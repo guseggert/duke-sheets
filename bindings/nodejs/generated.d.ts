@@ -1237,7 +1237,7 @@ export interface JsFormControlInput {
 export type JsFormControlKind =
   | { kind: 'button', caption: string }
   | { kind: 'checkbox', caption: string, state: JsCheckState, cellLink?: string, no3D: boolean }
-  | { kind: 'optionButton', caption: string, state: JsCheckState, cellLink?: string, firstInGroup: boolean, no3D: boolean }
+  | { kind: 'optionButton', caption: string, state: JsCheckState, cellLink?: string, firstInGroup?: boolean, no3D: boolean }
   | { kind: 'label', caption: string }
   | { kind: 'groupBox', caption: string, no3D: boolean }
   | { kind: 'listBox', inputRange?: string, cellLink?: string, selection: JsListSelection, selected: Array<number>, no3D: boolean }

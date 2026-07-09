@@ -2110,7 +2110,7 @@ pub enum JsFormControlKind {
         caption: String,
         state: JsCheckState,
         cell_link: Option<String>,
-        first_in_group: bool,
+        first_in_group: Option<bool>,
         no_3d: bool,
     },
     Label { caption: String },
@@ -2191,7 +2191,7 @@ impl From<&core::FormControlKind> for JsFormControlKind {
                 caption: caption.clone(), state: state(*value), cell_link: cell_link.clone(), no_3d: *no_3d,
             },
             K::OptionButton { caption, state: value, cell_link, first_in_group, no_3d } => Self::OptionButton {
-                caption: caption.clone(), state: state(*value), cell_link: cell_link.clone(), first_in_group: *first_in_group, no_3d: *no_3d,
+                caption: caption.clone(), state: state(*value), cell_link: cell_link.clone(), first_in_group: Some(*first_in_group), no_3d: *no_3d,
             },
             K::Label { caption } => Self::Label { caption: caption.clone() },
             K::GroupBox { caption, no_3d } => Self::GroupBox { caption: caption.clone(), no_3d: *no_3d },
