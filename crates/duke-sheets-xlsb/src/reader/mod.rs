@@ -125,9 +125,15 @@ impl XlsbReader {
                 )?;
             }
 
-            if let Ok(Some(dr)) =
+            if let Ok(Some(mut dr)) =
                 drawing::read_drawing_charts(&mut archive, &entry.path, &sheet_rels)
             {
+                // Control shapes in the drawing part are the a14
+                // twins of the VML controls parsed below; strip them
+                // so the raw passthrough doesn't duplicate them.
+                for (_, data) in dr.bundle.entries.iter_mut() {
+                    *data = strip_control_anchors(data);
+                }
                 if !dr.bundle.is_empty() {
                     wb.worksheet_mut(i)
                         .unwrap()
@@ -140,6 +146,25 @@ impl XlsbReader {
                 }
                 for cx in dr.charts_ex {
                     ws.add_chart_ex(cx);
+                }
+            }
+
+            // Form controls live in the legacy VML drawing part.
+            let vml_path = sheet_rels
+                .values()
+                .find(|r| r.rel_type.ends_with("/vmlDrawing"))
+                .map(|r| resolve_rel_path(&entry.path, &r.target));
+            if let Some(vml_path) = vml_path {
+                if let Ok(mut f) = archive.by_name(&vml_path) {
+                    let mut bytes = Vec::new();
+                    if std::io::Read::read_to_end(&mut f, &mut bytes).is_ok() {
+                        let ws = wb.worksheet_mut(i).unwrap();
+                        for shape in duke_sheets_vml::parse_vml_controls(&bytes) {
+                            if let Some(control) = shape.to_form_control() {
+                                ws.add_form_control(control);
+                            }
+                        }
+                    }
                 }
             }
 
@@ -271,6 +296,36 @@ fn parse_print_titles_formula(
     }
 
     (rows, cols)
+}
+
+/// Remove `mc:AlternateContent` blocks carrying an `a14:compatExt`
+/// marker from drawing XML. Those blocks are the DrawingML twins of
+/// legacy form controls (which round-trip via the VML part instead);
+/// replaying them verbatim would duplicate every control. Blocks
+/// without a compatExt (e.g. chartEx) are kept.
+fn strip_control_anchors(xml: &[u8]) -> Vec<u8> {
+    let Ok(text) = std::str::from_utf8(xml) else {
+        return xml.to_vec();
+    };
+    const OPEN: &str = "<mc:AlternateContent";
+    const CLOSE: &str = "</mc:AlternateContent>";
+    let mut out = String::with_capacity(text.len());
+    let mut pos = 0;
+    while let Some(start_rel) = text[pos..].find(OPEN) {
+        let start = pos + start_rel;
+        let Some(end_rel) = text[start..].find(CLOSE) else {
+            break;
+        };
+        let end = start + end_rel + CLOSE.len();
+        out.push_str(&text[pos..start]);
+        let block = &text[start..end];
+        if !block.contains("compatExt") {
+            out.push_str(block);
+        }
+        pos = end;
+    }
+    out.push_str(&text[pos..]);
+    out.into_bytes()
 }
 
 fn resolve_rel_path(base_path: &str, rel_target: &str) -> String {

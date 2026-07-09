@@ -78,6 +78,10 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
     let mut fallback_capture: Option<Writer<Cursor<Vec<u8>>>> = None;
     let mut fallback_depth: u32 = 0;
     let mut raw_mc_fallback: Option<Vec<u8>> = None;
+    // Set when the captured anchor contains an a14:compatExt marker:
+    // it is the drawing twin of a legacy form control (parsed from
+    // ctrlProps/VML instead) and must not be kept as a raw anchor.
+    let mut saw_compat_ext = false;
 
     // Image (pic) parsing state
     let mut in_pic = false;
@@ -281,6 +285,9 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                     let _ = w.write_event(Event::Empty(e.clone().into_owned()));
                 } else if let Some(ref mut w) = capture {
                     let _ = w.write_event(Event::Empty(e.clone().into_owned()));
+                }
+                if capture.is_some() && e.name().local_name().as_ref() == b"compatExt" {
+                    saw_compat_ext = true;
                 }
                 let local = e.name().local_name();
                 if in_graphic_data && local.as_ref() == b"chart" {
@@ -553,9 +560,12 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                                 raw_mc_fallback: raw_mc_fallback.take(),
                             });
                         } else if let Some(w) = capture.take() {
-                            raw_non_chart_anchors.push(w.into_inner().into_inner());
+                            if !saw_compat_ext {
+                                raw_non_chart_anchors.push(w.into_inner().into_inner());
+                            }
                         }
                         capture = None;
+                        saw_compat_ext = false;
                         in_two_cell_anchor = false;
                         in_one_cell_anchor = false;
                         in_absolute_anchor = false;

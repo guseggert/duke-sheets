@@ -15,7 +15,7 @@ pub(super) fn write_vml_drawing<W: Write + Seek>(
         .worksheet(sheet_index)
         .ok_or_else(|| XlsxError::InvalidFormat("Sheet not found".into()))?;
 
-    if sheet.comment_count() == 0 {
+    if sheet.comment_count() == 0 && sheet.form_control_count() == 0 {
         return Ok(());
     }
 
@@ -37,11 +37,16 @@ pub(super) fn write_vml_drawing<W: Write + Seek>(
         sheet_idx
     ));
     xml.push_str(" </o:shapelayout>\n");
-    xml.push_str(" <v:shapetype id=\"_x0000_t202\" coordsize=\"21600,21600\" o:spt=\"202\"\n");
-    xml.push_str("  path=\"m,l,21600r21600,l21600,xe\">\n");
-    xml.push_str("  <v:stroke joinstyle=\"miter\"/>\n");
-    xml.push_str("  <v:path gradientshapeok=\"t\" o:connecttype=\"rect\"/>\n");
-    xml.push_str(" </v:shapetype>\n");
+    if !comments.is_empty() {
+        xml.push_str(" <v:shapetype id=\"_x0000_t202\" coordsize=\"21600,21600\" o:spt=\"202\"\n");
+        xml.push_str("  path=\"m,l,21600r21600,l21600,xe\">\n");
+        xml.push_str("  <v:stroke joinstyle=\"miter\"/>\n");
+        xml.push_str("  <v:path gradientshapeok=\"t\" o:connecttype=\"rect\"/>\n");
+        xml.push_str(" </v:shapetype>\n");
+    }
+    if sheet.form_control_count() > 0 {
+        xml.push_str(duke_sheets_vml::CONTROL_SHAPETYPE);
+    }
 
     for (shape_index, ((row, col), comment)) in comments.iter().enumerate() {
         let row = *row;
@@ -83,6 +88,24 @@ pub(super) fn write_vml_drawing<W: Write + Seek>(
         xml.push_str(&format!("   <x:Column>{}</x:Column>\n", col));
         xml.push_str("  </x:ClientData>\n");
         xml.push_str(" </v:shape>\n");
+    }
+
+    // Form control shapes follow the comment shapes; their shape ids
+    // continue the same per-sheet 1024 block and must match the
+    // worksheet <control shapeId> values.
+    let controls = sheet.form_controls();
+    if !controls.is_empty() {
+        let heads = super::form_controls::radio_head_flags(controls);
+        let shape_base = sheet_idx * 1024 + 1 + comments.len();
+        for (j, control) in controls.iter().enumerate() {
+            duke_sheets_vml::write_control_shape(
+                &mut xml,
+                shape_base + j,
+                comments.len() + j + 1,
+                control,
+                heads[j],
+            );
+        }
     }
 
     xml.push_str("</xml>");

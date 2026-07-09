@@ -6,14 +6,18 @@ use zip::ZipWriter;
 use crate::error::XlsbResult;
 use duke_sheets_core::Worksheet;
 
-pub(crate) fn write_comment_vml<W: Write + Seek>(
+/// Write the sheet's legacy VML drawing part carrying comment
+/// shapes and/or form control shapes. Returns whether a part was
+/// written.
+pub(crate) fn write_legacy_vml<W: Write + Seek>(
     zip: &mut ZipWriter<W>,
     options: &SimpleFileOptions,
     sheet_index: usize,
     ws: &Worksheet,
 ) -> XlsbResult<bool> {
     let mut comments: Vec<_> = ws.comments().collect();
-    if comments.is_empty() {
+    let controls = ws.form_controls();
+    if comments.is_empty() && controls.is_empty() {
         return Ok(false);
     }
     comments.sort_by_key(|((row, col), _)| (*row, *col));
@@ -33,11 +37,16 @@ pub(crate) fn write_comment_vml<W: Write + Seek>(
         sheet_idx
     ));
     xml.push_str(" </o:shapelayout>\n");
-    xml.push_str(" <v:shapetype id=\"_x0000_t202\" coordsize=\"21600,21600\" o:spt=\"202\"\n");
-    xml.push_str("  path=\"m,l,21600r21600,l21600,xe\">\n");
-    xml.push_str("  <v:stroke joinstyle=\"miter\"/>\n");
-    xml.push_str("  <v:path gradientshapeok=\"t\" o:connecttype=\"rect\"/>\n");
-    xml.push_str(" </v:shapetype>\n");
+    if !comments.is_empty() {
+        xml.push_str(" <v:shapetype id=\"_x0000_t202\" coordsize=\"21600,21600\" o:spt=\"202\"\n");
+        xml.push_str("  path=\"m,l,21600r21600,l21600,xe\">\n");
+        xml.push_str("  <v:stroke joinstyle=\"miter\"/>\n");
+        xml.push_str("  <v:path gradientshapeok=\"t\" o:connecttype=\"rect\"/>\n");
+        xml.push_str(" </v:shapetype>\n");
+    }
+    if !controls.is_empty() {
+        xml.push_str(duke_sheets_vml::CONTROL_SHAPETYPE);
+    }
 
     for (shape_index, ((row, col), comment)) in comments.iter().enumerate() {
         let row = *row;
@@ -79,6 +88,27 @@ pub(crate) fn write_comment_vml<W: Write + Seek>(
         xml.push_str(&format!("   <x:Column>{}</x:Column>\n", col));
         xml.push_str("  </x:ClientData>\n");
         xml.push_str(" </v:shape>\n");
+    }
+
+    // Form control shapes follow the comment shapes in the same
+    // per-sheet shape id block.
+    if !controls.is_empty() {
+        let mut head_flags = vec![false; controls.len()];
+        for group in duke_sheets_core::radio_groups(controls) {
+            if let Some(&head) = group.first() {
+                head_flags[head] = true;
+            }
+        }
+        let shape_base = sheet_idx * 1024 + 1 + comments.len();
+        for (j, control) in controls.iter().enumerate() {
+            duke_sheets_vml::write_control_shape(
+                &mut xml,
+                shape_base + j,
+                comments.len() + j + 1,
+                control,
+                head_flags[j],
+            );
+        }
     }
 
     xml.push_str("</xml>");

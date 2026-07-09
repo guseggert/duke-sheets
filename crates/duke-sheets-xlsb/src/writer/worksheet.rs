@@ -119,9 +119,12 @@ pub(crate) fn write_worksheet<W: Write + Seek>(
     write_conditional_formats(&mut rw, ws, index, dxf_mapping, compile_ctx)?;
 
     let has_comments = ws.comments().next().is_some();
+    let has_vml = has_comments || ws.form_control_count() > 0;
 
-    if has_comments {
-        let vml_rid_num = rid_counter + 1;
+    if has_vml {
+        // Rel order written by write_sheet_rels: [comments], vml,
+        // [drawing]; comments occupy rid_counter when present.
+        let vml_rid_num = rid_counter + has_comments as u32;
         let vml_rid = format!("rId{}", vml_rid_num);
         let encoded_vml_rid = crate::biff12::encode_wide_str(&vml_rid);
         rw.write_record(records::BRT_LEGACY_DRAWING, &encoded_vml_rid)?;
@@ -130,7 +133,10 @@ pub(crate) fn write_worksheet<W: Write + Seek>(
     if has_drawing {
         let mut drawing_rid_num = rid_counter;
         if has_comments {
-            drawing_rid_num += 2;
+            drawing_rid_num += 1;
+        }
+        if has_vml {
+            drawing_rid_num += 1;
         }
         let rid = format!("rId{}", drawing_rid_num);
         let encoded_rid = crate::biff12::encode_wide_str(&rid);
