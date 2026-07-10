@@ -188,6 +188,8 @@ changes. Anchors are normalized to the two-cell form: one-cell and absolute
 anchors flatten to from/to markers at Excel's default cell metrics, with
 `editAs` preserving the original sizing behavior. Radio grouping is derived
 from group-box containment on write, so `firstInGroup` inputs are ignored.
+The Python factories default optional properties; the TypeScript inputs are
+fully explicit by design.
 ActiveX controls are not modeled, and ODS is not a supported format.
 
 ## Rust
