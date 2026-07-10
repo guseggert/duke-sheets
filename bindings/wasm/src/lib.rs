@@ -52,6 +52,7 @@ fn parse_xls_variant(
 }
 
 mod types;
+mod form_controls;
 mod workbook_read;
 mod worksheet_read;
 
@@ -192,11 +193,72 @@ export class RowIterator implements IterableIterator<JsRow> {
   next(): IteratorResult<JsRow>;
 }
 
+/**
+ * Flat two-cell anchor. Controls read from files with one-cell or
+ * absolute anchors are flattened to from/to markers at Excel's
+ * default cell metrics, with `editAs` preserving the original sizing
+ * behavior.
+ */
+export interface FormControlAnchor {
+  fromCol: number;
+  fromRow: number;
+  fromColOffset: number;
+  fromRowOffset: number;
+  toCol: number;
+  toRow: number;
+  toColOffset: number;
+  toRowOffset: number;
+  editAs: "twoCell" | "oneCell" | "absolute";
+}
+
+/**
+ * Kind-specific form-control data. List box and dropdown `selected`
+ * item indexes are zero-based; a linked cell still receives Excel's
+ * one-based value. `firstInGroup` is read-side information: writers
+ * recompute radio grouping from group-box containment and mark each
+ * group's first radio, so input values are ignored.
+ */
+export type FormControlKind =
+  | { kind: "button"; caption: string }
+  | { kind: "checkbox"; caption: string; state: "unchecked" | "checked" | "mixed"; cellLink?: string; no3D: boolean }
+  | { kind: "optionButton"; caption: string; state: "unchecked" | "checked"; cellLink?: string; firstInGroup: boolean; no3D: boolean }
+  | { kind: "label"; caption: string }
+  | { kind: "groupBox"; caption: string; no3D: boolean }
+  | { kind: "listBox"; inputRange?: string; cellLink?: string; selection: "single" | "multi" | "extend"; selected: number[]; no3D: boolean }
+  | { kind: "dropdown"; inputRange?: string; cellLink?: string; selected?: number; lines: number; no3D: boolean }
+  | { kind: "scrollbar"; value: number; min: number; max: number; increment: number; page: number; horizontal: boolean; cellLink?: string }
+  | { kind: "spinner"; value: number; min: number; max: number; increment: number; cellLink?: string };
+
+export type FormControlKindInput =
+  | Exclude<FormControlKind, { kind: "optionButton" }>
+  | { kind: "optionButton"; caption: string; state: "unchecked" | "checked"; cellLink?: string; firstInGroup?: boolean; no3D: boolean };
+
+export interface FormControl {
+  name?: string;
+  anchor: FormControlAnchor;
+  kind: FormControlKind;
+  locked: boolean;
+  printable: boolean;
+}
+
+export interface FormControlInput {
+  name?: string;
+  anchor: FormControlAnchor;
+  kind: FormControlKindInput;
+  locked?: boolean;
+  printable?: boolean;
+}
+
 export interface Worksheet {
   iterateRows(opts?: JsRowsOptions): RowIterator;
   setCellStyle(address: string, style: StyleInput): void;
   setCellStyleAt(row: number, col: number, style: StyleInput): void;
   setRangeStyle(range: string, style: StyleInput): void;
+  readonly formControls: FormControl[];
+  readonly formControlCount: number;
+  addFormControl(control: FormControlInput): number;
+  setFormControl(index: number, control: FormControlInput): void;
+  removeFormControl(index: number): void;
 }
 "#;
 

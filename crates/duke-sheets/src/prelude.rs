@@ -14,6 +14,7 @@ pub use crate::{
     CalculationOptions,
     CalculationStats,
     CellAddress,
+    CheckState,
     // Comments
     CellComment,
     CellError,
@@ -44,6 +45,9 @@ pub use crate::{
     FileFormat,
     FillStyle,
     FontStyle,
+    // Form control types
+    FormControl,
+    FormControlKind,
     HorizontalAlignment,
     Hyperlink,
     IconSetStyle,
@@ -51,6 +55,7 @@ pub use crate::{
 
     ImageInfo,
     ImageSizing,
+    ListSelection,
     NumberFormat,
     Result,
 

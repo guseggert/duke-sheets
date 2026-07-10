@@ -6,6 +6,7 @@ use duke_sheets::{
     AutoFilter, ColumnFilter, CustomFilterCondition, CustomFilters, DynamicFilter,
     DynamicFilterType, FilterColumn, FilterOperator, Top10Filter, ValueFilter,
 };
+use duke_sheets::{CellMarker, CheckState, ListSelection};
 use duke_sheets_core::style::Underline;
 use duke_sheets_core::{
     CellAddress, PageOrientation, Selection, SplitPanes, Table, TableColumn, TableStyleInfo,
@@ -6085,4 +6086,271 @@ fn xlsx_images_round_trip_across_multiple_sheets() {
             );
         }
     }
+}
+
+// Form controls
+
+fn control_anchor_2c(from_col: u16, from_row: u32, to_col: u16, to_row: u32) -> DrawingAnchor {
+    DrawingAnchor::TwoCell {
+        from: CellMarker {
+            col: from_col,
+            col_offset_emu: 0,
+            row: from_row,
+            row_offset_emu: 0,
+        },
+        to: CellMarker {
+            col: to_col,
+            col_offset_emu: 0,
+            row: to_row,
+            row_offset_emu: 0,
+        },
+        edit_as: None,
+    }
+}
+
+fn all_form_control_kinds() -> Vec<FormControlKind> {
+    vec![
+        FormControlKind::Button {
+            caption: "Run Report".to_string(),
+        },
+        FormControlKind::Checkbox {
+            caption: "Enable audit".to_string(),
+            state: CheckState::Checked,
+            cell_link: Some("$D$2".to_string()),
+            no_3d: true,
+        },
+        FormControlKind::Checkbox {
+            caption: "Tri state".to_string(),
+            state: CheckState::Mixed,
+            cell_link: None,
+            no_3d: true,
+        },
+        FormControlKind::OptionButton {
+            caption: "Opt A".to_string(),
+            state: CheckState::Checked,
+            cell_link: Some("$D$3".to_string()),
+            first_in_group: false,
+            no_3d: true,
+        },
+        FormControlKind::OptionButton {
+            caption: "Opt B".to_string(),
+            state: CheckState::Unchecked,
+            cell_link: None,
+            first_in_group: false,
+            no_3d: true,
+        },
+        FormControlKind::Label {
+            caption: "Status label".to_string(),
+        },
+        FormControlKind::GroupBox {
+            caption: "Choices".to_string(),
+            no_3d: true,
+        },
+        FormControlKind::ListBox {
+            input_range: Some("$H$1:$H$4".to_string()),
+            cell_link: Some("$D$5".to_string()),
+            selection: ListSelection::Single,
+            selected: vec![3],
+            no_3d: true,
+        },
+        FormControlKind::ListBox {
+            input_range: Some("$H$1:$H$5".to_string()),
+            cell_link: None,
+            selection: ListSelection::Multi,
+            selected: vec![0, 2, 4],
+            no_3d: true,
+        },
+        FormControlKind::Dropdown {
+            input_range: Some("$H$1:$H$4".to_string()),
+            cell_link: Some("$D$4".to_string()),
+            selected: Some(2),
+            lines: 6,
+            no_3d: true,
+        },
+        FormControlKind::Scrollbar {
+            value: 40,
+            min: 5,
+            max: 95,
+            increment: 2,
+            page: 10,
+            horizontal: true,
+            cell_link: Some("$D$6".to_string()),
+        },
+        FormControlKind::Spinner {
+            value: 12,
+            min: 0,
+            max: 30,
+            increment: 3,
+            cell_link: Some("$D$7".to_string()),
+        },
+    ]
+}
+
+#[test]
+fn xlsx_form_controls_round_trip() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 42.0).unwrap();
+    let kinds = all_form_control_kinds();
+    let count = kinds.len();
+    for (i, kind) in kinds.into_iter().enumerate() {
+        let row = 1 + 2 * i as u32;
+        ws.add_form_control(FormControl::with_anchor(
+            kind,
+            control_anchor_2c(1, row, 3, row + 1),
+        ));
+    }
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
+    let rt = XlsxReader::read(Cursor::new(&buf)).expect("read");
+    let controls = rt.worksheet(0).unwrap().form_controls();
+    assert_eq!(controls.len(), count, "every control survives");
+    let original = all_form_control_kinds();
+    for (i, control) in controls.iter().enumerate() {
+        // The writer recomputes radio grouping: the sheet group's
+        // first radio (control 3) carries firstButton after the trip.
+        let mut expected = original[i].clone();
+        if let FormControlKind::OptionButton { first_in_group, .. } = &mut expected {
+            *first_in_group = i == 3;
+        }
+        assert_eq!(control.kind, expected, "control {i} kind mismatch");
+        assert!(control.locked);
+        assert!(control.printable);
+    }
+    // Anchors survive exactly (EMU in controlPr).
+    match &controls[0].anchor {
+        DrawingAnchor::TwoCell { from, to, .. } => {
+            assert_eq!((from.col, from.row), (1, 1));
+            assert_eq!((to.col, to.row), (3, 2));
+        }
+        other => panic!("expected TwoCell anchor, got {other:?}"),
+    }
+    // Names are persisted (defaulted by the writer).
+    assert_eq!(controls[0].name.as_deref(), Some("Button 1"));
+}
+
+#[test]
+fn xlsx_form_controls_emit_expected_parts() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_comment("A1", CellComment::new("Author", "note"))
+        .unwrap();
+    ws.add_form_control(FormControl::with_anchor(
+        FormControlKind::Checkbox {
+            caption: "check".to_string(),
+            state: CheckState::Checked,
+            cell_link: Some("$D$2".to_string()),
+            no_3d: false,
+        },
+        control_anchor_2c(1, 1, 3, 2),
+    ));
+    ws.add_form_control(FormControl::with_anchor(
+        FormControlKind::ListBox {
+            input_range: Some("$H$1:$H$4".to_string()),
+            cell_link: None,
+            selection: ListSelection::Multi,
+            selected: vec![0, 2],
+            no_3d: false,
+        },
+        control_anchor_2c(1, 4, 3, 6),
+    ));
+    ws.add_form_control(FormControl::with_anchor(
+        FormControlKind::Dropdown {
+            input_range: Some("$H$1:$H$4".to_string()),
+            cell_link: None,
+            selected: Some(1),
+            lines: 8,
+            no_3d: false,
+        },
+        control_anchor_2c(1, 7, 3, 8),
+    ));
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
+
+    let mut zip = zip::ZipArchive::new(Cursor::new(&buf)).expect("zip");
+    let read_part = |zip: &mut zip::ZipArchive<Cursor<&Vec<u8>>>, name: &str| -> String {
+        use std::io::Read;
+        let mut s = String::new();
+        zip.by_name(name)
+            .unwrap_or_else(|_| panic!("part {name} missing"))
+            .read_to_string(&mut s)
+            .expect("read part");
+        s
+    };
+
+    let ctrl_prop = read_part(&mut zip, "xl/ctrlProps/ctrlProp1.xml");
+    assert!(ctrl_prop.contains("objectType=\"CheckBox\""));
+    assert!(ctrl_prop.contains("checked=\"Checked\""));
+    assert!(ctrl_prop.contains("fmlaLink=\"$D$2\""));
+
+    // Zero-based model selections serialize one-based on disk.
+    let list_prop = read_part(&mut zip, "xl/ctrlProps/ctrlProp2.xml");
+    assert!(list_prop.contains("multiSel=\"1,3\""), "{list_prop}");
+    let drop_prop = read_part(&mut zip, "xl/ctrlProps/ctrlProp3.xml");
+    assert!(drop_prop.contains("sel=\"2\""), "{drop_prop}");
+
+    let vml = read_part(&mut zip, "xl/drawings/vmlDrawing1.vml");
+    assert!(vml.contains("ObjectType=\"Note\""), "comment shape present");
+    assert!(vml.contains("ObjectType=\"Checkbox\""), "control shape present");
+    assert!(vml.contains("_x0000_t201"), "control shapetype declared");
+
+    let sheet = read_part(&mut zip, "xl/worksheets/sheet1.xml");
+    assert!(sheet.contains("<legacyDrawing r:id=\"rId1\"/>"));
+    assert!(sheet.contains("<controls>"));
+    // Comment occupies shape 1025; the control is 1026.
+    assert!(sheet.contains("shapeId=\"1026\""), "control shapeId offset by comment");
+
+    let content_types = read_part(&mut zip, "[Content_Types].xml");
+    assert!(content_types.contains("/xl/ctrlProps/ctrlProp1.xml"));
+    assert!(content_types.contains("Extension=\"vml\""));
+}
+
+#[test]
+fn xlsx_controls_without_comments_round_trip() {
+    // VML part exists for the controls alone; no comments part.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.add_form_control(FormControl::with_anchor(
+        FormControlKind::Spinner {
+            value: 5,
+            min: 0,
+            max: 10,
+            increment: 1,
+            cell_link: None,
+        },
+        control_anchor_2c(0, 0, 1, 3),
+    ));
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
+    let rt = XlsxReader::read(Cursor::new(&buf)).expect("read");
+    assert_eq!(rt.worksheet(0).unwrap().form_control_count(), 1);
+    assert_eq!(rt.worksheet(0).unwrap().comment_count(), 0);
+}
+
+#[test]
+fn xlsx_control_named_and_flagged_round_trips() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    let mut control = FormControl::with_anchor(
+        FormControlKind::Button {
+            caption: "Do <it> & more".to_string(),
+        },
+        control_anchor_2c(2, 2, 4, 4),
+    )
+    .with_name("My Button");
+    control.locked = false;
+    control.printable = false;
+    ws.add_form_control(control);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
+    let rt = XlsxReader::read(Cursor::new(&buf)).expect("read");
+    let controls = rt.worksheet(0).unwrap().form_controls();
+    assert_eq!(controls[0].name.as_deref(), Some("My Button"));
+    assert!(!controls[0].locked);
+    assert!(!controls[0].printable);
+    assert_eq!(controls[0].caption(), Some("Do <it> & more"));
 }

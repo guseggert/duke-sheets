@@ -10,6 +10,7 @@ use quick_xml::Writer;
 
 use crate::error::{XlsxError, XlsxResult};
 use crate::styles::{roundtrip_theme_data_for, XlsxStyleTable};
+use form_controls::radio_head_flags;
 use duke_sheets_core::style::Color;
 use duke_sheets_core::{CellAddress, CellRange, SheetSlot, Workbook};
 
@@ -19,6 +20,7 @@ mod comments;
 mod conditional_format;
 mod data_validation;
 mod drawing;
+mod form_controls;
 mod tables;
 
 const NS_SPREADSHEET: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
@@ -43,6 +45,8 @@ const RT_VML_DRAWING: &str =
 const RT_HYPERLINK: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink";
 const RT_TABLE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/table";
+const RT_CTRLPROP: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/ctrlProp";
 const RT_SHEET_METADATA: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sheetMetadata";
 const RT_DRAWING: &str =
@@ -61,6 +65,7 @@ const CT_WORKSHEET: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
 const CT_COMMENTS: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml";
+const CT_CTRLPROP: &str = "application/vnd.ms-excel.controlproperties+xml";
 const CT_THEME: &str = "application/vnd.openxmlformats-officedocument.theme+xml";
 const CT_RELS: &str = "application/vnd.openxmlformats-package.relationships+xml";
 const CT_TABLE: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml";
@@ -626,6 +631,28 @@ impl XlsxWriter {
             .map(|(i, _)| i)
             .collect();
 
+        // Sheets needing a legacy VML drawing part (comment shapes
+        // and/or form control shapes).
+        let sheets_with_vml: Vec<usize> = workbook
+            .worksheets()
+            .enumerate()
+            .filter(|(_, sheet)| sheet.comment_count() > 0 || sheet.form_control_count() > 0)
+            .map(|(i, _)| i)
+            .collect();
+
+        // Global ctrlProp part numbering: (sheet_idx, first_part_num).
+        // Parts are `xl/ctrlProps/ctrlProp{N}.xml`, numbered across
+        // the workbook in sheet order.
+        let mut ctrl_prop_numbering: Vec<(usize, usize)> = Vec::new();
+        let mut global_ctrl_prop_num = 1usize;
+        for (i, sheet) in workbook.worksheets().enumerate() {
+            if sheet.form_control_count() > 0 {
+                ctrl_prop_numbering.push((i, global_ctrl_prop_num));
+                global_ctrl_prop_num += sheet.form_control_count();
+            }
+        }
+        let total_ctrl_props = global_ctrl_prop_num - 1;
+
         // Build a mapping: (sheet_index, table_index_in_sheet) → global table number
         // Used for: xl/tables/table{N}.xml paths and relationship IDs.
         let mut table_numbering: Vec<(usize, usize, usize)> = Vec::new(); // (sheet_idx, table_in_sheet_idx, global_num)
@@ -703,6 +730,8 @@ impl XlsxWriter {
             &mut zip,
             workbook,
             &sheets_with_comments,
+            &sheets_with_vml,
+            total_ctrl_props,
             &sst,
             &table_numbering,
             &drawing_numbering,
@@ -753,6 +782,12 @@ impl XlsxWriter {
                 .find(|(si, _)| *si == i)
                 .map(|(_, dn)| *dn);
 
+            let ctrl_prop_start = ctrl_prop_numbering
+                .iter()
+                .find(|(si, _)| *si == i)
+                .map(|(_, start)| *start)
+                .unwrap_or(0);
+
             let rels = Self::write_worksheet(
                 &mut zip,
                 workbook,
@@ -761,15 +796,29 @@ impl XlsxWriter {
                 &sst,
                 &sheet_table_globals,
                 drawing_num,
+                ctrl_prop_start,
             )?;
 
             if !rels.is_empty() {
                 Self::write_worksheet_rels(&mut zip, i, &rels)?;
             }
 
-            if sheet.comment_count() > 0 {
+            if sheet.comment_count() > 0 || sheet.form_control_count() > 0 {
                 comments::write_vml_drawing(&mut zip, workbook, i)?;
+            }
+            if sheet.comment_count() > 0 {
                 comments::write_comments(&mut zip, workbook, i)?;
+            }
+            if sheet.form_control_count() > 0 {
+                let heads = radio_head_flags(sheet.form_controls());
+                for (j, control) in sheet.form_controls().iter().enumerate() {
+                    form_controls::write_ctrl_prop_part(
+                        &mut zip,
+                        ctrl_prop_start + j,
+                        control,
+                        heads[j],
+                    )?;
+                }
             }
 
             // Write table part XML files for this sheet
@@ -904,10 +953,13 @@ impl XlsxWriter {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn write_content_types<W: Write + Seek>(
         zip: &mut zip::ZipWriter<W>,
         workbook: &Workbook,
         sheets_with_comments: &[usize],
+        sheets_with_vml: &[usize],
+        total_ctrl_props: usize,
         sst: &SharedStringTable,
         table_numbering: &[(usize, usize, usize)],
         drawing_numbering: &[(usize, usize)],
@@ -932,7 +984,7 @@ impl XlsxWriter {
                 .with_attribute(("Extension", "xml"))
                 .with_attribute(("ContentType", "application/xml"))
                 .write_empty()?;
-            if !sheets_with_comments.is_empty() {
+            if !sheets_with_vml.is_empty() {
                 w.create_element("Default")
                     .with_attribute(("Extension", "vml"))
                     .with_attribute((
@@ -1008,6 +1060,14 @@ impl XlsxWriter {
                 w.create_element("Override")
                     .with_attribute(("PartName", part.as_str()))
                     .with_attribute(("ContentType", CT_COMMENTS))
+                    .write_empty()?;
+            }
+
+            for n in 1..=total_ctrl_props {
+                let part = format!("/xl/ctrlProps/ctrlProp{n}.xml");
+                w.create_element("Override")
+                    .with_attribute(("PartName", part.as_str()))
+                    .with_attribute(("ContentType", CT_CTRLPROP))
                     .write_empty()?;
             }
 
@@ -1708,6 +1768,7 @@ impl XlsxWriter {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn write_worksheet<W: Write + Seek>(
         zip: &mut zip::ZipWriter<W>,
         workbook: &Workbook,
@@ -1716,6 +1777,7 @@ impl XlsxWriter {
         sst: &SharedStringTable,
         sheet_table_globals: &[usize],
         drawing_num: Option<usize>,
+        ctrl_prop_start: usize,
     ) -> XlsxResult<Vec<WorksheetRelationship>> {
         let path = format!("xl/worksheets/sheet{}.xml", index + 1);
         let mut rels = Vec::new();
@@ -1724,8 +1786,8 @@ impl XlsxWriter {
                 .worksheet(index)
                 .ok_or_else(|| XlsxError::InvalidFormat("Sheet not found".into()))?;
 
-            if sheet.comment_count() > 0 {
-                let comments_target = format!("../comments{}.xml", index + 1);
+            let needs_vml = sheet.comment_count() > 0 || sheet.form_control_count() > 0;
+            if needs_vml {
                 let vml_target = format!("../drawings/vmlDrawing{}.vml", index + 1);
                 rels.push(WorksheetRelationship {
                     id: "rId1".to_string(),
@@ -1733,12 +1795,29 @@ impl XlsxWriter {
                     target: vml_target,
                     target_mode: None,
                 });
+            }
+            if sheet.comment_count() > 0 {
+                let comments_target = format!("../comments{}.xml", index + 1);
                 rels.push(WorksheetRelationship {
-                    id: "rId2".to_string(),
+                    id: format!("rId{}", rels.len() + 1),
                     rel_type: RT_COMMENTS,
                     target: comments_target,
                     target_mode: None,
                 });
+            }
+
+            // One ctrlProp rel per form control, recording the rel id
+            // for the worksheet <controls> block.
+            let mut ctrl_prop_rids: Vec<String> = Vec::new();
+            for j in 0..sheet.form_control_count() {
+                let rid = format!("rId{}", rels.len() + 1);
+                rels.push(WorksheetRelationship {
+                    id: rid.clone(),
+                    rel_type: RT_CTRLPROP,
+                    target: format!("../ctrlProps/ctrlProp{}.xml", ctrl_prop_start + j),
+                    target_mode: None,
+                });
+                ctrl_prop_rids.push(rid);
             }
 
             let drawing_rid = if let Some(dn) = drawing_num {
@@ -1758,6 +1837,18 @@ impl XlsxWriter {
             let mut tag = BytesStart::new("worksheet");
             tag.push_attribute(("xmlns", NS_SPREADSHEET));
             tag.push_attribute(("xmlns:r", NS_DOC_RELS));
+            if sheet.form_control_count() > 0 {
+                // The <controls> block's anchors use the xdr prefix
+                // and its mc:Choice requires the x14 namespace.
+                tag.push_attribute((
+                    "xmlns:xdr",
+                    "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing",
+                ));
+                tag.push_attribute((
+                    "xmlns:x14",
+                    "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main",
+                ));
+            }
             w.write_event(Event::Start(tag))?;
 
             // sheetPr (tab color)
@@ -1803,10 +1894,34 @@ impl XlsxWriter {
                 w.write_event(Event::Empty(el))?;
             }
 
-            if sheet.comment_count() > 0 {
+            if needs_vml {
                 let mut legacy_drawing = BytesStart::new("legacyDrawing");
                 legacy_drawing.push_attribute(("r:id", "rId1"));
                 w.write_event(Event::Empty(legacy_drawing))?;
+            }
+
+            // Form controls (CT_Worksheet places controls after
+            // legacyDrawing and before tableParts).
+            if sheet.form_control_count() > 0 {
+                let controls = sheet.form_controls();
+                let shape_base = (index + 1) * 1024 + 1 + sheet.comment_count();
+                let entries: Vec<form_controls::ControlEntry<'_>> = controls
+                    .iter()
+                    .enumerate()
+                    .map(|(j, control)| form_controls::ControlEntry {
+                        control,
+                        shape_id: shape_base + j,
+                        rid: ctrl_prop_rids[j].clone(),
+                        name: control.name.clone().unwrap_or_else(|| {
+                            form_controls::default_control_name(
+                                &control.kind,
+                                sheet.comment_count() + j + 1,
+                            )
+                        }),
+                    })
+                    .collect();
+                let block = form_controls::controls_block(&entries);
+                w.get_mut().write_all(block.as_bytes())?;
             }
 
             // tableParts (references to xl/tables/tableN.xml)

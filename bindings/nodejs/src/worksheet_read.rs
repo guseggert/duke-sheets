@@ -5,7 +5,7 @@ use napi_derive::napi;
 
 use super::{
     catch_panic, to_napi_err, JsAutoFilter, JsColor, JsComment, JsCommentEntry,
-    JsConditionalFormatRule, JsDataValidation, JsFormulaCell, JsFreezePanes, JsHyperlink,
+    JsConditionalFormatRule, JsDataValidation, JsFormControl, JsFormulaCell, JsFreezePanes, JsHyperlink,
     JsHyperlinkEntry, JsImageInfo, JsMergeSpan, JsMergedRegion, JsPageBreak, JsPageSetup, JsRow,
     JsRowCell, JsRowsOptions, JsSelection, JsSheetProtection, JsSpillSource, JsSplitPanes, JsStyle,
     JsTable, JsChart, JsChartEx, JsEmbeddedImage, Worksheet,
@@ -1084,6 +1084,30 @@ impl Worksheet {
                 .worksheet(self.sheet_index)
                 .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
             Ok(ws.image_count() as u32)
+        })
+    }
+
+    /// Get all form controls in worksheet order.
+    #[napi(getter)]
+    pub fn form_controls(&self) -> Result<Vec<JsFormControl>> {
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            Ok(ws.form_controls().iter().map(JsFormControl::from).collect())
+        })
+    }
+
+    /// Number of form controls in the worksheet.
+    #[napi(getter)]
+    pub fn form_control_count(&self) -> Result<u32> {
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            Ok(ws.form_control_count() as u32)
         })
     }
 }

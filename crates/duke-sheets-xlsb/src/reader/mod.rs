@@ -10,7 +10,7 @@ pub(crate) mod workbook;
 pub(crate) mod worksheet;
 
 use std::collections::HashMap;
-use std::io::{BufReader, Read, Seek};
+use std::io::{BufReader, Cursor, Read, Seek, Write};
 use std::path::Path;
 
 use duke_sheets_core::named_range::{NameScope, NamedRange};
@@ -18,6 +18,7 @@ use duke_sheets_core::worksheet::SheetVisibility;
 use duke_sheets_core::Workbook;
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
+use quick_xml::Writer;
 
 use crate::error::{XlsbError, XlsbResult};
 
@@ -125,9 +126,15 @@ impl XlsbReader {
                 )?;
             }
 
-            if let Ok(Some(dr)) =
+            if let Ok(Some(mut dr)) =
                 drawing::read_drawing_charts(&mut archive, &entry.path, &sheet_rels)
             {
+                // Control shapes in the drawing part are the a14
+                // twins of the VML controls parsed below; strip them
+                // so the raw passthrough doesn't duplicate them.
+                for (_, data) in dr.bundle.entries.iter_mut() {
+                    *data = strip_control_anchors(data);
+                }
                 if !dr.bundle.is_empty() {
                     wb.worksheet_mut(i)
                         .unwrap()
@@ -140,6 +147,25 @@ impl XlsbReader {
                 }
                 for cx in dr.charts_ex {
                     ws.add_chart_ex(cx);
+                }
+            }
+
+            // Form controls live in the legacy VML drawing part.
+            let vml_path = sheet_rels
+                .values()
+                .find(|r| r.rel_type.ends_with("/vmlDrawing"))
+                .map(|r| resolve_rel_path(&entry.path, &r.target));
+            if let Some(vml_path) = vml_path {
+                if let Ok(mut f) = archive.by_name(&vml_path) {
+                    let mut bytes = Vec::new();
+                    if std::io::Read::read_to_end(&mut f, &mut bytes).is_ok() {
+                        let ws = wb.worksheet_mut(i).unwrap();
+                        for shape in duke_sheets_vml::parse_vml_controls(&bytes) {
+                            if let Some(control) = shape.to_form_control() {
+                                ws.add_form_control(control);
+                            }
+                        }
+                    }
                 }
             }
 
@@ -271,6 +297,84 @@ fn parse_print_titles_formula(
     }
 
     (rows, cols)
+}
+
+/// Remove `mc:AlternateContent` blocks carrying an `a14:compatExt`
+/// marker from drawing XML. Those blocks are the DrawingML twins of
+/// legacy form controls (which round-trip via the VML part instead);
+/// replaying them verbatim would duplicate every control. Blocks
+/// without a compatExt (e.g. chartEx) are kept.
+fn strip_control_anchors(xml: &[u8]) -> Vec<u8> {
+    let mut reader = Reader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut output = Writer::new(Cursor::new(Vec::with_capacity(xml.len())));
+    let mut capture: Option<(Writer<Cursor<Vec<u8>>>, usize, bool)> = None;
+    let mut buf = Vec::new();
+
+    loop {
+        let event = match reader.read_event_into(&mut buf) {
+            Ok(event) => event.into_owned(),
+            Err(_) => return xml.to_vec(),
+        };
+        match event {
+            Event::Start(e) if e.local_name().as_ref() == b"AlternateContent" => {
+                if let Some((writer, depth, _)) = capture.as_mut() {
+                    *depth += 1;
+                    if writer.write_event(Event::Start(e)).is_err() {
+                        return xml.to_vec();
+                    }
+                } else {
+                    let mut writer = Writer::new(Cursor::new(Vec::new()));
+                    if writer.write_event(Event::Start(e)).is_err() {
+                        return xml.to_vec();
+                    }
+                    capture = Some((writer, 1, false));
+                }
+            }
+            Event::End(e) if capture.is_some() => {
+                let is_alternate = e.local_name().as_ref() == b"AlternateContent";
+                let (writer, depth, _) = capture.as_mut().unwrap();
+                if writer.write_event(Event::End(e)).is_err() {
+                    return xml.to_vec();
+                }
+                if is_alternate {
+                    *depth -= 1;
+                    if *depth == 0 {
+                        let (writer, _, has_compat) = capture.take().unwrap();
+                        if !has_compat
+                            && output
+                                .get_mut()
+                                .write_all(&writer.into_inner().into_inner())
+                                .is_err()
+                        {
+                            return xml.to_vec();
+                        }
+                    }
+                }
+            }
+            Event::Eof => {
+                if capture.is_some() {
+                    return xml.to_vec();
+                }
+                break;
+            }
+            event => {
+                if let Some((writer, _, has_compat)) = capture.as_mut() {
+                    if matches!(&event, Event::Start(e) | Event::Empty(e) if e.local_name().as_ref() == b"compatExt")
+                    {
+                        *has_compat = true;
+                    }
+                    if writer.write_event(event).is_err() {
+                        return xml.to_vec();
+                    }
+                } else if output.write_event(event).is_err() {
+                    return xml.to_vec();
+                }
+            }
+        }
+        buf.clear();
+    }
+    output.into_inner().into_inner()
 }
 
 fn resolve_rel_path(base_path: &str, rel_target: &str) -> String {

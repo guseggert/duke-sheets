@@ -1,0 +1,13 @@
+[package]
+name = "duke-sheets-vml"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Legacy VML drawing codec for form controls, shared by the XLSX and XLSB crates"
+
+[dependencies]
+duke-sheets-core.workspace = true
+duke-sheets-chart.workspace = true
+quick-xml.workspace = true

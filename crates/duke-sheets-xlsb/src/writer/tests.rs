@@ -2710,4 +2710,244 @@ mod tests {
             got.comment
         );
     }
+
+    #[test]
+    fn form_controls_roundtrip() {
+        use duke_sheets_chart::{CellMarker, DrawingAnchor};
+        use duke_sheets_core::{CheckState, FormControl, FormControlKind, ListSelection};
+
+        let anchor = |fc: u16, fr: u32, tc: u16, tr: u32| DrawingAnchor::TwoCell {
+            from: CellMarker {
+                col: fc,
+                col_offset_emu: 0,
+                row: fr,
+                row_offset_emu: 0,
+            },
+            to: CellMarker {
+                col: tc,
+                col_offset_emu: 0,
+                row: tr,
+                row_offset_emu: 0,
+            },
+            edit_as: None,
+        };
+
+        let kinds: Vec<FormControlKind> = vec![
+            FormControlKind::Button {
+                caption: "Run Report".to_string(),
+            },
+            FormControlKind::Checkbox {
+                caption: "Enable audit".to_string(),
+                state: CheckState::Checked,
+                cell_link: Some("$D$2".to_string()),
+                no_3d: true,
+            },
+            FormControlKind::Checkbox {
+                caption: "Tri state".to_string(),
+                state: CheckState::Mixed,
+                cell_link: None,
+                no_3d: true,
+            },
+            FormControlKind::OptionButton {
+                caption: "Opt A".to_string(),
+                state: CheckState::Checked,
+                cell_link: Some("$D$3".to_string()),
+                first_in_group: false,
+                no_3d: true,
+            },
+            FormControlKind::Label {
+                caption: "Status".to_string(),
+            },
+            FormControlKind::GroupBox {
+                caption: "Choices".to_string(),
+                no_3d: true,
+            },
+            FormControlKind::ListBox {
+                input_range: Some("$H$1:$H$5".to_string()),
+                cell_link: None,
+                selection: ListSelection::Multi,
+                selected: vec![0, 2, 4],
+                no_3d: true,
+            },
+            FormControlKind::Dropdown {
+                input_range: Some("$H$1:$H$4".to_string()),
+                cell_link: Some("$D$4".to_string()),
+                selected: Some(2),
+                lines: 6,
+                no_3d: true,
+            },
+            FormControlKind::Scrollbar {
+                value: 40,
+                min: 5,
+                max: 95,
+                increment: 2,
+                page: 10,
+                horizontal: false,
+                cell_link: Some("$D$6".to_string()),
+            },
+            FormControlKind::Spinner {
+                value: 12,
+                min: 0,
+                max: 30,
+                increment: 3,
+                cell_link: Some("$D$7".to_string()),
+            },
+        ];
+
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_cell_value_at(0, 0, 42.0).unwrap();
+        let count = kinds.len();
+        for (i, kind) in kinds.iter().enumerate() {
+            let row = 1 + 2 * i as u32;
+            ws.add_form_control(FormControl::with_anchor(
+                kind.clone(),
+                anchor(1, row, 3, row + 1),
+            ));
+        }
+
+        let wb2 = round_trip(&wb);
+        let controls = wb2.worksheet(0).unwrap().form_controls();
+        assert_eq!(controls.len(), count, "every control survives");
+        for (i, control) in controls.iter().enumerate() {
+            // The writer recomputes radio grouping; the single radio
+            // becomes its own group head.
+            let mut expected = kinds[i].clone();
+            if let FormControlKind::OptionButton { first_in_group, .. } = &mut expected {
+                *first_in_group = true;
+            }
+            assert_eq!(control.kind, expected, "control {i} kind mismatch");
+        }
+        match &controls[0].anchor {
+            DrawingAnchor::TwoCell { from, to, .. } => {
+                assert_eq!((from.col, from.row), (1, 1));
+                assert_eq!((to.col, to.row), (3, 2));
+            }
+            other => panic!("expected TwoCell anchor, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn form_controls_and_comments_share_vml() {
+        use duke_sheets_chart::{CellMarker, DrawingAnchor};
+        use duke_sheets_core::comment::CellComment;
+        use duke_sheets_core::{CheckState, FormControl, FormControlKind};
+
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_comment_at(0, 0, CellComment::new("Author", "note"));
+        ws.add_form_control(FormControl::with_anchor(
+            FormControlKind::Checkbox {
+                caption: "check".to_string(),
+                state: CheckState::Checked,
+                cell_link: None,
+                no_3d: false,
+            },
+            DrawingAnchor::TwoCell {
+                from: CellMarker {
+                    col: 1,
+                    col_offset_emu: 0,
+                    row: 1,
+                    row_offset_emu: 0,
+                },
+                to: CellMarker {
+                    col: 3,
+                    col_offset_emu: 0,
+                    row: 2,
+                    row_offset_emu: 0,
+                },
+                edit_as: None,
+            },
+        ));
+
+        let wb2 = round_trip(&wb);
+        let ws2 = wb2.worksheet(0).unwrap();
+        assert_eq!(ws2.comment_count(), 1, "comment survives");
+        assert_eq!(ws2.form_control_count(), 1, "control survives");
+        assert_eq!(ws2.form_controls()[0].caption(), Some("check"));
+    }
+
+    #[test]
+    fn form_control_table_relationship_ids_match_sheet_records() {
+        use std::io::Read;
+
+        use duke_sheets_chart::{CellMarker, DrawingAnchor};
+        use duke_sheets_core::table::{Table, TableColumn};
+        use duke_sheets_core::{CellRange, CheckState, FormControl, FormControlKind};
+
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_cell_value_at(0, 0, "Name").unwrap();
+        ws.set_cell_value_at(1, 0, "Alice").unwrap();
+        ws.add_table(Table {
+            id: 1,
+            name: "People".to_string(),
+            display_name: "People".to_string(),
+            reference: CellRange::parse("A1:A2").unwrap(),
+            columns: vec![TableColumn {
+                id: 1,
+                name: "Name".to_string(),
+                totals_row_function: None,
+                totals_row_formula: None,
+                totals_row_label: None,
+                calculated_column_formula: None,
+            }],
+            style_info: None,
+            header_row_count: 1,
+            totals_row_count: 0,
+            totals_row_shown: false,
+        });
+        ws.add_form_control(FormControl::with_anchor(
+            FormControlKind::Checkbox {
+                caption: "check".to_string(),
+                state: CheckState::Checked,
+                cell_link: None,
+                no_3d: false,
+            },
+            DrawingAnchor::TwoCell {
+                from: CellMarker {
+                    col: 2,
+                    col_offset_emu: 0,
+                    row: 0,
+                    row_offset_emu: 0,
+                },
+                to: CellMarker {
+                    col: 4,
+                    col_offset_emu: 0,
+                    row: 1,
+                    row_offset_emu: 0,
+                },
+                edit_as: None,
+            },
+        ));
+
+        let mut bytes = Vec::new();
+        XlsbWriter::write(&wb, Cursor::new(&mut bytes)).unwrap();
+        let mut zip = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+
+        let mut rels = String::new();
+        zip.by_name("xl/worksheets/_rels/sheet1.bin.rels")
+            .unwrap()
+            .read_to_string(&mut rels)
+            .unwrap();
+        assert!(rels.contains("Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/table\""));
+        assert!(rels.contains("Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing\""));
+
+        let mut sheet = Vec::new();
+        zip.by_name("xl/worksheets/sheet1.bin")
+            .unwrap()
+            .read_to_end(&mut sheet)
+            .unwrap();
+        let mut iter = crate::biff12::RecordIter::new(Cursor::new(sheet));
+        let mut payload = Vec::new();
+        let mut legacy_rid = None;
+        loop {
+            let Ok(record_type) = iter.read_type() else { break };
+            let len = iter.fill_buffer(&mut payload).unwrap();
+            if record_type == crate::biff12::records::BRT_LEGACY_DRAWING {
+                legacy_rid = Some(crate::biff12::parser::wide_str(&payload[..len], 0).unwrap().0);
+            }
+        }
+        assert_eq!(legacy_rid.as_deref(), Some("rId2"));
+    }
 }

@@ -1374,3 +1374,143 @@ fn excel_can_read_xlsx_png_image_we_emit() {
         "PNG bytes must round-trip through Excel verbatim"
     );
 }
+
+/// One of every Forms control kind survives the Excel XLSX
+/// round-trip: worksheet <controls> block, ctrlProps parts, and VML
+/// shapes (captions) all re-read intact. Our writer deliberately
+/// omits the a14 drawing-part twins Excel itself adds; the Repaired
+/// check inside the roundtrip helper proves Excel accepts that.
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_read_xlsx_form_controls_we_emit() {
+    use duke_sheets_chart::{CellMarker, DrawingAnchor};
+    use duke_sheets_core::{CheckState, FormControl, FormControlKind, ListSelection};
+
+    let anchor = |fc: u16, fr: u32, tc: u16, tr: u32| DrawingAnchor::TwoCell {
+        from: CellMarker {
+            col: fc,
+            col_offset_emu: 0,
+            row: fr,
+            row_offset_emu: 0,
+        },
+        to: CellMarker {
+            col: tc,
+            col_offset_emu: 0,
+            row: tr,
+            row_offset_emu: 0,
+        },
+        edit_as: None,
+    };
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 42.0).expect("A1");
+    for (i, item) in ["Alpha", "Beta", "Gamma", "Delta"].iter().enumerate() {
+        ws.set_cell_value_at(i as u32, 7, *item).expect("list item");
+    }
+    // Linked cells must agree with control states: Excel drives
+    // linked controls from their cells on load.
+    // Linked-cell values are one-based (Excel's runtime convention),
+    // so they are model index + 1.
+    ws.set_cell_value("D2", true).expect("D2");
+    ws.set_cell_value("D3", 1.0).expect("D3");
+    ws.set_cell_value("D4", 3.0).expect("D4");
+    ws.set_cell_value("D5", 4.0).expect("D5");
+    ws.set_cell_value("D6", 40.0).expect("D6");
+    ws.set_cell_value("D7", 12.0).expect("D7");
+
+    let kinds: Vec<FormControlKind> = vec![
+        FormControlKind::Button {
+            caption: "Run Report".to_string(),
+        },
+        FormControlKind::Checkbox {
+            caption: "Enable audit".to_string(),
+            state: CheckState::Checked,
+            cell_link: Some("$D$2".to_string()),
+            no_3d: true,
+        },
+        FormControlKind::Checkbox {
+            caption: "Tri state".to_string(),
+            state: CheckState::Mixed,
+            cell_link: None,
+            no_3d: true,
+        },
+        FormControlKind::OptionButton {
+            caption: "Opt A".to_string(),
+            state: CheckState::Checked,
+            cell_link: Some("$D$3".to_string()),
+            first_in_group: false,
+            no_3d: true,
+        },
+        FormControlKind::OptionButton {
+            caption: "Opt B".to_string(),
+            state: CheckState::Unchecked,
+            cell_link: None,
+            first_in_group: false,
+            no_3d: true,
+        },
+        FormControlKind::Label {
+            caption: "Status label".to_string(),
+        },
+        FormControlKind::GroupBox {
+            caption: "Choices".to_string(),
+            no_3d: true,
+        },
+        FormControlKind::ListBox {
+            input_range: Some("$H$1:$H$4".to_string()),
+            cell_link: Some("$D$5".to_string()),
+            selection: ListSelection::Single,
+            selected: vec![3],
+            no_3d: true,
+        },
+        FormControlKind::ListBox {
+            input_range: Some("$H$1:$H$4".to_string()),
+            cell_link: None,
+            selection: ListSelection::Multi,
+            selected: vec![1, 3],
+            no_3d: true,
+        },
+        FormControlKind::Dropdown {
+            input_range: Some("$H$1:$H$4".to_string()),
+            cell_link: Some("$D$4".to_string()),
+            selected: Some(2),
+            lines: 6,
+            no_3d: true,
+        },
+        FormControlKind::Scrollbar {
+            value: 40,
+            min: 5,
+            max: 95,
+            increment: 2,
+            page: 10,
+            horizontal: false,
+            cell_link: Some("$D$6".to_string()),
+        },
+        FormControlKind::Spinner {
+            value: 12,
+            min: 0,
+            max: 30,
+            increment: 3,
+            cell_link: Some("$D$7".to_string()),
+        },
+    ];
+    let count = kinds.len();
+    let expected = kinds.clone();
+    for (i, kind) in kinds.into_iter().enumerate() {
+        let row = 1 + 2 * i as u32;
+        ws.add_form_control(FormControl::with_anchor(kind, anchor(1, row, 3, row + 1)));
+    }
+
+    let result = roundtrip_through_excel(&wb);
+    let sheet = result.worksheet(0).unwrap();
+    let controls = sheet.form_controls();
+    assert_eq!(controls.len(), count, "every control survives Excel");
+    for (i, control) in controls.iter().enumerate() {
+        let mut want = expected[i].clone();
+        if let FormControlKind::OptionButton { first_in_group, .. } = &mut want {
+            // Writer recomputes grouping; first radio heads the group.
+            *first_in_group = i == 3;
+        }
+        assert_eq!(control.kind, want, "control {i} kind mismatch after Excel");
+    }
+}

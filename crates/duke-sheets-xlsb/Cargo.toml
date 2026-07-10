@@ -11,6 +11,7 @@ description = "XLSB (Excel Binary Workbook) reader/writer for duke-sheets"
 duke-sheets-core.workspace = true
 duke-sheets-formula.workspace = true
 duke-sheets-chart = { workspace = true, features = ["parse"] }
+duke-sheets-vml.workspace = true
 zip.workspace = true
 quick-xml.workspace = true
 thiserror.workspace = true

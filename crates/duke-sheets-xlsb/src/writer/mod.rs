@@ -259,14 +259,11 @@ impl XlsbWriter {
                 .and_then(|dr| dr.drawing_path.as_ref())
                 .is_some();
 
-            let has_vml = if result.has_comments {
+            if result.has_comments {
                 comments::write_comments(&mut zip, &options, i, ws)?;
-                let wrote_vml = vml::write_comment_vml(&mut zip, &options, i, ws)?;
                 comment_sheet_indices.push(i);
-                wrote_vml
-            } else {
-                false
-            };
+            }
+            let has_vml = vml::write_legacy_vml(&mut zip, &options, i, ws)?;
 
             if !result.sheet_rels.is_empty() || result.has_comments || has_drawing_rel || has_vml {
                 let drawing_path = drawing_result

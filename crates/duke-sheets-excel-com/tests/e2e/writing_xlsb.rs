@@ -1441,3 +1441,138 @@ fn excel_can_read_table_we_emit() {
         "header_row_count must survive Excel round-trip"
     );
 }
+
+/// Form controls survive the Excel XLSB round-trip. In XLSB the
+/// controls live entirely in the legacy VML part referenced by
+/// BrtLegacyDrawing; the Repaired check also pins the corrected
+/// record id (0x0227).
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_read_xlsb_form_controls_we_emit() {
+    use duke_sheets_chart::{CellMarker, DrawingAnchor};
+    use duke_sheets_core::table::{Table, TableColumn};
+    use duke_sheets_core::CellRange;
+    use duke_sheets_core::{CheckState, FormControl, FormControlKind, ListSelection};
+
+    let anchor = |fc: u16, fr: u32, tc: u16, tr: u32| DrawingAnchor::TwoCell {
+        from: CellMarker {
+            col: fc,
+            col_offset_emu: 0,
+            row: fr,
+            row_offset_emu: 0,
+        },
+        to: CellMarker {
+            col: tc,
+            col_offset_emu: 0,
+            row: tr,
+            row_offset_emu: 0,
+        },
+        edit_as: None,
+    };
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value_at(0, 0, 42.0).expect("A1");
+    for (i, item) in ["Alpha", "Beta", "Gamma", "Delta"].iter().enumerate() {
+        ws.set_cell_value_at(i as u32, 7, *item).expect("list item");
+    }
+    // Linked-cell values are one-based (Excel's runtime convention),
+    // so they are model index + 1.
+    ws.set_cell_value_at(1, 3, true).expect("D2");
+    ws.set_cell_value_at(3, 3, 3.0).expect("D4");
+    ws.set_cell_value_at(5, 3, 40.0).expect("D6");
+    ws.set_cell_value_at(0, 9, "Name").expect("J1");
+    ws.set_cell_value_at(1, 9, "Alice").expect("J2");
+    ws.add_table(Table {
+        id: 1,
+        name: "People".to_string(),
+        display_name: "People".to_string(),
+        reference: CellRange::parse("J1:J2").unwrap(),
+        columns: vec![TableColumn {
+            id: 1,
+            name: "Name".to_string(),
+            totals_row_function: None,
+            totals_row_formula: None,
+            totals_row_label: None,
+            calculated_column_formula: None,
+        }],
+        style_info: None,
+        header_row_count: 1,
+        totals_row_count: 0,
+        totals_row_shown: false,
+    });
+
+    let kinds: Vec<FormControlKind> = vec![
+        FormControlKind::Button {
+            caption: "Run Report".to_string(),
+        },
+        FormControlKind::Checkbox {
+            caption: "Enable audit".to_string(),
+            state: CheckState::Checked,
+            cell_link: Some("$D$2".to_string()),
+            no_3d: true,
+        },
+        FormControlKind::OptionButton {
+            caption: "Opt A".to_string(),
+            state: CheckState::Checked,
+            cell_link: None,
+            first_in_group: false,
+            no_3d: true,
+        },
+        FormControlKind::Label {
+            caption: "Status".to_string(),
+        },
+        FormControlKind::GroupBox {
+            caption: "Choices".to_string(),
+            no_3d: true,
+        },
+        FormControlKind::ListBox {
+            input_range: Some("$H$1:$H$4".to_string()),
+            cell_link: None,
+            selection: ListSelection::Multi,
+            selected: vec![1, 3],
+            no_3d: true,
+        },
+        FormControlKind::Dropdown {
+            input_range: Some("$H$1:$H$4".to_string()),
+            cell_link: Some("$D$4".to_string()),
+            selected: Some(2),
+            lines: 6,
+            no_3d: true,
+        },
+        FormControlKind::Scrollbar {
+            value: 40,
+            min: 5,
+            max: 95,
+            increment: 2,
+            page: 10,
+            horizontal: false,
+            cell_link: Some("$D$6".to_string()),
+        },
+        FormControlKind::Spinner {
+            value: 12,
+            min: 0,
+            max: 30,
+            increment: 3,
+            cell_link: None,
+        },
+    ];
+    let count = kinds.len();
+    let expected = kinds.clone();
+    for (i, kind) in kinds.into_iter().enumerate() {
+        let row = 1 + 2 * i as u32;
+        ws.add_form_control(FormControl::with_anchor(kind, anchor(1, row, 3, row + 1)));
+    }
+
+    let result = roundtrip_through_excel_xlsb(&wb);
+    let sheet = result.worksheet(0).unwrap();
+    let controls = sheet.form_controls();
+    assert_eq!(controls.len(), count, "every control survives Excel");
+    for (i, control) in controls.iter().enumerate() {
+        let mut want = expected[i].clone();
+        if let FormControlKind::OptionButton { first_in_group, .. } = &mut want {
+            *first_in_group = true;
+        }
+        assert_eq!(control.kind, want, "control {i} kind mismatch after Excel");
+    }
+}

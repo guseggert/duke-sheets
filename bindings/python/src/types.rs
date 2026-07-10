@@ -2246,6 +2246,10 @@ pub struct PyMergeSpan {
     pub col_span: u32,
 }
 
+/// Flat two-cell drawing anchor. Objects read from files with
+/// one-cell or absolute anchors are flattened to from/to markers at
+/// Excel's default cell metrics, with `edit_as` preserving the
+/// original sizing behavior.
 #[pyclass(name = "DrawingAnchor")]
 #[derive(Clone)]
 pub struct PyDrawingAnchor {
@@ -2265,12 +2269,15 @@ pub struct PyDrawingAnchor {
     pub to_col_offset: i64,
     #[pyo3(get)]
     pub to_row_offset: i64,
+    /// "two_cell", "one_cell", or "absolute".
+    #[pyo3(get)]
+    pub edit_as: String,
 }
 
 impl From<&duke_sheets::DrawingAnchor> for PyDrawingAnchor {
     fn from(a: &duke_sheets::DrawingAnchor) -> Self {
         match a {
-            duke_sheets::DrawingAnchor::TwoCell { from, to, .. } => Self {
+            duke_sheets::DrawingAnchor::TwoCell { from, to, edit_as } => Self {
                 from_col: from.col,
                 from_row: from.row,
                 from_col_offset: from.col_offset_emu,
@@ -2279,13 +2286,266 @@ impl From<&duke_sheets::DrawingAnchor> for PyDrawingAnchor {
                 to_row: to.row,
                 to_col_offset: to.col_offset_emu,
                 to_row_offset: to.row_offset_emu,
+                edit_as: match edit_as.clone().unwrap_or(duke_sheets::EditAs::TwoCell) {
+                    duke_sheets::EditAs::TwoCell => "two_cell",
+                    duke_sheets::EditAs::OneCell => "one_cell",
+                    duke_sheets::EditAs::Absolute => "absolute",
+                }
+                .to_string(),
             },
-            _ => Self {
-                from_col: 0, from_row: 0, from_col_offset: 0, from_row_offset: 0,
-                to_col: 0, to_row: 0, to_col_offset: 0, to_row_offset: 0,
-            },
+            _ => Self::from(&a.to_two_cell()),
         }
     }
+}
+
+impl PyDrawingAnchor {
+    fn to_core(&self) -> PyResult<duke_sheets::DrawingAnchor> {
+        use duke_sheets::{CellMarker, DrawingAnchor, EditAs};
+        let edit_as = match self.edit_as.as_str() {
+            "two_cell" => EditAs::TwoCell,
+            "one_cell" => EditAs::OneCell,
+            "absolute" => EditAs::Absolute,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "invalid edit_as {other:?}; expected two_cell, one_cell, or absolute"
+                )))
+            }
+        };
+        Ok(DrawingAnchor::TwoCell {
+            from: CellMarker {
+                col: self.from_col,
+                col_offset_emu: self.from_col_offset,
+                row: self.from_row,
+                row_offset_emu: self.from_row_offset,
+            },
+            to: CellMarker {
+                col: self.to_col,
+                col_offset_emu: self.to_col_offset,
+                row: self.to_row,
+                row_offset_emu: self.to_row_offset,
+            },
+            edit_as: Some(edit_as),
+        })
+    }
+}
+
+#[pymethods]
+impl PyDrawingAnchor {
+    #[new]
+    #[pyo3(signature=(from_row, from_col, to_row, to_col, *, from_row_offset=0, from_col_offset=0, to_row_offset=0, to_col_offset=0, edit_as="two_cell"))]
+    fn new(
+        from_row: u32,
+        from_col: u16,
+        to_row: u32,
+        to_col: u16,
+        from_row_offset: i64,
+        from_col_offset: i64,
+        to_row_offset: i64,
+        to_col_offset: i64,
+        edit_as: &str,
+    ) -> PyResult<Self> {
+        let anchor = Self {
+            from_col,
+            from_row,
+            from_col_offset,
+            from_row_offset,
+            to_col,
+            to_row,
+            to_col_offset,
+            to_row_offset,
+            edit_as: edit_as.to_string(),
+        };
+        anchor.to_core()?;
+        Ok(anchor)
+    }
+}
+
+#[pyclass(name = "FormControl")]
+#[derive(Clone)]
+pub struct PyFormControl {
+    pub(crate) inner: core::FormControl,
+}
+
+impl From<&core::FormControl> for PyFormControl {
+    fn from(control: &core::FormControl) -> Self {
+        Self {
+            inner: control.clone(),
+        }
+    }
+}
+
+impl PyFormControl {
+    fn create(
+        kind: core::FormControlKind,
+        anchor: &PyDrawingAnchor,
+        name: Option<String>,
+        locked: bool,
+        printable: bool,
+    ) -> PyResult<Self> {
+        let mut control = core::FormControl::with_anchor(kind, anchor.to_core()?);
+        control.name = name;
+        control.locked = locked;
+        control.printable = printable;
+        control
+            .validate()
+            .map_err(|err| PyValueError::new_err(err.to_string()))?;
+        Ok(Self { inner: control })
+    }
+}
+
+#[pymethods]
+impl PyFormControl {
+    #[staticmethod]
+    #[pyo3(signature=(caption, anchor, *, name=None, locked=true, printable=true))]
+    fn button(caption: String, anchor: PyRef<'_, PyDrawingAnchor>, name: Option<String>, locked: bool, printable: bool) -> PyResult<Self> {
+        Self::create(core::FormControlKind::Button { caption }, &anchor, name, locked, printable)
+    }
+
+    #[staticmethod]
+    #[pyo3(signature=(caption, anchor, *, state="unchecked", cell_link=None, no_3d=false, name=None, locked=true, printable=true))]
+    fn checkbox(caption: String, anchor: PyRef<'_, PyDrawingAnchor>, state: &str, cell_link: Option<String>, no_3d: bool, name: Option<String>, locked: bool, printable: bool) -> PyResult<Self> {
+        Self::create(core::FormControlKind::Checkbox { caption, state: parse_check_state(state)?, cell_link, no_3d }, &anchor, name, locked, printable)
+    }
+
+    /// Create an option (radio) button. Radio grouping is derived
+    /// from group-box containment when writing, so there is no
+    /// grouping argument; `first_in_group` is read-side information.
+    #[staticmethod]
+    #[pyo3(signature=(caption, anchor, *, state="unchecked", cell_link=None, no_3d=false, name=None, locked=true, printable=true))]
+    fn option_button(caption: String, anchor: PyRef<'_, PyDrawingAnchor>, state: &str, cell_link: Option<String>, no_3d: bool, name: Option<String>, locked: bool, printable: bool) -> PyResult<Self> {
+        Self::create(core::FormControlKind::OptionButton { caption, state: parse_check_state(state)?, cell_link, first_in_group: false, no_3d }, &anchor, name, locked, printable)
+    }
+
+    #[staticmethod]
+    #[pyo3(signature=(caption, anchor, *, name=None, locked=true, printable=true))]
+    fn label(caption: String, anchor: PyRef<'_, PyDrawingAnchor>, name: Option<String>, locked: bool, printable: bool) -> PyResult<Self> {
+        Self::create(core::FormControlKind::Label { caption }, &anchor, name, locked, printable)
+    }
+
+    #[staticmethod]
+    #[pyo3(signature=(caption, anchor, *, no_3d=false, name=None, locked=true, printable=true))]
+    fn group_box(caption: String, anchor: PyRef<'_, PyDrawingAnchor>, no_3d: bool, name: Option<String>, locked: bool, printable: bool) -> PyResult<Self> {
+        Self::create(core::FormControlKind::GroupBox { caption, no_3d }, &anchor, name, locked, printable)
+    }
+
+    /// Create a list box. `selected` holds zero-based item indexes,
+    /// sorted ascending; a linked cell still receives Excel's
+    /// one-based value at runtime.
+    #[staticmethod]
+    #[pyo3(signature=(anchor, *, input_range=None, cell_link=None, selection="single", selected=None, no_3d=false, name=None, locked=true, printable=true))]
+    fn list_box(anchor: PyRef<'_, PyDrawingAnchor>, input_range: Option<String>, cell_link: Option<String>, selection: &str, selected: Option<Vec<u16>>, no_3d: bool, name: Option<String>, locked: bool, printable: bool) -> PyResult<Self> {
+        Self::create(core::FormControlKind::ListBox { input_range, cell_link, selection: parse_list_selection(selection)?, selected: selected.unwrap_or_default(), no_3d }, &anchor, name, locked, printable)
+    }
+
+    /// Create a dropdown (combo box). `selected` is a zero-based item
+    /// index; a linked cell still receives Excel's one-based value at
+    /// runtime.
+    #[staticmethod]
+    #[pyo3(signature=(anchor, *, input_range=None, cell_link=None, selected=None, lines=8, no_3d=false, name=None, locked=true, printable=true))]
+    fn dropdown(anchor: PyRef<'_, PyDrawingAnchor>, input_range: Option<String>, cell_link: Option<String>, selected: Option<u16>, lines: u16, no_3d: bool, name: Option<String>, locked: bool, printable: bool) -> PyResult<Self> {
+        Self::create(core::FormControlKind::Dropdown { input_range, cell_link, selected, lines, no_3d }, &anchor, name, locked, printable)
+    }
+
+    #[staticmethod]
+    #[pyo3(signature=(anchor, *, value, min, max, increment=1, page=1, horizontal=false, cell_link=None, name=None, locked=true, printable=true))]
+    fn scrollbar(anchor: PyRef<'_, PyDrawingAnchor>, value: u16, min: u16, max: u16, increment: u16, page: u16, horizontal: bool, cell_link: Option<String>, name: Option<String>, locked: bool, printable: bool) -> PyResult<Self> {
+        Self::create(core::FormControlKind::Scrollbar { value, min, max, increment, page, horizontal, cell_link }, &anchor, name, locked, printable)
+    }
+
+    #[staticmethod]
+    #[pyo3(signature=(anchor, *, value, min, max, increment=1, cell_link=None, name=None, locked=true, printable=true))]
+    fn spinner(anchor: PyRef<'_, PyDrawingAnchor>, value: u16, min: u16, max: u16, increment: u16, cell_link: Option<String>, name: Option<String>, locked: bool, printable: bool) -> PyResult<Self> {
+        Self::create(core::FormControlKind::Spinner { value, min, max, increment, cell_link }, &anchor, name, locked, printable)
+    }
+
+    #[getter]
+    fn name(&self) -> Option<String> { self.inner.name.clone() }
+    #[getter]
+    fn anchor(&self) -> PyDrawingAnchor { PyDrawingAnchor::from(&self.inner.anchor) }
+    #[getter]
+    fn kind(&self) -> &'static str { form_control_kind_name(&self.inner.kind) }
+    #[getter]
+    fn locked(&self) -> bool { self.inner.locked }
+    #[getter]
+    fn printable(&self) -> bool { self.inner.printable }
+    #[getter]
+    fn caption(&self) -> Option<String> { self.inner.caption().map(str::to_string) }
+    #[getter]
+    fn state(&self) -> Option<&'static str> { form_control_state(&self.inner.kind) }
+    #[getter]
+    fn cell_link(&self) -> Option<String> { self.inner.cell_link().map(str::to_string) }
+    #[getter]
+    fn input_range(&self) -> Option<String> { match &self.inner.kind { core::FormControlKind::ListBox { input_range, .. } | core::FormControlKind::Dropdown { input_range, .. } => input_range.clone(), _ => None } }
+    #[getter]
+    fn no_3d(&self) -> Option<bool> { match &self.inner.kind { core::FormControlKind::Checkbox { no_3d, .. } | core::FormControlKind::OptionButton { no_3d, .. } | core::FormControlKind::GroupBox { no_3d, .. } | core::FormControlKind::ListBox { no_3d, .. } | core::FormControlKind::Dropdown { no_3d, .. } => Some(*no_3d), _ => None } }
+    /// Whether this radio heads its group (writers recompute this
+    /// from group-box containment).
+    #[getter]
+    fn first_in_group(&self) -> Option<bool> { match &self.inner.kind { core::FormControlKind::OptionButton { first_in_group, .. } => Some(*first_in_group), _ => None } }
+    #[getter]
+    fn selection(&self) -> Option<&'static str> { match &self.inner.kind { core::FormControlKind::ListBox { selection, .. } => Some(match selection { core::ListSelection::Single => "single", core::ListSelection::Multi => "multi", core::ListSelection::Extend => "extend" }), _ => None } }
+    /// Zero-based selected item indexes (list boxes and dropdowns).
+    #[getter]
+    fn selected(&self) -> Option<Vec<u16>> { match &self.inner.kind { core::FormControlKind::ListBox { selected, .. } => Some(selected.clone()), core::FormControlKind::Dropdown { selected, .. } => Some(selected.iter().copied().collect()), _ => None } }
+    #[getter]
+    fn lines(&self) -> Option<u16> { match &self.inner.kind { core::FormControlKind::Dropdown { lines, .. } => Some(*lines), _ => None } }
+    #[getter]
+    fn value(&self) -> Option<u16> { match &self.inner.kind { core::FormControlKind::Scrollbar { value, .. } | core::FormControlKind::Spinner { value, .. } => Some(*value), _ => None } }
+    #[getter]
+    fn min(&self) -> Option<u16> { match &self.inner.kind { core::FormControlKind::Scrollbar { min, .. } | core::FormControlKind::Spinner { min, .. } => Some(*min), _ => None } }
+    #[getter]
+    fn max(&self) -> Option<u16> { match &self.inner.kind { core::FormControlKind::Scrollbar { max, .. } | core::FormControlKind::Spinner { max, .. } => Some(*max), _ => None } }
+    #[getter]
+    fn increment(&self) -> Option<u16> { match &self.inner.kind { core::FormControlKind::Scrollbar { increment, .. } | core::FormControlKind::Spinner { increment, .. } => Some(*increment), _ => None } }
+    #[getter]
+    fn page(&self) -> Option<u16> { match &self.inner.kind { core::FormControlKind::Scrollbar { page, .. } => Some(*page), _ => None } }
+    #[getter]
+    fn horizontal(&self) -> Option<bool> { match &self.inner.kind { core::FormControlKind::Scrollbar { horizontal, .. } => Some(*horizontal), _ => None } }
+}
+
+fn parse_check_state(value: &str) -> PyResult<core::CheckState> {
+    match value {
+        "unchecked" => Ok(core::CheckState::Unchecked),
+        "checked" => Ok(core::CheckState::Checked),
+        "mixed" => Ok(core::CheckState::Mixed),
+        _ => Err(PyValueError::new_err("state must be unchecked, checked, or mixed")),
+    }
+}
+
+fn parse_list_selection(value: &str) -> PyResult<core::ListSelection> {
+    match value {
+        "single" => Ok(core::ListSelection::Single),
+        "multi" => Ok(core::ListSelection::Multi),
+        "extend" => Ok(core::ListSelection::Extend),
+        _ => Err(PyValueError::new_err("selection must be single, multi, or extend")),
+    }
+}
+
+fn form_control_kind_name(kind: &core::FormControlKind) -> &'static str {
+    match kind {
+        core::FormControlKind::Button { .. } => "button",
+        core::FormControlKind::Checkbox { .. } => "checkbox",
+        core::FormControlKind::OptionButton { .. } => "option_button",
+        core::FormControlKind::Label { .. } => "label",
+        core::FormControlKind::GroupBox { .. } => "group_box",
+        core::FormControlKind::ListBox { .. } => "list_box",
+        core::FormControlKind::Dropdown { .. } => "dropdown",
+        core::FormControlKind::Scrollbar { .. } => "scrollbar",
+        core::FormControlKind::Spinner { .. } => "spinner",
+    }
+}
+
+fn form_control_state(kind: &core::FormControlKind) -> Option<&'static str> {
+    let state = match kind {
+        core::FormControlKind::Checkbox { state, .. }
+        | core::FormControlKind::OptionButton { state, .. } => state,
+        _ => return None,
+    };
+    Some(match state {
+        core::CheckState::Unchecked => "unchecked",
+        core::CheckState::Checked => "checked",
+        core::CheckState::Mixed => "mixed",
+    })
 }
 
 #[pyclass(name = "DataReference")]

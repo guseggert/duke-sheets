@@ -10,6 +10,7 @@
 //! All tests are batched into one process to amortise the per-test
 //! VM round-trip cost (~15-25s of warm-VM time per test).
 
+use duke_sheets_chart::{CellMarker, DrawingAnchor};
 use duke_sheets_core::auto_filter::{AutoFilter, ColumnFilter, FilterColumn, Top10Filter};
 use duke_sheets_core::conditional_format::ConditionalFormatRule;
 use duke_sheets_core::rich_text::{RichTextRun, RunFont};
@@ -23,8 +24,8 @@ use serde_json::json;
 
 use crate::{
     atp_all_formulas, cleanup_fixture, ensure_vm_temp_dir, excel_bridge, pull_file_from_vm,
-    roundtrip_through_excel_xls, roundtrip_through_excel_xls_bytes, temp_fixture_xls,
-    xls_externname_record_bodies, xls_formula_ptg_streams_for_compare,
+    push_file_to_vm, roundtrip_through_excel_xls, roundtrip_through_excel_xls_bytes,
+    temp_fixture_xls, xls_externname_record_bodies, xls_formula_ptg_streams_for_compare,
 };
 
 fn range(start: &str, end: &str) -> CellRange {
@@ -2375,4 +2376,660 @@ fn excel_byte_parity_for_all_xls_atp_functions_we_emit() {
         our_en, excel_en,
         "our EXTERNNAME records (order/bodies) differ from Excel-authored output"
     );
+}
+
+/// Anchor helper for form-control parity tests.
+fn control_anchor(from_col: u16, from_row: u32, to_col: u16, to_row: u32) -> DrawingAnchor {
+    DrawingAnchor::TwoCell {
+        from: CellMarker {
+            col: from_col,
+            col_offset_emu: 0,
+            row: from_row,
+            row_offset_emu: 0,
+        },
+        to: CellMarker {
+            col: to_col,
+            col_offset_emu: 0,
+            row: to_row,
+            row_offset_emu: 0,
+        },
+        edit_as: None,
+    }
+}
+
+/// One of every Forms control kind survives the Excel round-trip
+/// with its kind-specific data intact: captions, checked states,
+/// cell links, input ranges, selections, and scroll parameters.
+///
+/// `no_3d` is deliberately not asserted: Excel rewrites the 3D flag
+/// unconditionally on re-save, so only in-process round trips can
+/// pin it.
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_read_form_controls_we_emit() {
+    use duke_sheets_core::{CheckState, FormControl, FormControlKind, ListSelection};
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 42.0).expect("A1");
+    for (i, item) in ["Alpha", "Beta", "Gamma", "Delta"].iter().enumerate() {
+        ws.set_cell_value_at(i as u32, 7, *item).expect("list item");
+    }
+    // Linked cells must agree with the control states: Excel drives a
+    // linked control's state from its cell on load, so a mismatch is
+    // "corrected" during the round-trip.
+    // Linked-cell values are one-based (Excel's runtime convention),
+    // so they are model index + 1.
+    ws.set_cell_value("D2", true).expect("D2");
+    ws.set_cell_value("D3", 1.0).expect("D3");
+    ws.set_cell_value("D4", 3.0).expect("D4");
+    ws.set_cell_value("D5", 4.0).expect("D5");
+    ws.set_cell_value("D6", 40.0).expect("D6");
+    ws.set_cell_value("D7", 12.0).expect("D7");
+
+    let kinds: Vec<FormControlKind> = vec![
+        FormControlKind::Button {
+            caption: "Run Report".to_string(),
+        },
+        FormControlKind::Checkbox {
+            caption: "Enable audit".to_string(),
+            state: CheckState::Checked,
+            cell_link: Some("$D$2".to_string()),
+            no_3d: true,
+        },
+        FormControlKind::Checkbox {
+            caption: "Tri state".to_string(),
+            state: CheckState::Mixed,
+            cell_link: None,
+            no_3d: true,
+        },
+        FormControlKind::OptionButton {
+            caption: "Opt A".to_string(),
+            state: CheckState::Checked,
+            cell_link: Some("$D$3".to_string()),
+            first_in_group: true,
+            no_3d: true,
+        },
+        FormControlKind::OptionButton {
+            caption: "Opt B".to_string(),
+            state: CheckState::Unchecked,
+            cell_link: None,
+            first_in_group: false,
+            no_3d: true,
+        },
+        FormControlKind::Label {
+            caption: "Status label".to_string(),
+        },
+        FormControlKind::GroupBox {
+            caption: "Choices".to_string(),
+            no_3d: true,
+        },
+        FormControlKind::ListBox {
+            input_range: Some("$H$1:$H$4".to_string()),
+            cell_link: Some("$D$5".to_string()),
+            selection: ListSelection::Single,
+            selected: vec![3],
+            no_3d: true,
+        },
+        FormControlKind::Dropdown {
+            input_range: Some("$H$1:$H$4".to_string()),
+            cell_link: Some("$D$4".to_string()),
+            selected: Some(2),
+            lines: 6,
+            no_3d: true,
+        },
+        FormControlKind::Scrollbar {
+            value: 40,
+            min: 5,
+            max: 95,
+            increment: 2,
+            page: 10,
+            horizontal: false,
+            cell_link: Some("$D$6".to_string()),
+        },
+        FormControlKind::Spinner {
+            value: 12,
+            min: 0,
+            max: 30,
+            increment: 3,
+            cell_link: Some("$D$7".to_string()),
+        },
+        FormControlKind::ListBox {
+            input_range: Some("$H$1:$H$4".to_string()),
+            cell_link: None,
+            selection: ListSelection::Multi,
+            selected: vec![1, 3],
+            no_3d: true,
+        },
+    ];
+    let count = kinds.len();
+    for (i, kind) in kinds.into_iter().enumerate() {
+        let row = 1 + 2 * i as u32;
+        ws.add_form_control(FormControl::with_anchor(
+            kind,
+            control_anchor(1, row, 3, row + 1),
+        ));
+    }
+
+    let result = roundtrip_through_excel_xls(&wb);
+    let sheet = result.worksheet(0).unwrap();
+    let controls = sheet.form_controls();
+    assert_eq!(
+        controls.len(),
+        count,
+        "every control must survive the Excel round-trip"
+    );
+
+    match &controls[0].kind {
+        FormControlKind::Button { caption } => assert_eq!(caption, "Run Report"),
+        other => panic!("control 0: expected Button, got {other:?}"),
+    }
+    match &controls[1].kind {
+        FormControlKind::Checkbox {
+            caption,
+            state,
+            cell_link,
+            ..
+        } => {
+            assert_eq!(caption, "Enable audit");
+            assert_eq!(*state, CheckState::Checked);
+            assert_eq!(cell_link.as_deref(), Some("$D$2"));
+        }
+        other => panic!("control 1: expected Checkbox, got {other:?}"),
+    }
+    match &controls[2].kind {
+        FormControlKind::Checkbox { caption, state, .. } => {
+            assert_eq!(caption, "Tri state");
+            assert_eq!(*state, CheckState::Mixed, "mixed state must survive");
+        }
+        other => panic!("control 2: expected Checkbox, got {other:?}"),
+    }
+    match &controls[3].kind {
+        FormControlKind::OptionButton {
+            caption,
+            state,
+            cell_link,
+            first_in_group,
+            ..
+        } => {
+            assert_eq!(caption, "Opt A");
+            assert_eq!(*state, CheckState::Checked);
+            assert_eq!(cell_link.as_deref(), Some("$D$3"));
+            assert!(*first_in_group, "first radio keeps fFirstBtn");
+        }
+        other => panic!("control 3: expected OptionButton, got {other:?}"),
+    }
+    match &controls[4].kind {
+        FormControlKind::OptionButton { caption, state, .. } => {
+            assert_eq!(caption, "Opt B");
+            assert_eq!(*state, CheckState::Unchecked);
+        }
+        other => panic!("control 4: expected OptionButton, got {other:?}"),
+    }
+    match &controls[5].kind {
+        FormControlKind::Label { caption } => assert_eq!(caption, "Status label"),
+        other => panic!("control 5: expected Label, got {other:?}"),
+    }
+    match &controls[6].kind {
+        FormControlKind::GroupBox { caption, .. } => assert_eq!(caption, "Choices"),
+        other => panic!("control 6: expected GroupBox, got {other:?}"),
+    }
+    match &controls[7].kind {
+        FormControlKind::ListBox {
+            input_range,
+            cell_link,
+            selection,
+            selected,
+            ..
+        } => {
+            assert_eq!(input_range.as_deref(), Some("$H$1:$H$4"));
+            assert_eq!(cell_link.as_deref(), Some("$D$5"));
+            assert_eq!(*selection, ListSelection::Single);
+            assert_eq!(selected, &vec![3]);
+        }
+        other => panic!("control 7: expected ListBox, got {other:?}"),
+    }
+    match &controls[8].kind {
+        FormControlKind::Dropdown {
+            input_range,
+            cell_link,
+            selected,
+            lines,
+            ..
+        } => {
+            assert_eq!(input_range.as_deref(), Some("$H$1:$H$4"));
+            assert_eq!(cell_link.as_deref(), Some("$D$4"));
+            assert_eq!(*selected, Some(2));
+            assert_eq!(*lines, 6);
+        }
+        other => panic!("control 8: expected Dropdown, got {other:?}"),
+    }
+    match &controls[9].kind {
+        FormControlKind::Scrollbar {
+            value,
+            min,
+            max,
+            increment,
+            page,
+            horizontal,
+            cell_link,
+        } => {
+            assert_eq!(*value, 40);
+            assert_eq!(*min, 5);
+            assert_eq!(*max, 95);
+            assert_eq!(*increment, 2);
+            assert_eq!(*page, 10);
+            assert!(!*horizontal);
+            assert_eq!(cell_link.as_deref(), Some("$D$6"));
+        }
+        other => panic!("control 9: expected Scrollbar, got {other:?}"),
+    }
+    match &controls[10].kind {
+        FormControlKind::Spinner {
+            value,
+            min,
+            max,
+            increment,
+            cell_link,
+        } => {
+            assert_eq!(*value, 12);
+            assert_eq!(*min, 0);
+            assert_eq!(*max, 30);
+            assert_eq!(*increment, 3);
+            assert_eq!(cell_link.as_deref(), Some("$D$7"));
+        }
+        other => panic!("control 10: expected Spinner, got {other:?}"),
+    }
+    match &controls[11].kind {
+        FormControlKind::ListBox {
+            selection,
+            selected,
+            ..
+        } => {
+            assert_eq!(*selection, ListSelection::Multi);
+            assert_eq!(selected, &vec![1, 3], "multi-selection must survive");
+        }
+        other => panic!("control 11: expected ListBox, got {other:?}"),
+    }
+
+    // Anchors survive (cell coordinates; offsets are requantised by
+    // Excel and asserted in the in-process layer instead).
+    match &controls[0].anchor {
+        DrawingAnchor::TwoCell { from, to, .. } => {
+            assert_eq!((from.col, from.row), (1, 1), "button anchor from");
+            assert_eq!((to.col, to.row), (3, 2), "button anchor to");
+        }
+        other => panic!("expected TwoCell anchor, got {other:?}"),
+    }
+}
+
+/// Excel's own interpretation of persisted selections pins the
+/// zero-based model ↔ one-based file conversion. A symmetric
+/// writer/reader offset bug survives a model round-trip, but not
+/// this: `ControlFormat.ListIndex` is one-based, so model index N
+/// must surface as N+1 in Excel.
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_interprets_xls_list_selections_one_based() {
+    use duke_sheets_core::{FormControl, FormControlKind, ListSelection};
+    use duke_sheets_xls::XlsWriter;
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    for (i, item) in ["Alpha", "Beta", "Gamma", "Delta"].iter().enumerate() {
+        ws.set_cell_value_at(i as u32, 7, *item).expect("item");
+    }
+    ws.add_form_control(FormControl::with_anchor(
+        FormControlKind::ListBox {
+            input_range: Some("$H$1:$H$4".to_string()),
+            cell_link: None,
+            selection: ListSelection::Single,
+            selected: vec![2],
+            no_3d: false,
+        },
+        control_anchor(1, 1, 3, 3),
+    ));
+    ws.add_form_control(FormControl::with_anchor(
+        FormControlKind::Dropdown {
+            input_range: Some("$H$1:$H$4".to_string()),
+            cell_link: None,
+            selected: Some(1),
+            lines: 8,
+            no_3d: false,
+        },
+        control_anchor(1, 5, 3, 6),
+    ));
+
+    let fixture = temp_fixture_xls();
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("write xls");
+    std::fs::write(&fixture.host_path, &bytes).expect("write fixture");
+    ensure_vm_temp_dir();
+    push_file_to_vm(&fixture);
+
+    let bridge = excel_bridge();
+    let excel = bridge.lock().unwrap();
+    let opened = excel
+        .open_workbook(&fixture.vm_path)
+        .expect("Excel should open our XLS without error");
+    let name = opened.name().expect("workbook name");
+    assert!(!name.contains("Repaired"), "Excel repaired the file: {name}");
+
+    // `Shapes.Item` is a method in Excel's type library, so it is
+    // unreachable through chain steps (GetProperty binding); invoke
+    // it explicitly.
+    let shapes_handle = excel
+        .navigate(
+            opened.handle(),
+            vec![
+                SheetRef::Index(0).to_chain_step(),
+                ChainStep::Property("Shapes".into()),
+            ],
+        )
+        .expect("navigate shapes");
+    let list_index = |shape: u32| -> f64 {
+        let shape_handle = match excel.invoke(
+            shapes_handle,
+            vec![],
+            "Item",
+            vec![serde_json::Value::from(shape)],
+        ) {
+            Ok(Some(ResponseData::Handle { handle })) => handle,
+            other => panic!("expected shape handle, got {other:?}"),
+        };
+        let index = match excel.get(
+            shape_handle,
+            vec![ChainStep::Property("ControlFormat".into())],
+            "ListIndex",
+        ) {
+            Ok(Some(ResponseData::Value { value })) => {
+                value.as_f64().expect("numeric ListIndex")
+            }
+            other => panic!("expected ListIndex value, got {other:?}"),
+        };
+        excel.release(shape_handle).expect("release shape");
+        index
+    };
+    assert_eq!(list_index(1), 3.0, "list box: model index 2 is Excel item 3");
+    assert_eq!(list_index(2), 2.0, "dropdown: model index 1 is Excel item 2");
+
+    excel.release(shapes_handle).expect("release shapes");
+    opened.close().expect("close workbook");
+    cleanup_fixture(&fixture);
+
+    // Read side: Excel authors the controls (ListIndex is one-based),
+    // saves XLS, and our reader must surface zero-based indices.
+    let authored = excel.create_workbook().expect("create workbook");
+    for (i, item) in ["Alpha", "Beta", "Gamma", "Delta"].iter().enumerate() {
+        authored
+            .set_cell_value(&format!("H{}", i + 1), *item)
+            .expect("item");
+    }
+    let sheet_shapes = excel
+        .navigate(
+            authored.handle(),
+            vec![
+                SheetRef::Index(0).to_chain_step(),
+                ChainStep::Property("Shapes".into()),
+            ],
+        )
+        .expect("navigate authored shapes");
+    // xlListBox = 6, xlDropDown = 2
+    for (control_type, list_index) in [(6, 3), (2, 2)] {
+        let shape = match excel.invoke(
+            sheet_shapes,
+            vec![],
+            "AddFormControl",
+            vec![
+                serde_json::Value::from(control_type),
+                serde_json::Value::from(10 * control_type),
+                serde_json::Value::from(10),
+                serde_json::Value::from(60),
+                serde_json::Value::from(60),
+            ],
+        ) {
+            Ok(Some(ResponseData::Handle { handle })) => handle,
+            other => panic!("expected AddFormControl handle, got {other:?}"),
+        };
+        excel
+            .set(
+                shape,
+                vec![ChainStep::Property("ControlFormat".into())],
+                "ListFillRange",
+                serde_json::Value::from("$H$1:$H$4"),
+            )
+            .expect("set ListFillRange");
+        excel
+            .set(
+                shape,
+                vec![ChainStep::Property("ControlFormat".into())],
+                "ListIndex",
+                serde_json::Value::from(list_index),
+            )
+            .expect("set ListIndex");
+        excel.release(shape).ok();
+    }
+    let out_xls = temp_fixture_xls();
+    authored.save_as(&out_xls.vm_path, 56).expect("save xls");
+    authored.close().expect("close authored");
+    excel.release(sheet_shapes).ok();
+    pull_file_from_vm(&out_xls);
+    let authored_model = duke_sheets_xls::XlsReader::read_file(&out_xls.host_path).expect("read");
+    let authored_controls = authored_model.worksheet(0).unwrap().form_controls();
+    match &authored_controls[0].kind {
+        FormControlKind::ListBox { selected, .. } => {
+            assert_eq!(selected, &vec![2], "Excel item 3 is model index 2");
+        }
+        other => panic!("expected ListBox, got {other:?}"),
+    }
+    match &authored_controls[1].kind {
+        FormControlKind::Dropdown { selected, .. } => {
+            assert_eq!(*selected, Some(1), "Excel item 2 is model index 1");
+        }
+        other => panic!("expected Dropdown, got {other:?}"),
+    }
+    cleanup_fixture(&out_xls);
+}
+
+/// Radio grouping by enclosing group box survives the Excel
+/// round-trip: two boxes with two radios each plus a loose radio
+/// come back as three groups (fFirstBtn on each group's first
+/// radio), with per-group checked states intact.
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_read_radio_groups_we_emit() {
+    use duke_sheets_core::{CheckState, FormControl, FormControlKind};
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 42.0).expect("A1");
+
+    let radio = |caption: &str, state: CheckState| FormControlKind::OptionButton {
+        caption: caption.to_string(),
+        state,
+        cell_link: None,
+        first_in_group: false,
+        no_3d: true,
+    };
+    let group_box = |caption: &str| FormControlKind::GroupBox {
+        caption: caption.to_string(),
+        no_3d: true,
+    };
+    ws.add_form_control(FormControl::with_anchor(
+        group_box("Box A"),
+        control_anchor(0, 0, 2, 6),
+    ));
+    ws.add_form_control(FormControl::with_anchor(
+        group_box("Box B"),
+        control_anchor(4, 0, 6, 6),
+    ));
+    ws.add_form_control(FormControl::with_anchor(
+        radio("A1", CheckState::Checked),
+        control_anchor(1, 1, 2, 2),
+    ));
+    ws.add_form_control(FormControl::with_anchor(
+        radio("B1", CheckState::Unchecked),
+        control_anchor(5, 1, 6, 2),
+    ));
+    ws.add_form_control(FormControl::with_anchor(
+        radio("A2", CheckState::Unchecked),
+        control_anchor(1, 3, 2, 4),
+    ));
+    ws.add_form_control(FormControl::with_anchor(
+        radio("B2", CheckState::Checked),
+        control_anchor(5, 3, 6, 4),
+    ));
+    ws.add_form_control(FormControl::with_anchor(
+        radio("Loose", CheckState::Unchecked),
+        control_anchor(8, 1, 9, 2),
+    ));
+
+    let result = roundtrip_through_excel_xls(&wb);
+    let sheet = result.worksheet(0).unwrap();
+    let controls = sheet.form_controls();
+    assert_eq!(controls.len(), 7, "all controls survive");
+
+    let radios: Vec<(String, CheckState, bool)> = controls
+        .iter()
+        .filter_map(|c| match &c.kind {
+            FormControlKind::OptionButton {
+                caption,
+                state,
+                first_in_group,
+                ..
+            } => Some((caption.clone(), *state, *first_in_group)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        radios,
+        vec![
+            ("A1".to_string(), CheckState::Checked, true),
+            ("B1".to_string(), CheckState::Unchecked, true),
+            ("A2".to_string(), CheckState::Unchecked, false),
+            ("B2".to_string(), CheckState::Checked, false),
+            ("Loose".to_string(), CheckState::Unchecked, true),
+        ],
+        "three radio groups with per-group states must survive Excel"
+    );
+}
+
+/// A form control coexisting with a comment and a picture keeps the
+/// OBJ↔shape pairing straight through Excel's re-save.
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_read_mixed_control_comment_picture_we_emit() {
+    use duke_sheets_core::{CheckState, FormControl, FormControlKind};
+
+    const TEST_PNG_1X1: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+        0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+        0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0B, 0x49, 0x44, 0x41, 0x54, 0x78,
+        0x9C, 0x63, 0x60, 0x00, 0x02, 0x00, 0x00, 0x05, 0x00, 0x01, 0x7A, 0x5E, 0xAB, 0x3F,
+        0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 7.0).expect("A1");
+    ws.set_cell_value("D2", true).expect("D2");
+    ws.add_image(duke_sheets_chart::EmbeddedImage {
+        id: 1,
+        name: "Pic".to_string(),
+        description: None,
+        anchor: control_anchor(6, 1, 8, 4),
+        format: duke_sheets_chart::ImageFormat::Png,
+        media_path: String::new(),
+        svg_media_path: None,
+        width_emu: 1_000_000,
+        height_emu: 1_000_000,
+        rotation: None,
+        flip_h: false,
+        flip_v: false,
+        data: TEST_PNG_1X1.to_vec(),
+        svg_data: None,
+    });
+    ws.set_comment_at(
+        0,
+        0,
+        duke_sheets_core::CellComment::new("Author", "a note"),
+    );
+    ws.add_form_control(FormControl::with_anchor(
+        FormControlKind::Checkbox {
+            caption: "mixed sheet".to_string(),
+            state: CheckState::Checked,
+            cell_link: Some("$D$2".to_string()),
+            no_3d: true,
+        },
+        control_anchor(1, 1, 3, 2),
+    ));
+
+    let result = roundtrip_through_excel_xls(&wb);
+    let sheet = result.worksheet(0).unwrap();
+    assert_eq!(sheet.image_count(), 1, "picture survives");
+    assert_eq!(sheet.comment_count(), 1, "comment survives");
+    let controls = sheet.form_controls();
+    assert_eq!(controls.len(), 1, "control survives");
+    match &controls[0].kind {
+        FormControlKind::Checkbox {
+            caption,
+            state,
+            cell_link,
+            ..
+        } => {
+            assert_eq!(caption, "mixed sheet");
+            assert_eq!(*state, CheckState::Checked);
+            assert_eq!(cell_link.as_deref(), Some("$D$2"));
+        }
+        other => panic!("expected Checkbox, got {other:?}"),
+    }
+}
+
+/// A multi-select list whose bsels array exceeds one OBJ body uses
+/// CONTINUE records and survives Excel without repair.
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_read_large_xls_list_control_we_emit() {
+    use duke_sheets_chart::{CellMarker, DrawingAnchor};
+    use duke_sheets_core::{FormControl, FormControlKind, ListSelection};
+
+    let mut wb = Workbook::new();
+    wb.worksheet_mut(0)
+        .unwrap()
+        .add_form_control(FormControl::with_anchor(
+            FormControlKind::ListBox {
+                input_range: Some("$H$1:$H$10000".to_string()),
+                cell_link: None,
+                selection: ListSelection::Multi,
+                selected: vec![0, 4_999, 9_999],
+                no_3d: false,
+            },
+            DrawingAnchor::TwoCell {
+                from: CellMarker {
+                    col: 0,
+                    col_offset_emu: 0,
+                    row: 0,
+                    row_offset_emu: 0,
+                },
+                to: CellMarker {
+                    col: 2,
+                    col_offset_emu: 0,
+                    row: 10,
+                    row_offset_emu: 0,
+                },
+                edit_as: None,
+            },
+        ));
+
+    let result = roundtrip_through_excel_xls(&wb);
+    match &result.worksheet(0).unwrap().form_controls()[0].kind {
+        FormControlKind::ListBox {
+            selection,
+            selected,
+            ..
+        } => {
+            assert_eq!(*selection, ListSelection::Multi);
+            assert_eq!(selected, &vec![0, 4_999, 9_999]);
+        }
+        other => panic!("expected ListBox, got {other:?}"),
+    }
 }

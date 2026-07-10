@@ -13,6 +13,7 @@ use crate::cell::{CellAddress, CellData, CellRange, CellStorage, CellValue, Form
 use crate::comment::CellComment;
 use crate::conditional_format::ConditionalFormatRule;
 use crate::error::{Error, Result};
+use crate::form_control::FormControl;
 use crate::hyperlink::Hyperlink;
 use crate::locale::Locale;
 use crate::style::Style;
@@ -75,6 +76,8 @@ pub struct Worksheet {
     charts_ex: Vec<ChartEx>,
     /// Embedded images from drawing
     images: Vec<EmbeddedImage>,
+    /// Form controls (Forms toolbar objects)
+    form_controls: Vec<FormControl>,
     /// Standalone auto-filter (dropdown filter on columns)
     auto_filter: Option<AutoFilter>,
     /// Horizontal page breaks (row breaks)
@@ -160,6 +163,7 @@ impl Worksheet {
             charts: Vec::new(),
             charts_ex: Vec::new(),
             images: Vec::new(),
+            form_controls: Vec::new(),
             auto_filter: None,
             row_breaks: Vec::new(),
             col_breaks: Vec::new(),
@@ -1306,6 +1310,66 @@ impl Worksheet {
     /// Get the number of embedded images.
     pub fn image_count(&self) -> usize {
         self.images.len()
+    }
+
+    /// Add a form control to this worksheet without validating it.
+    /// Readers use this to preserve out-of-spec controls from
+    /// existing files; prefer [`Self::try_add_form_control`] when
+    /// constructing controls programmatically.
+    pub fn add_form_control(&mut self, control: FormControl) {
+        self.form_controls.push(control);
+    }
+
+    /// Validate and append a form control, returning its zero-based index.
+    pub fn try_add_form_control(&mut self, control: FormControl) -> Result<usize> {
+        control.validate()?;
+        let index = self.form_controls.len();
+        self.form_controls.push(control);
+        Ok(index)
+    }
+
+    /// Get all form controls.
+    pub fn form_controls(&self) -> &[FormControl] {
+        &self.form_controls
+    }
+
+    /// Get mutable access to the form controls.
+    pub fn form_controls_mut(&mut self) -> &mut Vec<FormControl> {
+        &mut self.form_controls
+    }
+
+    /// Get a form control by zero-based index.
+    pub fn form_control(&self, index: usize) -> Option<&FormControl> {
+        self.form_controls.get(index)
+    }
+
+    /// Replace a form control by zero-based index.
+    pub fn set_form_control(&mut self, index: usize, control: FormControl) -> Result<()> {
+        control.validate()?;
+        let count = self.form_controls.len();
+        let slot = self.form_controls.get_mut(index).ok_or_else(|| {
+            Error::other(format!(
+                "form control index {index} out of bounds (count: {count})"
+            ))
+        })?;
+        *slot = control;
+        Ok(())
+    }
+
+    /// Remove and return a form control by zero-based index.
+    pub fn remove_form_control(&mut self, index: usize) -> Result<FormControl> {
+        if index >= self.form_controls.len() {
+            return Err(Error::other(format!(
+                "form control index {index} out of bounds (count: {})",
+                self.form_controls.len()
+            )));
+        }
+        Ok(self.form_controls.remove(index))
+    }
+
+    /// Get the number of form controls.
+    pub fn form_control_count(&self) -> usize {
+        self.form_controls.len()
     }
 
     /// Set the standalone auto-filter for this worksheet.

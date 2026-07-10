@@ -4,7 +4,7 @@
 
 #![cfg(target_arch = "wasm32")]
 
-use js_sys::{Function, Object, Reflect};
+use js_sys::{Array, Function, Object, Reflect};
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::*;
 
@@ -323,6 +323,169 @@ fn make_options(entries: &[(&str, JsValue)]) -> JsValue {
         Reflect::set(&obj, &JsValue::from_str(key), val).unwrap();
     }
     obj.into()
+}
+
+fn control_anchor() -> JsValue {
+    make_options(&[
+        ("fromCol", JsValue::from_f64(1.0)),
+        ("fromRow", JsValue::from_f64(1.0)),
+        ("fromColOffset", JsValue::from_f64(0.0)),
+        ("fromRowOffset", JsValue::from_f64(0.0)),
+        ("toCol", JsValue::from_f64(3.0)),
+        ("toRow", JsValue::from_f64(2.0)),
+        ("toColOffset", JsValue::from_f64(0.0)),
+        ("toRowOffset", JsValue::from_f64(0.0)),
+        ("editAs", JsValue::from_str("twoCell")),
+    ])
+}
+
+fn form_control(kind: JsValue) -> JsValue {
+    make_options(&[("anchor", control_anchor()), ("kind", kind)])
+}
+
+#[wasm_bindgen_test]
+fn test_form_control_mutations_and_roundtrip() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    // Zero-based: first and third items.
+    let selected = Array::new();
+    selected.push(&JsValue::from_f64(0.0));
+    selected.push(&JsValue::from_f64(2.0));
+    let kinds = vec![
+        make_options(&[("kind", JsValue::from_str("button")), ("caption", JsValue::from_str("Run"))]),
+        make_options(&[("kind", JsValue::from_str("checkbox")), ("caption", JsValue::from_str("Check")), ("state", JsValue::from_str("checked")), ("no3D", JsValue::FALSE)]),
+        make_options(&[("kind", JsValue::from_str("optionButton")), ("caption", JsValue::from_str("Option")), ("state", JsValue::from_str("unchecked")), ("no3D", JsValue::FALSE)]),
+        make_options(&[("kind", JsValue::from_str("label")), ("caption", JsValue::from_str("Label"))]),
+        make_options(&[("kind", JsValue::from_str("groupBox")), ("caption", JsValue::from_str("Group")), ("no3D", JsValue::FALSE)]),
+        make_options(&[("kind", JsValue::from_str("listBox")), ("inputRange", JsValue::from_str("$A$1:$A$3")), ("selection", JsValue::from_str("multi")), ("selected", selected.into()), ("no3D", JsValue::FALSE)]),
+        make_options(&[("kind", JsValue::from_str("dropdown")), ("inputRange", JsValue::from_str("$A$1:$A$3")), ("selected", JsValue::from_f64(2.0)), ("lines", JsValue::from_f64(8.0)), ("no3D", JsValue::FALSE)]),
+        make_options(&[("kind", JsValue::from_str("scrollbar")), ("value", JsValue::from_f64(5.0)), ("min", JsValue::from_f64(0.0)), ("max", JsValue::from_f64(10.0)), ("increment", JsValue::from_f64(1.0)), ("page", JsValue::from_f64(2.0)), ("horizontal", JsValue::FALSE)]),
+        make_options(&[("kind", JsValue::from_str("spinner")), ("value", JsValue::from_f64(2.0)), ("min", JsValue::from_f64(0.0)), ("max", JsValue::from_f64(10.0)), ("increment", JsValue::from_f64(1.0))]),
+    ];
+    for kind in kinds {
+        sheet.add_form_control(form_control(kind)).unwrap();
+    }
+    assert_eq!(sheet.form_control_count().unwrap(), 9);
+    let controls = Array::from(&sheet.form_controls().unwrap());
+    assert_eq!(controls.length(), 9);
+
+    assert!(sheet
+        .add_form_control(form_control(make_options(&[
+            ("kind", JsValue::from_str("optionButton")),
+            ("caption", JsValue::from_str("Bad")),
+            ("state", JsValue::from_str("mixed")),
+            ("no3D", JsValue::FALSE),
+        ])))
+        .is_err(), "mixed option buttons must be rejected");
+    assert!(sheet.remove_form_control(99).is_err(), "OOB removal must fail");
+    assert!(
+        sheet
+            .set_form_control(
+                99,
+                form_control(make_options(&[
+                    ("kind", JsValue::from_str("label")),
+                    ("caption", JsValue::from_str("nope")),
+                ])),
+            )
+            .is_err(),
+        "OOB set must fail"
+    );
+
+    sheet
+        .set_form_control(
+            0,
+            form_control(make_options(&[("kind", JsValue::from_str("label")), ("caption", JsValue::from_str("Replaced"))])),
+        )
+        .unwrap();
+    sheet.remove_form_control(0).unwrap();
+    assert_eq!(sheet.form_control_count().unwrap(), 8);
+
+    // After removing the leading button: checkbox, optionButton,
+    // label, groupBox, listBox, dropdown, scrollbar, spinner.
+    let assert_controls_survive = |sheet: &Worksheet| {
+        let controls = Array::from(&sheet.form_controls().unwrap());
+        let kind_of = |i: u32| -> JsValue {
+            Reflect::get(&controls.get(i), &"kind".into()).unwrap()
+        };
+        let tags: Vec<String> = (0..controls.length())
+            .map(|i| get_string_field(&kind_of(i), "kind"))
+            .collect();
+        assert_eq!(
+            tags,
+            [
+                "checkbox",
+                "optionButton",
+                "label",
+                "groupBox",
+                "listBox",
+                "dropdown",
+                "scrollbar",
+                "spinner"
+            ]
+        );
+        let checkbox = kind_of(0);
+        assert_eq!(get_string_field(&checkbox, "state"), "checked");
+        let list_box = kind_of(4);
+        assert_eq!(get_string_field(&list_box, "selection"), "multi");
+        let selected: Vec<f64> =
+            Array::from(&Reflect::get(&list_box, &"selected".into()).unwrap())
+                .iter()
+                .map(|v| v.as_f64().unwrap())
+                .collect();
+        assert_eq!(selected, [0.0, 2.0]);
+        let dropdown = kind_of(5);
+        assert_eq!(get_f64_field(&dropdown, "selected"), 2.0);
+        assert_eq!(get_f64_field(&dropdown, "lines"), 8.0);
+        let scrollbar = kind_of(6);
+        assert_eq!(get_f64_field(&scrollbar, "value"), 5.0);
+        assert_eq!(get_f64_field(&scrollbar, "page"), 2.0);
+        assert!(!get_bool_field(&scrollbar, "horizontal"));
+        let spinner = kind_of(7);
+        assert_eq!(get_f64_field(&spinner, "increment"), 1.0);
+    };
+    assert_controls_survive(&sheet);
+
+    for bytes in [wb.save_xlsx_bytes().unwrap(), wb.save_xlsb_bytes().unwrap()] {
+        let reopened = Workbook::from_bytes(&bytes).unwrap();
+        let sheet = reopened.get_sheet(0).unwrap();
+        assert_eq!(sheet.form_control_count().unwrap(), 8);
+        assert_controls_survive(&sheet);
+    }
+    let xls = wb
+        .save_xls_bytes_encrypted("password", None, None)
+        .unwrap();
+    let reopened = Workbook::from_bytes_with_password(&xls, "password", None).unwrap();
+    let sheet = reopened.get_sheet(0).unwrap();
+    assert_eq!(sheet.form_control_count().unwrap(), 8);
+    assert_controls_survive(&sheet);
+}
+
+/// The form-control API must be reachable through its documented
+/// camelCase JS names. Rust method calls bypass JS property lookup,
+/// so a missing `js_name` attribute is only caught here.
+#[wasm_bindgen_test]
+fn test_form_control_js_api_names() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    sheet
+        .add_form_control(form_control(make_options(&[
+            ("kind", JsValue::from_str("button")),
+            ("caption", JsValue::from_str("Run")),
+        ])))
+        .unwrap();
+
+    let sheet_js = JsValue::from(sheet);
+    let count = Reflect::get(&sheet_js, &"formControlCount".into()).unwrap();
+    assert_eq!(count.as_f64(), Some(1.0), "formControlCount getter");
+    let controls = Reflect::get(&sheet_js, &"formControls".into()).unwrap();
+    assert!(Array::is_array(&controls), "formControls getter");
+    let kind = Reflect::get(&Array::from(&controls).get(0), &"kind".into()).unwrap();
+    let kind_tag = Reflect::get(&kind, &"kind".into()).unwrap();
+    assert_eq!(kind_tag.as_string().as_deref(), Some("button"));
+    for name in ["addFormControl", "setFormControl", "removeFormControl"] {
+        let method = Reflect::get(&sheet_js, &(*name).into()).unwrap();
+        assert!(method.is_function(), "{name} missing from the JS API");
+    }
 }
 
 #[wasm_bindgen_test]

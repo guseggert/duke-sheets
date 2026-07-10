@@ -39,6 +39,7 @@ mod comments;
 mod conditional_format;
 mod data_validation;
 mod drawing;
+mod form_controls;
 mod formulas;
 mod shared_strings;
 mod table;
@@ -370,7 +371,7 @@ impl XlsxReader {
                     .sheet_order_mut()
                     .push(SheetSlot::Worksheet(sheet_idx));
                 let sheet_rels = read_sheet_rels(&mut archive, path)?;
-                Self::read_worksheet(
+                let pending_controls = form_controls::dedupe_pending_controls(Self::read_worksheet(
                     &mut archive,
                     path,
                     workbook.worksheet_mut(sheet_idx).unwrap(),
@@ -379,7 +380,7 @@ impl XlsxReader {
                     &dxf_styles,
                     theme_palette.as_ref(),
                     &sheet_rels,
-                )?;
+                )?);
 
                 // Read comments for this worksheet (if present).
                 // Resolve paths via sheet .rels relationships; fall back to
@@ -394,6 +395,51 @@ impl XlsxReader {
                     .find(|r| r.rel_type.ends_with("/vmlDrawing"))
                     .map(|r| r.target.clone())
                     .unwrap_or_else(|| format!("xl/drawings/vmlDrawing{}.vml", ws_count));
+
+                // Resolve form controls: each worksheet <control>
+                // references a ctrlProp part via r:id; captions come
+                // from the legacy VML shape with the matching id.
+                if !pending_controls.is_empty() {
+                    let vml_shapes = archive_by_name(&mut archive, &vml_path)
+                        .ok()
+                        .and_then(|mut f| {
+                            let mut buf = Vec::new();
+                            std::io::Read::read_to_end(&mut f, &mut buf).ok().map(|_| buf)
+                        })
+                        .map(|bytes| duke_sheets_vml::parse_vml_controls(&bytes))
+                        .unwrap_or_default();
+                    let vml_shapes: HashMap<u32, duke_sheets_vml::VmlControl> = vml_shapes
+                        .into_iter()
+                        .map(|shape| (shape.shape_num, shape))
+                        .collect();
+
+                    let ws = workbook.worksheet_mut(sheet_idx).unwrap();
+                    for pending in &pending_controls {
+                        let Some(rel) = sheet_rels.get(&pending.rid) else {
+                            continue;
+                        };
+                        if !rel.rel_type.ends_with("/ctrlProp") {
+                            continue;
+                        }
+                        let Ok(mut f) = archive_by_name(&mut archive, &rel.target) else {
+                            continue;
+                        };
+                        let mut bytes = Vec::new();
+                        if std::io::Read::read_to_end(&mut f, &mut bytes).is_err() {
+                            continue;
+                        }
+                        let Some(pr) = form_controls::parse_ctrl_prop(&bytes) else {
+                            continue;
+                        };
+                        if let Some(control) = form_controls::assemble_with_vml(
+                            pending,
+                            &pr,
+                            vml_shapes.get(&pending.shape_id),
+                        ) {
+                            ws.add_form_control(control);
+                        }
+                    }
+                }
                 read_worksheet_comments(
                     &mut archive,
                     &comments_path,
@@ -636,7 +682,7 @@ impl XlsxReader {
         dxf_styles: &[Style],
         theme_palette: Option<&ThemePalette>,
         sheet_rels: &HashMap<String, SheetRelationship>,
-    ) -> XlsxResult<()> {
+    ) -> XlsxResult<Vec<form_controls::PendingControl>> {
         let file = archive
             .by_name(path)
             .map_err(|_| XlsxError::MissingPart(path.to_string()))?;
@@ -695,6 +741,19 @@ impl XlsxReader {
         let mut dv_formula1: Option<String> = None;
         let mut dv_formula2: Option<String> = None;
 
+        // Form control state (<controls> block after legacyDrawing).
+        let mut pending_controls: Vec<form_controls::PendingControl> = Vec::new();
+        let mut in_controls = false;
+        let mut current_control: Option<form_controls::PendingControl> = None;
+        let mut in_control_anchor = false;
+        let mut control_anchor_move = false;
+        let mut control_anchor_size = false;
+        let mut control_anchor_in_from = true;
+        let mut control_anchor_vals = [[0i64; 4]; 2];
+        // (marker 0=from/1=to, field 0=col 1=colOff 2=row 3=rowOff)
+        let mut control_anchor_field: Option<(usize, usize)> = None;
+        let mut control_anchor_text = String::new();
+
         // Conditional formatting state
         let mut in_cond_formatting = false;
         let mut cf_sqref: Option<String> = None;
@@ -743,6 +802,58 @@ impl XlsxReader {
             match xml_reader.read_event_into(&mut buf) {
                 Ok(Event::Start(e)) => {
                     match e.name().local_name().as_ref() {
+                        b"controls" => in_controls = true,
+                        b"control" if in_controls => {
+                            let mut pending = form_controls::PendingControl::new();
+                            for attr in e.attributes().flatten() {
+                                let value = String::from_utf8_lossy(&attr.value).into_owned();
+                                match attr.key.local_name().as_ref() {
+                                    b"shapeId" => pending.shape_id = value.parse().unwrap_or(0),
+                                    b"name" => pending.name = Some(value),
+                                    b"id" => pending.rid = value,
+                                    _ => {}
+                                }
+                            }
+                            current_control = Some(pending);
+                        }
+                        b"controlPr" if current_control.is_some() => {
+                            let pending = current_control.as_mut().unwrap();
+                            for attr in e.attributes().flatten() {
+                                let truthy = matches!(&*attr.value, b"1" | b"true");
+                                match attr.key.local_name().as_ref() {
+                                    b"locked" => pending.locked = truthy,
+                                    b"print" => pending.printable = truthy,
+                                    _ => {}
+                                }
+                            }
+                        }
+                        b"anchor" if current_control.is_some() => {
+                            in_control_anchor = true;
+                            control_anchor_move = false;
+                            control_anchor_size = false;
+                            control_anchor_vals = [[0i64; 4]; 2];
+                            for attr in e.attributes().flatten() {
+                                let truthy = matches!(&*attr.value, b"1" | b"true");
+                                match attr.key.local_name().as_ref() {
+                                    b"moveWithCells" => control_anchor_move = truthy,
+                                    b"sizeWithCells" => control_anchor_size = truthy,
+                                    _ => {}
+                                }
+                            }
+                        }
+                        b"from" if in_control_anchor => control_anchor_in_from = true,
+                        b"to" if in_control_anchor => control_anchor_in_from = false,
+                        b"col" | b"colOff" | b"row" | b"rowOff" if in_control_anchor => {
+                            let field = match e.name().local_name().as_ref() {
+                                b"col" => 0,
+                                b"colOff" => 1,
+                                b"row" => 2,
+                                _ => 3,
+                            };
+                            let marker = if control_anchor_in_from { 0 } else { 1 };
+                            control_anchor_field = Some((marker, field));
+                            control_anchor_text.clear();
+                        }
                         b"sheetView" => {
                             for attr in e.attributes().flatten() {
                                 match attr.key.local_name().as_ref() {
@@ -1258,6 +1369,31 @@ impl XlsxReader {
                 }
                 Ok(Event::End(e)) => {
                     match e.name().local_name().as_ref() {
+                        b"controls" => in_controls = false,
+                        b"control" if current_control.is_some() => {
+                            let pending = current_control.take().unwrap();
+                            if !pending.rid.is_empty() {
+                                pending_controls.push(pending);
+                            }
+                        }
+                        b"anchor" if in_control_anchor => {
+                            in_control_anchor = false;
+                            if let Some(pending) = current_control.as_mut() {
+                                pending.anchor = Some(form_controls::anchor_from_markers(
+                                    control_anchor_vals[0],
+                                    control_anchor_vals[1],
+                                    control_anchor_move,
+                                    control_anchor_size,
+                                ));
+                            }
+                        }
+                        b"col" | b"colOff" | b"row" | b"rowOff"
+                            if control_anchor_field.is_some() =>
+                        {
+                            let (marker, field) = control_anchor_field.take().unwrap();
+                            control_anchor_vals[marker][field] =
+                                control_anchor_text.trim().parse().unwrap_or(0);
+                        }
                         b"c" => {
                             // Process the cell
                             if let Some(ref cell_ref) = current_cell_ref {
@@ -1560,6 +1696,11 @@ impl XlsxReader {
                     }
                 }
                 Ok(Event::Text(e)) => {
+                    if control_anchor_field.is_some() {
+                        if let Ok(text) = e.unescape() {
+                            control_anchor_text.push_str(&text);
+                        }
+                    }
                     if in_value {
                         match e.unescape() {
                             Ok(text) => current_value = Some(text.to_string()),
@@ -2524,7 +2665,7 @@ impl XlsxReader {
             }
         }
 
-        Ok(())
+        Ok(pending_controls)
     }
 
     fn parse_sheet_selection_attrs(

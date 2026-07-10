@@ -20,6 +20,7 @@
 
 mod common;
 mod reading;
+mod writing;
 
 // Re-export common utilities for submodules
 pub use common::*;

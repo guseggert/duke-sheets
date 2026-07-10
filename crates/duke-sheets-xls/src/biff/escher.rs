@@ -135,6 +135,9 @@ pub mod shape_type {
     pub const TEXT_BOX: u16 = 0x00CA;
     /// `msosptPictureFrame` — used by embedded pictures.
     pub const PICTURE_FRAME: u16 = 0x004B;
+    /// `msosptHostControl` — used by Forms toolbar controls
+    /// (checkboxes, buttons, list boxes, ...).
+    pub const HOST_CONTROL: u16 = 0x00C9;
 }
 
 /// MS-ODRAW §2.2.32 OfficeArtFBSE blip-type codes (`btWin32`,
@@ -317,7 +320,7 @@ impl OfficeArtRecordHeader {
 
     /// Total on-disk size of this record (8-byte header + payload).
     pub fn total_len(&self) -> usize {
-        HEADER_LEN + self.rec_len as usize
+        HEADER_LEN.saturating_add(self.rec_len as usize)
     }
 
     /// Serialise to the 8-byte on-disk header. Panics if `rec_ver`
@@ -566,19 +569,19 @@ pub struct OfficeArtClientAnchor {
     /// Left column.
     pub col_l: u16,
     /// X offset within left cell (1024ths of cell width).
-    pub dx_l: u16,
+    pub dx_l: i16,
     /// Top row.
     pub row_t: u16,
     /// Y offset within top cell (256ths of cell height).
-    pub dy_t: u16,
+    pub dy_t: i16,
     /// Right column (inclusive).
     pub col_r: u16,
     /// X offset within right cell.
-    pub dx_r: u16,
+    pub dx_r: i16,
     /// Bottom row (inclusive).
     pub row_b: u16,
     /// Y offset within bottom cell.
-    pub dy_b: u16,
+    pub dy_b: i16,
 }
 
 impl OfficeArtClientAnchor {
@@ -638,17 +641,18 @@ impl OfficeArtClientAnchor {
             return Err(XlsError::InvalidFormat("ClientAnchor truncated".into()));
         }
         let read_u16 = |off: usize| u16::from_le_bytes([bytes[off], bytes[off + 1]]);
+        let read_i16 = |off: usize| i16::from_le_bytes([bytes[off], bytes[off + 1]]);
         Ok((
             Self {
                 flag: read_u16(HEADER_LEN),
                 col_l: read_u16(HEADER_LEN + 2),
-                dx_l: read_u16(HEADER_LEN + 4),
+                dx_l: read_i16(HEADER_LEN + 4),
                 row_t: read_u16(HEADER_LEN + 6),
-                dy_t: read_u16(HEADER_LEN + 8),
+                dy_t: read_i16(HEADER_LEN + 8),
                 col_r: read_u16(HEADER_LEN + 10),
-                dx_r: read_u16(HEADER_LEN + 12),
+                dx_r: read_i16(HEADER_LEN + 12),
                 row_b: read_u16(HEADER_LEN + 14),
-                dy_b: read_u16(HEADER_LEN + 16),
+                dy_b: read_i16(HEADER_LEN + 16),
             },
             HEADER_LEN + 18,
         ))
@@ -1888,6 +1892,25 @@ mod tests {
         let (parsed, consumed) = OfficeArtClientAnchor::read_from(&out).unwrap();
         assert_eq!(parsed, anchor);
         assert_eq!(consumed, 26); // 8 header + 18 body
+    }
+
+    #[test]
+    fn client_anchor_preserves_signed_offsets() {
+        let anchor = OfficeArtClientAnchor {
+            flag: 3,
+            col_l: 1,
+            dx_l: -12,
+            row_t: 2,
+            dy_t: -3,
+            col_r: 4,
+            dx_r: -1,
+            row_b: 5,
+            dy_b: -7,
+        };
+        let mut out = Vec::new();
+        anchor.write_to(&mut out);
+        let (parsed, _) = OfficeArtClientAnchor::read_from(&out).unwrap();
+        assert_eq!(parsed, anchor);
     }
 
     #[test]

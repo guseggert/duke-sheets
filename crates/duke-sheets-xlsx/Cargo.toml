@@ -11,6 +11,7 @@ description = "XLSX (Office Open XML) reader/writer for duke-sheets"
 duke-sheets-core.workspace = true
 duke-sheets-formula.workspace = true
 duke-sheets-chart = { workspace = true, features = ["parse"] }
+duke-sheets-vml.workspace = true
 duke-sheets-crypto.workspace = true
 # Encrypted .xlsx files are CFB-wrapped, not ZIP. We reuse the
 # corpus-hardened CFB parser from the XLS crate.
