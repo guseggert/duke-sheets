@@ -305,9 +305,11 @@ impl DrawingAnchor {
     /// The canonical two-cell form of any anchor. OneCell and
     /// Absolute anchors are flattened to from/to markers at Excel's
     /// default cell metrics (609,600 EMU per column, 190,500 EMU per
-    /// row), with `edit_as` preserving the original sizing behavior;
-    /// markers clamp to the grid limits on overflow. TwoCell anchors
-    /// are returned unchanged.
+    /// row), with `edit_as` preserving the original sizing behavior.
+    /// Markers clamp to the grid limits, and euclidean division keeps
+    /// offsets in `0..metric`, so off-grid negative coordinates
+    /// normalize onto the grid origin. TwoCell anchors are returned
+    /// unchanged.
     pub fn to_two_cell(&self) -> DrawingAnchor {
         const COL_EMU: i128 = 609_600;
         const ROW_EMU: i128 = 190_500;
@@ -532,6 +534,27 @@ mod tests {
                 assert_eq!((to.col, to.col_offset_emu), (3, 100));
                 assert_eq!((to.row, to.row_offset_emu), (2, 100));
                 assert_eq!(edit_as, Some(EditAs::Absolute));
+            }
+            other => panic!("expected TwoCell, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn negative_absolute_coordinates_normalize_euclidean() {
+        // Off-grid negative coordinates from permissively-read files
+        // normalize with euclidean division: the marker clamps to the
+        // grid origin and the offset stays in 0..metric.
+        let anchor = DrawingAnchor::Absolute {
+            x_emu: -1_000,
+            y_emu: -1_000,
+            width_emu: 0,
+            height_emu: 0,
+        };
+        match anchor.to_two_cell() {
+            DrawingAnchor::TwoCell { from, to, .. } => {
+                assert_eq!((from.col, from.col_offset_emu), (0, 608_600));
+                assert_eq!((from.row, from.row_offset_emu), (0, 189_500));
+                assert_eq!(to, from);
             }
             other => panic!("expected TwoCell, got {other:?}"),
         }

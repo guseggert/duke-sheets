@@ -22,12 +22,12 @@
 //! let mut workbook = Workbook::new();
 //! let sheet = workbook.worksheet_mut(0).unwrap();
 //!
-//! sheet.add_form_control(FormControl::new(FormControlKind::Checkbox {
+//! sheet.try_add_form_control(FormControl::new(FormControlKind::Checkbox {
 //!     caption: "Enable feature".to_string(),
 //!     state: CheckState::Checked,
 //!     cell_link: Some("$D$2".to_string()),
 //!     no_3d: false,
-//! }));
+//! })).unwrap();
 //!
 //! assert_eq!(sheet.form_control_count(), 1);
 //! ```
