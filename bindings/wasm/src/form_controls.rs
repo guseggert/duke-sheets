@@ -9,7 +9,7 @@ use crate::{
 #[wasm_bindgen]
 impl Worksheet {
     /// All form controls in worksheet order.
-    #[wasm_bindgen(getter, skip_typescript)]
+    #[wasm_bindgen(getter, js_name = formControls, skip_typescript)]
     pub fn form_controls(&self) -> Result<JsValue, JsError> {
         let wb = self.workbook.borrow();
         let ws = wb
@@ -21,7 +21,7 @@ impl Worksheet {
     }
 
     /// Number of form controls in the worksheet.
-    #[wasm_bindgen(getter)]
+    #[wasm_bindgen(getter, js_name = formControlCount, skip_typescript)]
     pub fn form_control_count(&self) -> Result<u32, JsError> {
         let wb = self.workbook.borrow();
         let ws = wb
@@ -32,7 +32,7 @@ impl Worksheet {
     }
 
     /// Append a form control and return its zero-based index.
-    #[wasm_bindgen(skip_typescript)]
+    #[wasm_bindgen(js_name = addFormControl, skip_typescript)]
     pub fn add_form_control(&self, value: JsValue) -> Result<u32, JsError> {
         let input: WasmFormControlInput = serde_wasm_bindgen::from_value(value)
             .map_err(|err| JsError::new(&format!("invalid form control: {err}")))?;
@@ -48,7 +48,7 @@ impl Worksheet {
     }
 
     /// Replace a form control by zero-based index.
-    #[wasm_bindgen(skip_typescript)]
+    #[wasm_bindgen(js_name = setFormControl, skip_typescript)]
     pub fn set_form_control(&self, index: u32, value: JsValue) -> Result<(), JsError> {
         let input: WasmFormControlInput = serde_wasm_bindgen::from_value(value)
             .map_err(|err| JsError::new(&format!("invalid form control: {err}")))?;
@@ -62,7 +62,7 @@ impl Worksheet {
     }
 
     /// Remove a form control by zero-based index.
-    #[wasm_bindgen(skip_typescript)]
+    #[wasm_bindgen(js_name = removeFormControl, skip_typescript)]
     pub fn remove_form_control(&self, index: u32) -> Result<(), JsError> {
         let mut wb = self.workbook.borrow_mut();
         let ws = wb

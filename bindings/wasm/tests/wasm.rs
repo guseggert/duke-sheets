@@ -389,6 +389,34 @@ fn test_form_control_mutations_and_roundtrip() {
     assert_eq!(reopened.get_sheet(0).unwrap().form_control_count().unwrap(), 8);
 }
 
+/// The form-control API must be reachable through its documented
+/// camelCase JS names. Rust method calls bypass JS property lookup,
+/// so a missing `js_name` attribute is only caught here.
+#[wasm_bindgen_test]
+fn test_form_control_js_api_names() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    sheet
+        .add_form_control(form_control(make_options(&[
+            ("kind", JsValue::from_str("button")),
+            ("caption", JsValue::from_str("Run")),
+        ])))
+        .unwrap();
+
+    let sheet_js = JsValue::from(sheet);
+    let count = Reflect::get(&sheet_js, &"formControlCount".into()).unwrap();
+    assert_eq!(count.as_f64(), Some(1.0), "formControlCount getter");
+    let controls = Reflect::get(&sheet_js, &"formControls".into()).unwrap();
+    assert!(Array::is_array(&controls), "formControls getter");
+    let kind = Reflect::get(&Array::from(&controls).get(0), &"kind".into()).unwrap();
+    let kind_tag = Reflect::get(&kind, &"kind".into()).unwrap();
+    assert_eq!(kind_tag.as_string().as_deref(), Some("button"));
+    for name in ["addFormControl", "setFormControl", "removeFormControl"] {
+        let method = Reflect::get(&sheet_js, &(*name).into()).unwrap();
+        assert!(method.is_function(), "{name} missing from the JS API");
+    }
+}
+
 #[wasm_bindgen_test]
 fn test_calculation_with_options() {
     let wb = Workbook::new();
