@@ -603,7 +603,8 @@ impl PyWorksheet {
         let ws = wb
             .worksheet_mut(self.sheet_index)
             .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
-        ws.try_add_form_control(control.inner.clone()).map_err(to_py_err)
+        ws.try_add_form_control(control.inner.clone())
+            .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
     /// Replace a form control by zero-based index.
@@ -619,7 +620,7 @@ impl PyWorksheet {
             )));
         }
         ws.set_form_control(index, control.inner.clone())
-            .map_err(to_py_err)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
     /// Remove a form control by zero-based index.

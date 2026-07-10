@@ -1312,7 +1312,10 @@ impl Worksheet {
         self.images.len()
     }
 
-    /// Add a form control to this worksheet.
+    /// Add a form control to this worksheet without validating it.
+    /// Readers use this to preserve out-of-spec controls from
+    /// existing files; prefer [`Self::try_add_form_control`] when
+    /// constructing controls programmatically.
     pub fn add_form_control(&mut self, control: FormControl) {
         self.form_controls.push(control);
     }

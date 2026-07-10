@@ -151,7 +151,7 @@ controls (buttons, checkboxes, option buttons, labels, group boxes, list boxes,
 dropdowns, scrollbars, and spinners). XLSX, XLSB, and XLS are supported.
 
 ```typescript
-import { JsCheckState, Workbook } from '@dukelib/sheets';
+import { Workbook } from '@dukelib/sheets';
 
 const sheet = new Workbook().getSheet(0);
 const index = sheet.addFormControl({
@@ -163,7 +163,7 @@ const index = sheet.addFormControl({
   kind: {
     kind: 'checkbox',
     caption: 'Enable feature',
-    state: JsCheckState.Checked,
+    state: 'checked',
     no3D: false,
   },
 });

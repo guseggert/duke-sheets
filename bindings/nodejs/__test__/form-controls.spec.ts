@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  JsCheckState,
-  JsListSelection,
-  Workbook,
-  type JsFormControlInput,
-} from "../index.js";
+import { Workbook, type JsFormControlInput } from "../index.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -28,7 +23,7 @@ const controls: JsFormControlInput[] = [
     kind: {
       kind: "checkbox",
       caption: "Check",
-      state: JsCheckState.Checked,
+      state: "checked",
       no3D: true,
     },
   },
@@ -37,7 +32,7 @@ const controls: JsFormControlInput[] = [
     kind: {
       kind: "optionButton",
       caption: "Option",
-      state: JsCheckState.Unchecked,
+      state: "unchecked",
       no3D: false,
     },
   },
@@ -48,7 +43,7 @@ const controls: JsFormControlInput[] = [
     kind: {
       kind: "listBox",
       inputRange: "$A$1:$A$3",
-      selection: JsListSelection.Multi,
+      selection: "multi",
       // Zero-based: first and third items.
       selected: [0, 2],
       no3D: false,
@@ -126,13 +121,13 @@ describe("form controls", () => {
         {
           kind: "checkbox",
           caption: "Check",
-          state: JsCheckState.Checked,
+          state: "checked",
           no3D: true,
         },
         {
           kind: "optionButton",
           caption: "Option",
-          state: JsCheckState.Unchecked,
+          state: "unchecked",
           firstInGroup: true,
           no3D: false,
         },
@@ -141,7 +136,7 @@ describe("form controls", () => {
         {
           kind: "listBox",
           inputRange: "$A$1:$A$3",
-          selection: JsListSelection.Multi,
+          selection: "multi",
           selected: [0, 2],
           no3D: false,
         },
@@ -175,7 +170,7 @@ describe("form controls", () => {
         kind: {
           kind: "optionButton",
           caption: "Bad",
-          state: JsCheckState.Mixed,
+          state: "mixed",
           no3D: false,
         },
       }),
@@ -185,7 +180,7 @@ describe("form controls", () => {
         anchor,
         kind: {
           kind: "listBox",
-          selection: JsListSelection.Multi,
+          selection: "multi",
           selected: [2, 1],
           no3D: false,
         },

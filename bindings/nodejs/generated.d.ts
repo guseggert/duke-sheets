@@ -930,11 +930,9 @@ export interface JsChartTypeGroup {
   upDownBars?: JsUpDownBars
 }
 
-export declare const enum JsCheckState {
-  Unchecked = 'unchecked',
-  Checked = 'checked',
-  Mixed = 'mixed'
-}
+export type JsCheckState =  'unchecked'|
+'checked'|
+'mixed';
 
 /**
  * Color representation. The `colorType` field indicates the variant:
@@ -1328,11 +1326,9 @@ export interface JsLegend {
   overlay: boolean
 }
 
-export declare const enum JsListSelection {
-  Single = 'single',
-  Multi = 'multi',
-  Extend = 'extend'
-}
+export type JsListSelection =  'single'|
+'multi'|
+'extend';
 
 /** Manual layout positioning. */
 export interface JsManualLayout {
