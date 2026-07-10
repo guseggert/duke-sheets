@@ -723,6 +723,98 @@ mod tests {
             .to_string()
             .contains("maximum"));
 
+        let multi_selected_single = FormControl::new(FormControlKind::ListBox {
+            input_range: None,
+            cell_link: None,
+            selection: ListSelection::Single,
+            selected: vec![0, 1],
+            no_3d: false,
+        });
+        assert!(multi_selected_single
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("at most one item"));
+
+        let zero_lines = FormControl::new(FormControlKind::Dropdown {
+            input_range: None,
+            cell_link: None,
+            selected: None,
+            lines: 0,
+            no_3d: false,
+        });
+        assert!(zero_lines
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("lines"));
+
+        let blank_cell_link = FormControl::new(FormControlKind::Checkbox {
+            caption: "blank".to_string(),
+            state: CheckState::Checked,
+            cell_link: Some("   ".to_string()),
+            no_3d: false,
+        });
+        assert!(blank_cell_link
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("cell link cannot be empty"));
+    }
+
+    #[test]
+    fn validates_numeric_control_invariants() {
+        let scrollbar = |value, min, max, increment, page| {
+            FormControl::new(FormControlKind::Scrollbar {
+                value,
+                min,
+                max,
+                increment,
+                page,
+                horizontal: false,
+                cell_link: None,
+            })
+        };
+        scrollbar(5, 0, 10, 1, 2).validate().unwrap();
+        assert!(scrollbar(5, 6, 10, 1, 2)
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("min <= value <= max"));
+        assert!(scrollbar(11, 0, 10, 1, 2)
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("min <= value <= max"));
+        assert!(scrollbar(5, 10, 0, 1, 2)
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("min <= value <= max"));
+        assert!(scrollbar(5, 0, 10, 0, 2)
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("increment"));
+        assert!(scrollbar(5, 0, 10, 1, 0)
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("page"));
+
+        let spinner = FormControl::new(FormControlKind::Spinner {
+            value: 5,
+            min: 0,
+            max: 10,
+            increment: 0,
+            cell_link: None,
+        });
+        assert!(spinner
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("increment"));
+
         let invalid_anchor = FormControl::with_anchor(
             FormControlKind::Button {
                 caption: "button".to_string(),

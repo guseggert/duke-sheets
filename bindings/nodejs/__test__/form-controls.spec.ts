@@ -145,5 +145,16 @@ describe("form controls", () => {
         },
       }),
     ).toThrow(/mixed state/);
+    expect(() =>
+      sheet.addFormControl({
+        anchor,
+        kind: {
+          kind: "listBox",
+          selection: JsListSelection.Multi,
+          selected: [2, 1],
+          no3D: false,
+        },
+      }),
+    ).toThrow(/sorted and unique/);
   });
 });
