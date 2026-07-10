@@ -347,9 +347,10 @@ fn form_control(kind: JsValue) -> JsValue {
 fn test_form_control_mutations_and_roundtrip() {
     let wb = Workbook::new();
     let sheet = wb.get_sheet(0).unwrap();
+    // Zero-based: first and third items.
     let selected = Array::new();
-    selected.push(&JsValue::from_f64(1.0));
-    selected.push(&JsValue::from_f64(3.0));
+    selected.push(&JsValue::from_f64(0.0));
+    selected.push(&JsValue::from_f64(2.0));
     let kinds = vec![
         make_options(&[("kind", JsValue::from_str("button")), ("caption", JsValue::from_str("Run"))]),
         make_options(&[("kind", JsValue::from_str("checkbox")), ("caption", JsValue::from_str("Check")), ("state", JsValue::from_str("checked")), ("no3D", JsValue::FALSE)]),

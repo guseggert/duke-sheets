@@ -2860,9 +2860,11 @@ impl XlsReader {
                         2 => ListSelection::Extend,
                         _ => ListSelection::Single,
                     };
+                    // iSel is one-based (0 = none); the model is
+                    // zero-based. bsels positions are already 0-based.
                     let selected: Vec<u16> = if lbs.sel_type == 0 {
                         if lbs.sel > 0 {
-                            vec![lbs.sel]
+                            vec![lbs.sel - 1]
                         } else {
                             Vec::new()
                         }
@@ -2871,7 +2873,7 @@ impl XlsReader {
                             .iter()
                             .enumerate()
                             .filter(|(_, &s)| s)
-                            .map(|(idx, _)| idx as u16 + 1)
+                            .map(|(idx, _)| idx as u16)
                             .collect()
                     };
                     FormControlKind::ListBox {
@@ -2887,7 +2889,7 @@ impl XlsReader {
                     FormControlKind::Dropdown {
                         input_range: decompile_rgce(&Some(lbs.input_rgce)),
                         cell_link,
-                        selected: if lbs.sel > 0 { Some(lbs.sel) } else { None },
+                        selected: if lbs.sel > 0 { Some(lbs.sel - 1) } else { None },
                         lines: lbs.drop.as_ref().map(|d| d.lines).unwrap_or(8),
                         no_3d: lbs.no_3d,
                     }

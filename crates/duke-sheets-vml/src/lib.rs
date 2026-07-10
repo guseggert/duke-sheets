@@ -379,7 +379,7 @@ pub fn write_control_shape(
                 ));
             }
             if let Some(&first) = selected.first() {
-                xml.push_str(&format!("   <x:Sel>{first}</x:Sel>\n"));
+                xml.push_str(&format!("   <x:Sel>{}</x:Sel>\n", u32::from(first) + 1));
             }
             if *no_3d {
                 xml.push_str("   <x:NoThreeD2/>\n");
@@ -394,7 +394,7 @@ pub fn write_control_shape(
             if !matches!(selection, ListSelection::Single) && !selected.is_empty() {
                 let list = selected
                     .iter()
-                    .map(|v| v.to_string())
+                    .map(|&v| (u32::from(v) + 1).to_string())
                     .collect::<Vec<_>>()
                     .join(",");
                 xml.push_str(&format!("   <x:MultiSel>{list}</x:MultiSel>\n"));
@@ -418,7 +418,7 @@ pub fn write_control_shape(
                 ));
             }
             if let Some(sel) = selected {
-                xml.push_str(&format!("   <x:Sel>{sel}</x:Sel>\n"));
+                xml.push_str(&format!("   <x:Sel>{}</x:Sel>\n", u32::from(*sel) + 1));
             }
             if *no_3d {
                 xml.push_str("   <x:NoThreeD2/>\n");
@@ -490,7 +490,7 @@ pub struct VmlControl {
     pub checked: u16,
     pub fmla_link: Option<String>,
     pub fmla_range: Option<String>,
-    /// One-based `x:Sel` selection index.
+    /// One-based `x:Sel` selection index (0 = no selection).
     pub sel: u16,
     /// `x:SelType` text (Single/Multi/Extended).
     pub sel_type: String,
@@ -564,16 +564,22 @@ impl VmlControl {
                     "Extended" => ListSelection::Extend,
                     _ => ListSelection::Single,
                 };
+                // File values are one-based (0 = none); the model is
+                // zero-based.
                 let selected = if selection == ListSelection::Single {
                     if self.sel > 0 {
-                        vec![self.sel]
+                        vec![self.sel - 1]
                     } else {
                         Vec::new()
                     }
                 } else if !self.multi_sel.is_empty() {
-                    self.multi_sel.clone()
+                    self.multi_sel
+                        .iter()
+                        .filter(|&&v| v > 0)
+                        .map(|&v| v - 1)
+                        .collect()
                 } else if self.sel > 0 {
-                    vec![self.sel]
+                    vec![self.sel - 1]
                 } else {
                     Vec::new()
                 };
@@ -594,7 +600,7 @@ impl VmlControl {
                 FormControlKind::Dropdown {
                     input_range: self.fmla_range.clone(),
                     cell_link: self.fmla_link.clone(),
-                    selected: if self.sel > 0 { Some(self.sel) } else { None },
+                    selected: if self.sel > 0 { Some(self.sel - 1) } else { None },
                     lines: self.drop_lines,
                     no_3d: self.no_3d,
                 }
@@ -985,7 +991,7 @@ mod tests {
                 input_range: Some("$H$1:$H$5".to_string()),
                 cell_link: None,
                 selection: ListSelection::Multi,
-                selected: vec![1, 3, 5],
+                selected: vec![0, 2, 4],
                 no_3d: true,
             },
             FormControlKind::Dropdown {
@@ -1040,6 +1046,10 @@ mod tests {
             let first = matches!(control.kind, FormControlKind::OptionButton { .. });
             write_control_shape(&mut xml, 1025 + i, i + 1, control, first);
         }
+
+        // Zero-based model selections serialize one-based on disk.
+        assert!(xml.contains("<x:MultiSel>1,3,5</x:MultiSel>"), "{xml}");
+        assert!(xml.contains("<x:Sel>3</x:Sel>"), "{xml}");
 
         let parsed = parse_vml_controls(wrap(&xml).as_bytes());
         assert_eq!(parsed.len(), controls.len());

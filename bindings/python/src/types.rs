@@ -2465,12 +2465,18 @@ impl PyFormControl {
         Self::create(core::FormControlKind::GroupBox { caption, no_3d }, &anchor, name, locked, printable)
     }
 
+    /// Create a list box. `selected` holds zero-based item indexes,
+    /// sorted ascending; a linked cell still receives Excel's
+    /// one-based value at runtime.
     #[staticmethod]
     #[pyo3(signature=(anchor, *, input_range=None, cell_link=None, selection="single", selected=None, no_3d=false, name=None, locked=true, printable=true))]
     fn list_box(anchor: PyRef<'_, PyDrawingAnchor>, input_range: Option<String>, cell_link: Option<String>, selection: &str, selected: Option<Vec<u16>>, no_3d: bool, name: Option<String>, locked: bool, printable: bool) -> PyResult<Self> {
         Self::create(core::FormControlKind::ListBox { input_range, cell_link, selection: parse_list_selection(selection)?, selected: selected.unwrap_or_default(), no_3d }, &anchor, name, locked, printable)
     }
 
+    /// Create a dropdown (combo box). `selected` is a zero-based item
+    /// index; a linked cell still receives Excel's one-based value at
+    /// runtime.
     #[staticmethod]
     #[pyo3(signature=(anchor, *, input_range=None, cell_link=None, selected=None, lines=8, no_3d=false, name=None, locked=true, printable=true))]
     fn dropdown(anchor: PyRef<'_, PyDrawingAnchor>, input_range: Option<String>, cell_link: Option<String>, selected: Option<u16>, lines: u16, no_3d: bool, name: Option<String>, locked: bool, printable: bool) -> PyResult<Self> {
@@ -2513,6 +2519,7 @@ impl PyFormControl {
     fn first_in_group(&self) -> Option<bool> { match &self.inner.kind { core::FormControlKind::OptionButton { first_in_group, .. } => Some(*first_in_group), _ => None } }
     #[getter]
     fn selection(&self) -> Option<&'static str> { match &self.inner.kind { core::FormControlKind::ListBox { selection, .. } => Some(match selection { core::ListSelection::Single => "single", core::ListSelection::Multi => "multi", core::ListSelection::Extend => "extend" }), _ => None } }
+    /// Zero-based selected item indexes (list boxes and dropdowns).
     #[getter]
     fn selected(&self) -> Option<Vec<u16>> { match &self.inner.kind { core::FormControlKind::ListBox { selected, .. } => Some(selected.clone()), core::FormControlKind::Dropdown { selected, .. } => Some(selected.iter().copied().collect()), _ => None } }
     #[getter]

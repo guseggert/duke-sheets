@@ -1476,8 +1476,10 @@ fn excel_can_read_xlsb_form_controls_we_emit() {
     for (i, item) in ["Alpha", "Beta", "Gamma", "Delta"].iter().enumerate() {
         ws.set_cell_value_at(i as u32, 7, *item).expect("list item");
     }
+    // Linked-cell values are one-based (Excel's runtime convention),
+    // so they are model index + 1.
     ws.set_cell_value_at(1, 3, true).expect("D2");
-    ws.set_cell_value_at(3, 3, 2.0).expect("D4");
+    ws.set_cell_value_at(3, 3, 3.0).expect("D4");
     ws.set_cell_value_at(5, 3, 40.0).expect("D6");
     ws.set_cell_value_at(0, 9, "Name").expect("J1");
     ws.set_cell_value_at(1, 9, "Alice").expect("J2");

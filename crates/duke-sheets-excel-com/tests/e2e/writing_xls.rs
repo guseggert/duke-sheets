@@ -24,8 +24,8 @@ use serde_json::json;
 
 use crate::{
     atp_all_formulas, cleanup_fixture, ensure_vm_temp_dir, excel_bridge, pull_file_from_vm,
-    roundtrip_through_excel_xls, roundtrip_through_excel_xls_bytes, temp_fixture_xls,
-    xls_externname_record_bodies, xls_formula_ptg_streams_for_compare,
+    push_file_to_vm, roundtrip_through_excel_xls, roundtrip_through_excel_xls_bytes,
+    temp_fixture_xls, xls_externname_record_bodies, xls_formula_ptg_streams_for_compare,
 };
 
 fn range(start: &str, end: &str) -> CellRange {
@@ -2418,10 +2418,12 @@ fn excel_can_read_form_controls_we_emit() {
     // Linked cells must agree with the control states: Excel drives a
     // linked control's state from its cell on load, so a mismatch is
     // "corrected" during the round-trip.
+    // Linked-cell values are one-based (Excel's runtime convention),
+    // so they are model index + 1.
     ws.set_cell_value("D2", true).expect("D2");
     ws.set_cell_value("D3", 1.0).expect("D3");
-    ws.set_cell_value("D4", 2.0).expect("D4");
-    ws.set_cell_value("D5", 3.0).expect("D5");
+    ws.set_cell_value("D4", 3.0).expect("D4");
+    ws.set_cell_value("D5", 4.0).expect("D5");
     ws.set_cell_value("D6", 40.0).expect("D6");
     ws.set_cell_value("D7", 12.0).expect("D7");
 
@@ -2661,6 +2663,173 @@ fn excel_can_read_form_controls_we_emit() {
     }
 }
 
+/// Excel's own interpretation of persisted selections pins the
+/// zero-based model ↔ one-based file conversion. A symmetric
+/// writer/reader offset bug survives a model round-trip, but not
+/// this: `ControlFormat.ListIndex` is one-based, so model index N
+/// must surface as N+1 in Excel.
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_interprets_xls_list_selections_one_based() {
+    use duke_sheets_core::{FormControl, FormControlKind, ListSelection};
+    use duke_sheets_xls::XlsWriter;
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    for (i, item) in ["Alpha", "Beta", "Gamma", "Delta"].iter().enumerate() {
+        ws.set_cell_value_at(i as u32, 7, *item).expect("item");
+    }
+    ws.add_form_control(FormControl::with_anchor(
+        FormControlKind::ListBox {
+            input_range: Some("$H$1:$H$4".to_string()),
+            cell_link: None,
+            selection: ListSelection::Single,
+            selected: vec![2],
+            no_3d: false,
+        },
+        control_anchor(1, 1, 3, 3),
+    ));
+    ws.add_form_control(FormControl::with_anchor(
+        FormControlKind::Dropdown {
+            input_range: Some("$H$1:$H$4".to_string()),
+            cell_link: None,
+            selected: Some(1),
+            lines: 8,
+            no_3d: false,
+        },
+        control_anchor(1, 5, 3, 6),
+    ));
+
+    let fixture = temp_fixture_xls();
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("write xls");
+    std::fs::write(&fixture.host_path, &bytes).expect("write fixture");
+    ensure_vm_temp_dir();
+    push_file_to_vm(&fixture);
+
+    let bridge = excel_bridge();
+    let excel = bridge.lock().unwrap();
+    let opened = excel
+        .open_workbook(&fixture.vm_path)
+        .expect("Excel should open our XLS without error");
+    let name = opened.name().expect("workbook name");
+    assert!(!name.contains("Repaired"), "Excel repaired the file: {name}");
+
+    // `Shapes.Item` is a method in Excel's type library, so it is
+    // unreachable through chain steps (GetProperty binding); invoke
+    // it explicitly.
+    let shapes_handle = excel
+        .navigate(
+            opened.handle(),
+            vec![
+                SheetRef::Index(0).to_chain_step(),
+                ChainStep::Property("Shapes".into()),
+            ],
+        )
+        .expect("navigate shapes");
+    let list_index = |shape: u32| -> f64 {
+        let shape_handle = match excel.invoke(
+            shapes_handle,
+            vec![],
+            "Item",
+            vec![serde_json::Value::from(shape)],
+        ) {
+            Ok(Some(ResponseData::Handle { handle })) => handle,
+            other => panic!("expected shape handle, got {other:?}"),
+        };
+        let index = match excel.get(
+            shape_handle,
+            vec![ChainStep::Property("ControlFormat".into())],
+            "ListIndex",
+        ) {
+            Ok(Some(ResponseData::Value { value })) => {
+                value.as_f64().expect("numeric ListIndex")
+            }
+            other => panic!("expected ListIndex value, got {other:?}"),
+        };
+        excel.release(shape_handle).expect("release shape");
+        index
+    };
+    assert_eq!(list_index(1), 3.0, "list box: model index 2 is Excel item 3");
+    assert_eq!(list_index(2), 2.0, "dropdown: model index 1 is Excel item 2");
+
+    excel.release(shapes_handle).expect("release shapes");
+    opened.close().expect("close workbook");
+    cleanup_fixture(&fixture);
+
+    // Read side: Excel authors the controls (ListIndex is one-based),
+    // saves XLS, and our reader must surface zero-based indices.
+    let authored = excel.create_workbook().expect("create workbook");
+    for (i, item) in ["Alpha", "Beta", "Gamma", "Delta"].iter().enumerate() {
+        authored
+            .set_cell_value(&format!("H{}", i + 1), *item)
+            .expect("item");
+    }
+    let sheet_shapes = excel
+        .navigate(
+            authored.handle(),
+            vec![
+                SheetRef::Index(0).to_chain_step(),
+                ChainStep::Property("Shapes".into()),
+            ],
+        )
+        .expect("navigate authored shapes");
+    // xlListBox = 6, xlDropDown = 2
+    for (control_type, list_index) in [(6, 3), (2, 2)] {
+        let shape = match excel.invoke(
+            sheet_shapes,
+            vec![],
+            "AddFormControl",
+            vec![
+                serde_json::Value::from(control_type),
+                serde_json::Value::from(10 * control_type),
+                serde_json::Value::from(10),
+                serde_json::Value::from(60),
+                serde_json::Value::from(60),
+            ],
+        ) {
+            Ok(Some(ResponseData::Handle { handle })) => handle,
+            other => panic!("expected AddFormControl handle, got {other:?}"),
+        };
+        excel
+            .set(
+                shape,
+                vec![ChainStep::Property("ControlFormat".into())],
+                "ListFillRange",
+                serde_json::Value::from("$H$1:$H$4"),
+            )
+            .expect("set ListFillRange");
+        excel
+            .set(
+                shape,
+                vec![ChainStep::Property("ControlFormat".into())],
+                "ListIndex",
+                serde_json::Value::from(list_index),
+            )
+            .expect("set ListIndex");
+        excel.release(shape).ok();
+    }
+    let out_xls = temp_fixture_xls();
+    authored.save_as(&out_xls.vm_path, 56).expect("save xls");
+    authored.close().expect("close authored");
+    excel.release(sheet_shapes).ok();
+    pull_file_from_vm(&out_xls);
+    let authored_model = duke_sheets_xls::XlsReader::read_file(&out_xls.host_path).expect("read");
+    let authored_controls = authored_model.worksheet(0).unwrap().form_controls();
+    match &authored_controls[0].kind {
+        FormControlKind::ListBox { selected, .. } => {
+            assert_eq!(selected, &vec![2], "Excel item 3 is model index 2");
+        }
+        other => panic!("expected ListBox, got {other:?}"),
+    }
+    match &authored_controls[1].kind {
+        FormControlKind::Dropdown { selected, .. } => {
+            assert_eq!(*selected, Some(1), "Excel item 2 is model index 1");
+        }
+        other => panic!("expected Dropdown, got {other:?}"),
+    }
+    cleanup_fixture(&out_xls);
+}
+
 /// Radio grouping by enclosing group box survives the Excel
 /// round-trip: two boxes with two radios each plus a loose radio
 /// come back as three groups (fFirstBtn on each group's first
@@ -2831,7 +3000,7 @@ fn excel_can_read_large_xls_list_control_we_emit() {
                 input_range: Some("$H$1:$H$10000".to_string()),
                 cell_link: None,
                 selection: ListSelection::Multi,
-                selected: vec![1, 5_000, 10_000],
+                selected: vec![0, 4_999, 9_999],
                 no_3d: false,
             },
             DrawingAnchor::TwoCell {
@@ -2859,7 +3028,7 @@ fn excel_can_read_large_xls_list_control_we_emit() {
             ..
         } => {
             assert_eq!(*selection, ListSelection::Multi);
-            assert_eq!(selected, &vec![1, 5_000, 10_000]);
+            assert_eq!(selected, &vec![0, 4_999, 9_999]);
         }
         other => panic!("expected ListBox, got {other:?}"),
     }

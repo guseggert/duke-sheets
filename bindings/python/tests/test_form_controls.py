@@ -20,7 +20,8 @@ def all_controls():
             a,
             input_range="$A$1:$A$3",
             selection="multi",
-            selected=[1, 3],
+            # Zero-based: first and third items.
+            selected=[0, 2],
         ),
         duke_sheets.FormControl.dropdown(
             a, input_range="$A$1:$A$3", selected=2, lines=8
@@ -51,7 +52,7 @@ def test_add_set_remove_form_controls():
         "spinner",
     ]
     assert sheet.form_controls[1].state == "checked"
-    assert sheet.form_controls[5].selected == [1, 3]
+    assert sheet.form_controls[5].selected == [0, 2]
 
     sheet.set_form_control(0, duke_sheets.FormControl.label("Replaced", anchor()))
     assert sheet.form_controls[0].caption == "Replaced"
@@ -74,6 +75,8 @@ def test_form_controls_round_trip(tmp_path, extension):
     reopened = duke_sheets.Workbook.open(path).get_sheet(0)
     assert reopened.form_control_count == 9
     assert reopened.form_controls[1].kind == "checkbox"
+    assert reopened.form_controls[5].selected == [0, 2]
+    assert reopened.form_controls[6].selected == [2]
 
 
 def test_invalid_form_control_inputs():

@@ -138,10 +138,12 @@ pub(super) fn write_ctrl_prop_part<W: Write + Seek>(
             attrs.push(("dx", "22".to_string()));
             push_link(&mut attrs, cell_link);
             push_range(&mut attrs, input_range);
+            // Model indices are zero-based; the attributes are
+            // one-based (0 = none).
             if !selected.is_empty() && !matches!(selection, ListSelection::Single) {
                 let list = selected
                     .iter()
-                    .map(|v| v.to_string())
+                    .map(|&v| (u32::from(v) + 1).to_string())
                     .collect::<Vec<_>>()
                     .join(",");
                 attrs.push(("multiSel", list));
@@ -151,7 +153,7 @@ pub(super) fn write_ctrl_prop_part<W: Write + Seek>(
             }
             if matches!(selection, ListSelection::Single) {
                 if let Some(&first) = selected.first() {
-                    attrs.push(("sel", first.to_string()));
+                    attrs.push(("sel", (u32::from(first) + 1).to_string()));
                 }
             }
             match selection {
@@ -179,7 +181,7 @@ pub(super) fn write_ctrl_prop_part<W: Write + Seek>(
                 attrs.push(("noThreeD", "1".to_string()));
             }
             if let Some(sel) = selected {
-                attrs.push(("sel", sel.to_string()));
+                attrs.push(("sel", (u32::from(*sel) + 1).to_string()));
             }
             attrs.push(("val", "0".to_string()));
         }

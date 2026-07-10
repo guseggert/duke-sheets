@@ -49,7 +49,8 @@ const controls: JsFormControlInput[] = [
       kind: "listBox",
       inputRange: "$A$1:$A$3",
       selection: JsListSelection.Multi,
-      selected: [1, 3],
+      // Zero-based: first and third items.
+      selected: [0, 2],
       no3D: false,
     },
   },
@@ -119,6 +120,14 @@ describe("form controls", () => {
       const reopened = Workbook.open(file).getSheet(0);
       expect(reopened.formControlCount).toBe(9);
       expect(reopened.formControls[1].kind.kind).toBe("checkbox");
+      expect(reopened.formControls[5].kind).toMatchObject({
+        kind: "listBox",
+        selected: [0, 2],
+      });
+      expect(reopened.formControls[6].kind).toMatchObject({
+        kind: "dropdown",
+        selected: 2,
+      });
       fs.rmSync(dir, { recursive: true, force: true });
     });
   }

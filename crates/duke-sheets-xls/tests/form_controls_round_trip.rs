@@ -208,7 +208,7 @@ fn list_box_multi_select_round_trips() {
         input_range: Some("$H$1:$H$5".to_string()),
         cell_link: None,
         selection: ListSelection::Multi,
-        selected: vec![1, 3, 5],
+        selected: vec![0, 2, 4],
         no_3d: false,
     });
     assert_eq!(
@@ -217,7 +217,7 @@ fn list_box_multi_select_round_trips() {
             input_range: Some("$H$1:$H$5".to_string()),
             cell_link: None,
             selection: ListSelection::Multi,
-            selected: vec![1, 3, 5],
+            selected: vec![0, 2, 4],
             no_3d: false,
         }
     );
@@ -751,7 +751,7 @@ fn large_multi_select_list_uses_continue_records() {
             input_range: Some("$H$1:$H$10000".to_string()),
             cell_link: None,
             selection: ListSelection::Multi,
-            selected: vec![1, 5_000, 10_000],
+            selected: vec![0, 4_999, 9_999],
             no_3d: false,
         },
         anchor(0, 0, 2, 10),
@@ -760,7 +760,7 @@ fn large_multi_select_list_uses_continue_records() {
     let parsed = write_then_read(&wb);
     match &parsed.worksheet(0).unwrap().form_controls()[0].kind {
         FormControlKind::ListBox { selected, .. } => {
-            assert_eq!(selected, &vec![1, 5_000, 10_000]);
+            assert_eq!(selected, &vec![0, 4_999, 9_999]);
         }
         other => panic!("expected ListBox, got {other:?}"),
     }
@@ -788,6 +788,7 @@ fn full_column_list_range_returns_a_clean_error() {
 
 #[test]
 fn list_selection_outside_input_range_returns_a_clean_error() {
+    // Zero-based index 4 is the first out-of-range value for 4 items.
     let mut wb = Workbook::new();
     wb.worksheet_mut(0)
         .unwrap()
@@ -796,14 +797,14 @@ fn list_selection_outside_input_range_returns_a_clean_error() {
                 input_range: Some("$H$1:$H$4".to_string()),
                 cell_link: None,
                 selection: ListSelection::Single,
-                selected: vec![5],
+                selected: vec![4],
                 no_3d: false,
             },
             anchor(0, 0, 2, 4),
         ));
 
     let err = XlsWriter::write_to_bytes(&wb).expect_err("selection exceeds cLines");
-    assert!(err.to_string().contains("selection index 5"));
+    assert!(err.to_string().contains("selection index 4"));
 }
 
 #[test]

@@ -2082,7 +2082,6 @@ impl TryFrom<JsDrawingAnchor> for duke_sheets_chart::DrawingAnchor {
     }
 }
 
-/// Kind-specific form-control data. `kind` is the TypeScript discriminator.
 #[napi(string_enum = "lowercase")]
 pub enum JsCheckState {
     Unchecked,
@@ -2097,6 +2096,9 @@ pub enum JsListSelection {
     Extend,
 }
 
+/// Kind-specific form-control data. `kind` is the TypeScript
+/// discriminator. List box and dropdown `selected` item indexes are
+/// zero-based; a linked cell still receives Excel's one-based value.
 #[napi(discriminant = "kind", discriminant_case = "camelCase")]
 pub enum JsFormControlKind {
     Button { caption: String },

@@ -181,9 +181,10 @@ sheet.set_form_control(index, duke_sheets.FormControl.label("Ready", anchor))
 sheet.remove_form_control(index)
 ```
 
-Worksheet/control/anchor indexes are zero-based. List-box and dropdown selected
-item indexes are one-based. Returned controls are snapshots; call the explicit
-`set` method to persist changes. ODS and ActiveX controls are not supported.
+All indexes are zero-based, including list-box and dropdown selected item
+indexes (a linked cell still receives Excel's one-based value at runtime).
+Returned controls are snapshots; call the explicit `set` method to persist
+changes. ODS and ActiveX controls are not supported.
 
 ## Rust
 

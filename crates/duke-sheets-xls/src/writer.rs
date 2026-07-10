@@ -5594,8 +5594,10 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
                 selected,
                 matches!(selection, ListSelection::Single),
             )?;
+            // Model indices are zero-based; iSel is one-based
+            // (0 = none) and bsels positions are zero-based.
             let multi_sel = if sel_type != 0 {
-                (1..=lines).map(|i| selected.contains(&i)).collect()
+                (0..lines).map(|i| selected.contains(&i)).collect()
             } else {
                 Vec::new()
             };
@@ -5603,7 +5605,7 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
             obj::LbsData {
                 input_rgce: control.input_rgce.clone(),
                 lines,
-                sel: selected.first().copied().unwrap_or(0),
+                sel: selected.first().map(|&i| i + 1).unwrap_or(0),
                 sel_type,
                 no_3d: *no_3d,
                 use_cb: false,
@@ -5650,7 +5652,7 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
             obj::LbsData {
                 input_rgce: control.input_rgce.clone(),
                 lines: item_count,
-                sel: selected.unwrap_or(0),
+                sel: selected.map(|i| i + 1).unwrap_or(0),
                 sel_type: 0,
                 no_3d: *no_3d,
                 use_cb: false,
@@ -5741,9 +5743,9 @@ fn validated_list_selection_count(
         ));
     }
     for &index in selected {
-        if index == 0 || u32::from(index) > item_count {
+        if u32::from(index) >= item_count {
             return Err(XlsError::InvalidFormat(format!(
-                "XLS list selection index {index} is outside the 1..={item_count} item range"
+                "XLS list selection index {index} is outside the {item_count}-item range"
             )));
         }
     }

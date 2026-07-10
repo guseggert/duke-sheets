@@ -930,7 +930,6 @@ export interface JsChartTypeGroup {
   upDownBars?: JsUpDownBars
 }
 
-/** Kind-specific form-control data. `kind` is the TypeScript discriminator. */
 export declare const enum JsCheckState {
   Unchecked = 'unchecked',
   Checked = 'checked',
@@ -1234,6 +1233,11 @@ export interface JsFormControlInput {
   printable?: boolean
 }
 
+/**
+ * Kind-specific form-control data. `kind` is the TypeScript
+ * discriminator. List box and dropdown `selected` item indexes are
+ * zero-based; a linked cell still receives Excel's one-based value.
+ */
 export type JsFormControlKind =
   | { kind: 'button', caption: string }
   | { kind: 'checkbox', caption: string, state: JsCheckState, cellLink?: string, no3D: boolean }

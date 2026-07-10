@@ -205,6 +205,11 @@ export interface FormControlAnchor {
   editAs: "twoCell" | "oneCell" | "absolute";
 }
 
+/**
+ * Kind-specific form-control data. List box and dropdown `selected`
+ * item indexes are zero-based; a linked cell still receives Excel's
+ * one-based value.
+ */
 export type FormControlKind =
   | { kind: "button"; caption: string }
   | { kind: "checkbox"; caption: string; state: "unchecked" | "checked" | "mixed"; cellLink?: string; no3D: boolean }

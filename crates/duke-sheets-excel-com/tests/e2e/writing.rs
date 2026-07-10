@@ -1410,10 +1410,12 @@ fn excel_can_read_xlsx_form_controls_we_emit() {
     }
     // Linked cells must agree with control states: Excel drives
     // linked controls from their cells on load.
+    // Linked-cell values are one-based (Excel's runtime convention),
+    // so they are model index + 1.
     ws.set_cell_value("D2", true).expect("D2");
     ws.set_cell_value("D3", 1.0).expect("D3");
-    ws.set_cell_value("D4", 2.0).expect("D4");
-    ws.set_cell_value("D5", 3.0).expect("D5");
+    ws.set_cell_value("D4", 3.0).expect("D4");
+    ws.set_cell_value("D5", 4.0).expect("D5");
     ws.set_cell_value("D6", 40.0).expect("D6");
     ws.set_cell_value("D7", 12.0).expect("D7");
 

@@ -8,6 +8,12 @@
 //! with an optional sheet prefix (e.g. `"$A$1"` or `"Sheet2!$B$2:$B$9"`),
 //! matching the convention used by data validation formulas.
 //!
+//! List box and dropdown selection indices are zero-based, like every
+//! other index in this library. The file formats store them one-based
+//! (0 = no selection); codecs convert at the read/write boundary. Note
+//! that a *linked cell* still receives Excel's one-based value at
+//! runtime.
+//!
 //! ## Example
 //!
 //! ```rust
@@ -107,12 +113,14 @@ pub enum FormControlKind {
     ListBox {
         /// Range providing the list items (A1-style, optional sheet prefix).
         input_range: Option<String>,
-        /// Cell receiving the one-based index of the selected item.
+        /// Cell receiving the one-based index of the selected item
+        /// (Excel's linked-cell convention).
         cell_link: Option<String>,
         /// Selection behavior.
         selection: ListSelection,
-        /// One-based indices of selected items. At most one entry for
-        /// [`ListSelection::Single`]; any number for multi/extend.
+        /// Zero-based indices of selected items, sorted ascending. At
+        /// most one entry for [`ListSelection::Single`]; any number
+        /// for multi/extend.
         selected: Vec<u16>,
         /// Render without 3D shading.
         no_3d: bool,
@@ -121,9 +129,10 @@ pub enum FormControlKind {
     Dropdown {
         /// Range providing the list items (A1-style, optional sheet prefix).
         input_range: Option<String>,
-        /// Cell receiving the one-based index of the selected item.
+        /// Cell receiving the one-based index of the selected item
+        /// (Excel's linked-cell convention).
         cell_link: Option<String>,
-        /// One-based index of the selected item; `None` = no selection.
+        /// Zero-based index of the selected item; `None` = no selection.
         selected: Option<u16>,
         /// Number of lines shown when the list is dropped down.
         lines: u16,
@@ -225,8 +234,12 @@ impl FormControlKind {
                         "single-select list boxes can select at most one item",
                     ));
                 }
-                if selected.contains(&0) {
-                    return Err(Error::other("list selection indices are one-based"));
+                if selected.contains(&u16::MAX) {
+                    return Err(Error::other(format!(
+                        "list selection index {} exceeds the maximum of {}",
+                        u16::MAX,
+                        u16::MAX - 1
+                    )));
                 }
                 if selected.windows(2).any(|pair| pair[0] >= pair[1]) {
                     return Err(Error::other(
@@ -243,8 +256,12 @@ impl FormControlKind {
             } => {
                 nonempty_formula("input range", input_range)?;
                 nonempty_formula("cell link", cell_link)?;
-                if selected == &Some(0) {
-                    return Err(Error::other("dropdown selection indices are one-based"));
+                if selected == &Some(u16::MAX) {
+                    return Err(Error::other(format!(
+                        "dropdown selection index {} exceeds the maximum of {}",
+                        u16::MAX,
+                        u16::MAX - 1
+                    )));
                 }
                 if *lines == 0 {
                     return Err(Error::other("dropdown lines must be greater than zero"));
@@ -660,6 +677,51 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("sorted and unique"));
+
+        // Selection indices are zero-based: 0 selects the first item.
+        let zero_selected = FormControl::new(FormControlKind::ListBox {
+            input_range: None,
+            cell_link: None,
+            selection: ListSelection::Multi,
+            selected: vec![0, 2],
+            no_3d: false,
+        });
+        zero_selected.validate().unwrap();
+
+        let overflowing_list = FormControl::new(FormControlKind::ListBox {
+            input_range: None,
+            cell_link: None,
+            selection: ListSelection::Single,
+            selected: vec![u16::MAX],
+            no_3d: false,
+        });
+        assert!(overflowing_list
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("maximum"));
+
+        let zero_dropdown = FormControl::new(FormControlKind::Dropdown {
+            input_range: None,
+            cell_link: None,
+            selected: Some(0),
+            lines: 8,
+            no_3d: false,
+        });
+        zero_dropdown.validate().unwrap();
+
+        let overflowing_dropdown = FormControl::new(FormControlKind::Dropdown {
+            input_range: None,
+            cell_link: None,
+            selected: Some(u16::MAX),
+            lines: 8,
+            no_3d: false,
+        });
+        assert!(overflowing_dropdown
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("maximum"));
 
         let invalid_anchor = FormControl::with_anchor(
             FormControlKind::Button {

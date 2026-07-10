@@ -217,16 +217,22 @@ pub(super) fn assemble(
                 "extended" => ListSelection::Extend,
                 _ => ListSelection::Single,
             };
+            // Attribute values are one-based (0 = none); the model is
+            // zero-based.
             let selected = if selection == ListSelection::Single {
                 if pr.sel > 0 {
-                    vec![pr.sel]
+                    vec![pr.sel - 1]
                 } else {
                     Vec::new()
                 }
             } else if !pr.multi_sel.is_empty() {
-                pr.multi_sel.clone()
+                pr.multi_sel
+                    .iter()
+                    .filter(|&&v| v > 0)
+                    .map(|&v| v - 1)
+                    .collect()
             } else if pr.sel > 0 {
-                vec![pr.sel]
+                vec![pr.sel - 1]
             } else {
                 Vec::new()
             };
@@ -241,7 +247,7 @@ pub(super) fn assemble(
         "Drop" => FormControlKind::Dropdown {
             input_range: pr.fmla_range.clone(),
             cell_link: pr.fmla_link.clone(),
-            selected: if pr.sel > 0 { Some(pr.sel) } else { None },
+            selected: if pr.sel > 0 { Some(pr.sel - 1) } else { None },
             lines: pr.drop_lines,
             no_3d: pr.no_3d,
         },
@@ -312,6 +318,13 @@ mod tests {
         assert_eq!(pr.drop_lines, 6);
         assert_eq!(pr.sel, 2);
         assert_eq!(pr.fmla_range.as_deref(), Some("$H$1:$H$4"));
+
+        // The one-based sel attribute becomes a zero-based model index.
+        let control = assemble(&PendingControl::new(), &pr, String::new()).expect("assemble");
+        match control.kind {
+            FormControlKind::Dropdown { selected, .. } => assert_eq!(selected, Some(1)),
+            other => panic!("expected Dropdown, got {other:?}"),
+        }
     }
 
     #[test]

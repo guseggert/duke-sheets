@@ -2766,7 +2766,7 @@ mod tests {
                 input_range: Some("$H$1:$H$5".to_string()),
                 cell_link: None,
                 selection: ListSelection::Multi,
-                selected: vec![1, 3, 5],
+                selected: vec![0, 2, 4],
                 no_3d: true,
             },
             FormControlKind::Dropdown {

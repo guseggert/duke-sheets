@@ -6157,7 +6157,7 @@ fn all_form_control_kinds() -> Vec<FormControlKind> {
             input_range: Some("$H$1:$H$5".to_string()),
             cell_link: None,
             selection: ListSelection::Multi,
-            selected: vec![1, 3, 5],
+            selected: vec![0, 2, 4],
             no_3d: true,
         },
         FormControlKind::Dropdown {
@@ -6245,6 +6245,26 @@ fn xlsx_form_controls_emit_expected_parts() {
         },
         control_anchor_2c(1, 1, 3, 2),
     ));
+    ws.add_form_control(FormControl::with_anchor(
+        FormControlKind::ListBox {
+            input_range: Some("$H$1:$H$4".to_string()),
+            cell_link: None,
+            selection: ListSelection::Multi,
+            selected: vec![0, 2],
+            no_3d: false,
+        },
+        control_anchor_2c(1, 4, 3, 6),
+    ));
+    ws.add_form_control(FormControl::with_anchor(
+        FormControlKind::Dropdown {
+            input_range: Some("$H$1:$H$4".to_string()),
+            cell_link: None,
+            selected: Some(1),
+            lines: 8,
+            no_3d: false,
+        },
+        control_anchor_2c(1, 7, 3, 8),
+    ));
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
@@ -6264,6 +6284,12 @@ fn xlsx_form_controls_emit_expected_parts() {
     assert!(ctrl_prop.contains("objectType=\"CheckBox\""));
     assert!(ctrl_prop.contains("checked=\"Checked\""));
     assert!(ctrl_prop.contains("fmlaLink=\"$D$2\""));
+
+    // Zero-based model selections serialize one-based on disk.
+    let list_prop = read_part(&mut zip, "xl/ctrlProps/ctrlProp2.xml");
+    assert!(list_prop.contains("multiSel=\"1,3\""), "{list_prop}");
+    let drop_prop = read_part(&mut zip, "xl/ctrlProps/ctrlProp3.xml");
+    assert!(drop_prop.contains("sel=\"2\""), "{drop_prop}");
 
     let vml = read_part(&mut zip, "xl/drawings/vmlDrawing1.vml");
     assert!(vml.contains("ObjectType=\"Note\""), "comment shape present");
