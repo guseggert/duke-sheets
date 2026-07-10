@@ -6,9 +6,6 @@
 
 See [github.com/guseggert/duke-sheets](https://github.com/guseggert/duke-sheets).
 
-Node.js, Python, and WASM expose worksheet form-control collection and mutation
-APIs. The experimental C FFI does not yet expose worksheet objects.
-
 ## Building
 
 All bindings are managed via [mise](https://mise.jdx.dev/):
