@@ -74,9 +74,49 @@ def test_form_controls_round_trip(tmp_path, extension):
     workbook.save(path)
     reopened = duke_sheets.Workbook.open(path).get_sheet(0)
     assert reopened.form_control_count == 9
-    assert reopened.form_controls[1].kind == "checkbox"
-    assert reopened.form_controls[5].selected == [0, 2]
-    assert reopened.form_controls[6].selected == [2]
+
+    checkbox = reopened.form_controls[1]
+    assert (checkbox.kind, checkbox.caption, checkbox.state) == (
+        "checkbox",
+        "Check",
+        "checked",
+    )
+    assert checkbox.no_3d is True
+
+    # Writers recompute radio grouping; the sheet group's lone radio
+    # heads its group after the trip.
+    option = reopened.form_controls[2]
+    assert (option.state, option.first_in_group) == ("unchecked", True)
+
+    list_box = reopened.form_controls[5]
+    assert (list_box.input_range, list_box.selection, list_box.selected) == (
+        "$A$1:$A$3",
+        "multi",
+        [0, 2],
+    )
+
+    dropdown = reopened.form_controls[6]
+    assert (dropdown.input_range, dropdown.selected, dropdown.lines) == (
+        "$A$1:$A$3",
+        [2],
+        8,
+    )
+
+    scrollbar = reopened.form_controls[7]
+    assert (scrollbar.value, scrollbar.min, scrollbar.max) == (5, 0, 10)
+    assert (scrollbar.increment, scrollbar.page, scrollbar.horizontal) == (
+        1,
+        2,
+        False,
+    )
+
+    spinner = reopened.form_controls[8]
+    assert (spinner.value, spinner.min, spinner.max, spinner.increment) == (
+        2,
+        0,
+        10,
+        1,
+    )
 
 
 def test_invalid_form_control_inputs():

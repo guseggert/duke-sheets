@@ -369,6 +369,28 @@ fn test_form_control_mutations_and_roundtrip() {
     let controls = Array::from(&sheet.form_controls().unwrap());
     assert_eq!(controls.length(), 9);
 
+    assert!(sheet
+        .add_form_control(form_control(make_options(&[
+            ("kind", JsValue::from_str("optionButton")),
+            ("caption", JsValue::from_str("Bad")),
+            ("state", JsValue::from_str("mixed")),
+            ("no3D", JsValue::FALSE),
+        ])))
+        .is_err(), "mixed option buttons must be rejected");
+    assert!(sheet.remove_form_control(99).is_err(), "OOB removal must fail");
+    assert!(
+        sheet
+            .set_form_control(
+                99,
+                form_control(make_options(&[
+                    ("kind", JsValue::from_str("label")),
+                    ("caption", JsValue::from_str("nope")),
+                ])),
+            )
+            .is_err(),
+        "OOB set must fail"
+    );
+
     sheet
         .set_form_control(
             0,
@@ -378,15 +400,64 @@ fn test_form_control_mutations_and_roundtrip() {
     sheet.remove_form_control(0).unwrap();
     assert_eq!(sheet.form_control_count().unwrap(), 8);
 
+    // After removing the leading button: checkbox, optionButton,
+    // label, groupBox, listBox, dropdown, scrollbar, spinner.
+    let assert_controls_survive = |sheet: &Worksheet| {
+        let controls = Array::from(&sheet.form_controls().unwrap());
+        let kind_of = |i: u32| -> JsValue {
+            Reflect::get(&controls.get(i), &"kind".into()).unwrap()
+        };
+        let tags: Vec<String> = (0..controls.length())
+            .map(|i| get_string_field(&kind_of(i), "kind"))
+            .collect();
+        assert_eq!(
+            tags,
+            [
+                "checkbox",
+                "optionButton",
+                "label",
+                "groupBox",
+                "listBox",
+                "dropdown",
+                "scrollbar",
+                "spinner"
+            ]
+        );
+        let checkbox = kind_of(0);
+        assert_eq!(get_string_field(&checkbox, "state"), "checked");
+        let list_box = kind_of(4);
+        assert_eq!(get_string_field(&list_box, "selection"), "multi");
+        let selected: Vec<f64> =
+            Array::from(&Reflect::get(&list_box, &"selected".into()).unwrap())
+                .iter()
+                .map(|v| v.as_f64().unwrap())
+                .collect();
+        assert_eq!(selected, [0.0, 2.0]);
+        let dropdown = kind_of(5);
+        assert_eq!(get_f64_field(&dropdown, "selected"), 2.0);
+        assert_eq!(get_f64_field(&dropdown, "lines"), 8.0);
+        let scrollbar = kind_of(6);
+        assert_eq!(get_f64_field(&scrollbar, "value"), 5.0);
+        assert_eq!(get_f64_field(&scrollbar, "page"), 2.0);
+        assert!(!get_bool_field(&scrollbar, "horizontal"));
+        let spinner = kind_of(7);
+        assert_eq!(get_f64_field(&spinner, "increment"), 1.0);
+    };
+    assert_controls_survive(&sheet);
+
     for bytes in [wb.save_xlsx_bytes().unwrap(), wb.save_xlsb_bytes().unwrap()] {
         let reopened = Workbook::from_bytes(&bytes).unwrap();
-        assert_eq!(reopened.get_sheet(0).unwrap().form_control_count().unwrap(), 8);
+        let sheet = reopened.get_sheet(0).unwrap();
+        assert_eq!(sheet.form_control_count().unwrap(), 8);
+        assert_controls_survive(&sheet);
     }
     let xls = wb
         .save_xls_bytes_encrypted("password", None, None)
         .unwrap();
     let reopened = Workbook::from_bytes_with_password(&xls, "password", None).unwrap();
-    assert_eq!(reopened.get_sheet(0).unwrap().form_control_count().unwrap(), 8);
+    let sheet = reopened.get_sheet(0).unwrap();
+    assert_eq!(sheet.form_control_count().unwrap(), 8);
+    assert_controls_survive(&sheet);
 }
 
 /// The form-control API must be reachable through its documented

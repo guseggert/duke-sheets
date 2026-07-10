@@ -119,15 +119,50 @@ describe("form controls", () => {
       wb.save(file);
       const reopened = Workbook.open(file).getSheet(0);
       expect(reopened.formControlCount).toBe(9);
-      expect(reopened.formControls[1].kind.kind).toBe("checkbox");
-      expect(reopened.formControls[5].kind).toMatchObject({
-        kind: "listBox",
-        selected: [0, 2],
-      });
-      expect(reopened.formControls[6].kind).toMatchObject({
-        kind: "dropdown",
-        selected: 2,
-      });
+      // Writers recompute radio grouping; the sheet group's lone
+      // radio heads its group after the trip.
+      expect(reopened.formControls.map((c) => c.kind)).toEqual([
+        { kind: "button", caption: "Run" },
+        {
+          kind: "checkbox",
+          caption: "Check",
+          state: JsCheckState.Checked,
+          no3D: true,
+        },
+        {
+          kind: "optionButton",
+          caption: "Option",
+          state: JsCheckState.Unchecked,
+          firstInGroup: true,
+          no3D: false,
+        },
+        { kind: "label", caption: "Label" },
+        { kind: "groupBox", caption: "Group", no3D: false },
+        {
+          kind: "listBox",
+          inputRange: "$A$1:$A$3",
+          selection: JsListSelection.Multi,
+          selected: [0, 2],
+          no3D: false,
+        },
+        {
+          kind: "dropdown",
+          inputRange: "$A$1:$A$3",
+          selected: 2,
+          lines: 8,
+          no3D: false,
+        },
+        {
+          kind: "scrollbar",
+          value: 5,
+          min: 0,
+          max: 10,
+          increment: 1,
+          page: 2,
+          horizontal: false,
+        },
+        { kind: "spinner", value: 2, min: 0, max: 10, increment: 1 },
+      ]);
       fs.rmSync(dir, { recursive: true, force: true });
     });
   }
