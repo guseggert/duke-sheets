@@ -16,12 +16,17 @@ use duke_sheets_core::validation::DataValidation;
 use duke_sheets_core::{CellAddress, CellRange, CellValue, Workbook};
 use duke_sheets_xls::{XlsReader, XlsWriter};
 
+#[path = "common/form_controls.rs"]
+mod form_controls;
+use form_controls::FuzzFormControl;
+
 #[derive(Arbitrary, Debug)]
 struct FuzzWorkbook {
     cells: Vec<FuzzCell>,
     comment: Option<SmallString>,
     list_validation: Option<SmallString>,
     autofilter: bool,
+    controls: Vec<FuzzFormControl>,
 }
 
 #[derive(Arbitrary, Debug)]
@@ -160,9 +165,19 @@ fuzz_target!(|data: &[u8]| {
         sheet.add_data_validation(dv);
     }
 
+    for control in fwb.controls.iter().take(6) {
+        sheet.add_form_control(control.to_control());
+    }
+    let control_count = sheet.form_control_count();
+
     let bytes = match XlsWriter::write_to_bytes(&workbook) {
         Ok(bytes) => bytes,
         Err(_) => return,
     };
-    let _ = XlsReader::read(Cursor::new(bytes)).expect("our own XLS output must read back");
+    let rt = XlsReader::read(Cursor::new(bytes)).expect("our own XLS output must read back");
+    assert_eq!(
+        rt.worksheet(0).unwrap().form_control_count(),
+        control_count,
+        "form control count mismatch"
+    );
 });
