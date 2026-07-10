@@ -144,54 +144,6 @@ const xlsxBytes = wb.saveXlsxBytes();   // Uint8Array
 const csvString = wb.saveCsvString();    // string
 ```
 
-## Form controls
-
-Node.js, Python, WASM, and Rust can inspect and mutate legacy worksheet form
-controls (buttons, checkboxes, option buttons, labels, group boxes, list boxes,
-dropdowns, scrollbars, and spinners). XLSX, XLSB, and XLS are supported.
-
-```typescript
-import { Workbook } from '@dukelib/sheets';
-
-const sheet = new Workbook().getSheet(0);
-const index = sheet.addFormControl({
-  anchor: {
-    fromRow: 1, fromCol: 1, fromRowOffset: 0, fromColOffset: 0,
-    toRow: 2, toCol: 3, toRowOffset: 0, toColOffset: 0,
-    editAs: 'twoCell',
-  },
-  kind: {
-    kind: 'checkbox',
-    caption: 'Enable feature',
-    state: 'checked',
-    no3D: false,
-  },
-});
-sheet.setFormControl(index, sheet.formControls[index]);
-sheet.removeFormControl(index);
-```
-
-```python
-anchor = duke_sheets.DrawingAnchor(1, 1, 2, 3)
-control = duke_sheets.FormControl.checkbox(
-    "Enable feature", anchor, state="checked"
-)
-index = sheet.add_form_control(control)
-sheet.set_form_control(index, duke_sheets.FormControl.label("Ready", anchor))
-sheet.remove_form_control(index)
-```
-
-All indexes are zero-based, including list-box and dropdown selected item
-indexes (a linked cell still receives Excel's one-based value at runtime).
-Returned controls are snapshots; call the explicit `set` method to persist
-changes. Anchors are normalized to the two-cell form: one-cell and absolute
-anchors flatten to from/to markers at Excel's default cell metrics, with
-`editAs` preserving the original sizing behavior. Radio grouping is derived
-from group-box containment on write, so `firstInGroup` inputs are ignored.
-The Python factories default optional properties; the TypeScript inputs are
-fully explicit by design.
-ActiveX controls are not modeled, and ODS is not a supported format.
-
 ## Rust
 
 Add to your `Cargo.toml`:
