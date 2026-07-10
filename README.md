@@ -184,7 +184,11 @@ sheet.remove_form_control(index)
 All indexes are zero-based, including list-box and dropdown selected item
 indexes (a linked cell still receives Excel's one-based value at runtime).
 Returned controls are snapshots; call the explicit `set` method to persist
-changes. ODS and ActiveX controls are not supported.
+changes. Anchors are normalized to the two-cell form: one-cell and absolute
+anchors flatten to from/to markers at Excel's default cell metrics, with
+`editAs` preserving the original sizing behavior. Radio grouping is derived
+from group-box containment on write, so `firstInGroup` inputs are ignored.
+ActiveX controls are not modeled, and ODS is not a supported format.
 
 ## Rust
 

@@ -193,6 +193,12 @@ export class RowIterator implements IterableIterator<JsRow> {
   next(): IteratorResult<JsRow>;
 }
 
+/**
+ * Flat two-cell anchor. Controls read from files with one-cell or
+ * absolute anchors are flattened to from/to markers at Excel's
+ * default cell metrics, with `editAs` preserving the original sizing
+ * behavior.
+ */
 export interface FormControlAnchor {
   fromCol: number;
   fromRow: number;
@@ -208,7 +214,9 @@ export interface FormControlAnchor {
 /**
  * Kind-specific form-control data. List box and dropdown `selected`
  * item indexes are zero-based; a linked cell still receives Excel's
- * one-based value.
+ * one-based value. `firstInGroup` is read-side information: writers
+ * recompute radio grouping from group-box containment and mark each
+ * group's first radio, so input values are ignored.
  */
 export type FormControlKind =
   | { kind: "button"; caption: string }

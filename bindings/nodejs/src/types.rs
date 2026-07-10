@@ -1950,7 +1950,10 @@ pub struct JsImageInfo {
 }
 
 
-/// Chart anchor position in a worksheet.
+/// Flat two-cell drawing anchor. Objects read from files with
+/// one-cell or absolute anchors are flattened to from/to markers at
+/// Excel's default cell metrics, with `editAs` preserving the
+/// original sizing behavior.
 #[napi(object)]
 pub struct JsDrawingAnchor {
     pub from_col: u32,
@@ -2057,6 +2060,9 @@ pub enum JsListSelection {
 /// Kind-specific form-control data. `kind` is the TypeScript
 /// discriminator. List box and dropdown `selected` item indexes are
 /// zero-based; a linked cell still receives Excel's one-based value.
+/// `firstInGroup` is read-side information: writers recompute radio
+/// grouping from group-box containment and mark each group's first
+/// radio, so input values are ignored.
 #[napi(discriminant = "kind", discriminant_case = "camelCase")]
 pub enum JsFormControlKind {
     Button { caption: String },

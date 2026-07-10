@@ -2246,6 +2246,10 @@ pub struct PyMergeSpan {
     pub col_span: u32,
 }
 
+/// Flat two-cell drawing anchor. Objects read from files with
+/// one-cell or absolute anchors are flattened to from/to markers at
+/// Excel's default cell metrics, with `edit_as` preserving the
+/// original sizing behavior.
 #[pyclass(name = "DrawingAnchor")]
 #[derive(Clone)]
 pub struct PyDrawingAnchor {
@@ -2403,6 +2407,9 @@ impl PyFormControl {
         Self::create(core::FormControlKind::Checkbox { caption, state: parse_check_state(state)?, cell_link, no_3d }, &anchor, name, locked, printable)
     }
 
+    /// Create an option (radio) button. Radio grouping is derived
+    /// from group-box containment when writing, so there is no
+    /// grouping argument; `first_in_group` is read-side information.
     #[staticmethod]
     #[pyo3(signature=(caption, anchor, *, state="unchecked", cell_link=None, no_3d=false, name=None, locked=true, printable=true))]
     fn option_button(caption: String, anchor: PyRef<'_, PyDrawingAnchor>, state: &str, cell_link: Option<String>, no_3d: bool, name: Option<String>, locked: bool, printable: bool) -> PyResult<Self> {
@@ -2471,6 +2478,8 @@ impl PyFormControl {
     fn input_range(&self) -> Option<String> { match &self.inner.kind { core::FormControlKind::ListBox { input_range, .. } | core::FormControlKind::Dropdown { input_range, .. } => input_range.clone(), _ => None } }
     #[getter]
     fn no_3d(&self) -> Option<bool> { match &self.inner.kind { core::FormControlKind::Checkbox { no_3d, .. } | core::FormControlKind::OptionButton { no_3d, .. } | core::FormControlKind::GroupBox { no_3d, .. } | core::FormControlKind::ListBox { no_3d, .. } | core::FormControlKind::Dropdown { no_3d, .. } => Some(*no_3d), _ => None } }
+    /// Whether this radio heads its group (writers recompute this
+    /// from group-box containment).
     #[getter]
     fn first_in_group(&self) -> Option<bool> { match &self.inner.kind { core::FormControlKind::OptionButton { first_in_group, .. } => Some(*first_in_group), _ => None } }
     #[getter]
