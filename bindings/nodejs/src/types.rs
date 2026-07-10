@@ -1989,59 +1989,17 @@ fn canonical_anchor(
     duke_sheets_chart::CellMarker,
     &'static str,
 ) {
-    use duke_sheets_chart::{CellMarker, DrawingAnchor, EditAs};
-    const COL_EMU: i64 = 609_600;
-    const ROW_EMU: i64 = 190_500;
-    let extend = |from: &CellMarker, width: i64, height: i64| CellMarker {
-        col: ((from.col as i128 * COL_EMU as i128
-            + from.col_offset_emu as i128
-            + width.max(0) as i128)
-            / COL_EMU as i128)
-            .clamp(0, u16::MAX as i128) as u16,
-        col_offset_emu: (from.col_offset_emu + width.max(0)) % COL_EMU,
-        row: ((from.row as i128 * ROW_EMU as i128
-            + from.row_offset_emu as i128
-            + height.max(0) as i128)
-            / ROW_EMU as i128)
-            .clamp(0, u32::MAX as i128) as u32,
-        row_offset_emu: (from.row_offset_emu + height.max(0)) % ROW_EMU,
-    };
-    match anchor {
+    use duke_sheets_chart::{DrawingAnchor, EditAs};
+    match anchor.to_two_cell() {
         DrawingAnchor::TwoCell { from, to, edit_as } => {
-            let edit_as = match edit_as.clone().unwrap_or(EditAs::TwoCell) {
+            let edit_as = match edit_as.unwrap_or(EditAs::TwoCell) {
                 EditAs::TwoCell => "twoCell",
                 EditAs::OneCell => "oneCell",
                 EditAs::Absolute => "absolute",
             };
-            (from.clone(), to.clone(), edit_as)
+            (from, to, edit_as)
         }
-        DrawingAnchor::OneCell {
-            from,
-            width_emu,
-            height_emu,
-        } => (
-            from.clone(),
-            extend(from, *width_emu, *height_emu),
-            "oneCell",
-        ),
-        DrawingAnchor::Absolute {
-            x_emu,
-            y_emu,
-            width_emu,
-            height_emu,
-        } => {
-            let from = CellMarker {
-                col: (*x_emu / COL_EMU).clamp(0, u16::MAX as i64) as u16,
-                col_offset_emu: *x_emu % COL_EMU,
-                row: (*y_emu / ROW_EMU).clamp(0, u32::MAX as i64) as u32,
-                row_offset_emu: *y_emu % ROW_EMU,
-            };
-            (
-                from.clone(),
-                extend(&from, *width_emu, *height_emu),
-                "absolute",
-            )
-        }
+        other => unreachable!("to_two_cell returned {other:?}"),
     }
 }
 

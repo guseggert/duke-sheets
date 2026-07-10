@@ -301,6 +301,66 @@ impl Default for DrawingAnchor {
     }
 }
 
+impl DrawingAnchor {
+    /// The canonical two-cell form of any anchor. OneCell and
+    /// Absolute anchors are flattened to from/to markers at Excel's
+    /// default cell metrics (609,600 EMU per column, 190,500 EMU per
+    /// row), with `edit_as` preserving the original sizing behavior;
+    /// markers clamp to the grid limits on overflow. TwoCell anchors
+    /// are returned unchanged.
+    pub fn to_two_cell(&self) -> DrawingAnchor {
+        const COL_EMU: i128 = 609_600;
+        const ROW_EMU: i128 = 190_500;
+        let marker = |col_total: i128, row_total: i128| CellMarker {
+            col: col_total
+                .div_euclid(COL_EMU)
+                .clamp(0, i128::from(u16::MAX)) as u16,
+            col_offset_emu: col_total.rem_euclid(COL_EMU) as i64,
+            row: row_total
+                .div_euclid(ROW_EMU)
+                .clamp(0, i128::from(u32::MAX)) as u32,
+            row_offset_emu: row_total.rem_euclid(ROW_EMU) as i64,
+        };
+        let from_total = |from: &CellMarker| {
+            (
+                i128::from(from.col) * COL_EMU + i128::from(from.col_offset_emu),
+                i128::from(from.row) * ROW_EMU + i128::from(from.row_offset_emu),
+            )
+        };
+        match self {
+            DrawingAnchor::TwoCell { .. } => self.clone(),
+            DrawingAnchor::OneCell {
+                from,
+                width_emu,
+                height_emu,
+            } => {
+                let (x, y) = from_total(from);
+                DrawingAnchor::TwoCell {
+                    from: from.clone(),
+                    to: marker(
+                        x + i128::from((*width_emu).max(0)),
+                        y + i128::from((*height_emu).max(0)),
+                    ),
+                    edit_as: Some(EditAs::OneCell),
+                }
+            }
+            DrawingAnchor::Absolute {
+                x_emu,
+                y_emu,
+                width_emu,
+                height_emu,
+            } => DrawingAnchor::TwoCell {
+                from: marker(i128::from(*x_emu), i128::from(*y_emu)),
+                to: marker(
+                    i128::from(*x_emu) + i128::from((*width_emu).max(0)),
+                    i128::from(*y_emu) + i128::from((*height_emu).max(0)),
+                ),
+                edit_as: Some(EditAs::Absolute),
+            },
+        }
+    }
+}
+
 /// Image format for embedded images.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ImageFormat {
@@ -408,4 +468,110 @@ pub enum BarShape {
     Cylinder,
     Pyramid,
     PyramidToMax,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn two_cell_anchor_is_returned_unchanged() {
+        let anchor = DrawingAnchor::TwoCell {
+            from: CellMarker {
+                col: 1,
+                col_offset_emu: 100,
+                row: 2,
+                row_offset_emu: 200,
+            },
+            to: CellMarker {
+                col: 3,
+                col_offset_emu: 300,
+                row: 4,
+                row_offset_emu: 400,
+            },
+            edit_as: Some(EditAs::OneCell),
+        };
+        assert_eq!(anchor.to_two_cell(), anchor);
+    }
+
+    #[test]
+    fn one_cell_anchor_flattens_at_default_metrics() {
+        let anchor = DrawingAnchor::OneCell {
+            from: CellMarker {
+                col: 2,
+                col_offset_emu: 9_600,
+                row: 1,
+                row_offset_emu: 500,
+            },
+            width_emu: 1_219_200, // exactly two columns
+            height_emu: 381_000,  // exactly two rows
+        };
+        match anchor.to_two_cell() {
+            DrawingAnchor::TwoCell { from, to, edit_as } => {
+                assert_eq!((from.col, from.row), (2, 1));
+                assert_eq!((to.col, to.col_offset_emu), (4, 9_600));
+                assert_eq!((to.row, to.row_offset_emu), (3, 500));
+                assert_eq!(edit_as, Some(EditAs::OneCell));
+            }
+            other => panic!("expected TwoCell, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn absolute_anchor_flattens_at_default_metrics() {
+        let anchor = DrawingAnchor::Absolute {
+            x_emu: 1_219_300,
+            y_emu: 190_600,
+            width_emu: 609_600,
+            height_emu: 190_500,
+        };
+        match anchor.to_two_cell() {
+            DrawingAnchor::TwoCell { from, to, edit_as } => {
+                assert_eq!((from.col, from.col_offset_emu), (2, 100));
+                assert_eq!((from.row, from.row_offset_emu), (1, 100));
+                assert_eq!((to.col, to.col_offset_emu), (3, 100));
+                assert_eq!((to.row, to.row_offset_emu), (2, 100));
+                assert_eq!(edit_as, Some(EditAs::Absolute));
+            }
+            other => panic!("expected TwoCell, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn extreme_anchor_values_clamp_without_panicking() {
+        // Offsets near i64::MAX must not overflow the flattening
+        // arithmetic; markers clamp to the grid limits.
+        let hostile = DrawingAnchor::OneCell {
+            from: CellMarker {
+                col: u16::MAX,
+                col_offset_emu: i64::MAX,
+                row: u32::MAX,
+                row_offset_emu: i64::MAX,
+            },
+            width_emu: i64::MAX,
+            height_emu: i64::MAX,
+        };
+        match hostile.to_two_cell() {
+            DrawingAnchor::TwoCell { to, .. } => {
+                assert_eq!(to.col, u16::MAX);
+                assert_eq!(to.row, u32::MAX);
+                assert!((0..609_600).contains(&to.col_offset_emu));
+                assert!((0..190_500).contains(&to.row_offset_emu));
+            }
+            other => panic!("expected TwoCell, got {other:?}"),
+        }
+
+        let hostile_absolute = DrawingAnchor::Absolute {
+            x_emu: i64::MIN,
+            y_emu: i64::MIN,
+            width_emu: i64::MAX,
+            height_emu: i64::MAX,
+        };
+        match hostile_absolute.to_two_cell() {
+            DrawingAnchor::TwoCell { from, .. } => {
+                assert_eq!((from.col, from.row), (0, 0));
+            }
+            other => panic!("expected TwoCell, got {other:?}"),
+        }
+    }
 }
