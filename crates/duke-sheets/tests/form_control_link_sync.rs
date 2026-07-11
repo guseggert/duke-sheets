@@ -1,6 +1,6 @@
 use duke_sheets::{
     CellError, CellValue, CheckState, FormControl, FormControlKind, ListSelection, Workbook,
-    WorkbookExt, WorkbookOpenOptions, WorkbookSaveOptions,
+    WorkbookCalculationExt, WorkbookExt, WorkbookOpenOptions, WorkbookSaveOptions,
 };
 
 fn linked_controls_workbook() -> Workbook {
@@ -105,6 +105,71 @@ fn high_level_save_synchronizes_form_control_linked_cells() {
         assert_eq!(sheet.get_value("A6").unwrap(), CellValue::Number(18.0));
         assert_eq!(sheet.get_value("A7").unwrap(), CellValue::Number(2.0));
         assert_eq!(sheet.get_value("A8").unwrap(), CellValue::Boolean(true));
+    }
+}
+
+#[test]
+fn calculation_keeps_linked_cells_and_controls_live() {
+    let mut workbook = Workbook::new();
+    let sheet = workbook.worksheet_mut(0).unwrap();
+    // Control -> cell: the checkbox state must be visible to formulas.
+    sheet.set_cell_formula("C1", "=IF(D2,10,0)").unwrap();
+    sheet.add_form_control(FormControl::new(FormControlKind::Checkbox {
+        caption: "input".into(),
+        state: CheckState::Checked,
+        cell_link: Some("$D$2".into()),
+        no_3d: false,
+    }));
+    // Cell -> control: a formula in a linked cell drives the control.
+    sheet.set_cell_value("B1", 5.0).unwrap();
+    sheet.set_cell_formula("D3", "=B1>0").unwrap();
+    sheet.add_form_control(FormControl::new(FormControlKind::Checkbox {
+        caption: "driven".into(),
+        state: CheckState::Unchecked,
+        cell_link: Some("$D$3".into()),
+        no_3d: false,
+    }));
+
+    workbook.calculate().unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+    assert_eq!(sheet.get_value("D2").unwrap(), CellValue::Boolean(true));
+    assert_eq!(
+        sheet.get_calculated_value_at(0, 2),
+        Some(&CellValue::Number(10.0)),
+        "formulas must see the synchronized control state"
+    );
+    assert!(sheet.has_formula_at(2, 3), "driving formula survives");
+    match &sheet.form_controls()[1].kind {
+        FormControlKind::Checkbox { state, .. } => {
+            assert_eq!(*state, CheckState::Checked, "formula result drives the control");
+        }
+        other => panic!("expected Checkbox, got {other:?}"),
+    }
+
+    // Flip the input and recalculate: the driven control follows.
+    workbook
+        .worksheet_mut(0)
+        .unwrap()
+        .set_cell_value("B1", -1.0)
+        .unwrap();
+    workbook.calculate().unwrap();
+    match &workbook.worksheet(0).unwrap().form_controls()[1].kind {
+        FormControlKind::Checkbox { state, .. } => assert_eq!(*state, CheckState::Unchecked),
+        other => panic!("expected Checkbox, got {other:?}"),
+    }
+
+    // Saving after calculation preserves the driving formula: the control
+    // now agrees with it, so synchronization leaves the cell alone.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("calc.xlsx");
+    workbook.save(&path).unwrap();
+    let reopened = Workbook::open(&path).unwrap();
+    let sheet = reopened.worksheet(0).unwrap();
+    assert!(sheet.has_formula_at(2, 3), "formula persists in the file");
+    assert_eq!(sheet.get_value("D3").unwrap(), CellValue::Boolean(false));
+    match &sheet.form_controls()[1].kind {
+        FormControlKind::Checkbox { state, .. } => assert_eq!(*state, CheckState::Unchecked),
+        other => panic!("expected Checkbox, got {other:?}"),
     }
 }
 

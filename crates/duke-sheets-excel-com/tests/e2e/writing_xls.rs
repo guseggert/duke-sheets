@@ -3183,6 +3183,269 @@ fn excel_authored_xls_form_control_linked_cell_semantics() {
     cleanup_fixture(&fixture);
 }
 
+/// Excel-authored probe pinning how a FORMULA in a linked cell drives
+/// each control kind when it recalculates: the checkbox on/off/mixed
+/// mapping, scrollbar clamping (and whether Excel rewrites the formula
+/// cell to the clamp), list box out-of-range handling, and radio-group
+/// index selection. The saved XLS must persist the driven control
+/// states while the linked cells keep their formulas.
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_authored_xls_linked_formulas_drive_controls() {
+    use duke_sheets_core::{CellError, CheckState, FormControlKind};
+    use excel_com_protocol::CellValue as ExcelCellValue;
+
+    let fixture = temp_fixture_xls();
+    ensure_vm_temp_dir();
+
+    let bridge = excel_bridge();
+    let excel = bridge.lock().unwrap();
+    let workbook = excel.create_workbook().expect("create Excel workbook");
+    for (i, item) in ["Alpha", "Beta", "Gamma", "Delta"].iter().enumerate() {
+        workbook
+            .set_cell_value(&format!("H{}", i + 1), *item)
+            .expect("set list item");
+    }
+
+    let shapes = excel
+        .navigate(
+            workbook.handle(),
+            vec![
+                SheetRef::Index(0).to_chain_step(),
+                ChainStep::Property("Shapes".into()),
+            ],
+        )
+        .expect("navigate shapes");
+    let add_control = |control_type: i32, left: i32, top: i32| -> u64 {
+        match excel.invoke(
+            shapes,
+            vec![],
+            "AddFormControl",
+            vec![
+                serde_json::Value::from(control_type),
+                serde_json::Value::from(left),
+                serde_json::Value::from(top),
+                serde_json::Value::from(100),
+                serde_json::Value::from(30),
+            ],
+        ) {
+            Ok(Some(ResponseData::Handle { handle })) => handle,
+            other => panic!("expected AddFormControl handle, got {other:?}"),
+        }
+    };
+    let set_control = |shape: u64, property: &str, value: serde_json::Value| {
+        excel
+            .set(
+                shape,
+                vec![ChainStep::Property("ControlFormat".into())],
+                property,
+                value,
+            )
+            .unwrap_or_else(|e| panic!("set ControlFormat.{property}: {e}"));
+    };
+    let get_control = |shape: u64, property: &str| -> serde_json::Value {
+        match excel
+            .get(
+                shape,
+                vec![ChainStep::Property("ControlFormat".into())],
+                property,
+            )
+            .unwrap_or_else(|e| panic!("get ControlFormat.{property}: {e}"))
+        {
+            Some(ResponseData::Value { value }) => value,
+            other => panic!("expected ControlFormat.{property} value, got {other:?}"),
+        }
+    };
+    let drive = |cell: &str, formula: &str| {
+        workbook
+            .set_cell_formula(cell, formula)
+            .unwrap_or_else(|e| panic!("set {cell} formula {formula}: {e}"));
+        excel
+            .recalculate()
+            .unwrap_or_else(|e| panic!("recalculate after {cell} = {formula}: {e}"));
+    };
+
+    // xlCheckBox = 1 linked to $A$1; xlOn = 1, xlOff = -4146, xlMixed = 2.
+    let checkbox = add_control(1, 10, 10);
+    set_control(checkbox, "LinkedCell", json!("$A$1"));
+    let checkbox_values: Vec<serde_json::Value> = ["=5", "=0", "=TRUE", "=\"text\"", "=NA()"]
+        .into_iter()
+        .map(|formula| {
+            drive("A1", formula);
+            let value = get_control(checkbox, "Value");
+            eprintln!("checkbox: A1 {formula} -> Value {value}");
+            value
+        })
+        .collect();
+
+    // xlScrollBar = 8 (Min=5, Max=95) linked to $A$2. Alongside the
+    // control's Value, capture what the cell holds afterwards to pin
+    // whether Excel rewrites the formula cell to the clamp.
+    let scrollbar = add_control(8, 150, 10);
+    set_control(scrollbar, "Min", json!(5));
+    set_control(scrollbar, "Max", json!(95));
+    set_control(scrollbar, "LinkedCell", json!("$A$2"));
+    let scrollbar_probe: Vec<(serde_json::Value, ExcelCellValue, String)> = ["=150", "=2", "=40"]
+        .into_iter()
+        .map(|formula| {
+            drive("A2", formula);
+            let value = get_control(scrollbar, "Value");
+            let cell_value = workbook.get_cell_value("A2").expect("read A2 value");
+            let cell_formula = workbook.get_cell_formula("A2").expect("read A2 formula");
+            eprintln!(
+                "scrollbar: A2 {formula} -> Value {value}, cell {cell_value:?} ({cell_formula})"
+            );
+            (value, cell_value, cell_formula)
+        })
+        .collect();
+
+    // xlListBox = 6, single-select over $H$1:$H$4, linked to $A$3.
+    let list_box = add_control(6, 10, 60);
+    set_control(list_box, "ListFillRange", json!("$H$1:$H$4"));
+    set_control(list_box, "LinkedCell", json!("$A$3"));
+    let list_indexes: Vec<serde_json::Value> = ["=2", "=99", "=0"]
+        .into_iter()
+        .map(|formula| {
+            drive("A3", formula);
+            let index = get_control(list_box, "ListIndex");
+            eprintln!("list box: A3 {formula} -> ListIndex {index}");
+            index
+        })
+        .collect();
+
+    // xlOptionButton = 7 pair sharing $A$4. They are the only radios on
+    // the sheet, so they form the sheet-level group by themselves.
+    let option_1 = add_control(7, 300, 10);
+    let option_2 = add_control(7, 300, 50);
+    for option in [option_1, option_2] {
+        set_control(option, "LinkedCell", json!("$A$4"));
+    }
+    let radio_probe: Vec<(serde_json::Value, serde_json::Value)> = ["=2", "=0"]
+        .into_iter()
+        .map(|formula| {
+            drive("A4", formula);
+            let first = get_control(option_1, "Value");
+            let second = get_control(option_2, "Value");
+            eprintln!("radios: A4 {formula} -> ({first}, {second})");
+            (first, second)
+        })
+        .collect();
+
+    assert_eq!(
+        checkbox_values,
+        vec![json!(1), json!(-4146), json!(1), json!(1), json!(2)],
+        "checkbox: nonzero, TRUE and text all check; 0 unchecks; only #N/A mixes"
+    );
+    assert_eq!(
+        scrollbar_probe,
+        vec![
+            (json!(95), ExcelCellValue::Number(150.0), "=150".to_string()),
+            (json!(5), ExcelCellValue::Number(2.0), "=2".to_string()),
+            (json!(40), ExcelCellValue::Number(40.0), "=40".to_string()),
+        ],
+        "scrollbar Value clamps to Min/Max; the formula cell is not rewritten"
+    );
+    assert_eq!(
+        list_indexes,
+        vec![json!(2), json!(4), json!(0)],
+        "list box: in-range selects; out-of-range clamps to the last item; 0 deselects"
+    );
+    assert_eq!(
+        radio_probe,
+        vec![(json!(-4146), json!(1)), (json!(-4146), json!(-4146))],
+        "radio pair (first, second) Value per formula =2, =0"
+    );
+
+    workbook.save_as(&fixture.vm_path, 56).expect("save xls");
+    for handle in [checkbox, scrollbar, list_box, option_1, option_2, shapes] {
+        excel.release(handle).expect("release COM handle");
+    }
+    workbook.close().expect("close workbook");
+    pull_file_from_vm(&fixture);
+    let model = duke_sheets_xls::XlsReader::read_file(&fixture.host_path).expect("read xls");
+    let sheet = model.worksheet(0).unwrap();
+
+    // The linked cells persist as formulas with recalculated caches,
+    // not as constants pushed back by the controls.
+    assert_eq!(sheet.get_formula_at(0, 0), Some("=NA()"));
+    assert_eq!(
+        sheet.get_value("A1").unwrap(),
+        CellValue::Error(CellError::Na)
+    );
+    assert_eq!(sheet.get_formula_at(1, 0), Some("=40"));
+    assert_eq!(sheet.get_value("A2").unwrap(), CellValue::Number(40.0));
+    assert_eq!(sheet.get_formula_at(2, 0), Some("=0"));
+    assert_eq!(sheet.get_value("A3").unwrap(), CellValue::Number(0.0));
+    assert_eq!(sheet.get_formula_at(3, 0), Some("=0"));
+    assert_eq!(sheet.get_value("A4").unwrap(), CellValue::Number(0.0));
+
+    // The persisted control states match the last formula-driven states.
+    let controls = sheet.form_controls();
+    assert_eq!(controls.len(), 5, "all controls survive the save");
+    match &controls[0].kind {
+        FormControlKind::Checkbox {
+            state, cell_link, ..
+        } => {
+            assert_eq!(
+                *state,
+                CheckState::Mixed,
+                "checkbox persists the #N/A-driven mixed state"
+            );
+            assert_eq!(cell_link.as_deref(), Some("$A$1"));
+        }
+        other => panic!("expected Checkbox, got {other:?}"),
+    }
+    match &controls[1].kind {
+        FormControlKind::Scrollbar {
+            value,
+            min,
+            max,
+            cell_link,
+            ..
+        } => {
+            assert_eq!((*min, *max, *value), (5, 95, 40));
+            assert_eq!(cell_link.as_deref(), Some("$A$2"));
+        }
+        other => panic!("expected Scrollbar, got {other:?}"),
+    }
+    match &controls[2].kind {
+        FormControlKind::ListBox {
+            selected,
+            cell_link,
+            ..
+        } => {
+            assert_eq!(
+                selected,
+                &Vec::<u16>::new(),
+                "ListIndex 0 persists as no selection"
+            );
+            assert_eq!(cell_link.as_deref(), Some("$A$3"));
+        }
+        other => panic!("expected ListBox, got {other:?}"),
+    }
+    let radios: Vec<(CheckState, Option<&str>, bool)> = controls[3..]
+        .iter()
+        .map(|control| match &control.kind {
+            FormControlKind::OptionButton {
+                state,
+                cell_link,
+                first_in_group,
+                ..
+            } => (*state, cell_link.as_deref(), *first_in_group),
+            other => panic!("expected OptionButton, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        radios,
+        vec![
+            (CheckState::Unchecked, Some("$A$4"), true),
+            (CheckState::Unchecked, None, false),
+        ],
+        "=0 leaves both radios unchecked; Excel stores the group link on the first radio only"
+    );
+    cleanup_fixture(&fixture);
+}
+
 /// An unselected radio group whose linked cell held a stale value
 /// must survive Excel: synchronization resets the cell to 0, which
 /// Excel reads back as "no radio checked". Without the reset, Excel

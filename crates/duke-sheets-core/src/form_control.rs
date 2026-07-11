@@ -23,6 +23,11 @@
 //! Low-level format writers are immutable and require an explicit call
 //! before writing.
 //!
+//! Calculation binds the two live, as in Excel: control state is projected
+//! into constant linked cells before evaluation (so formulas see it), and
+//! recalculated formulas in linked cells drive their controls afterwards via
+//! [`crate::Workbook::sync_form_controls_from_linked_cells`].
+//!
 //! ## Example
 //!
 //! ```rust
