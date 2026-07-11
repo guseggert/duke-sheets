@@ -151,12 +151,14 @@ impl Workbook {
     /// one-based item index, option-button groups write their one-based
     /// selected index, and scrollbars/spinners write their numeric value.
     /// Fresh unchecked/no-selection/multi-select links preserve a blank cell;
-    /// an existing linked value is reset to `FALSE` or `0`. Existing formulas
-    /// are replaced. Malformed, external-workbook, and unknown-sheet links are
-    /// left unchanged. If multiple controls target one cell, the last control
-    /// in worksheet order wins.
+    /// an existing linked value is reset to `FALSE` or `0`. A linked cell that
+    /// already holds the control's value is left untouched, so a formula
+    /// driving the control survives, as in Excel; a disagreeing formula is
+    /// replaced with the control's constant. Malformed, external-workbook,
+    /// and unknown-sheet links are left unchanged. If multiple controls
+    /// target one cell, the last control in worksheet order wins.
     ///
-    /// Returns the number of distinct linked cells updated.
+    /// Returns the number of distinct linked cells whose value changed.
     pub fn sync_form_control_links(&mut self) -> usize {
         let mut updates: BTreeMap<(usize, u32, u16), CellValue> = BTreeMap::new();
 
@@ -262,6 +264,11 @@ impl Workbook {
 
         let mut updated = 0;
         for ((sheet, row, col), value) in updates {
+            // Excel only writes the linked cell when the control state
+            // disagrees with it, so an agreeing driving formula survives.
+            if self.worksheets[sheet].get_value_at(row, col) == value {
+                continue;
+            }
             if self.worksheets[sheet]
                 .set_cell_value_at(row, col, value)
                 .is_ok()
@@ -960,6 +967,8 @@ mod tests {
         let ws = wb.worksheet_mut(0).unwrap();
         ws.set_cell_formula("A8", "=FALSE").unwrap();
         ws.set_cell_formula("A11", "=0").unwrap();
+        ws.set_formula_with_cached_value_at(11, 0, "=1=2", CellValue::Boolean(false))
+            .unwrap();
         ws.set_cell_value("A3", 99.0).unwrap();
         ws.set_cell_value("A10", true).unwrap();
 
@@ -1046,12 +1055,18 @@ mod tests {
                 lines: 8,
                 no_3d: false,
             },
+            FormControlKind::Checkbox {
+                caption: "agreeing formula".into(),
+                state: CheckState::Unchecked,
+                cell_link: Some("$A$12".into()),
+                no_3d: false,
+            },
         ];
         for kind in kinds {
             ws.add_form_control(FormControl::new(kind));
         }
 
-        assert_eq!(wb.sync_form_control_links(), 11);
+        assert_eq!(wb.sync_form_control_links(), 9);
         let ws = wb.worksheet(0).unwrap();
         assert_eq!(ws.get_value("A1").unwrap(), CellValue::Error(CellError::Na));
         assert_eq!(ws.get_value("A2").unwrap(), CellValue::Number(3.0));
@@ -1065,6 +1080,10 @@ mod tests {
         assert_eq!(ws.get_value("A11").unwrap(), CellValue::Number(0.0));
         assert!(!ws.has_formula_at(10, 0));
         assert!(!ws.has_formula_at(7, 0));
+        // A formula whose cached value agrees with the control state
+        // survives, matching Excel's drive-the-control pattern.
+        assert_eq!(ws.get_value("A12").unwrap(), CellValue::Boolean(false));
+        assert!(ws.has_formula_at(11, 0));
         assert_eq!(
             wb.worksheet(1).unwrap().get_value("A1").unwrap(),
             CellValue::Number(18.0)
