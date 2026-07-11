@@ -410,10 +410,18 @@ pub trait WorkbookExt {
     /// Open a workbook from bytes with explicit options.
     fn from_bytes_with(bytes: &[u8], opts: &WorkbookOpenOptions) -> Result<Workbook>;
 
-    /// Save the workbook to a file
+    /// Save the workbook to a file.
+    ///
+    /// Form-control state is synchronized into linked cells in the output,
+    /// replacing existing values and formulas there; the caller's workbook is
+    /// left unchanged.
     fn save<P: AsRef<Path>>(&self, path: P) -> Result<()>;
 
-    /// Save the workbook to a file with explicit options
+    /// Save the workbook to a file with explicit options.
+    ///
+    /// Form-control state is synchronized into linked cells in the output,
+    /// replacing existing values and formulas there; the caller's workbook is
+    /// left unchanged.
     /// (to write an encrypted file, etc.).
     fn save_with<P: AsRef<Path>>(&self, path: P, opts: &WorkbookSaveOptions) -> Result<()>;
 }
@@ -549,7 +557,9 @@ impl WorkbookExt for Workbook {
                         )));
                     }
                 };
-                XlsxWriter::write_file_encrypted(self, path, password, &xlsx_profile)
+                let snapshot = self.synchronized_for_save();
+                let workbook = snapshot.as_ref().unwrap_or(self);
+                XlsxWriter::write_file_encrypted(workbook, path, password, &xlsx_profile)
                     .map_err(|e| Error::other(e.to_string()))
             }
             #[cfg(feature = "xls")]
@@ -575,7 +585,9 @@ impl WorkbookExt for Workbook {
                         )));
                     }
                 };
-                XlsWriter::write_file_encrypted(self, path, password, variant)
+                let snapshot = self.synchronized_for_save();
+                let workbook = snapshot.as_ref().unwrap_or(self);
+                XlsWriter::write_file_encrypted(workbook, path, password, variant)
                     .map_err(|e| Error::other(e.to_string()))
             }
             _ => Err(Error::other(format!(
@@ -668,22 +680,30 @@ impl WorkbookExt for Workbook {
 
         match extension.as_deref() {
             Some("xlsx") => {
-                XlsxWriter::write_file(self, path).map_err(|e| Error::other(e.to_string()))
+                let snapshot = self.synchronized_for_save();
+                let workbook = snapshot.as_ref().unwrap_or(self);
+                XlsxWriter::write_file(workbook, path).map_err(|e| Error::other(e.to_string()))
             }
             #[cfg(feature = "xls")]
             Some("xls") => {
-                XlsWriter::write_file(self, path).map_err(|e| Error::other(e.to_string()))
+                let snapshot = self.synchronized_for_save();
+                let workbook = snapshot.as_ref().unwrap_or(self);
+                XlsWriter::write_file(workbook, path).map_err(|e| Error::other(e.to_string()))
             }
             #[cfg(not(feature = "xls"))]
             Some("xls") => Err(Error::other("XLS writing requires the 'xls' feature")),
             #[cfg(feature = "xlsb")]
             Some("xlsb") => {
-                XlsbWriter::write_file(self, path).map_err(|e| Error::other(e.to_string()))
+                let snapshot = self.synchronized_for_save();
+                let workbook = snapshot.as_ref().unwrap_or(self);
+                XlsbWriter::write_file(workbook, path).map_err(|e| Error::other(e.to_string()))
             }
             #[cfg(not(feature = "xlsb"))]
             Some("xlsb") => Err(Error::other("XLSB writing requires the 'xlsb' feature")),
             Some("csv") => {
-                if let Some(sheet) = self.worksheet(0) {
+                let snapshot = self.synchronized_for_save();
+                let workbook = snapshot.as_ref().unwrap_or(self);
+                if let Some(sheet) = workbook.worksheet(0) {
                     CsvWriter::write_file(sheet, path, &CsvWriteOptions::default())
                         .map_err(|e| Error::other(e.to_string()))
                 } else {

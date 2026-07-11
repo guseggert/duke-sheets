@@ -12,7 +12,9 @@ def all_controls():
     a = anchor()
     return [
         duke_sheets.FormControl.button("Run", a),
-        duke_sheets.FormControl.checkbox("Check", a, state="checked", no_3d=True),
+        duke_sheets.FormControl.checkbox(
+            "Check", a, state="checked", cell_link="$D$2", no_3d=True
+        ),
         duke_sheets.FormControl.option_button("Option", a),
         duke_sheets.FormControl.label("Label", a),
         duke_sheets.FormControl.group_box("Group", a),
@@ -82,6 +84,7 @@ def test_form_controls_round_trip(tmp_path, extension):
         "checked",
     )
     assert checkbox.no_3d is True
+    assert checkbox.cell_link == "$D$2"
 
     # Writers recompute radio grouping; the sheet group's lone radio
     # heads its group after the trip.
@@ -117,6 +120,7 @@ def test_form_controls_round_trip(tmp_path, extension):
         10,
         1,
     )
+    assert reopened.get_cell("D2").as_boolean() is True
 
 
 def test_invalid_form_control_inputs():

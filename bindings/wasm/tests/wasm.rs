@@ -353,7 +353,7 @@ fn test_form_control_mutations_and_roundtrip() {
     selected.push(&JsValue::from_f64(2.0));
     let kinds = vec![
         make_options(&[("kind", JsValue::from_str("button")), ("caption", JsValue::from_str("Run"))]),
-        make_options(&[("kind", JsValue::from_str("checkbox")), ("caption", JsValue::from_str("Check")), ("state", JsValue::from_str("checked")), ("no3D", JsValue::FALSE)]),
+        make_options(&[("kind", JsValue::from_str("checkbox")), ("caption", JsValue::from_str("Check")), ("state", JsValue::from_str("checked")), ("cellLink", JsValue::from_str("$D$2")), ("no3D", JsValue::FALSE)]),
         make_options(&[("kind", JsValue::from_str("optionButton")), ("caption", JsValue::from_str("Option")), ("state", JsValue::from_str("unchecked")), ("no3D", JsValue::FALSE)]),
         make_options(&[("kind", JsValue::from_str("label")), ("caption", JsValue::from_str("Label"))]),
         make_options(&[("kind", JsValue::from_str("groupBox")), ("caption", JsValue::from_str("Group")), ("no3D", JsValue::FALSE)]),
@@ -450,6 +450,7 @@ fn test_form_control_mutations_and_roundtrip() {
         let sheet = reopened.get_sheet(0).unwrap();
         assert_eq!(sheet.form_control_count().unwrap(), 8);
         assert_controls_survive(&sheet);
+        assert_eq!(sheet.get_cell("D2").unwrap().as_boolean(), Some(true));
     }
     let xls = wb
         .save_xls_bytes_encrypted("password", None, None)
@@ -458,6 +459,7 @@ fn test_form_control_mutations_and_roundtrip() {
     let sheet = reopened.get_sheet(0).unwrap();
     assert_eq!(sheet.form_control_count().unwrap(), 8);
     assert_controls_survive(&sheet);
+    assert_eq!(sheet.get_cell("D2").unwrap().as_boolean(), Some(true));
 }
 
 /// The form-control API must be reachable through its documented

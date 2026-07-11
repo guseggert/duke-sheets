@@ -3773,11 +3773,22 @@ mod tests {
         }
 
         // Read the handcrafted XLSX.
-        let wb = XlsxReader::read(Cursor::new(&xlsx_buf)).unwrap();
+        let mut wb = XlsxReader::read(Cursor::new(&xlsx_buf)).unwrap();
+        wb.worksheet_mut(0)
+            .unwrap()
+            .add_form_control(duke_sheets_core::FormControl::new(
+                duke_sheets_core::FormControlKind::Checkbox {
+                    caption: "linked".into(),
+                    state: duke_sheets_core::CheckState::Checked,
+                    cell_link: Some("$A$1".into()),
+                    no_3d: false,
+                },
+            ));
+        let snapshot = wb.synchronized_for_save().unwrap();
 
-        // Write it back out.
+        // Write a linked-cell-synchronized snapshot back out.
         let mut out = Cursor::new(Vec::new());
-        XlsxWriter::write(&wb, &mut out).unwrap();
+        XlsxWriter::write(&snapshot, &mut out).unwrap();
         let out_bytes = out.into_inner();
 
         // The re-written theme should be our custom theme, not the default.

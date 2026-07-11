@@ -24,6 +24,7 @@ const controls: JsFormControlInput[] = [
       kind: "checkbox",
       caption: "Check",
       state: "checked",
+      cellLink: "$D$2",
       no3D: true,
     },
   },
@@ -122,6 +123,7 @@ describe("form controls", () => {
           kind: "checkbox",
           caption: "Check",
           state: "checked",
+          cellLink: "$D$2",
           no3D: true,
         },
         {
@@ -158,6 +160,7 @@ describe("form controls", () => {
         },
         { kind: "spinner", value: 2, min: 0, max: 10, increment: 1 },
       ]);
+      expect(reopened.getCell("D2").asBoolean()).toBe(true);
       fs.rmSync(dir, { recursive: true, force: true });
     });
   }

@@ -111,6 +111,50 @@ pub struct Worksheet {
     pub raw_drawing_objects: Vec<Vec<u8>>,
 }
 
+impl Clone for Worksheet {
+    fn clone(&self) -> Self {
+        Self {
+            name: self.name.clone(),
+            cells: self.cells.clone(),
+            visibility: self.visibility,
+            selected: self.selected,
+            zoom_scale: self.zoom_scale,
+            selections: self.selections.clone(),
+            protection: self.protection.clone(),
+            freeze_panes: self.freeze_panes.clone(),
+            split_panes: self.split_panes.clone(),
+            page_setup: self.page_setup.clone(),
+            tab_color: self.tab_color.clone(),
+            comments: self.comments.clone(),
+            hyperlinks: self.hyperlinks.clone(),
+            comment_authors: self.comment_authors.clone(),
+            data_validations: self.data_validations.clone(),
+            conditional_formats: self.conditional_formats.clone(),
+            tables: self.tables.clone(),
+            charts: self.charts.clone(),
+            charts_ex: self.charts_ex.clone(),
+            images: self.images.clone(),
+            form_controls: self.form_controls.clone(),
+            auto_filter: self.auto_filter.clone(),
+            row_breaks: self.row_breaks.clone(),
+            col_breaks: self.col_breaks.clone(),
+            date_1904: self.date_1904,
+            locale: self.locale.clone(),
+            ssfmt_locale: self.ssfmt_locale.clone(),
+            mutation_count: self.mutation_count,
+            topology_generation: self.topology_generation,
+            dirty_value_ranges: self.dirty_value_ranges.clone(),
+            image_metadata: RwLock::new(
+                self.image_metadata
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone(),
+            ),
+            raw_drawing_objects: self.raw_drawing_objects.clone(),
+        }
+    }
+}
+
 /// Sizing mode for the IMAGE function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageSizing {

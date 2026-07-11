@@ -93,7 +93,7 @@ impl SpillInfo {
 /// - Ordered iteration (for streaming writes) sorts on demand (cold path)
 ///
 /// Structure: `HashMap<(row_index, col_index), CellData>`
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CellStorage {
     /// Flat cell map keyed by (row, col) - uses ahash for fast integer hashing
     cells: AHashMap<(u32, u16), CellData>,

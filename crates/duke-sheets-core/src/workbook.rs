@@ -1,13 +1,16 @@
 //! Workbook type - the main document structure
 
+use std::any::Any;
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use std::any::Any;
+use crate::cell::{CellAddress, CellError, CellValue};
 use crate::error::{Error, Result};
+use crate::form_control::{radio_groups, CheckState, FormControlKind, ListSelection};
 use crate::named_range::{NameScope, NamedRange, NamedRangeCollection};
 use crate::worksheet::{SheetVisibility, Worksheet};
-use duke_sheets_chart::Chart;
 use crate::MAX_SHEET_NAME_LEN;
+use duke_sheets_chart::Chart;
 
 static NEXT_WORKBOOK_NONCE: AtomicU64 = AtomicU64::new(1);
 
@@ -139,6 +142,418 @@ impl Workbook {
     /// Iterate over all worksheets mutably
     pub fn worksheets_mut(&mut self) -> impl Iterator<Item = &mut Worksheet> {
         self.worksheets.iter_mut()
+    }
+
+    /// Synchronize form-control state into each control's linked cell.
+    ///
+    /// This mirrors Excel's runtime behavior: checkboxes write booleans
+    /// (`#N/A` for mixed), single-select lists and dropdowns write a
+    /// one-based item index, option-button groups write their one-based
+    /// selected index, and scrollbars/spinners write their numeric value.
+    /// Fresh unchecked/no-selection/multi-select links preserve a blank cell;
+    /// an existing linked value is reset to `FALSE` or `0`. A linked cell that
+    /// already holds the control's value is left untouched, so a formula
+    /// driving the control survives, as in Excel; a disagreeing formula is
+    /// replaced with the control's constant. Malformed, external-workbook,
+    /// and unknown-sheet links are left unchanged. If multiple controls
+    /// target one cell, the last control in worksheet order wins.
+    ///
+    /// Returns the number of distinct linked cells whose value changed.
+    pub fn sync_form_control_links(&mut self) -> usize {
+        self.sync_form_control_links_impl(false)
+    }
+
+    /// Calculation-entry variant of [`Self::sync_form_control_links`]:
+    /// formula-holding linked cells are left for the engine to evaluate,
+    /// after which [`Self::sync_form_controls_from_linked_cells`] lets the
+    /// recalculated formulas drive the controls, mirroring Excel's live
+    /// cell-to-control direction.
+    #[doc(hidden)]
+    pub fn sync_form_control_links_for_calculation(&mut self) -> usize {
+        self.sync_form_control_links_impl(true)
+    }
+
+    fn sync_form_control_links_impl(&mut self, skip_formula_cells: bool) -> usize {
+        let mut updates: BTreeMap<(usize, u32, u16), CellValue> = BTreeMap::new();
+
+        for source_sheet in 0..self.worksheets.len() {
+            let controls = self.worksheets[source_sheet].form_controls();
+            let mut radio_values = vec![None; controls.len()];
+            for group in radio_groups(controls) {
+                let value = group
+                    .iter()
+                    .position(|&index| {
+                        matches!(
+                            controls[index].kind,
+                            FormControlKind::OptionButton {
+                                state: CheckState::Checked,
+                                ..
+                            }
+                        )
+                    })
+                    .map(|index| CellValue::Number(index as f64 + 1.0))
+                    .unwrap_or(CellValue::Empty);
+                for index in group {
+                    radio_values[index] = Some(value.clone());
+                }
+            }
+
+            for (index, control) in controls.iter().enumerate() {
+                let (link, value) = match &control.kind {
+                    FormControlKind::Checkbox {
+                        state, cell_link, ..
+                    } => {
+                        let value = match state {
+                            CheckState::Unchecked => CellValue::Boolean(false),
+                            CheckState::Checked => CellValue::Boolean(true),
+                            CheckState::Mixed => CellValue::Error(CellError::Na),
+                        };
+                        (cell_link.as_deref(), value)
+                    }
+                    FormControlKind::ListBox {
+                        cell_link,
+                        selection,
+                        selected,
+                        ..
+                    } => {
+                        let value = if *selection == ListSelection::Single {
+                            selected
+                                .first()
+                                .map(|index| CellValue::Number(f64::from(*index) + 1.0))
+                                .unwrap_or(CellValue::Empty)
+                        } else {
+                            CellValue::Empty
+                        };
+                        (cell_link.as_deref(), value)
+                    }
+                    FormControlKind::Dropdown {
+                        cell_link,
+                        selected,
+                        ..
+                    } => (
+                        cell_link.as_deref(),
+                        selected
+                            .map(|index| CellValue::Number(f64::from(index) + 1.0))
+                            .unwrap_or(CellValue::Empty),
+                    ),
+                    FormControlKind::Scrollbar {
+                        cell_link, value, ..
+                    }
+                    | FormControlKind::Spinner {
+                        cell_link, value, ..
+                    } => (cell_link.as_deref(), CellValue::Number(f64::from(*value))),
+                    FormControlKind::OptionButton { cell_link, .. } => (
+                        cell_link.as_deref(),
+                        radio_values[index].clone().unwrap_or(CellValue::Empty),
+                    ),
+                    FormControlKind::Button { .. }
+                    | FormControlKind::Label { .. }
+                    | FormControlKind::GroupBox { .. } => continue,
+                };
+
+                if let Some((sheet, address)) =
+                    link.and_then(|link| self.resolve_control_link(source_sheet, link))
+                {
+                    let has_formula =
+                        self.worksheets[sheet].has_formula_at(address.row, address.col);
+                    if skip_formula_cells && has_formula {
+                        continue;
+                    }
+                    let existing = self.worksheets[sheet].get_value_at(address.row, address.col);
+                    let fresh_blank = existing == CellValue::Empty && !has_formula;
+                    let value = if matches!(
+                        &control.kind,
+                        FormControlKind::Checkbox {
+                            state: CheckState::Unchecked,
+                            ..
+                        }
+                    ) && fresh_blank
+                    {
+                        CellValue::Empty
+                    } else if value == CellValue::Empty && !fresh_blank {
+                        CellValue::Number(0.0)
+                    } else {
+                        value
+                    };
+                    updates.insert((sheet, address.row, address.col), value);
+                }
+            }
+        }
+
+        let mut updated = 0;
+        for ((sheet, row, col), value) in updates {
+            // Excel only writes the linked cell when the control state
+            // disagrees with it, so an agreeing driving formula survives.
+            if self.worksheets[sheet].get_value_at(row, col) == value {
+                continue;
+            }
+            if self.worksheets[sheet]
+                .set_cell_value_at(row, col, value)
+                .is_ok()
+            {
+                updated += 1;
+            }
+        }
+        updated
+    }
+
+    /// Drive form-control state from linked cells that hold formulas,
+    /// mirroring Excel's cell-to-control direction.
+    ///
+    /// A formula can only persist in a linked cell when the control was not
+    /// changed after it (Excel replaces the formula with a constant on
+    /// interaction), so for formula-holding links the cell's cached value
+    /// wins: checkboxes treat zero as unchecked, any other number, text, or
+    /// boolean truth as checked, and `#N/A` as mixed; scrollbars and spinners
+    /// clamp the number into their min/max range; single-select lists,
+    /// dropdowns, and option groups treat the number as a one-based index,
+    /// clamping past-the-end values to the last item and `<= 0` as no
+    /// selection. Non-formula links, other error values, and unevaluated
+    /// formulas leave the control unchanged.
+    ///
+    /// Returns the number of controls whose state changed.
+    pub fn sync_form_controls_from_linked_cells(&mut self) -> usize {
+        enum Driven {
+            Check(CheckState),
+            ListSelection(Vec<u16>),
+            DropSelection(Option<u16>),
+            Value(u16),
+        }
+
+        let driving_value = |workbook: &Self, source_sheet: usize, link: &str| {
+            let (sheet, address) = workbook.resolve_control_link(source_sheet, link)?;
+            if !workbook.worksheets[sheet].has_formula_at(address.row, address.col) {
+                return None;
+            }
+            Some(workbook.worksheets[sheet].get_value_at(address.row, address.col))
+        };
+        let as_number = |value: &CellValue| match value {
+            CellValue::Number(n) => Some(*n),
+            CellValue::Boolean(b) => Some(f64::from(*b as u8)),
+            _ => None,
+        };
+        let as_index = |value: &CellValue, count: Option<u16>| -> Option<u16> {
+            let index = as_number(value)?.trunc();
+            if index <= 0.0 {
+                return Some(0);
+            }
+            let index = index.min(f64::from(u16::MAX)) as u16;
+            Some(match count {
+                Some(count) if count > 0 => index.min(count),
+                _ => index,
+            })
+        };
+
+        let mut planned: Vec<(usize, usize, Driven)> = Vec::new();
+        for source_sheet in 0..self.worksheets.len() {
+            let controls = self.worksheets[source_sheet].form_controls();
+
+            for group in radio_groups(controls) {
+                // Excel persists the group's link on the first radio.
+                let Some(value) = group.iter().find_map(|&index| {
+                    controls[index]
+                        .cell_link()
+                        .and_then(|link| driving_value(self, source_sheet, link))
+                }) else {
+                    continue;
+                };
+                let Some(selected) = as_index(&value, u16::try_from(group.len()).ok()) else {
+                    continue;
+                };
+                for (position, &index) in group.iter().enumerate() {
+                    let state = if position + 1 == selected as usize {
+                        CheckState::Checked
+                    } else {
+                        CheckState::Unchecked
+                    };
+                    planned.push((source_sheet, index, Driven::Check(state)));
+                }
+            }
+
+            for (index, control) in controls.iter().enumerate() {
+                match &control.kind {
+                    FormControlKind::Checkbox { cell_link, .. } => {
+                        let Some(value) = cell_link
+                            .as_deref()
+                            .and_then(|link| driving_value(self, source_sheet, link))
+                        else {
+                            continue;
+                        };
+                        let state = match value {
+                            CellValue::Boolean(true) => CheckState::Checked,
+                            CellValue::Boolean(false) => CheckState::Unchecked,
+                            CellValue::Number(n) if n == 0.0 => CheckState::Unchecked,
+                            CellValue::Number(_) => CheckState::Checked,
+                            CellValue::String(_) | CellValue::RichText(_) => CheckState::Checked,
+                            CellValue::Error(CellError::Na) => CheckState::Mixed,
+                            _ => continue,
+                        };
+                        planned.push((source_sheet, index, Driven::Check(state)));
+                    }
+                    FormControlKind::ListBox {
+                        cell_link,
+                        selection: ListSelection::Single,
+                        input_range,
+                        ..
+                    } => {
+                        let Some(value) = cell_link
+                            .as_deref()
+                            .and_then(|link| driving_value(self, source_sheet, link))
+                        else {
+                            continue;
+                        };
+                        let Some(selected) = as_index(&value, input_range_rows(input_range))
+                        else {
+                            continue;
+                        };
+                        let selected = if selected == 0 {
+                            Vec::new()
+                        } else {
+                            vec![selected - 1]
+                        };
+                        planned.push((source_sheet, index, Driven::ListSelection(selected)));
+                    }
+                    FormControlKind::Dropdown {
+                        cell_link,
+                        input_range,
+                        ..
+                    } => {
+                        let Some(value) = cell_link
+                            .as_deref()
+                            .and_then(|link| driving_value(self, source_sheet, link))
+                        else {
+                            continue;
+                        };
+                        let Some(selected) = as_index(&value, input_range_rows(input_range))
+                        else {
+                            continue;
+                        };
+                        let selected = (selected > 0).then(|| selected - 1);
+                        planned.push((source_sheet, index, Driven::DropSelection(selected)));
+                    }
+                    FormControlKind::Scrollbar {
+                        cell_link,
+                        min,
+                        max,
+                        ..
+                    }
+                    | FormControlKind::Spinner {
+                        cell_link,
+                        min,
+                        max,
+                        ..
+                    } => {
+                        let Some(value) = cell_link
+                            .as_deref()
+                            .and_then(|link| driving_value(self, source_sheet, link))
+                        else {
+                            continue;
+                        };
+                        let (Some(number), true) = (as_number(&value), min <= max) else {
+                            continue;
+                        };
+                        let clamped = number
+                            .trunc()
+                            .clamp(f64::from(*min), f64::from(*max)) as u16;
+                        planned.push((source_sheet, index, Driven::Value(clamped)));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let mut changed = 0;
+        for (sheet, index, driven) in planned {
+            let control = &mut self.worksheets[sheet].form_controls_mut()[index];
+            let did_change = match (&mut control.kind, driven) {
+                (
+                    FormControlKind::Checkbox { state, .. }
+                    | FormControlKind::OptionButton { state, .. },
+                    Driven::Check(new_state),
+                ) => std::mem::replace(state, new_state) != new_state,
+                (FormControlKind::ListBox { selected, .. }, Driven::ListSelection(new)) => {
+                    std::mem::replace(selected, new.clone()) != new
+                }
+                (FormControlKind::Dropdown { selected, .. }, Driven::DropSelection(new)) => {
+                    std::mem::replace(selected, new) != new
+                }
+                (
+                    FormControlKind::Scrollbar { value, .. }
+                    | FormControlKind::Spinner { value, .. },
+                    Driven::Value(new),
+                ) => std::mem::replace(value, new) != new,
+                _ => false,
+            };
+            if did_change {
+                changed += 1;
+            }
+        }
+        changed
+    }
+
+    /// Create a serialization snapshot with form-control linked cells
+    /// synchronized. Calculation caches are omitted; persisted workbook state
+    /// and the roundtrip nonce are retained.
+    #[doc(hidden)]
+    pub fn synchronized_for_save(&self) -> Option<Self> {
+        if !self
+            .worksheets
+            .iter()
+            .flat_map(|sheet| sheet.form_controls())
+            .any(|control| control.cell_link().is_some())
+        {
+            return None;
+        }
+        let mut snapshot = Self {
+            worksheets: self.worksheets.clone(),
+            chartsheets: self.chartsheets.clone(),
+            sheet_order: self.sheet_order.clone(),
+            settings: self.settings.clone(),
+            active_sheet: self.active_sheet,
+            named_ranges: self.named_ranges.clone(),
+            calc_cache: None,
+            structural_generation: self.structural_generation,
+            nonce: self.nonce,
+        };
+        snapshot.sync_form_control_links();
+        Some(snapshot)
+    }
+
+    fn resolve_control_link(
+        &self,
+        source_sheet: usize,
+        link: &str,
+    ) -> Option<(usize, CellAddress)> {
+        // Names may refer to other names; Excel resolves the chain.
+        self.resolve_control_link_depth(source_sheet, link, 4)
+    }
+
+    fn resolve_control_link_depth(
+        &self,
+        source_sheet: usize,
+        link: &str,
+        depth: u8,
+    ) -> Option<(usize, CellAddress)> {
+        let depth = depth.checked_sub(1)?;
+        let link = link.trim().strip_prefix('=').unwrap_or(link.trim());
+        let (sheet, address) = match link.rsplit_once('!') {
+            Some((sheet, address)) => {
+                let sheet = parse_link_sheet_name(sheet)?;
+                let folded = sheet.to_lowercase();
+                let index = self
+                    .worksheets
+                    .iter()
+                    .position(|worksheet| worksheet.name().to_lowercase() == folded)?;
+                (index, address)
+            }
+            None => (source_sheet, link),
+        };
+        if let Ok(address) = CellAddress::parse(address) {
+            return Some((sheet, address));
+        }
+        // Excel also accepts a defined name as a cell link.
+        let name = self.named_ranges.get(address, sheet)?;
+        self.resolve_control_link_depth(sheet, name.expression(), depth)
     }
 
     /// Structural generation counter - incremented when sheets are added,
@@ -526,6 +941,46 @@ impl Workbook {
     }
 }
 
+/// Row count of a list control's input range, when it parses as a
+/// same-workbook range (optionally sheet-qualified).
+fn input_range_rows(input_range: &Option<String>) -> Option<u16> {
+    let range = input_range.as_deref()?.trim();
+    let range = range.strip_prefix('=').unwrap_or(range);
+    let range = match range.rsplit_once('!') {
+        Some((_, address)) => address,
+        None => range,
+    };
+    let range = crate::CellRange::parse(range).ok()?;
+    u16::try_from(range.end.row.checked_sub(range.start.row)? + 1).ok()
+}
+
+fn parse_link_sheet_name(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.contains(['[', ']']) {
+        return None;
+    }
+    if let Some(quoted) = value.strip_prefix('\'') {
+        let quoted = quoted.strip_suffix('\'')?;
+        let mut name = String::with_capacity(quoted.len());
+        let mut chars = quoted.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch == '\'' {
+                if chars.next() != Some('\'') {
+                    return None;
+                }
+                name.push('\'');
+            } else {
+                name.push(ch);
+            }
+        }
+        (!name.is_empty()).then_some(name)
+    } else if value.is_empty() || value.contains('\'') {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
 impl Default for Workbook {
     fn default() -> Self {
         Self::new()
@@ -576,6 +1031,7 @@ pub struct ChartSheet {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{CellError, CellValue, CheckState, FormControl, FormControlKind, ListSelection};
 
     #[test]
     fn test_new_workbook() {
@@ -726,5 +1182,351 @@ mod tests {
         wb.add_chartsheet(cs).unwrap();
         assert_eq!(wb.sheet_order().len(), 2);
         assert_eq!(wb.sheet_order()[1], SheetSlot::ChartSheet(0));
+    }
+
+    #[test]
+    fn sync_form_control_links_matches_excel_semantics() {
+        let mut wb = Workbook::new();
+        wb.rename_worksheet(0, "Controls").unwrap();
+        wb.add_worksheet_with_name("Linked Data").unwrap();
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_cell_formula("A8", "=FALSE").unwrap();
+        ws.set_cell_formula("A11", "=0").unwrap();
+        ws.set_formula_with_cached_value_at(11, 0, "=1=2", CellValue::Boolean(false))
+            .unwrap();
+        ws.set_cell_value("A3", 99.0).unwrap();
+        ws.set_cell_value("A10", true).unwrap();
+
+        let kinds = [
+            FormControlKind::Checkbox {
+                caption: "mixed".into(),
+                state: CheckState::Mixed,
+                cell_link: Some("$A$1".into()),
+                no_3d: false,
+            },
+            FormControlKind::ListBox {
+                input_range: None,
+                cell_link: Some("$A$2".into()),
+                selection: ListSelection::Single,
+                selected: vec![2],
+                no_3d: false,
+            },
+            FormControlKind::ListBox {
+                input_range: None,
+                cell_link: Some("$A$3".into()),
+                selection: ListSelection::Multi,
+                selected: vec![0, 2, 3],
+                no_3d: false,
+            },
+            FormControlKind::Dropdown {
+                input_range: None,
+                cell_link: Some("$A$4".into()),
+                selected: None,
+                lines: 8,
+                no_3d: false,
+            },
+            FormControlKind::Scrollbar {
+                value: 55,
+                min: 0,
+                max: 100,
+                increment: 1,
+                page: 10,
+                horizontal: false,
+                cell_link: Some("$A$5".into()),
+            },
+            FormControlKind::Spinner {
+                value: 18,
+                min: 0,
+                max: 30,
+                increment: 1,
+                cell_link: Some("'Linked Data'!$A$1".into()),
+            },
+            FormControlKind::OptionButton {
+                caption: "one".into(),
+                state: CheckState::Unchecked,
+                cell_link: Some("$A$7".into()),
+                first_in_group: false,
+                no_3d: false,
+            },
+            FormControlKind::OptionButton {
+                caption: "two".into(),
+                state: CheckState::Checked,
+                cell_link: Some("$A$7".into()),
+                first_in_group: false,
+                no_3d: false,
+            },
+            FormControlKind::Checkbox {
+                caption: "formula overwrite".into(),
+                state: CheckState::Checked,
+                cell_link: Some("$A$8".into()),
+                no_3d: false,
+            },
+            FormControlKind::Checkbox {
+                caption: "fresh unchecked".into(),
+                state: CheckState::Unchecked,
+                cell_link: Some("$A$9".into()),
+                no_3d: false,
+            },
+            FormControlKind::Checkbox {
+                caption: "changed unchecked".into(),
+                state: CheckState::Unchecked,
+                cell_link: Some("$A$10".into()),
+                no_3d: false,
+            },
+            FormControlKind::Dropdown {
+                input_range: None,
+                cell_link: Some("$A$11".into()),
+                selected: None,
+                lines: 8,
+                no_3d: false,
+            },
+            FormControlKind::Checkbox {
+                caption: "agreeing formula".into(),
+                state: CheckState::Unchecked,
+                cell_link: Some("$A$12".into()),
+                no_3d: false,
+            },
+        ];
+        for kind in kinds {
+            ws.add_form_control(FormControl::new(kind));
+        }
+
+        assert_eq!(wb.sync_form_control_links(), 9);
+        let ws = wb.worksheet(0).unwrap();
+        assert_eq!(ws.get_value("A1").unwrap(), CellValue::Error(CellError::Na));
+        assert_eq!(ws.get_value("A2").unwrap(), CellValue::Number(3.0));
+        assert_eq!(ws.get_value("A3").unwrap(), CellValue::Number(0.0));
+        assert_eq!(ws.get_value("A4").unwrap(), CellValue::Empty);
+        assert_eq!(ws.get_value("A5").unwrap(), CellValue::Number(55.0));
+        assert_eq!(ws.get_value("A7").unwrap(), CellValue::Number(2.0));
+        assert_eq!(ws.get_value("A8").unwrap(), CellValue::Boolean(true));
+        assert_eq!(ws.get_value("A9").unwrap(), CellValue::Empty);
+        assert_eq!(ws.get_value("A10").unwrap(), CellValue::Boolean(false));
+        assert_eq!(ws.get_value("A11").unwrap(), CellValue::Number(0.0));
+        assert!(!ws.has_formula_at(10, 0));
+        assert!(!ws.has_formula_at(7, 0));
+        // A formula whose cached value agrees with the control state
+        // survives, matching Excel's drive-the-control pattern.
+        assert_eq!(ws.get_value("A12").unwrap(), CellValue::Boolean(false));
+        assert!(ws.has_formula_at(11, 0));
+        assert_eq!(
+            wb.worksheet(1).unwrap().get_value("A1").unwrap(),
+            CellValue::Number(18.0)
+        );
+    }
+
+    #[test]
+    fn sync_form_control_links_resolves_quoted_sheets_and_skips_unsupported_links() {
+        let mut wb = Workbook::new();
+        wb.add_worksheet_with_name("It's A! Sheet").unwrap();
+        let ws = wb.worksheet_mut(0).unwrap();
+        for link in [
+            "='It''s A! Sheet'!$B$2",
+            "SUM(A1:A3)",
+            "[Other.xlsx]Sheet1!$A$1",
+            "Missing!$A$1",
+            "=''!$A$1",
+            "='Bob's'!$A$1",
+        ] {
+            ws.add_form_control(FormControl::new(FormControlKind::Checkbox {
+                caption: link.into(),
+                state: CheckState::Checked,
+                cell_link: Some(link.into()),
+                no_3d: false,
+            }));
+        }
+
+        assert_eq!(wb.sync_form_control_links(), 1);
+        assert_eq!(
+            wb.worksheet(1).unwrap().get_value("B2").unwrap(),
+            CellValue::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn sync_form_control_links_resolves_defined_names() {
+        let mut wb = Workbook::new();
+        wb.add_worksheet_with_name("Data").unwrap();
+        wb.named_ranges_mut()
+            .define_or_update(NamedRange::workbook_scope("Target", "Data!$B$2"));
+        wb.named_ranges_mut()
+            .define_or_update(NamedRange::workbook_scope("Alias", "=Target"));
+        wb.named_ranges_mut().define_or_update(NamedRange::new(
+            "Local",
+            "$C$3",
+            NameScope::Sheet(0),
+        ));
+        wb.named_ranges_mut()
+            .define_or_update(NamedRange::workbook_scope("Wide", "Data!$A$1:$A$4"));
+        wb.named_ranges_mut()
+            .define_or_update(NamedRange::workbook_scope("LoopA", "LoopB"));
+        wb.named_ranges_mut()
+            .define_or_update(NamedRange::workbook_scope("LoopB", "LoopA"));
+
+        let ws = wb.worksheet_mut(0).unwrap();
+        for (link, value) in [
+            ("Target", 11),
+            ("Alias", 22),
+            ("Local", 33),
+            ("Wide", 44),
+            ("LoopA", 55),
+            ("NoSuchName", 66),
+        ] {
+            ws.add_form_control(FormControl::new(FormControlKind::Spinner {
+                value,
+                min: 0,
+                max: 100,
+                increment: 1,
+                cell_link: Some(link.into()),
+            }));
+        }
+
+        assert_eq!(wb.sync_form_control_links(), 2);
+        assert_eq!(
+            wb.worksheet(1).unwrap().get_value("B2").unwrap(),
+            CellValue::Number(22.0),
+            "workbook-scoped name resolves; the aliased control targets it too"
+        );
+        assert_eq!(
+            wb.worksheet(0).unwrap().get_value("C3").unwrap(),
+            CellValue::Number(33.0),
+            "sheet-scoped name resolves against the control's sheet"
+        );
+    }
+
+    #[test]
+    fn sync_form_controls_from_linked_cells_matches_excel_semantics() {
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        let formula = [
+            ("A1", CellValue::Number(5.0)),
+            ("A2", CellValue::string("text")),
+            ("A3", CellValue::Error(CellError::Na)),
+            ("A4", CellValue::Error(CellError::Div0)),
+            ("A5", CellValue::Number(150.0)),
+            ("A6", CellValue::Number(99.0)),
+            ("A7", CellValue::Number(0.0)),
+            ("A8", CellValue::Number(2.0)),
+        ];
+        for (address, cached) in formula {
+            let parsed = crate::CellAddress::parse(address).unwrap();
+            ws.set_formula_with_cached_value_at(parsed.row, parsed.col, "=X1", cached)
+                .unwrap();
+        }
+        // Constant, not a formula: must not drive the control.
+        ws.set_cell_value("A9", 0.0).unwrap();
+
+        let checkbox = |link: &str, state| FormControlKind::Checkbox {
+            caption: link.into(),
+            state,
+            cell_link: Some(link.into()),
+            no_3d: false,
+        };
+        let kinds = [
+            checkbox("$A$1", CheckState::Unchecked),
+            checkbox("$A$2", CheckState::Unchecked),
+            checkbox("$A$3", CheckState::Unchecked),
+            checkbox("$A$4", CheckState::Checked),
+            FormControlKind::Scrollbar {
+                value: 40,
+                min: 5,
+                max: 95,
+                increment: 1,
+                page: 10,
+                horizontal: false,
+                cell_link: Some("$A$5".into()),
+            },
+            FormControlKind::ListBox {
+                input_range: Some("$H$1:$H$4".into()),
+                cell_link: Some("$A$6".into()),
+                selection: ListSelection::Single,
+                selected: vec![0],
+                no_3d: false,
+            },
+            FormControlKind::Dropdown {
+                input_range: Some("$H$1:$H$4".into()),
+                cell_link: Some("$A$7".into()),
+                selected: Some(1),
+                lines: 8,
+                no_3d: false,
+            },
+            FormControlKind::OptionButton {
+                caption: "one".into(),
+                state: CheckState::Checked,
+                cell_link: Some("$A$8".into()),
+                first_in_group: false,
+                no_3d: false,
+            },
+            FormControlKind::OptionButton {
+                caption: "two".into(),
+                state: CheckState::Unchecked,
+                cell_link: None,
+                first_in_group: false,
+                no_3d: false,
+            },
+            checkbox("$A$9", CheckState::Checked),
+        ];
+        for kind in kinds {
+            ws.add_form_control(FormControl::new(kind));
+        }
+
+        assert_eq!(wb.sync_form_controls_from_linked_cells(), 8);
+        let controls = wb.worksheet(0).unwrap().form_controls();
+        let state = |index: usize| match &controls[index].kind {
+            FormControlKind::Checkbox { state, .. }
+            | FormControlKind::OptionButton { state, .. } => *state,
+            other => panic!("expected stateful control, got {other:?}"),
+        };
+        assert_eq!(state(0), CheckState::Checked, "nonzero number checks");
+        assert_eq!(state(1), CheckState::Checked, "text is truthy");
+        assert_eq!(state(2), CheckState::Mixed, "#N/A is mixed");
+        assert_eq!(state(3), CheckState::Checked, "other errors leave state");
+        match &controls[4].kind {
+            FormControlKind::Scrollbar { value, .. } => {
+                assert_eq!(*value, 95, "value clamps to max");
+            }
+            other => panic!("expected Scrollbar, got {other:?}"),
+        }
+        match &controls[5].kind {
+            FormControlKind::ListBox { selected, .. } => {
+                assert_eq!(selected, &vec![3], "out-of-range clamps to last item");
+            }
+            other => panic!("expected ListBox, got {other:?}"),
+        }
+        match &controls[6].kind {
+            FormControlKind::Dropdown { selected, .. } => {
+                assert_eq!(*selected, None, "zero deselects");
+            }
+            other => panic!("expected Dropdown, got {other:?}"),
+        }
+        assert_eq!(state(7), CheckState::Unchecked, "group index 2 moves selection");
+        assert_eq!(state(8), CheckState::Checked, "second radio becomes checked");
+        assert_eq!(state(9), CheckState::Checked, "constant cells do not drive");
+    }
+
+    #[test]
+    fn sync_form_control_links_uses_control_order_for_duplicate_targets() {
+        let mut wb = Workbook::new();
+        assert!(wb.synchronized_for_save().is_none());
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.add_form_control(FormControl::new(FormControlKind::Spinner {
+            value: 7,
+            min: 0,
+            max: 10,
+            increment: 1,
+            cell_link: Some("$A$1".into()),
+        }));
+        ws.add_form_control(FormControl::new(FormControlKind::Checkbox {
+            caption: "later".into(),
+            state: CheckState::Checked,
+            cell_link: Some("$A$1".into()),
+            no_3d: false,
+        }));
+
+        assert_eq!(wb.sync_form_control_links(), 1);
+        assert_eq!(
+            wb.worksheet(0).unwrap().get_value("A1").unwrap(),
+            CellValue::Boolean(true)
+        );
     }
 }

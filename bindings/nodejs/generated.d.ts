@@ -117,7 +117,11 @@ export declare class Workbook {
    */
   static fromCsvString(csv: string): Workbook
   /**
-   * Save the workbook to a file
+   * Save the workbook to a file.
+   *
+   * Form-control state is synchronized into linked cells in the output,
+   * replacing existing values and formulas there; this workbook is left
+   * unchanged.
    *
    * The format is determined by the file extension:
    * - `.xlsx` for Excel format
@@ -128,7 +132,9 @@ export declare class Workbook {
    */
   save(path: string): void
   /**
-   * Save the workbook to a password-protected file. The encryption
+   * Save the workbook to a password-protected file. Form-control state is
+   * synchronized into linked cells in the serialized file, replacing
+   * existing values and formulas there. The encryption
    * variant is selected via `profile`:
    *
    * - `"default"` (or null) - Agile-256 for .xlsx, RC4 CryptoAPI 128 for .xls
@@ -156,7 +162,10 @@ export declare class Workbook {
    *   Default false.
    */
   static openWithPassword(path: string, password: string, skipIntegrityCheck?: boolean | undefined | null): Workbook
-  /** Save the workbook as a CSV string (first sheet only) */
+  /**
+   * Save the workbook as a CSV string (first sheet only, with
+   * form-control state synchronized into linked cells in the output)
+   */
   saveCsvString(): string
   /** Get the number of worksheets */
   get sheetCount(): number
@@ -208,6 +217,8 @@ export declare class Workbook {
   getNamedRange(name: string): string | null
   /**
    * Save the workbook to a file asynchronously (non-blocking).
+   * Form-control state is synchronized into linked cells in the output
+   * without changing this workbook.
    *
    * @param path - Path to save to
    * @returns Promise<void>

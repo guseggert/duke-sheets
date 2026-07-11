@@ -377,7 +377,7 @@ impl From<String> for SharedString {
 ///
 /// When reading large spreadsheets, many cells often contain the same string values.
 /// The string pool ensures each unique string is stored only once in memory.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct StringPool {
     strings: HashMap<Arc<str>, SharedString>,
 }

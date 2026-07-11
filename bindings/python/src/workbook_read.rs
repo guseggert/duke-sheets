@@ -38,8 +38,12 @@ impl PyWorkbook {
         })
     }
 
+    /// Save the workbook as a CSV string (first sheet only, with
+    /// form-control state synchronized into linked cells in the output).
     fn save_csv_string(&self) -> PyResult<String> {
         let wb = self.inner.read().map_err(to_py_err)?;
+        let snapshot = wb.synchronized_for_save();
+        let wb = snapshot.as_ref().unwrap_or_else(|| &*wb);
         let ws = wb
             .worksheet(0)
             .ok_or_else(|| PyIndexError::new_err("No worksheets to save"))?;

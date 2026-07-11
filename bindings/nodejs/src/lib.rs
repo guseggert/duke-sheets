@@ -808,7 +808,11 @@ impl Workbook {
         })
     }
 
-    /// Save the workbook to a file
+    /// Save the workbook to a file.
+    ///
+    /// Form-control state is synchronized into linked cells in the output,
+    /// replacing existing values and formulas there; this workbook is left
+    /// unchanged.
     ///
     /// The format is determined by the file extension:
     /// - `.xlsx` for Excel format
@@ -826,7 +830,9 @@ impl Workbook {
         })
     }
 
-    /// Save the workbook to a password-protected file. The encryption
+    /// Save the workbook to a password-protected file. Form-control state is
+    /// synchronized into linked cells in the serialized file, replacing
+    /// existing values and formulas there. The encryption
     /// variant is selected via `profile`:
     ///
     /// - `"default"` (or null) - Agile-256 for .xlsx, RC4 CryptoAPI 128 for .xls
@@ -889,11 +895,14 @@ impl Workbook {
         })
     }
 
-    /// Save the workbook as a CSV string (first sheet only)
+    /// Save the workbook as a CSV string (first sheet only, with
+    /// form-control state synchronized into linked cells in the output)
     #[napi]
     pub fn save_csv_string(&self) -> Result<String> {
         catch_panic(|| {
             let wb = self.inner.read().map_err(to_napi_err)?;
+            let snapshot = wb.synchronized_for_save();
+            let wb = snapshot.as_ref().unwrap_or_else(|| &*wb);
             let ws = wb
                 .worksheet(0)
                 .ok_or_else(|| napi::Error::from_reason("No worksheets to save"))?;
@@ -1164,6 +1173,8 @@ pub fn from_bytes_async(data: Buffer) -> AsyncTask<OpenBytesTask> {
 #[napi]
 impl Workbook {
     /// Save the workbook to a file asynchronously (non-blocking).
+    /// Form-control state is synchronized into linked cells in the output
+    /// without changing this workbook.
     ///
     /// @param path - Path to save to
     /// @returns Promise<void>

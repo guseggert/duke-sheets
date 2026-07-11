@@ -2415,18 +2415,6 @@ fn excel_can_read_form_controls_we_emit() {
     for (i, item) in ["Alpha", "Beta", "Gamma", "Delta"].iter().enumerate() {
         ws.set_cell_value_at(i as u32, 7, *item).expect("list item");
     }
-    // Linked cells must agree with the control states: Excel drives a
-    // linked control's state from its cell on load, so a mismatch is
-    // "corrected" during the round-trip.
-    // Linked-cell values are one-based (Excel's runtime convention),
-    // so they are model index + 1.
-    ws.set_cell_value("D2", true).expect("D2");
-    ws.set_cell_value("D3", 1.0).expect("D3");
-    ws.set_cell_value("D4", 3.0).expect("D4");
-    ws.set_cell_value("D5", 4.0).expect("D5");
-    ws.set_cell_value("D6", 40.0).expect("D6");
-    ws.set_cell_value("D7", 12.0).expect("D7");
-
     let kinds: Vec<FormControlKind> = vec![
         FormControlKind::Button {
             caption: "Run Report".to_string(),
@@ -2510,9 +2498,16 @@ fn excel_can_read_form_controls_we_emit() {
             control_anchor(1, row, 3, row + 1),
         ));
     }
+    assert_eq!(wb.sync_form_control_links(), 6);
 
     let result = roundtrip_through_excel_xls(&wb);
     let sheet = result.worksheet(0).unwrap();
+    assert_eq!(sheet.get_value("D2").unwrap(), CellValue::Boolean(true));
+    assert_eq!(sheet.get_value("D3").unwrap(), CellValue::Number(1.0));
+    assert_eq!(sheet.get_value("D4").unwrap(), CellValue::Number(3.0));
+    assert_eq!(sheet.get_value("D5").unwrap(), CellValue::Number(4.0));
+    assert_eq!(sheet.get_value("D6").unwrap(), CellValue::Number(40.0));
+    assert_eq!(sheet.get_value("D7").unwrap(), CellValue::Number(12.0));
     let controls = sheet.form_controls();
     assert_eq!(
         controls.len(),
@@ -2828,6 +2823,675 @@ fn excel_interprets_xls_list_selections_one_based() {
         other => panic!("expected Dropdown, got {other:?}"),
     }
     cleanup_fixture(&out_xls);
+}
+
+/// Excel-authored controls pin how each form-control state projects into its
+/// linked cell, including the cases where the cell stays blank or becomes an
+/// error. The saved XLS assertions also verify that those values and a true
+/// multi-selection survive BIFF8 serialization.
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_authored_xls_form_control_linked_cell_semantics() {
+    use duke_sheets_core::{CellError, FormControlKind, ListSelection};
+    use excel_com_protocol::CellValue as ExcelCellValue;
+
+    let fixture = temp_fixture_xls();
+    ensure_vm_temp_dir();
+
+    let bridge = excel_bridge();
+    let excel = bridge.lock().unwrap();
+    let workbook = excel.create_workbook().expect("create Excel workbook");
+    rename_excel_sheet(&excel, workbook.handle(), 0, "Controls");
+    add_excel_worksheet_after(&excel, workbook.handle(), 0, "Linked Data");
+    for (i, item) in ["Alpha", "Beta", "Gamma", "Delta"].iter().enumerate() {
+        workbook
+            .set_cell_value(&format!("H{}", i + 1), *item)
+            .expect("set list item");
+    }
+
+    let shapes = excel
+        .navigate(
+            workbook.handle(),
+            vec![
+                SheetRef::Index(0).to_chain_step(),
+                ChainStep::Property("Shapes".into()),
+            ],
+        )
+        .expect("navigate shapes");
+    let add_control = |control_type: i32, left: i32, top: i32| -> u64 {
+        match excel.invoke(
+            shapes,
+            vec![],
+            "AddFormControl",
+            vec![
+                serde_json::Value::from(control_type),
+                serde_json::Value::from(left),
+                serde_json::Value::from(top),
+                serde_json::Value::from(100),
+                serde_json::Value::from(30),
+            ],
+        ) {
+            Ok(Some(ResponseData::Handle { handle })) => handle,
+            other => panic!("expected AddFormControl handle, got {other:?}"),
+        }
+    };
+    let set_control = |shape: u64, property: &str, value: serde_json::Value| {
+        excel
+            .set(
+                shape,
+                vec![ChainStep::Property("ControlFormat".into())],
+                property,
+                value,
+            )
+            .unwrap_or_else(|e| panic!("set ControlFormat.{property}: {e}"));
+    };
+    let get_control = |shape: u64, property: &str| -> serde_json::Value {
+        match excel
+            .get(
+                shape,
+                vec![ChainStep::Property("ControlFormat".into())],
+                property,
+            )
+            .unwrap_or_else(|e| panic!("get ControlFormat.{property}: {e}"))
+        {
+            Some(ResponseData::Value { value }) => value,
+            other => panic!("expected ControlFormat.{property} value, got {other:?}"),
+        }
+    };
+
+    // xlCheckBox = 1; xlOff = -4146, xlOn = 1, xlMixed = 2.
+    let checkbox = add_control(1, 10, 10);
+    set_control(checkbox, "LinkedCell", json!("$A$1"));
+    assert_eq!(workbook.get_cell_value("A1").unwrap(), ExcelCellValue::Null);
+    set_control(checkbox, "Value", json!(-4146));
+    assert_eq!(workbook.get_cell_value("A1").unwrap(), ExcelCellValue::Null);
+    set_control(checkbox, "Value", json!(1));
+    assert_eq!(
+        workbook.get_cell_value("A1").unwrap(),
+        ExcelCellValue::Bool(true)
+    );
+    set_control(checkbox, "Value", json!(-4146));
+    assert_eq!(
+        workbook.get_cell_value("A1").unwrap(),
+        ExcelCellValue::Bool(false)
+    );
+    set_control(checkbox, "Value", json!(2));
+    assert_eq!(
+        workbook.get_cell_value("A1").unwrap(),
+        ExcelCellValue::Number(-2146826246.0),
+        "the bridge exposes Excel's #N/A CVErr as its signed numeric value"
+    );
+
+    // xlListBox = 6; xlNone = -4142, xlSimple = -4154.
+    let single_list = add_control(6, 10, 60);
+    set_control(single_list, "ListFillRange", json!("$H$1:$H$4"));
+    set_control(single_list, "LinkedCell", json!("$A$2"));
+    assert_eq!(workbook.get_cell_value("A2").unwrap(), ExcelCellValue::Null);
+    set_control(single_list, "ListIndex", json!(3));
+    assert_eq!(
+        workbook.get_cell_value("A2").unwrap(),
+        ExcelCellValue::Number(3.0)
+    );
+
+    let multi_list = add_control(6, 10, 110);
+    set_control(multi_list, "ListFillRange", json!("$H$1:$H$4"));
+    set_control(multi_list, "MultiSelect", json!(-4154));
+    assert_eq!(get_control(multi_list, "MultiSelect"), json!(-4154));
+    assert_eq!(get_control(multi_list, "LinkedCell"), json!(""));
+    assert_eq!(workbook.get_cell_value("A3").unwrap(), ExcelCellValue::Null);
+
+    // Selected is an indexed property, which the generic bridge cannot put.
+    // A temporary module drives the same Excel object and is removed pre-save.
+    let vb_components = excel
+        .navigate(
+            workbook.handle(),
+            vec![
+                ChainStep::Property("VBProject".into()),
+                ChainStep::Property("VBComponents".into()),
+            ],
+        )
+        .expect("navigate VB components");
+    let probe_module = match excel.invoke(vb_components, vec![], "Add", vec![json!(1)]) {
+        Ok(Some(ResponseData::Handle { handle })) => handle,
+        other => panic!("expected VB module handle, got {other:?}"),
+    };
+    excel
+        .invoke(
+            probe_module,
+            vec![ChainStep::Property("CodeModule".into())],
+            "AddFromString",
+            vec![json!(
+                "Sub SelectProbeItems()\nWith Worksheets(\"Controls\").ListBoxes(2)\n.Selected(1) = True\n.Selected(3) = True\n.Selected(4) = True\nEnd With\nEnd Sub"
+            )],
+        )
+        .expect("add selection probe macro");
+    excel
+        .invoke(0, vec![], "Run", vec![json!("SelectProbeItems")])
+        .expect("run selection probe macro");
+    assert_eq!(workbook.get_cell_value("A3").unwrap(), ExcelCellValue::Null);
+    assert_eq!(get_control(multi_list, "MultiSelect"), json!(-4154));
+    excel
+        .invoke(
+            vb_components,
+            vec![],
+            "Remove",
+            vec![json!({"$ref": probe_module})],
+        )
+        .expect("remove selection probe macro");
+    workbook
+        .set_cell_value("A3", 99.0)
+        .expect("preseed multi-select linked cell");
+    set_control(multi_list, "LinkedCell", json!("$A$3"));
+    assert_eq!(get_control(multi_list, "LinkedCell"), json!("$A$3"));
+    assert_eq!(get_control(multi_list, "MultiSelect"), json!(-4154));
+    assert_eq!(
+        workbook.get_cell_value("A3").unwrap(),
+        ExcelCellValue::Number(0.0)
+    );
+
+    // xlDropDown = 2.
+    let dropdown = add_control(2, 10, 160);
+    set_control(dropdown, "ListFillRange", json!("$H$1:$H$4"));
+    set_control(dropdown, "LinkedCell", json!("$A$4"));
+    assert_eq!(workbook.get_cell_value("A4").unwrap(), ExcelCellValue::Null);
+    set_control(dropdown, "ListIndex", json!(2));
+    assert_eq!(
+        workbook.get_cell_value("A4").unwrap(),
+        ExcelCellValue::Number(2.0)
+    );
+
+    // xlScrollBar = 8; xlSpinner = 9.
+    let scrollbar = add_control(8, 150, 10);
+    set_control(scrollbar, "Min", json!(5));
+    set_control(scrollbar, "Max", json!(95));
+    set_control(scrollbar, "Value", json!(40));
+    set_control(scrollbar, "LinkedCell", json!("$A$5"));
+    assert_eq!(
+        workbook.get_cell_value("A5").unwrap(),
+        ExcelCellValue::Number(40.0)
+    );
+    set_control(scrollbar, "Value", json!(55));
+    assert_eq!(
+        workbook.get_cell_value("A5").unwrap(),
+        ExcelCellValue::Number(55.0)
+    );
+
+    let spinner = add_control(9, 150, 60);
+    set_control(spinner, "Min", json!(0));
+    set_control(spinner, "Max", json!(30));
+    set_control(spinner, "Value", json!(12));
+    set_control(spinner, "LinkedCell", json!("$A$6"));
+    assert_eq!(
+        workbook.get_cell_value("A6").unwrap(),
+        ExcelCellValue::Number(12.0)
+    );
+    set_control(spinner, "Value", json!(18));
+    assert_eq!(
+        workbook.get_cell_value("A6").unwrap(),
+        ExcelCellValue::Number(18.0)
+    );
+
+    // xlGroupBox = 4; xlOptionButton = 7.
+    let group_box = add_control(4, 300, 10);
+    excel
+        .set(group_box, vec![], "Height", json!(130))
+        .expect("size option group box");
+    let option_1 = add_control(7, 310, 35);
+    let option_2 = add_control(7, 310, 65);
+    let option_3 = add_control(7, 310, 95);
+    for option in [option_1, option_2, option_3] {
+        set_control(option, "LinkedCell", json!("$A$7"));
+    }
+    assert_eq!(workbook.get_cell_value("A7").unwrap(), ExcelCellValue::Null);
+    set_control(option_2, "Value", json!(1));
+    assert_eq!(
+        workbook.get_cell_value("A7").unwrap(),
+        ExcelCellValue::Number(2.0)
+    );
+
+    let formula_checkbox = add_control(1, 150, 110);
+    set_control(formula_checkbox, "LinkedCell", json!("$A$8"));
+    workbook
+        .set_cell_formula("A8", "=FALSE")
+        .expect("set linked-cell formula");
+    excel.recalculate().expect("recalculate formula");
+    assert_eq!(
+        workbook.get_cell_value("A8").unwrap(),
+        ExcelCellValue::Bool(false)
+    );
+    assert_eq!(workbook.get_cell_formula("A8").unwrap(), "=FALSE");
+    assert_eq!(get_control(formula_checkbox, "Value"), json!(-4146));
+    set_control(formula_checkbox, "Value", json!(1));
+    assert_eq!(workbook.get_cell_formula("A8").unwrap(), "TRUE");
+    assert_eq!(
+        workbook.get_cell_value("A8").unwrap(),
+        ExcelCellValue::Bool(true)
+    );
+    assert_eq!(get_control(formula_checkbox, "Value"), json!(1));
+
+    let cross_sheet_checkbox = add_control(1, 150, 160);
+    set_control(
+        cross_sheet_checkbox,
+        "LinkedCell",
+        json!("'Linked Data'!$A$1"),
+    );
+    set_control(cross_sheet_checkbox, "Value", json!(1));
+    assert_eq!(
+        workbook
+            .get_cell_value_on_sheet(SheetRef::Name("Linked Data".into()), "A1")
+            .unwrap(),
+        ExcelCellValue::Bool(true)
+    );
+
+    // Excel also accepts a defined name as the cell link.
+    define_excel_name(&excel, workbook.handle(), "LinkedTarget", "=Controls!$B$1");
+    let named_checkbox = add_control(1, 150, 210);
+    set_control(named_checkbox, "LinkedCell", json!("LinkedTarget"));
+    assert_eq!(get_control(named_checkbox, "LinkedCell"), json!("LinkedTarget"));
+    set_control(named_checkbox, "Value", json!(1));
+    assert_eq!(
+        workbook.get_cell_value("B1").unwrap(),
+        ExcelCellValue::Bool(true)
+    );
+
+    workbook.save_as(&fixture.vm_path, 56).expect("save xls");
+    for handle in [
+        checkbox,
+        single_list,
+        multi_list,
+        dropdown,
+        scrollbar,
+        spinner,
+        option_1,
+        option_2,
+        option_3,
+        group_box,
+        formula_checkbox,
+        cross_sheet_checkbox,
+        named_checkbox,
+        probe_module,
+        vb_components,
+        shapes,
+    ] {
+        excel.release(handle).expect("release COM handle");
+    }
+    workbook.close().expect("close workbook");
+    pull_file_from_vm(&fixture);
+    let model = duke_sheets_xls::XlsReader::read_file(&fixture.host_path).expect("read xls");
+    let controls_sheet = model.worksheet(0).unwrap();
+    assert_eq!(
+        controls_sheet.get_value("A1").unwrap(),
+        CellValue::Error(CellError::Na)
+    );
+    assert_eq!(
+        controls_sheet.get_value("A2").unwrap(),
+        CellValue::Number(3.0)
+    );
+    assert_eq!(
+        controls_sheet.get_value("A3").unwrap(),
+        CellValue::Number(0.0)
+    );
+    assert_eq!(
+        controls_sheet.get_value("A4").unwrap(),
+        CellValue::Number(2.0)
+    );
+    assert_eq!(
+        controls_sheet.get_value("A5").unwrap(),
+        CellValue::Number(55.0)
+    );
+    assert_eq!(
+        controls_sheet.get_value("A6").unwrap(),
+        CellValue::Number(18.0)
+    );
+    assert_eq!(
+        controls_sheet.get_value("A7").unwrap(),
+        CellValue::Number(2.0)
+    );
+    assert_eq!(
+        controls_sheet.get_value("A8").unwrap(),
+        CellValue::Boolean(true)
+    );
+    assert_eq!(
+        model.worksheet(1).unwrap().get_value("A1").unwrap(),
+        CellValue::Boolean(true)
+    );
+    match &controls_sheet.form_controls()[2].kind {
+        FormControlKind::ListBox {
+            cell_link,
+            selection,
+            selected,
+            ..
+        } => {
+            assert_eq!(cell_link.as_deref(), Some("$A$3"));
+            assert_eq!(*selection, ListSelection::Multi);
+            assert_eq!(selected, &vec![0, 2, 3]);
+        }
+        other => panic!("expected multi-select ListBox, got {other:?}"),
+    }
+    // The name-linked checkbox persists its link as the defined name,
+    // and the name's target carries the pushed value.
+    assert_eq!(
+        controls_sheet.get_value("B1").unwrap(),
+        CellValue::Boolean(true)
+    );
+    let named_link = controls_sheet
+        .form_controls()
+        .iter()
+        .filter_map(|control| control.cell_link())
+        .find(|link| link.contains("LinkedTarget"));
+    assert_eq!(named_link, Some("LinkedTarget"));
+    cleanup_fixture(&fixture);
+}
+
+/// Excel-authored probe pinning how a FORMULA in a linked cell drives
+/// each control kind when it recalculates: the checkbox on/off/mixed
+/// mapping, scrollbar clamping (and whether Excel rewrites the formula
+/// cell to the clamp), list box out-of-range handling, and radio-group
+/// index selection. The saved XLS must persist the driven control
+/// states while the linked cells keep their formulas.
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_authored_xls_linked_formulas_drive_controls() {
+    use duke_sheets_core::{CellError, CheckState, FormControlKind};
+    use excel_com_protocol::CellValue as ExcelCellValue;
+
+    let fixture = temp_fixture_xls();
+    ensure_vm_temp_dir();
+
+    let bridge = excel_bridge();
+    let excel = bridge.lock().unwrap();
+    let workbook = excel.create_workbook().expect("create Excel workbook");
+    for (i, item) in ["Alpha", "Beta", "Gamma", "Delta"].iter().enumerate() {
+        workbook
+            .set_cell_value(&format!("H{}", i + 1), *item)
+            .expect("set list item");
+    }
+
+    let shapes = excel
+        .navigate(
+            workbook.handle(),
+            vec![
+                SheetRef::Index(0).to_chain_step(),
+                ChainStep::Property("Shapes".into()),
+            ],
+        )
+        .expect("navigate shapes");
+    let add_control = |control_type: i32, left: i32, top: i32| -> u64 {
+        match excel.invoke(
+            shapes,
+            vec![],
+            "AddFormControl",
+            vec![
+                serde_json::Value::from(control_type),
+                serde_json::Value::from(left),
+                serde_json::Value::from(top),
+                serde_json::Value::from(100),
+                serde_json::Value::from(30),
+            ],
+        ) {
+            Ok(Some(ResponseData::Handle { handle })) => handle,
+            other => panic!("expected AddFormControl handle, got {other:?}"),
+        }
+    };
+    let set_control = |shape: u64, property: &str, value: serde_json::Value| {
+        excel
+            .set(
+                shape,
+                vec![ChainStep::Property("ControlFormat".into())],
+                property,
+                value,
+            )
+            .unwrap_or_else(|e| panic!("set ControlFormat.{property}: {e}"));
+    };
+    let get_control = |shape: u64, property: &str| -> serde_json::Value {
+        match excel
+            .get(
+                shape,
+                vec![ChainStep::Property("ControlFormat".into())],
+                property,
+            )
+            .unwrap_or_else(|e| panic!("get ControlFormat.{property}: {e}"))
+        {
+            Some(ResponseData::Value { value }) => value,
+            other => panic!("expected ControlFormat.{property} value, got {other:?}"),
+        }
+    };
+    let drive = |cell: &str, formula: &str| {
+        workbook
+            .set_cell_formula(cell, formula)
+            .unwrap_or_else(|e| panic!("set {cell} formula {formula}: {e}"));
+        excel
+            .recalculate()
+            .unwrap_or_else(|e| panic!("recalculate after {cell} = {formula}: {e}"));
+    };
+
+    // xlCheckBox = 1 linked to $A$1; xlOn = 1, xlOff = -4146, xlMixed = 2.
+    let checkbox = add_control(1, 10, 10);
+    set_control(checkbox, "LinkedCell", json!("$A$1"));
+    let checkbox_values: Vec<serde_json::Value> = ["=5", "=0", "=TRUE", "=\"text\"", "=NA()"]
+        .into_iter()
+        .map(|formula| {
+            drive("A1", formula);
+            let value = get_control(checkbox, "Value");
+            eprintln!("checkbox: A1 {formula} -> Value {value}");
+            value
+        })
+        .collect();
+
+    // xlScrollBar = 8 (Min=5, Max=95) linked to $A$2. Alongside the
+    // control's Value, capture what the cell holds afterwards to pin
+    // whether Excel rewrites the formula cell to the clamp.
+    let scrollbar = add_control(8, 150, 10);
+    set_control(scrollbar, "Min", json!(5));
+    set_control(scrollbar, "Max", json!(95));
+    set_control(scrollbar, "LinkedCell", json!("$A$2"));
+    let scrollbar_probe: Vec<(serde_json::Value, ExcelCellValue, String)> = ["=150", "=2", "=40"]
+        .into_iter()
+        .map(|formula| {
+            drive("A2", formula);
+            let value = get_control(scrollbar, "Value");
+            let cell_value = workbook.get_cell_value("A2").expect("read A2 value");
+            let cell_formula = workbook.get_cell_formula("A2").expect("read A2 formula");
+            eprintln!(
+                "scrollbar: A2 {formula} -> Value {value}, cell {cell_value:?} ({cell_formula})"
+            );
+            (value, cell_value, cell_formula)
+        })
+        .collect();
+
+    // xlListBox = 6, single-select over $H$1:$H$4, linked to $A$3.
+    let list_box = add_control(6, 10, 60);
+    set_control(list_box, "ListFillRange", json!("$H$1:$H$4"));
+    set_control(list_box, "LinkedCell", json!("$A$3"));
+    let list_indexes: Vec<serde_json::Value> = ["=2", "=99", "=0"]
+        .into_iter()
+        .map(|formula| {
+            drive("A3", formula);
+            let index = get_control(list_box, "ListIndex");
+            eprintln!("list box: A3 {formula} -> ListIndex {index}");
+            index
+        })
+        .collect();
+
+    // xlOptionButton = 7 pair sharing $A$4. They are the only radios on
+    // the sheet, so they form the sheet-level group by themselves.
+    let option_1 = add_control(7, 300, 10);
+    let option_2 = add_control(7, 300, 50);
+    for option in [option_1, option_2] {
+        set_control(option, "LinkedCell", json!("$A$4"));
+    }
+    let radio_probe: Vec<(serde_json::Value, serde_json::Value)> = ["=2", "=0"]
+        .into_iter()
+        .map(|formula| {
+            drive("A4", formula);
+            let first = get_control(option_1, "Value");
+            let second = get_control(option_2, "Value");
+            eprintln!("radios: A4 {formula} -> ({first}, {second})");
+            (first, second)
+        })
+        .collect();
+
+    assert_eq!(
+        checkbox_values,
+        vec![json!(1), json!(-4146), json!(1), json!(1), json!(2)],
+        "checkbox: nonzero, TRUE and text all check; 0 unchecks; only #N/A mixes"
+    );
+    assert_eq!(
+        scrollbar_probe,
+        vec![
+            (json!(95), ExcelCellValue::Number(150.0), "=150".to_string()),
+            (json!(5), ExcelCellValue::Number(2.0), "=2".to_string()),
+            (json!(40), ExcelCellValue::Number(40.0), "=40".to_string()),
+        ],
+        "scrollbar Value clamps to Min/Max; the formula cell is not rewritten"
+    );
+    assert_eq!(
+        list_indexes,
+        vec![json!(2), json!(4), json!(0)],
+        "list box: in-range selects; out-of-range clamps to the last item; 0 deselects"
+    );
+    assert_eq!(
+        radio_probe,
+        vec![(json!(-4146), json!(1)), (json!(-4146), json!(-4146))],
+        "radio pair (first, second) Value per formula =2, =0"
+    );
+
+    workbook.save_as(&fixture.vm_path, 56).expect("save xls");
+    for handle in [checkbox, scrollbar, list_box, option_1, option_2, shapes] {
+        excel.release(handle).expect("release COM handle");
+    }
+    workbook.close().expect("close workbook");
+    pull_file_from_vm(&fixture);
+    let model = duke_sheets_xls::XlsReader::read_file(&fixture.host_path).expect("read xls");
+    let sheet = model.worksheet(0).unwrap();
+
+    // The linked cells persist as formulas with recalculated caches,
+    // not as constants pushed back by the controls.
+    assert_eq!(sheet.get_formula_at(0, 0), Some("=NA()"));
+    assert_eq!(
+        sheet.get_value("A1").unwrap(),
+        CellValue::Error(CellError::Na)
+    );
+    assert_eq!(sheet.get_formula_at(1, 0), Some("=40"));
+    assert_eq!(sheet.get_value("A2").unwrap(), CellValue::Number(40.0));
+    assert_eq!(sheet.get_formula_at(2, 0), Some("=0"));
+    assert_eq!(sheet.get_value("A3").unwrap(), CellValue::Number(0.0));
+    assert_eq!(sheet.get_formula_at(3, 0), Some("=0"));
+    assert_eq!(sheet.get_value("A4").unwrap(), CellValue::Number(0.0));
+
+    // The persisted control states match the last formula-driven states.
+    let controls = sheet.form_controls();
+    assert_eq!(controls.len(), 5, "all controls survive the save");
+    match &controls[0].kind {
+        FormControlKind::Checkbox {
+            state, cell_link, ..
+        } => {
+            assert_eq!(
+                *state,
+                CheckState::Mixed,
+                "checkbox persists the #N/A-driven mixed state"
+            );
+            assert_eq!(cell_link.as_deref(), Some("$A$1"));
+        }
+        other => panic!("expected Checkbox, got {other:?}"),
+    }
+    match &controls[1].kind {
+        FormControlKind::Scrollbar {
+            value,
+            min,
+            max,
+            cell_link,
+            ..
+        } => {
+            assert_eq!((*min, *max, *value), (5, 95, 40));
+            assert_eq!(cell_link.as_deref(), Some("$A$2"));
+        }
+        other => panic!("expected Scrollbar, got {other:?}"),
+    }
+    match &controls[2].kind {
+        FormControlKind::ListBox {
+            selected,
+            cell_link,
+            ..
+        } => {
+            assert_eq!(
+                selected,
+                &Vec::<u16>::new(),
+                "ListIndex 0 persists as no selection"
+            );
+            assert_eq!(cell_link.as_deref(), Some("$A$3"));
+        }
+        other => panic!("expected ListBox, got {other:?}"),
+    }
+    let radios: Vec<(CheckState, Option<&str>, bool)> = controls[3..]
+        .iter()
+        .map(|control| match &control.kind {
+            FormControlKind::OptionButton {
+                state,
+                cell_link,
+                first_in_group,
+                ..
+            } => (*state, cell_link.as_deref(), *first_in_group),
+            other => panic!("expected OptionButton, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        radios,
+        vec![
+            (CheckState::Unchecked, Some("$A$4"), true),
+            (CheckState::Unchecked, None, false),
+        ],
+        "=0 leaves both radios unchecked; Excel stores the group link on the first radio only"
+    );
+    cleanup_fixture(&fixture);
+}
+
+/// An unselected radio group whose linked cell held a stale value
+/// must survive Excel: synchronization resets the cell to 0, which
+/// Excel reads back as "no radio checked". Without the reset, Excel
+/// would check the radio at the stale one-based index on open.
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_unselected_radio_group_over_stale_link() {
+    use duke_sheets_core::{CheckState, FormControl, FormControlKind};
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("D1", 2.0).expect("stale link value");
+    for (caption, row) in [("First", 1), ("Second", 3)] {
+        ws.add_form_control(FormControl::with_anchor(
+            FormControlKind::OptionButton {
+                caption: caption.to_string(),
+                state: CheckState::Unchecked,
+                cell_link: Some("$D$1".to_string()),
+                first_in_group: false,
+                no_3d: true,
+            },
+            control_anchor(1, row, 2, row + 1),
+        ));
+    }
+    assert_eq!(wb.sync_form_control_links(), 1);
+    assert_eq!(
+        wb.worksheet(0).unwrap().get_value("D1").unwrap(),
+        CellValue::Number(0.0)
+    );
+
+    let result = roundtrip_through_excel_xls(&wb);
+    let sheet = result.worksheet(0).unwrap();
+    assert_eq!(sheet.get_value("D1").unwrap(), CellValue::Number(0.0));
+    let states: Vec<CheckState> = sheet
+        .form_controls()
+        .iter()
+        .map(|control| match &control.kind {
+            FormControlKind::OptionButton { state, .. } => *state,
+            other => panic!("expected OptionButton, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        states,
+        vec![CheckState::Unchecked, CheckState::Unchecked],
+        "no radio may become checked from the stale link"
+    );
 }
 
 /// Radio grouping by enclosing group box survives the Excel
