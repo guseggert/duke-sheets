@@ -3083,6 +3083,17 @@ fn excel_authored_xls_form_control_linked_cell_semantics() {
         ExcelCellValue::Bool(true)
     );
 
+    // Excel also accepts a defined name as the cell link.
+    define_excel_name(&excel, workbook.handle(), "LinkedTarget", "=Controls!$B$1");
+    let named_checkbox = add_control(1, 150, 210);
+    set_control(named_checkbox, "LinkedCell", json!("LinkedTarget"));
+    assert_eq!(get_control(named_checkbox, "LinkedCell"), json!("LinkedTarget"));
+    set_control(named_checkbox, "Value", json!(1));
+    assert_eq!(
+        workbook.get_cell_value("B1").unwrap(),
+        ExcelCellValue::Bool(true)
+    );
+
     workbook.save_as(&fixture.vm_path, 56).expect("save xls");
     for handle in [
         checkbox,
@@ -3097,6 +3108,7 @@ fn excel_authored_xls_form_control_linked_cell_semantics() {
         group_box,
         formula_checkbox,
         cross_sheet_checkbox,
+        named_checkbox,
         probe_module,
         vb_components,
         shapes,
@@ -3156,7 +3168,67 @@ fn excel_authored_xls_form_control_linked_cell_semantics() {
         }
         other => panic!("expected multi-select ListBox, got {other:?}"),
     }
+    // The name-linked checkbox persists its link as the defined name,
+    // and the name's target carries the pushed value.
+    assert_eq!(
+        controls_sheet.get_value("B1").unwrap(),
+        CellValue::Boolean(true)
+    );
+    let named_link = controls_sheet
+        .form_controls()
+        .iter()
+        .filter_map(|control| control.cell_link())
+        .find(|link| link.contains("LinkedTarget"));
+    assert_eq!(named_link, Some("LinkedTarget"));
     cleanup_fixture(&fixture);
+}
+
+/// An unselected radio group whose linked cell held a stale value
+/// must survive Excel: synchronization resets the cell to 0, which
+/// Excel reads back as "no radio checked". Without the reset, Excel
+/// would check the radio at the stale one-based index on open.
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_unselected_radio_group_over_stale_link() {
+    use duke_sheets_core::{CheckState, FormControl, FormControlKind};
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("D1", 2.0).expect("stale link value");
+    for (caption, row) in [("First", 1), ("Second", 3)] {
+        ws.add_form_control(FormControl::with_anchor(
+            FormControlKind::OptionButton {
+                caption: caption.to_string(),
+                state: CheckState::Unchecked,
+                cell_link: Some("$D$1".to_string()),
+                first_in_group: false,
+                no_3d: true,
+            },
+            control_anchor(1, row, 2, row + 1),
+        ));
+    }
+    assert_eq!(wb.sync_form_control_links(), 1);
+    assert_eq!(
+        wb.worksheet(0).unwrap().get_value("D1").unwrap(),
+        CellValue::Number(0.0)
+    );
+
+    let result = roundtrip_through_excel_xls(&wb);
+    let sheet = result.worksheet(0).unwrap();
+    assert_eq!(sheet.get_value("D1").unwrap(), CellValue::Number(0.0));
+    let states: Vec<CheckState> = sheet
+        .form_controls()
+        .iter()
+        .map(|control| match &control.kind {
+            FormControlKind::OptionButton { state, .. } => *state,
+            other => panic!("expected OptionButton, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        states,
+        vec![CheckState::Unchecked, CheckState::Unchecked],
+        "no radio may become checked from the stale link"
+    );
 }
 
 /// Radio grouping by enclosing group box survives the Excel

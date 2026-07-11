@@ -412,14 +412,16 @@ pub trait WorkbookExt {
 
     /// Save the workbook to a file.
     ///
-    /// For Excel formats, form-control state is synchronized into linked cells before
-    /// serialization, replacing existing values and formulas in those cells.
+    /// Form-control state is synchronized into linked cells in the output,
+    /// replacing existing values and formulas there; the caller's workbook is
+    /// left unchanged.
     fn save<P: AsRef<Path>>(&self, path: P) -> Result<()>;
 
     /// Save the workbook to a file with explicit options.
     ///
-    /// For Excel formats, form-control state is synchronized into linked cells before
-    /// serialization, replacing existing values and formulas in those cells.
+    /// Form-control state is synchronized into linked cells in the output,
+    /// replacing existing values and formulas there; the caller's workbook is
+    /// left unchanged.
     /// (to write an encrypted file, etc.).
     fn save_with<P: AsRef<Path>>(&self, path: P, opts: &WorkbookSaveOptions) -> Result<()>;
 }
@@ -699,7 +701,9 @@ impl WorkbookExt for Workbook {
             #[cfg(not(feature = "xlsb"))]
             Some("xlsb") => Err(Error::other("XLSB writing requires the 'xlsb' feature")),
             Some("csv") => {
-                if let Some(sheet) = self.worksheet(0) {
+                let snapshot = self.synchronized_for_save();
+                let workbook = snapshot.as_ref().unwrap_or(self);
+                if let Some(sheet) = workbook.worksheet(0) {
                     CsvWriter::write_file(sheet, path, &CsvWriteOptions::default())
                         .map_err(|e| Error::other(e.to_string()))
                 } else {

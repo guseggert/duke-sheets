@@ -119,8 +119,9 @@ export declare class Workbook {
   /**
    * Save the workbook to a file.
    *
-   * For Excel formats, form-control state is synchronized into linked cells
-   * in the serialized file, replacing existing values and formulas there.
+   * Form-control state is synchronized into linked cells in the output,
+   * replacing existing values and formulas there; this workbook is left
+   * unchanged.
    *
    * The format is determined by the file extension:
    * - `.xlsx` for Excel format
@@ -161,7 +162,10 @@ export declare class Workbook {
    *   Default false.
    */
   static openWithPassword(path: string, password: string, skipIntegrityCheck?: boolean | undefined | null): Workbook
-  /** Save the workbook as a CSV string (first sheet only) */
+  /**
+   * Save the workbook as a CSV string (first sheet only, with
+   * form-control state synchronized into linked cells in the output)
+   */
   saveCsvString(): string
   /** Get the number of worksheets */
   get sheetCount(): number
@@ -213,8 +217,8 @@ export declare class Workbook {
   getNamedRange(name: string): string | null
   /**
    * Save the workbook to a file asynchronously (non-blocking).
-   * For Excel formats, form-control state is synchronized into linked cells
-   * in the serialized file without changing this workbook.
+   * Form-control state is synchronized into linked cells in the output
+   * without changing this workbook.
    *
    * @param path - Path to save to
    * @returns Promise<void>

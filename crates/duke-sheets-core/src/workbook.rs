@@ -258,7 +258,6 @@ impl Workbook {
                     updates.insert((sheet, address.row, address.col), value);
                 }
             }
-
         }
 
         let mut updated = 0;
@@ -306,6 +305,17 @@ impl Workbook {
         source_sheet: usize,
         link: &str,
     ) -> Option<(usize, CellAddress)> {
+        // Names may refer to other names; Excel resolves the chain.
+        self.resolve_control_link_depth(source_sheet, link, 4)
+    }
+
+    fn resolve_control_link_depth(
+        &self,
+        source_sheet: usize,
+        link: &str,
+        depth: u8,
+    ) -> Option<(usize, CellAddress)> {
+        let depth = depth.checked_sub(1)?;
         let link = link.trim().strip_prefix('=').unwrap_or(link.trim());
         let (sheet, address) = match link.rsplit_once('!') {
             Some((sheet, address)) => {
@@ -319,7 +329,12 @@ impl Workbook {
             }
             None => (source_sheet, link),
         };
-        Some((sheet, CellAddress::parse(address).ok()?))
+        if let Ok(address) = CellAddress::parse(address) {
+            return Some((sheet, address));
+        }
+        // Excel also accepts a defined name as a cell link.
+        let name = self.named_ranges.get(address, sheet)?;
+        self.resolve_control_link_depth(sheet, name.expression(), depth)
     }
 
     /// Structural generation counter - incremented when sheets are added,
@@ -1081,6 +1096,57 @@ mod tests {
         assert_eq!(
             wb.worksheet(1).unwrap().get_value("B2").unwrap(),
             CellValue::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn sync_form_control_links_resolves_defined_names() {
+        let mut wb = Workbook::new();
+        wb.add_worksheet_with_name("Data").unwrap();
+        wb.named_ranges_mut()
+            .define_or_update(NamedRange::workbook_scope("Target", "Data!$B$2"));
+        wb.named_ranges_mut()
+            .define_or_update(NamedRange::workbook_scope("Alias", "=Target"));
+        wb.named_ranges_mut().define_or_update(NamedRange::new(
+            "Local",
+            "$C$3",
+            NameScope::Sheet(0),
+        ));
+        wb.named_ranges_mut()
+            .define_or_update(NamedRange::workbook_scope("Wide", "Data!$A$1:$A$4"));
+        wb.named_ranges_mut()
+            .define_or_update(NamedRange::workbook_scope("LoopA", "LoopB"));
+        wb.named_ranges_mut()
+            .define_or_update(NamedRange::workbook_scope("LoopB", "LoopA"));
+
+        let ws = wb.worksheet_mut(0).unwrap();
+        for (link, value) in [
+            ("Target", 11),
+            ("Alias", 22),
+            ("Local", 33),
+            ("Wide", 44),
+            ("LoopA", 55),
+            ("NoSuchName", 66),
+        ] {
+            ws.add_form_control(FormControl::new(FormControlKind::Spinner {
+                value,
+                min: 0,
+                max: 100,
+                increment: 1,
+                cell_link: Some(link.into()),
+            }));
+        }
+
+        assert_eq!(wb.sync_form_control_links(), 2);
+        assert_eq!(
+            wb.worksheet(1).unwrap().get_value("B2").unwrap(),
+            CellValue::Number(22.0),
+            "workbook-scoped name resolves; the aliased control targets it too"
+        );
+        assert_eq!(
+            wb.worksheet(0).unwrap().get_value("C3").unwrap(),
+            CellValue::Number(33.0),
+            "sheet-scoped name resolves against the control's sheet"
         );
     }
 

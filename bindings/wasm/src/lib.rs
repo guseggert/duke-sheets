@@ -814,9 +814,13 @@ impl Workbook {
         Ok(buf)
     }
 
+    /// Save the first sheet as a CSV string, with form-control state
+    /// synchronized into linked cells in the output.
     #[wasm_bindgen(js_name = saveCsvString)]
     pub fn save_csv_string(&self) -> Result<String, JsError> {
         let wb = self.inner.borrow();
+        let snapshot = wb.synchronized_for_save();
+        let wb = snapshot.as_ref().unwrap_or_else(|| &*wb);
         let ws = wb
             .worksheet(0)
             .ok_or_else(|| JsError::new("No worksheets to save"))?;

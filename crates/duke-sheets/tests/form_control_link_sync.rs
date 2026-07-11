@@ -109,6 +109,30 @@ fn high_level_save_synchronizes_form_control_linked_cells() {
 }
 
 #[test]
+fn csv_save_synchronizes_form_control_linked_cells() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("controls.csv");
+    let workbook = linked_controls_workbook();
+    workbook.save(&path).unwrap();
+
+    let csv = std::fs::read_to_string(&path).unwrap();
+    let first_cells: Vec<&str> = csv
+        .lines()
+        .map(|line| line.split(',').next().unwrap_or(""))
+        .collect();
+    // Rows 2/5/7 hold the single-select index, scrollbar value, and
+    // radio-group index that synchronization writes into column A.
+    assert_eq!(first_cells[1], "3");
+    assert_eq!(first_cells[4], "55");
+    assert_eq!(first_cells[6], "2");
+    // The caller's workbook is untouched.
+    assert_eq!(
+        workbook.worksheet(0).unwrap().get_value("A2").unwrap(),
+        CellValue::Empty
+    );
+}
+
+#[test]
 fn encrypted_save_synchronizes_form_control_linked_cells() {
     const PASSWORD: &str = "linked-cells";
     for extension in ["xlsx", "xls"] {

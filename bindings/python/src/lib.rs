@@ -700,8 +700,9 @@ impl PyWorkbook {
 
     /// Save the workbook to a file.
     ///
-    /// For Excel formats, form-control state is synchronized into linked cells
-    /// in the serialized file, replacing existing values and formulas there.
+    /// Form-control state is synchronized into linked cells in the output,
+    /// replacing existing values and formulas there; this workbook is left
+    /// unchanged.
     ///
     /// The format is determined by the file extension:
     /// - .xlsx for Excel format
