@@ -156,7 +156,12 @@ pub const BRT_BEGIN_LIST_PARTS: u16 = 0x0294; // 660
 pub const BRT_LIST_PART: u16 = 0x0295; // 661
 pub const BRT_END_LIST_PARTS: u16 = 0x0296; // 662
 
-pub const BRT_SHEET_PROTECTION: u16 = 0x0217; // 535
+// Pinned from Excel-authored XLSB files. These protection records are
+// adjacent in the BIFF12 stream and using the wrong neighbor ID makes Excel
+// reject the workbook before repair.
+pub const BRT_BOOK_PROTECTION: u16 = 0x0216;
+pub const BRT_SHEET_PROTECTION: u16 = 0x0217;
+pub const BRT_RANGE_PROTECTION: u16 = 0x0218;
 
 pub const BRT_BEGIN_RW_BRK: u16 = 0x0188; // 392
 pub const BRT_END_RW_BRK: u16 = 0x0189; // 393

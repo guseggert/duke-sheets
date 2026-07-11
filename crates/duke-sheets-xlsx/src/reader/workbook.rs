@@ -8,12 +8,13 @@ use quick_xml::reader::Reader;
 
 use super::archive_by_name;
 use crate::error::{XlsxError, XlsxResult};
-use duke_sheets_core::SheetVisibility;
+use duke_sheets_core::{SheetVisibility, WorkbookProtection};
 
 /// Parsed workbook properties from workbook.xml
 pub(super) struct WorkbookProps {
     pub(super) sheets: Vec<SheetEntry>,
     pub(super) date_1904: bool,
+    pub(super) workbook_protection: Option<WorkbookProtection>,
     pub(super) named_ranges: Vec<duke_sheets_core::named_range::NamedRange>,
 }
 
@@ -52,6 +53,7 @@ pub(super) fn read_workbook_xml<R: Read + Seek>(
     let mut buf = Vec::new();
     let mut sheets = Vec::new();
     let mut date_1904 = false;
+    let mut workbook_protection = None;
     let mut named_ranges = Vec::new();
 
     loop {
@@ -59,11 +61,17 @@ pub(super) fn read_workbook_xml<R: Read + Seek>(
             Ok(Event::Empty(ref e)) => match e.name().local_name().as_ref() {
                 b"sheet" => parse_sheet_element(e, &mut sheets),
                 b"workbookPr" => parse_workbook_pr(e, &mut date_1904),
+                b"workbookProtection" => {
+                    workbook_protection = parse_workbook_protection(e);
+                }
                 _ => {}
             },
             Ok(Event::Start(ref e)) => match e.name().local_name().as_ref() {
                 b"sheet" => parse_sheet_element(e, &mut sheets),
                 b"workbookPr" => parse_workbook_pr(e, &mut date_1904),
+                b"workbookProtection" => {
+                    workbook_protection = parse_workbook_protection(e);
+                }
                 b"definedName" => {
                     let mut dn_name = None;
                     let mut local_sheet_id: Option<usize> = None;
@@ -121,6 +129,7 @@ pub(super) fn read_workbook_xml<R: Read + Seek>(
     Ok(WorkbookProps {
         sheets,
         date_1904,
+        workbook_protection,
         named_ranges,
     })
 }
@@ -166,6 +175,38 @@ fn parse_workbook_pr(e: &quick_xml::events::BytesStart<'_>, date_1904: &mut bool
             }
             _ => {}
         }
+    }
+}
+
+fn parse_workbook_protection(e: &quick_xml::events::BytesStart<'_>) -> Option<WorkbookProtection> {
+    let mut protection = WorkbookProtection::default();
+
+    for attr in e.attributes().flatten() {
+        let Ok(value) = attr.unescape_value() else {
+            continue;
+        };
+        match attr.key.local_name().as_ref() {
+            b"lockStructure" => {
+                protection.structure =
+                    value.as_ref() == "1" || value.as_ref().eq_ignore_ascii_case("true");
+            }
+            b"lockWindows" => {
+                protection.windows =
+                    value.as_ref() == "1" || value.as_ref().eq_ignore_ascii_case("true");
+            }
+            b"workbookPassword" => {
+                if let Ok(h) = u16::from_str_radix(value.as_ref(), 16) {
+                    protection.password_hash = Some(h);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if protection.structure || protection.windows || protection.password_hash.is_some() {
+        Some(protection)
+    } else {
+        None
     }
 }
 

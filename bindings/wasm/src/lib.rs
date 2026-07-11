@@ -494,7 +494,9 @@ impl Worksheet {
             .cell_style_at(addr.row, addr.col)
             .cloned()
             .unwrap_or_default();
-        patch.apply_to_core_style(&mut core_style).map_err(to_js_error)?;
+        patch
+            .apply_to_core_style(&mut core_style)
+            .map_err(to_js_error)?;
         ws.set_cell_style_at(addr.row, addr.col, &core_style)
             .map_err(to_js_error)
     }
@@ -510,7 +512,9 @@ impl Worksheet {
             .cell_style_at(row, col as u16)
             .cloned()
             .unwrap_or_default();
-        patch.apply_to_core_style(&mut core_style).map_err(to_js_error)?;
+        patch
+            .apply_to_core_style(&mut core_style)
+            .map_err(to_js_error)?;
         ws.set_cell_style_at(row, col as u16, &core_style)
             .map_err(to_js_error)
     }
@@ -529,10 +533,46 @@ impl Worksheet {
                 .cell_style_at(addr.row, addr.col)
                 .cloned()
                 .unwrap_or_default();
-            patch.apply_to_core_style(&mut core_style).map_err(to_js_error)?;
+            patch
+                .apply_to_core_style(&mut core_style)
+                .map_err(to_js_error)?;
             ws.set_cell_style_at(addr.row, addr.col, &core_style)
                 .map_err(to_js_error)?;
         }
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setProtection)]
+    pub fn set_protection(&self, protection: JsValue) -> Result<(), JsError> {
+        let protection = if protection.is_null() || protection.is_undefined() {
+            None
+        } else {
+            let input: WasmSheetProtectionInput =
+                serde_wasm_bindgen::from_value(protection).map_err(to_js_error)?;
+            Some(input.into_core().map_err(to_js_error)?)
+        };
+        let mut wb = self.workbook.borrow_mut();
+        let ws = wb
+            .worksheet_mut(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        ws.set_protection(protection);
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setProtectedRanges)]
+    pub fn set_protected_ranges(&self, ranges: JsValue) -> Result<(), JsError> {
+        let inputs: Vec<WasmProtectedRangeInput> =
+            serde_wasm_bindgen::from_value(ranges).map_err(to_js_error)?;
+        let ranges = inputs
+            .into_iter()
+            .map(WasmProtectedRangeInput::into_core)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(to_js_error)?;
+        let mut wb = self.workbook.borrow_mut();
+        let ws = wb
+            .worksheet_mut(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        ws.set_protected_ranges(ranges);
         Ok(())
     }
 
@@ -880,6 +920,20 @@ impl Workbook {
         wb.add_worksheet_with_name(name).map_err(to_js_error)
     }
 
+    #[wasm_bindgen(js_name = setWorkbookProtection)]
+    pub fn set_workbook_protection(&self, protection: JsValue) -> Result<(), JsError> {
+        let protection = if protection.is_null() || protection.is_undefined() {
+            None
+        } else {
+            let input: WasmWorkbookProtectionInput =
+                serde_wasm_bindgen::from_value(protection).map_err(to_js_error)?;
+            Some(input.into_core().map_err(to_js_error)?)
+        };
+        let mut wb = self.inner.borrow_mut();
+        wb.set_workbook_protection(protection);
+        Ok(())
+    }
+
     #[wasm_bindgen(js_name = removeSheet)]
     pub fn remove_sheet(&self, index: usize) -> Result<(), JsError> {
         let mut wb = self.inner.borrow_mut();
@@ -949,24 +1003,30 @@ impl Workbook {
             // Build external_fn from callback: externalFn(book, name, args[]) -> number|string|bool|null
             let external_fn = external_js_fn.map(|(js_fn, legacy_two_arg)| {
                 let wrapper = SendSyncFunction(js_fn);
-                Arc::new(move |book: &str, name: &str, args: &[String]| -> Option<FormulaValue> {
-                    let args_arr = js_sys::Array::new();
-                    for a in args {
-                        args_arr.push(&JsValue::from_str(a));
-                    }
-                    let result = if legacy_two_arg {
-                        wrapper.call2(&JsValue::NULL, &JsValue::from_str(name), &args_arr.into())
-                    } else {
-                        wrapper.call3(
-                            &JsValue::NULL,
-                            &JsValue::from_str(book),
-                            &JsValue::from_str(name),
-                            &args_arr.into(),
-                        )
-                    }
-                    .ok()?;
-                    js_value_to_formula_value(result)
-                })
+                Arc::new(
+                    move |book: &str, name: &str, args: &[String]| -> Option<FormulaValue> {
+                        let args_arr = js_sys::Array::new();
+                        for a in args {
+                            args_arr.push(&JsValue::from_str(a));
+                        }
+                        let result = if legacy_two_arg {
+                            wrapper.call2(
+                                &JsValue::NULL,
+                                &JsValue::from_str(name),
+                                &args_arr.into(),
+                            )
+                        } else {
+                            wrapper.call3(
+                                &JsValue::NULL,
+                                &JsValue::from_str(book),
+                                &JsValue::from_str(name),
+                                &args_arr.into(),
+                            )
+                        }
+                        .ok()?;
+                        js_value_to_formula_value(result)
+                    },
+                )
                     as Arc<dyn Fn(&str, &str, &[String]) -> Option<FormulaValue> + Send + Sync>
             });
 

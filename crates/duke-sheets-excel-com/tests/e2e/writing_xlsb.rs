@@ -1312,6 +1312,52 @@ fn excel_can_read_protection_state_we_emit() {
 
 #[test]
 #[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_workbook_protection_and_protected_ranges_we_emit() {
+    use duke_sheets_core::{ProtectedRange, WorkbookProtection};
+
+    let mut wb = Workbook::new();
+    wb.set_workbook_protection(Some(WorkbookProtection {
+        structure: true,
+        windows: true,
+        password_hash: Some(0xCAFE),
+    }));
+
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "editable").unwrap();
+    ws.set_protected_ranges(vec![ProtectedRange {
+        name: "Editable".to_string(),
+        ranges: vec![range("A1", "B2"), range("D4", "D5")],
+        password_hash: Some(0xCAFE),
+        security_descriptor: None,
+    }]);
+
+    let result = roundtrip_through_excel_xlsb(&wb);
+    let protection = result
+        .workbook_protection()
+        .expect("workbook protection must survive Excel round-trip");
+    assert!(protection.structure, "workbook structure protection lost");
+    // Excel opens fLockWindow in XLSB, but current Excel re-saves the
+    // workbook with only fLockStructure set. The in-process XLSB round-trip
+    // pins byte-level preservation of the window bit; this parity test pins
+    // the portion Excel itself preserves.
+    assert!(
+        protection.password_hash.unwrap_or_default() != 0,
+        "workbook password hash lost"
+    );
+
+    let ranges = result.worksheet(0).unwrap().protected_ranges();
+    assert_eq!(ranges.len(), 1, "protected range count changed");
+    assert_eq!(ranges[0].name, "Editable");
+    assert_eq!(ranges[0].ranges[0].to_string(), "A1:B2");
+    assert_eq!(ranges[0].ranges[1].to_string(), "D4:D5");
+    assert!(
+        ranges[0].password_hash.unwrap_or_default() != 0,
+        "protected range password hash lost"
+    );
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_dimensions_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();

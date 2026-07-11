@@ -95,6 +95,25 @@ fn test_workbook_invalid_sheet_index() {
     assert!(result.is_err());
 }
 
+#[wasm_bindgen_test]
+fn test_workbook_protection() {
+    let wb = Workbook::new();
+    let protection = make_options(&[
+        ("structure", JsValue::TRUE),
+        ("windows", JsValue::TRUE),
+        ("password", JsValue::from_str("password")),
+    ]);
+    wb.set_workbook_protection(protection).unwrap();
+
+    let protection = wb.workbook_protection().unwrap();
+    assert!(get_bool_field(&protection, "structure"));
+    assert!(get_bool_field(&protection, "windows"));
+    assert_eq!(get_f64_field(&protection, "passwordHash") as u16, 0x83af);
+
+    wb.set_workbook_protection(JsValue::NULL).unwrap();
+    assert!(wb.workbook_protection().unwrap().is_null());
+}
+
 // Worksheet Tests
 
 #[wasm_bindgen_test]
@@ -226,6 +245,70 @@ fn test_worksheet_set_range_style() {
     }
 }
 
+#[wasm_bindgen_test]
+fn test_worksheet_protection_and_protected_ranges() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+
+    let protection = make_options(&[
+        ("protected", JsValue::TRUE),
+        ("password", JsValue::from_str("password")),
+        ("selectLockedCells", JsValue::TRUE),
+        ("selectUnlockedCells", JsValue::TRUE),
+        ("formatCells", JsValue::TRUE),
+        ("sort", JsValue::TRUE),
+    ]);
+    sheet.set_protection(protection).unwrap();
+
+    let protection = sheet.protection().unwrap();
+    assert!(get_bool_field(&protection, "protected"));
+    assert_eq!(get_f64_field(&protection, "passwordHash") as u16, 0x83af);
+    assert!(get_bool_field(&protection, "selectLockedCells"));
+    assert!(get_bool_field(&protection, "selectUnlockedCells"));
+    assert!(get_bool_field(&protection, "formatCells"));
+    assert!(get_bool_field(&protection, "sort"));
+
+    let ranges = make_array(&[JsValue::from_str("A1:B2"), JsValue::from_str("D4:D5")]);
+    let protected_range = make_options(&[
+        ("name", JsValue::from_str("Editable")),
+        ("ranges", ranges),
+        ("passwordHash", JsValue::from_f64(0xcafe as f64)),
+        ("securityDescriptor", JsValue::from_str("S-1-5-21")),
+    ]);
+    sheet
+        .set_protected_ranges(make_array(&[protected_range]))
+        .unwrap();
+
+    let protected_ranges = Array::from(&sheet.protected_ranges().unwrap());
+    assert_eq!(protected_ranges.length(), 1);
+    let first = protected_ranges.get(0);
+    assert_eq!(get_string_field(&first, "name"), "Editable");
+    assert_eq!(get_f64_field(&first, "passwordHash") as u16, 0xcafe);
+    assert_eq!(get_string_field(&first, "securityDescriptor"), "S-1-5-21");
+    let first_ranges = Array::from(&Reflect::get(&first, &JsValue::from_str("ranges")).unwrap());
+    assert_eq!(first_ranges.length(), 2);
+    assert_eq!(first_ranges.get(0).as_string().unwrap(), "A1:B2");
+    assert_eq!(first_ranges.get(1).as_string().unwrap(), "D4:D5");
+
+    sheet.set_protection(JsValue::NULL).unwrap();
+    assert!(sheet.protection().unwrap().is_null());
+}
+
+#[wasm_bindgen_test]
+fn test_sheet_protection_defaults_allow_selection() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+
+    let protection = make_options(&[("password", JsValue::from_str("password"))]);
+    sheet.set_protection(protection).unwrap();
+
+    let protection = sheet.protection().unwrap();
+    assert!(get_bool_field(&protection, "protected"));
+    assert_eq!(get_f64_field(&protection, "passwordHash") as u16, 0x83af);
+    assert!(get_bool_field(&protection, "selectLockedCells"));
+    assert!(get_bool_field(&protection, "selectUnlockedCells"));
+}
+
 // Formula Tests
 
 #[wasm_bindgen_test]
@@ -323,6 +406,14 @@ fn make_options(entries: &[(&str, JsValue)]) -> JsValue {
         Reflect::set(&obj, &JsValue::from_str(key), val).unwrap();
     }
     obj.into()
+}
+
+fn make_array(values: &[JsValue]) -> JsValue {
+    let array = Array::new();
+    for value in values {
+        array.push(value);
+    }
+    array.into()
 }
 
 fn control_anchor() -> JsValue {
@@ -766,8 +857,8 @@ fn test_populated_feature_reads_through_binding() {
     // the binding's DTO conversions.
     use duke_sheets_core::auto_filter::{AutoFilter, ColumnFilter, FilterColumn, ValueFilter};
     use duke_sheets_core::comment::CellComment;
-    use duke_sheets_core::{CellAddress, CellRange};
     use duke_sheets_core::validation::DataValidation;
+    use duke_sheets_core::{CellAddress, CellRange};
 
     let mut core_wb = duke_sheets_core::Workbook::new();
     let ws = core_wb.worksheet_mut(0).unwrap();
@@ -1180,7 +1271,10 @@ fn encrypted_round_trip_xlsx(profile: Option<&str>, key_bits: Option<u32>) {
     let opened = Workbook::from_bytes_with_password(&bytes, PASSWORD, None)
         .expect("from_bytes_with_password");
     let sheet = opened.get_sheet(0).unwrap();
-    assert_eq!(sheet.get_cell("A1").unwrap().as_text().as_deref(), Some("hello"));
+    assert_eq!(
+        sheet.get_cell("A1").unwrap().as_text().as_deref(),
+        Some("hello")
+    );
     assert_eq!(sheet.get_cell("B1").unwrap().as_number(), Some(42.0));
 }
 
@@ -1197,7 +1291,10 @@ fn encrypted_round_trip_xls(profile: Option<&str>, key_bits: Option<u32>) {
     let opened = Workbook::from_bytes_with_password(&bytes, PASSWORD, None)
         .expect("from_bytes_with_password");
     let sheet = opened.get_sheet(0).unwrap();
-    assert_eq!(sheet.get_cell("A1").unwrap().as_text().as_deref(), Some("hello"));
+    assert_eq!(
+        sheet.get_cell("A1").unwrap().as_text().as_deref(),
+        Some("hello")
+    );
     assert_eq!(sheet.get_cell("B1").unwrap().as_number(), Some(42.0));
 }
 

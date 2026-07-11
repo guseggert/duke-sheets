@@ -6,11 +6,11 @@ use pyo3::exceptions::PyIndexError;
 use pyo3::prelude::*;
 
 use crate::{
-    image_sizing_to_python, to_py_err, PyAutoFilter, PyCalculationImage, PyChart, PyColor,
-    PyComment, PyCommentEntry, PyConditionalFormatRule, PyDataValidation, PyFormControl, PyFormulaCell,
-    PyFreezePanes, PyHyperlink, PyHyperlinkEntry, PyMergeSpan, PyMergedRegion, PyPageBreak,
-    PyPageSetup, PyRow, PyRowCell, PySelection, PySheetProtection, PySpillSource, PySplitPanes,
-    PyStyle, PyTable, PyChartEx, PyEmbeddedImage, PyWorksheet,
+    image_sizing_to_python, to_py_err, PyAutoFilter, PyCalculationImage, PyChart, PyChartEx,
+    PyColor, PyComment, PyCommentEntry, PyConditionalFormatRule, PyDataValidation, PyEmbeddedImage,
+    PyFormControl, PyFormulaCell, PyFreezePanes, PyHyperlink, PyHyperlinkEntry, PyMergeSpan,
+    PyMergedRegion, PyPageBreak, PyPageSetup, PyProtectedRange, PyRow, PyRowCell, PySelection,
+    PySheetProtection, PySpillSource, PySplitPanes, PyStyle, PyTable, PyWorksheet,
 };
 
 const ROW_ITER_BATCH_SIZE: u32 = 1000;
@@ -771,6 +771,19 @@ impl PyWorksheet {
             .worksheet(self.sheet_index)
             .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
         Ok(ws.protection().map(PySheetProtection::from))
+    }
+
+    #[getter]
+    fn protected_ranges(&self) -> PyResult<Vec<PyProtectedRange>> {
+        let wb = self.workbook.read().map_err(to_py_err)?;
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
+        Ok(ws
+            .protected_ranges()
+            .iter()
+            .map(PyProtectedRange::from)
+            .collect())
     }
 
     #[getter]

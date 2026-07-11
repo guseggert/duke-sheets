@@ -110,6 +110,7 @@ pub(crate) fn write_worksheet<W: Write + Seek>(
     write_hyperlinks(&mut rw, ws, &mut sheet_rels, &mut rid_counter)?;
     write_auto_filter(&mut rw, ws, dxf_mapping.color_filter_dxf_id())?;
     write_sheet_protection(&mut rw, ws)?;
+    write_protected_ranges(&mut rw, ws)?;
     write_page_setup(&mut rw, ws)?;
     write_print_options(&mut rw, ws)?;
     write_margins(&mut rw, ws)?;
@@ -1018,6 +1019,58 @@ fn write_sheet_protection<W: Write>(
     rw.write_record(records::BRT_SHEET_PROTECTION, &payload)
 }
 
+fn write_protected_ranges<W: Write>(
+    rw: &mut RecordWriter<W>,
+    ws: &Worksheet,
+) -> std::io::Result<()> {
+    for protected_range in ws.protected_ranges() {
+        if protected_range.ranges.is_empty()
+            || protected_range.ranges.len() >= 8192
+            || protected_range.name.is_empty()
+        {
+            continue;
+        }
+
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&protected_range.password_hash.unwrap_or(0).to_le_bytes());
+        payload.extend_from_slice(&(protected_range.ranges.len() as u32).to_le_bytes());
+        for range in &protected_range.ranges {
+            payload.extend_from_slice(&range.start.row.to_le_bytes());
+            payload.extend_from_slice(&range.end.row.to_le_bytes());
+            payload.extend_from_slice(&(range.start.col as u32).to_le_bytes());
+            payload.extend_from_slice(&(range.end.col as u32).to_le_bytes());
+        }
+        payload.extend_from_slice(&encode_wide_str(&protected_range.name));
+
+        let descriptor = protected_range
+            .security_descriptor
+            .as_deref()
+            .and_then(decode_hex_security_descriptor);
+        if let Some(bytes) = descriptor {
+            payload.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+            payload.extend_from_slice(&bytes);
+        } else {
+            payload.extend_from_slice(&0u32.to_le_bytes());
+        }
+
+        rw.write_record(records::BRT_RANGE_PROTECTION, &payload)?;
+    }
+    Ok(())
+}
+
+fn decode_hex_security_descriptor(value: &str) -> Option<Vec<u8>> {
+    let hex = value.strip_prefix("hex:")?;
+    if hex.len() % 2 != 0 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(hex.len() / 2);
+    for chunk in hex.as_bytes().chunks_exact(2) {
+        let s = std::str::from_utf8(chunk).ok()?;
+        out.push(u8::from_str_radix(s, 16).ok()?);
+    }
+    Some(out)
+}
+
 fn write_page_breaks<W: Write>(rw: &mut RecordWriter<W>, ws: &Worksheet) -> std::io::Result<()> {
     let row_breaks = ws.row_breaks();
     if !row_breaks.is_empty() {
@@ -1261,7 +1314,9 @@ fn write_dv_parsed_formula(payload: &mut Vec<u8>, text: Option<&str>, ctx: &Comp
             };
             match duke_sheets_formula::parse_formula(&normalized) {
                 Ok(expr) if !dv_formula_allowed(&expr) => {
-                    log::warn!("DV formula '{t}' uses tokens forbidden in DVParsedFormula; dropping");
+                    log::warn!(
+                        "DV formula '{t}' uses tokens forbidden in DVParsedFormula; dropping"
+                    );
                     None
                 }
                 _ => match compiler::compile_formula(t, ctx) {

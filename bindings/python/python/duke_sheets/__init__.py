@@ -37,8 +37,11 @@ from duke_sheets._native import (
     FormControl,
     GradientStop,
     NumberFormat,
+    ProtectedRange,
+    SheetProtection,
     Style,
     Workbook,
+    WorkbookProtection,
     Worksheet,
 )
 from duke_sheets.types import (
@@ -51,7 +54,10 @@ from duke_sheets.types import (
     FontStyleInput,
     GradientStopInput,
     NumberFormatInput,
+    ProtectedRangeInput,
+    SheetProtectionInput,
     StyleInput,
+    WorkbookProtectionInput,
 )
 
 __all__ = [
@@ -77,9 +83,15 @@ __all__ = [
     "GradientStopInput",
     "NumberFormat",
     "NumberFormatInput",
+    "ProtectedRange",
+    "ProtectedRangeInput",
+    "SheetProtection",
+    "SheetProtectionInput",
     "Style",
     "StyleInput",
     "Workbook",
+    "WorkbookProtection",
+    "WorkbookProtectionInput",
     "Worksheet",
 ]
 

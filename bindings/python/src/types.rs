@@ -534,6 +534,17 @@ fn dict_get_u32(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<u32>> {
         .transpose()
 }
 
+fn dict_get_u32_alias(
+    dict: &Bound<'_, PyDict>,
+    primary: &str,
+    alias: &str,
+) -> PyResult<Option<u32>> {
+    match dict_get_u32(dict, primary)? {
+        Some(value) => Ok(Some(value)),
+        None => dict_get_u32(dict, alias),
+    }
+}
+
 fn dict_get_i32(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<i32>> {
     dict_get(dict, key)?
         .map(|value| value.extract::<i32>())
@@ -545,7 +556,8 @@ fn u32_to_u8(value: u32, field: &str) -> PyResult<u8> {
 }
 
 fn i32_to_i8(value: i32, field: &str) -> PyResult<i8> {
-    i8::try_from(value).map_err(|_| style_input_error(format!("{field} must be between -128 and 127")))
+    i8::try_from(value)
+        .map_err(|_| style_input_error(format!("{field} must be between -128 and 127")))
 }
 
 fn parse_color_hex(hex: &str) -> PyResult<CoreColor> {
@@ -588,9 +600,18 @@ fn color_parts_to_core(
                 parse_rgb_hex(hex)
             } else {
                 Ok(CoreColor::Rgb {
-                    r: u32_to_u8(r.ok_or_else(|| style_input_error("rgb color requires r"))?, "r")?,
-                    g: u32_to_u8(g.ok_or_else(|| style_input_error("rgb color requires g"))?, "g")?,
-                    b: u32_to_u8(b.ok_or_else(|| style_input_error("rgb color requires b"))?, "b")?,
+                    r: u32_to_u8(
+                        r.ok_or_else(|| style_input_error("rgb color requires r"))?,
+                        "r",
+                    )?,
+                    g: u32_to_u8(
+                        g.ok_or_else(|| style_input_error("rgb color requires g"))?,
+                        "g",
+                    )?,
+                    b: u32_to_u8(
+                        b.ok_or_else(|| style_input_error("rgb color requires b"))?,
+                        "b",
+                    )?,
                 })
             }
         }
@@ -600,9 +621,18 @@ fn color_parts_to_core(
             } else {
                 Ok(CoreColor::Argb {
                     a: u32_to_u8(a.unwrap_or(255), "a")?,
-                    r: u32_to_u8(r.ok_or_else(|| style_input_error("argb color requires r"))?, "r")?,
-                    g: u32_to_u8(g.ok_or_else(|| style_input_error("argb color requires g"))?, "g")?,
-                    b: u32_to_u8(b.ok_or_else(|| style_input_error("argb color requires b"))?, "b")?,
+                    r: u32_to_u8(
+                        r.ok_or_else(|| style_input_error("argb color requires r"))?,
+                        "r",
+                    )?,
+                    g: u32_to_u8(
+                        g.ok_or_else(|| style_input_error("argb color requires g"))?,
+                        "g",
+                    )?,
+                    b: u32_to_u8(
+                        b.ok_or_else(|| style_input_error("argb color requires b"))?,
+                        "b",
+                    )?,
                 })
             }
         }
@@ -614,7 +644,8 @@ fn color_parts_to_core(
             tint: i32_to_i8(tint.unwrap_or(0), "tint")?,
         }),
         Some("indexed") => Ok(CoreColor::Indexed(u32_to_u8(
-            palette_index.ok_or_else(|| style_input_error("indexed color requires palette_index"))?,
+            palette_index
+                .ok_or_else(|| style_input_error("indexed color requires palette_index"))?,
             "palette_index",
         )?)),
         Some(other) => Err(style_input_error(format!("unknown color_type {other:?}"))),
@@ -623,9 +654,18 @@ fn color_parts_to_core(
                 parse_color_hex(hex)
             } else if r.is_some() || g.is_some() || b.is_some() {
                 Ok(CoreColor::Rgb {
-                    r: u32_to_u8(r.ok_or_else(|| style_input_error("rgb color requires r"))?, "r")?,
-                    g: u32_to_u8(g.ok_or_else(|| style_input_error("rgb color requires g"))?, "g")?,
-                    b: u32_to_u8(b.ok_or_else(|| style_input_error("rgb color requires b"))?, "b")?,
+                    r: u32_to_u8(
+                        r.ok_or_else(|| style_input_error("rgb color requires r"))?,
+                        "r",
+                    )?,
+                    g: u32_to_u8(
+                        g.ok_or_else(|| style_input_error("rgb color requires g"))?,
+                        "g",
+                    )?,
+                    b: u32_to_u8(
+                        b.ok_or_else(|| style_input_error("rgb color requires b"))?,
+                        "b",
+                    )?,
                 })
             } else if let Some(theme_index) = theme_index {
                 Ok(CoreColor::Theme {
@@ -633,9 +673,14 @@ fn color_parts_to_core(
                     tint: i32_to_i8(tint.unwrap_or(0), "tint")?,
                 })
             } else if let Some(palette_index) = palette_index {
-                Ok(CoreColor::Indexed(u32_to_u8(palette_index, "palette_index")?))
+                Ok(CoreColor::Indexed(u32_to_u8(
+                    palette_index,
+                    "palette_index",
+                )?))
             } else {
-                Err(style_input_error("color requires color_type, hex, rgb, theme_index, or palette_index"))
+                Err(style_input_error(
+                    "color requires color_type, hex, rgb, theme_index, or palette_index",
+                ))
             }
         }
     }
@@ -694,7 +739,9 @@ fn parse_font_vertical_align_input(value: &str) -> PyResult<FontVerticalAlign> {
         "baseline" => Ok(FontVerticalAlign::Baseline),
         "superscript" => Ok(FontVerticalAlign::Superscript),
         "subscript" => Ok(FontVerticalAlign::Subscript),
-        other => Err(style_input_error(format!("unknown vertical_align {other:?}"))),
+        other => Err(style_input_error(format!(
+            "unknown vertical_align {other:?}"
+        ))),
     }
 }
 
@@ -810,7 +857,9 @@ fn parse_gradient_type_input(value: &str) -> PyResult<GradientType> {
     match value {
         "linear" => Ok(GradientType::Linear),
         "path" => Ok(GradientType::Path),
-        other => Err(style_input_error(format!("unknown gradient_type {other:?}"))),
+        other => Err(style_input_error(format!(
+            "unknown gradient_type {other:?}"
+        ))),
     }
 }
 
@@ -842,7 +891,9 @@ fn py_fill_to_core(fill: &PyFillStyle) -> PyResult<CoreFillStyle> {
             )?,
         }),
         "gradient" => Ok(CoreFillStyle::Gradient {
-            gradient_type: parse_gradient_type_input(fill.gradient_type.as_deref().unwrap_or("linear"))?,
+            gradient_type: parse_gradient_type_input(
+                fill.gradient_type.as_deref().unwrap_or("linear"),
+            )?,
             angle: fill.angle.unwrap_or(0.0),
             stops: fill
                 .stops
@@ -907,7 +958,9 @@ fn fill_dict_to_core(dict: &Bound<'_, PyDict>) -> PyResult<CoreFillStyle> {
                 .collect::<PyResult<Vec<_>>>()?;
             Ok(CoreFillStyle::Gradient {
                 gradient_type: parse_gradient_type_input(
-                    dict_get_string(dict, "gradient_type")?.as_deref().unwrap_or("linear"),
+                    dict_get_string(dict, "gradient_type")?
+                        .as_deref()
+                        .unwrap_or("linear"),
                 )?,
                 angle: dict_get_f64(dict, "angle")?.unwrap_or(0.0),
                 stops,
@@ -957,7 +1010,9 @@ fn parse_diagonal_direction_input(value: &str) -> PyResult<DiagonalDirection> {
         "down" => Ok(DiagonalDirection::Down),
         "up" => Ok(DiagonalDirection::Up),
         "both" => Ok(DiagonalDirection::Both),
-        other => Err(style_input_error(format!("unknown diagonal_direction {other:?}"))),
+        other => Err(style_input_error(format!(
+            "unknown diagonal_direction {other:?}"
+        ))),
     }
 }
 
@@ -966,7 +1021,10 @@ fn py_border_edge_to_core(edge: &PyBorderEdge) -> PyResult<Option<CoreBorderEdge
     if style == CoreBorderLineStyle::None {
         Ok(None)
     } else {
-        Ok(Some(CoreBorderEdge::new(style, py_color_to_core(&edge.color)?)))
+        Ok(Some(CoreBorderEdge::new(
+            style,
+            py_color_to_core(&edge.color)?,
+        )))
     }
 }
 
@@ -1088,7 +1146,9 @@ fn parse_horizontal_alignment_input(value: &str) -> PyResult<HorizontalAlignment
         "justify" => Ok(HorizontalAlignment::Justify),
         "centerContinuous" => Ok(HorizontalAlignment::CenterContinuous),
         "distributed" => Ok(HorizontalAlignment::Distributed),
-        other => Err(style_input_error(format!("unknown horizontal alignment {other:?}"))),
+        other => Err(style_input_error(format!(
+            "unknown horizontal alignment {other:?}"
+        ))),
     }
 }
 
@@ -1099,7 +1159,9 @@ fn parse_vertical_alignment_input(value: &str) -> PyResult<VerticalAlignment> {
         "bottom" => Ok(VerticalAlignment::Bottom),
         "justify" => Ok(VerticalAlignment::Justify),
         "distributed" => Ok(VerticalAlignment::Distributed),
-        other => Err(style_input_error(format!("unknown vertical alignment {other:?}"))),
+        other => Err(style_input_error(format!(
+            "unknown vertical alignment {other:?}"
+        ))),
     }
 }
 
@@ -1108,7 +1170,9 @@ fn parse_reading_order_input(value: &str) -> PyResult<ReadingOrder> {
         "contextDependent" => Ok(ReadingOrder::ContextDependent),
         "leftToRight" => Ok(ReadingOrder::LeftToRight),
         "rightToLeft" => Ok(ReadingOrder::RightToLeft),
-        other => Err(style_input_error(format!("unknown reading_order {other:?}"))),
+        other => Err(style_input_error(format!(
+            "unknown reading_order {other:?}"
+        ))),
     }
 }
 
@@ -1152,7 +1216,9 @@ fn apply_alignment_dict(dict: &Bound<'_, PyDict>, alignment: &mut CoreAlignment)
     }
     if let Some(rotation) = dict_get_i32(dict, "rotation")? {
         if !((-90..=90).contains(&rotation) || rotation == 255) {
-            return Err(style_input_error("rotation must be between -90 and 90, or 255"));
+            return Err(style_input_error(
+                "rotation must be between -90 and 90, or 255",
+            ));
         }
         alignment.rotation = rotation as i16;
     }
@@ -1184,12 +1250,12 @@ fn apply_alignment_input(input: &Bound<'_, PyAny>, alignment: &mut CoreAlignment
 fn py_number_format_to_core(number_format: &PyNumberFormat) -> PyResult<CoreNumberFormat> {
     match number_format.format_type.as_str() {
         "general" => Ok(CoreNumberFormat::General),
-        "builtin" => Ok(CoreNumberFormat::BuiltIn(
-            number_format
-                .id
-                .ok_or_else(|| style_input_error("builtin number format requires id"))?,
+        "builtin" => Ok(CoreNumberFormat::BuiltIn(number_format.id.ok_or_else(
+            || style_input_error("builtin number format requires id"),
+        )?)),
+        "custom" => Ok(CoreNumberFormat::Custom(
+            number_format.format_string.clone(),
         )),
-        "custom" => Ok(CoreNumberFormat::Custom(number_format.format_string.clone())),
         other => Err(style_input_error(format!("unknown format_type {other:?}"))),
     }
 }
@@ -1206,13 +1272,15 @@ fn number_format_dict_to_core(dict: &Bound<'_, PyDict>) -> PyResult<CoreNumberFo
                 .ok_or_else(|| style_input_error("custom number format requires format_string"))?,
         )),
         Some(other) => Err(style_input_error(format!("unknown format_type {other:?}"))),
-        None if dict_get_u32(dict, "id")?.is_some() => {
-            Ok(CoreNumberFormat::BuiltIn(dict_get_u32(dict, "id")?.unwrap()))
-        }
+        None if dict_get_u32(dict, "id")?.is_some() => Ok(CoreNumberFormat::BuiltIn(
+            dict_get_u32(dict, "id")?.unwrap(),
+        )),
         None if dict_get_string(dict, "format_string")?.is_some() => Ok(CoreNumberFormat::Custom(
             dict_get_string(dict, "format_string")?.unwrap(),
         )),
-        None => Err(style_input_error("number_format requires format_type, id, or format_string")),
+        None => Err(style_input_error(
+            "number_format requires format_type, id, or format_string",
+        )),
     }
 }
 
@@ -1430,6 +1498,8 @@ pub struct PySheetProtection {
     #[pyo3(get)]
     pub protected: bool,
     #[pyo3(get)]
+    pub password_hash: Option<u32>,
+    #[pyo3(get)]
     pub select_locked_cells: bool,
     #[pyo3(get)]
     pub select_unlocked_cells: bool,
@@ -1461,6 +1531,7 @@ impl From<&core::SheetProtection> for PySheetProtection {
     fn from(p: &core::SheetProtection) -> Self {
         Self {
             protected: p.protected,
+            password_hash: p.password_hash.map(|h| h as u32),
             select_locked_cells: p.select_locked_cells,
             select_unlocked_cells: p.select_unlocked_cells,
             format_cells: p.format_cells,
@@ -1476,6 +1547,201 @@ impl From<&core::SheetProtection> for PySheetProtection {
             pivot_tables: p.pivot_tables,
         }
     }
+}
+
+#[pyclass(name = "WorkbookProtection")]
+#[derive(Clone)]
+pub struct PyWorkbookProtection {
+    #[pyo3(get)]
+    pub structure: bool,
+    #[pyo3(get)]
+    pub windows: bool,
+    #[pyo3(get)]
+    pub password_hash: Option<u32>,
+}
+
+impl From<&core::WorkbookProtection> for PyWorkbookProtection {
+    fn from(p: &core::WorkbookProtection) -> Self {
+        Self {
+            structure: p.structure,
+            windows: p.windows,
+            password_hash: p.password_hash.map(|h| h as u32),
+        }
+    }
+}
+
+#[pyclass(name = "ProtectedRange")]
+#[derive(Clone)]
+pub struct PyProtectedRange {
+    #[pyo3(get)]
+    pub name: String,
+    #[pyo3(get)]
+    pub ranges: Vec<String>,
+    #[pyo3(get)]
+    pub password_hash: Option<u32>,
+    #[pyo3(get)]
+    pub security_descriptor: Option<String>,
+}
+
+impl From<&core::ProtectedRange> for PyProtectedRange {
+    fn from(p: &core::ProtectedRange) -> Self {
+        Self {
+            name: p.name.clone(),
+            ranges: p.ranges.iter().map(ToString::to_string).collect(),
+            password_hash: p.password_hash.map(|h| h as u32),
+            security_descriptor: p.security_descriptor.clone(),
+        }
+    }
+}
+
+fn protection_password_hash(
+    password: Option<String>,
+    password_hash: Option<u32>,
+) -> PyResult<Option<u16>> {
+    match (password, password_hash) {
+        (Some(_), Some(_)) => Err(PyValueError::new_err(
+            "Specify either password or password_hash, not both",
+        )),
+        (Some(password), None) => Ok(Some(core::hash_legacy_protection_password(&password))),
+        (None, Some(hash)) => u16::try_from(hash)
+            .map(Some)
+            .map_err(|_| PyValueError::new_err("password_hash must be between 0 and 65535")),
+        (None, None) => Ok(None),
+    }
+}
+
+fn py_sheet_protection_to_core(p: &PySheetProtection) -> core::SheetProtection {
+    core::SheetProtection {
+        protected: p.protected,
+        password_hash: p.password_hash.map(|h| h as u16),
+        select_locked_cells: p.select_locked_cells,
+        select_unlocked_cells: p.select_unlocked_cells,
+        format_cells: p.format_cells,
+        format_columns: p.format_columns,
+        format_rows: p.format_rows,
+        insert_columns: p.insert_columns,
+        insert_rows: p.insert_rows,
+        insert_hyperlinks: p.insert_hyperlinks,
+        delete_columns: p.delete_columns,
+        delete_rows: p.delete_rows,
+        sort: p.sort,
+        auto_filter: p.auto_filter,
+        pivot_tables: p.pivot_tables,
+    }
+}
+
+pub(crate) fn sheet_protection_input_to_core(
+    input: &Bound<'_, PyAny>,
+) -> PyResult<Option<core::SheetProtection>> {
+    if input.is_none() {
+        return Ok(None);
+    }
+    if let Ok(py_protection) = input.extract::<PyRef<PySheetProtection>>() {
+        return Ok(Some(py_sheet_protection_to_core(&py_protection)));
+    }
+
+    let dict = input.downcast::<PyDict>().map_err(|_| {
+        PyValueError::new_err("protection must be a dict, SheetProtection, or None")
+    })?;
+    Ok(Some(core::SheetProtection {
+        protected: dict_get_bool(dict, "protected")?.unwrap_or(true),
+        password_hash: protection_password_hash(
+            dict_get_string(dict, "password")?,
+            dict_get_u32_alias(dict, "password_hash", "passwordHash")?,
+        )?,
+        select_locked_cells: dict_get_bool(dict, "select_locked_cells")?.unwrap_or(true),
+        select_unlocked_cells: dict_get_bool(dict, "select_unlocked_cells")?.unwrap_or(true),
+        format_cells: dict_get_bool(dict, "format_cells")?.unwrap_or(false),
+        format_columns: dict_get_bool(dict, "format_columns")?.unwrap_or(false),
+        format_rows: dict_get_bool(dict, "format_rows")?.unwrap_or(false),
+        insert_columns: dict_get_bool(dict, "insert_columns")?.unwrap_or(false),
+        insert_rows: dict_get_bool(dict, "insert_rows")?.unwrap_or(false),
+        insert_hyperlinks: dict_get_bool(dict, "insert_hyperlinks")?.unwrap_or(false),
+        delete_columns: dict_get_bool(dict, "delete_columns")?.unwrap_or(false),
+        delete_rows: dict_get_bool(dict, "delete_rows")?.unwrap_or(false),
+        sort: dict_get_bool(dict, "sort")?.unwrap_or(false),
+        auto_filter: dict_get_bool(dict, "auto_filter")?.unwrap_or(false),
+        pivot_tables: dict_get_bool(dict, "pivot_tables")?.unwrap_or(false),
+    }))
+}
+
+pub(crate) fn workbook_protection_input_to_core(
+    input: &Bound<'_, PyAny>,
+) -> PyResult<Option<core::WorkbookProtection>> {
+    if input.is_none() {
+        return Ok(None);
+    }
+    if let Ok(py_protection) = input.extract::<PyRef<PyWorkbookProtection>>() {
+        return Ok(Some(core::WorkbookProtection {
+            structure: py_protection.structure,
+            windows: py_protection.windows,
+            password_hash: py_protection.password_hash.map(|h| h as u16),
+        }));
+    }
+
+    let dict = input.downcast::<PyDict>().map_err(|_| {
+        PyValueError::new_err("workbook protection must be a dict, WorkbookProtection, or None")
+    })?;
+    Ok(Some(core::WorkbookProtection {
+        structure: dict_get_bool(dict, "structure")?.unwrap_or(true),
+        windows: dict_get_bool(dict, "windows")?.unwrap_or(false),
+        password_hash: protection_password_hash(
+            dict_get_string(dict, "password")?,
+            dict_get_u32_alias(dict, "password_hash", "passwordHash")?,
+        )?,
+    }))
+}
+
+fn protected_range_input_to_core(input: &Bound<'_, PyAny>) -> PyResult<core::ProtectedRange> {
+    if let Ok(py_range) = input.extract::<PyRef<PyProtectedRange>>() {
+        let mut ranges = Vec::with_capacity(py_range.ranges.len());
+        for range in &py_range.ranges {
+            ranges.push(core::CellRange::parse(range).map_err(|e| {
+                PyValueError::new_err(format!("Invalid protected range '{}': {}", range, e))
+            })?);
+        }
+        return Ok(core::ProtectedRange {
+            name: py_range.name.clone(),
+            ranges,
+            password_hash: py_range.password_hash.map(|h| h as u16),
+            security_descriptor: py_range.security_descriptor.clone(),
+        });
+    }
+
+    let dict = input
+        .downcast::<PyDict>()
+        .map_err(|_| PyValueError::new_err("protected range must be a dict or ProtectedRange"))?;
+    let name = dict_get_string(dict, "name")?
+        .ok_or_else(|| PyValueError::new_err("protected range requires name"))?;
+    let ranges_any = dict_get(dict, "ranges")?
+        .ok_or_else(|| PyValueError::new_err("protected range requires ranges"))?;
+    let range_strings = ranges_any.extract::<Vec<String>>()?;
+    let mut ranges = Vec::with_capacity(range_strings.len());
+    for range in range_strings {
+        ranges.push(core::CellRange::parse(&range).map_err(|e| {
+            PyValueError::new_err(format!("Invalid protected range '{}': {}", range, e))
+        })?);
+    }
+    Ok(core::ProtectedRange {
+        name,
+        ranges,
+        password_hash: protection_password_hash(
+            dict_get_string(dict, "password")?,
+            dict_get_u32_alias(dict, "password_hash", "passwordHash")?,
+        )?,
+        security_descriptor: dict_get_string(dict, "security_descriptor")?,
+    })
+}
+
+pub(crate) fn protected_ranges_input_to_core(
+    input: &Bound<'_, PyAny>,
+) -> PyResult<Vec<core::ProtectedRange>> {
+    let list = input
+        .downcast::<PyList>()
+        .map_err(|_| PyValueError::new_err("protected ranges must be a list"))?;
+    list.iter()
+        .map(|item| protected_range_input_to_core(&item))
+        .collect()
 }
 
 #[pyclass(name = "PageSetup")]
@@ -2609,7 +2875,10 @@ impl From<&chart::ChartShapeProperties> for PyChartShapeProperties {
             solid_fill_hex: sp.solid_fill.as_ref().map(|c| c.hex.clone()),
             no_fill: sp.no_fill,
             line_width: sp.line.as_ref().and_then(|l| l.width),
-            line_color_hex: sp.line.as_ref().and_then(|l| l.solid_fill.as_ref().map(|c| c.hex.clone())),
+            line_color_hex: sp
+                .line
+                .as_ref()
+                .and_then(|l| l.solid_fill.as_ref().map(|c| c.hex.clone())),
             line_no_fill: sp.line.as_ref().map(|l| l.no_fill).unwrap_or(false),
             line_dash_style: sp.line.as_ref().and_then(|l| l.dash_style.clone()),
         }
@@ -2659,7 +2928,10 @@ impl From<&duke_sheets::DataSeries> for PyDataSeries {
             smooth: s.smooth,
             explosion: s.explosion,
             invert_if_negative: s.invert_if_negative,
-            shape_properties: s.shape_properties.as_ref().map(PyChartShapeProperties::from),
+            shape_properties: s
+                .shape_properties
+                .as_ref()
+                .map(PyChartShapeProperties::from),
         }
     }
 }
@@ -2723,37 +2995,61 @@ impl From<&duke_sheets::Axis> for PyAxis {
             number_format: a.number_format.as_ref().map(PyChartNumberFormat::from),
             major_gridlines: a.major_gridlines,
             minor_gridlines: a.minor_gridlines,
-            major_gridlines_shape_properties: a.major_gridlines_shape_properties.as_ref().map(PyChartShapeProperties::from),
-            minor_gridlines_shape_properties: a.minor_gridlines_shape_properties.as_ref().map(PyChartShapeProperties::from),
-            major_tick_mark: a.major_tick_mark.as_ref().map(|t| match t {
-                chart::TickMark::Cross => "cross",
-                chart::TickMark::Inside => "inside",
-                chart::TickMark::None => "none",
-                chart::TickMark::Outside => "outside",
-            }.into()),
-            minor_tick_mark: a.minor_tick_mark.as_ref().map(|t| match t {
-                chart::TickMark::Cross => "cross",
-                chart::TickMark::Inside => "inside",
-                chart::TickMark::None => "none",
-                chart::TickMark::Outside => "outside",
-            }.into()),
-            label_position: a.label_position.as_ref().map(|p| match p {
-                chart::TickLabelPosition::High => "high",
-                chart::TickLabelPosition::Low => "low",
-                chart::TickLabelPosition::NextTo => "nextTo",
-                chart::TickLabelPosition::None => "none",
-            }.into()),
+            major_gridlines_shape_properties: a
+                .major_gridlines_shape_properties
+                .as_ref()
+                .map(PyChartShapeProperties::from),
+            minor_gridlines_shape_properties: a
+                .minor_gridlines_shape_properties
+                .as_ref()
+                .map(PyChartShapeProperties::from),
+            major_tick_mark: a.major_tick_mark.as_ref().map(|t| {
+                match t {
+                    chart::TickMark::Cross => "cross",
+                    chart::TickMark::Inside => "inside",
+                    chart::TickMark::None => "none",
+                    chart::TickMark::Outside => "outside",
+                }
+                .into()
+            }),
+            minor_tick_mark: a.minor_tick_mark.as_ref().map(|t| {
+                match t {
+                    chart::TickMark::Cross => "cross",
+                    chart::TickMark::Inside => "inside",
+                    chart::TickMark::None => "none",
+                    chart::TickMark::Outside => "outside",
+                }
+                .into()
+            }),
+            label_position: a.label_position.as_ref().map(|p| {
+                match p {
+                    chart::TickLabelPosition::High => "high",
+                    chart::TickLabelPosition::Low => "low",
+                    chart::TickLabelPosition::NextTo => "nextTo",
+                    chart::TickLabelPosition::None => "none",
+                }
+                .into()
+            }),
             delete: a.delete,
-            crosses: a.crosses.as_ref().map(|c| match c {
-                chart::AxisCrosses::AutoZero => "autoZero",
-                chart::AxisCrosses::Min => "min",
-                chart::AxisCrosses::Max => "max",
-            }.into()),
-            cross_between: a.cross_between.as_ref().map(|c| match c {
-                chart::CrossBetween::Between => "between",
-                chart::CrossBetween::MidCat => "midCat",
-            }.into()),
-            shape_properties: a.shape_properties.as_ref().map(PyChartShapeProperties::from),
+            crosses: a.crosses.as_ref().map(|c| {
+                match c {
+                    chart::AxisCrosses::AutoZero => "autoZero",
+                    chart::AxisCrosses::Min => "min",
+                    chart::AxisCrosses::Max => "max",
+                }
+                .into()
+            }),
+            cross_between: a.cross_between.as_ref().map(|c| {
+                match c {
+                    chart::CrossBetween::Between => "between",
+                    chart::CrossBetween::MidCat => "midCat",
+                }
+                .into()
+            }),
+            shape_properties: a
+                .shape_properties
+                .as_ref()
+                .map(PyChartShapeProperties::from),
         }
     }
 }
@@ -2850,7 +3146,6 @@ impl From<&chart::ChartTypeGroup> for PyChartTypeGroup {
         }
     }
 }
-
 
 #[pyclass(name = "ChartAxis")]
 #[derive(Clone)]
@@ -2961,14 +3256,20 @@ impl From<&duke_sheets::Chart> for PyChart {
             data_labels: c.data_labels.as_ref().map(PyDataLabels::from),
             view_3d: c.view_3d.as_ref().map(PyView3D::from),
             data_table: c.data_table.as_ref().map(PyChartDataTable::from),
-            display_blanks_as: c.display_blanks_as.as_ref().map(|d| match d {
-                chart::DisplayBlanksAs::Gap => "gap",
-                chart::DisplayBlanksAs::Span => "span",
-                chart::DisplayBlanksAs::Zero => "zero",
-            }.into()),
+            display_blanks_as: c.display_blanks_as.as_ref().map(|d| {
+                match d {
+                    chart::DisplayBlanksAs::Gap => "gap",
+                    chart::DisplayBlanksAs::Span => "span",
+                    chart::DisplayBlanksAs::Zero => "zero",
+                }
+                .into()
+            }),
             plot_visible_only: c.plot_visible_only,
             layout: c.layout.as_ref().map(PyLayout::from),
-            shape_properties: c.shape_properties.as_ref().map(PyChartShapeProperties::from),
+            shape_properties: c
+                .shape_properties
+                .as_ref()
+                .map(PyChartShapeProperties::from),
             is_3d: c.is_3d,
             vary_colors: c.vary_colors,
             gap_width: c.gap_width,
@@ -3045,17 +3346,20 @@ impl From<&chart::DataLabels> for PyDataLabels {
             show_percent: d.show_percent,
             show_bubble_size: d.show_bubble_size,
             separator: d.separator.clone(),
-            position: d.position.as_ref().map(|p| match p {
-                chart::DataLabelPosition::BestFit => "bestFit",
-                chart::DataLabelPosition::Bottom => "bottom",
-                chart::DataLabelPosition::Center => "center",
-                chart::DataLabelPosition::InsideBase => "insideBase",
-                chart::DataLabelPosition::InsideEnd => "insideEnd",
-                chart::DataLabelPosition::Left => "left",
-                chart::DataLabelPosition::OutsideEnd => "outsideEnd",
-                chart::DataLabelPosition::Right => "right",
-                chart::DataLabelPosition::Top => "top",
-            }.into()),
+            position: d.position.as_ref().map(|p| {
+                match p {
+                    chart::DataLabelPosition::BestFit => "bestFit",
+                    chart::DataLabelPosition::Bottom => "bottom",
+                    chart::DataLabelPosition::Center => "center",
+                    chart::DataLabelPosition::InsideBase => "insideBase",
+                    chart::DataLabelPosition::InsideEnd => "insideEnd",
+                    chart::DataLabelPosition::Left => "left",
+                    chart::DataLabelPosition::OutsideEnd => "outsideEnd",
+                    chart::DataLabelPosition::Right => "right",
+                    chart::DataLabelPosition::Top => "top",
+                }
+                .into()
+            }),
             number_format: d.number_format.as_ref().map(PyChartNumberFormat::from),
             show_leader_lines: d.show_leader_lines,
         }
@@ -3095,7 +3399,8 @@ impl From<&chart::Trendline> for PyTrendline {
                 chart::TrendlineType::MovingAverage => "movingAverage",
                 chart::TrendlineType::Polynomial => "polynomial",
                 chart::TrendlineType::Power => "power",
-            }.into(),
+            }
+            .into(),
             name: t.name.clone(),
             order: t.order,
             period: t.period,
@@ -3129,19 +3434,22 @@ impl From<&chart::ErrorBars> for PyErrorBars {
             direction: match e.direction {
                 chart::ErrorBarDirection::X => "x",
                 chart::ErrorBarDirection::Y => "y",
-            }.into(),
+            }
+            .into(),
             bar_type: match e.bar_type {
                 chart::ErrorBarType::Both => "both",
                 chart::ErrorBarType::Minus => "minus",
                 chart::ErrorBarType::Plus => "plus",
-            }.into(),
+            }
+            .into(),
             value_type: match e.value_type {
                 chart::ErrorValueType::Custom => "custom",
                 chart::ErrorValueType::FixedValue => "fixedValue",
                 chart::ErrorValueType::Percentage => "percentage",
                 chart::ErrorValueType::StandardDeviation => "standardDeviation",
                 chart::ErrorValueType::StandardError => "standardError",
-            }.into(),
+            }
+            .into(),
             value: e.value,
             no_end_cap: e.no_end_cap,
         }
@@ -3160,20 +3468,23 @@ pub struct PyMarker {
 impl From<&chart::Marker> for PyMarker {
     fn from(m: &chart::Marker) -> Self {
         Self {
-            symbol: m.symbol.as_ref().map(|s| match s {
-                chart::MarkerSymbol::Circle => "circle",
-                chart::MarkerSymbol::Dash => "dash",
-                chart::MarkerSymbol::Diamond => "diamond",
-                chart::MarkerSymbol::Dot => "dot",
-                chart::MarkerSymbol::None => "none",
-                chart::MarkerSymbol::Picture => "picture",
-                chart::MarkerSymbol::Plus => "plus",
-                chart::MarkerSymbol::Square => "square",
-                chart::MarkerSymbol::Star => "star",
-                chart::MarkerSymbol::Triangle => "triangle",
-                chart::MarkerSymbol::X => "x",
-                chart::MarkerSymbol::Auto => "auto",
-            }.into()),
+            symbol: m.symbol.as_ref().map(|s| {
+                match s {
+                    chart::MarkerSymbol::Circle => "circle",
+                    chart::MarkerSymbol::Dash => "dash",
+                    chart::MarkerSymbol::Diamond => "diamond",
+                    chart::MarkerSymbol::Dot => "dot",
+                    chart::MarkerSymbol::None => "none",
+                    chart::MarkerSymbol::Picture => "picture",
+                    chart::MarkerSymbol::Plus => "plus",
+                    chart::MarkerSymbol::Square => "square",
+                    chart::MarkerSymbol::Star => "star",
+                    chart::MarkerSymbol::Triangle => "triangle",
+                    chart::MarkerSymbol::X => "x",
+                    chart::MarkerSymbol::Auto => "auto",
+                }
+                .into()
+            }),
             size: m.size,
         }
     }
@@ -3198,7 +3509,10 @@ impl From<&chart::DataPoint> for PyDataPoint {
             index: p.index,
             marker: p.marker.as_ref().map(PyMarker::from),
             explosion: p.explosion,
-            shape_properties: p.shape_properties.as_ref().map(PyChartShapeProperties::from),
+            shape_properties: p
+                .shape_properties
+                .as_ref()
+                .map(PyChartShapeProperties::from),
         }
     }
 }
@@ -3306,7 +3620,10 @@ pub struct PyChartLines {
 impl From<&chart::ChartLines> for PyChartLines {
     fn from(cl: &chart::ChartLines) -> Self {
         Self {
-            shape_properties: cl.shape_properties.as_ref().map(PyChartShapeProperties::from),
+            shape_properties: cl
+                .shape_properties
+                .as_ref()
+                .map(PyChartShapeProperties::from),
         }
     }
 }
@@ -3513,7 +3830,12 @@ impl From<&chart::ChartExScaling> for PyChartExScaling {
                 major_unit: None,
                 minor_unit: None,
             },
-            chart::ChartExScaling::Value { min, max, major_unit, minor_unit } => Self {
+            chart::ChartExScaling::Value {
+                min,
+                max,
+                major_unit,
+                minor_unit,
+            } => Self {
                 scaling_type: "value".into(),
                 gap_width: None,
                 min: *min,
@@ -3538,9 +3860,14 @@ impl From<&chart::ChartExAxisTitle> for PyChartExAxisTitle {
     fn from(t: &chart::ChartExAxisTitle) -> Self {
         Self {
             text: t.text.as_ref().and_then(|tx| {
-                tx.data.as_ref().and_then(|d| d.value.clone().or_else(|| d.formula.clone()))
+                tx.data
+                    .as_ref()
+                    .and_then(|d| d.value.clone().or_else(|| d.formula.clone()))
             }),
-            shape_properties: t.shape_properties.as_ref().map(PyChartShapeProperties::from),
+            shape_properties: t
+                .shape_properties
+                .as_ref()
+                .map(PyChartShapeProperties::from),
         }
     }
 }
@@ -3669,7 +3996,10 @@ impl From<&chart::ChartExDataPoint> for PyChartExDataPoint {
     fn from(p: &chart::ChartExDataPoint) -> Self {
         Self {
             idx: p.idx,
-            shape_properties: p.shape_properties.as_ref().map(PyChartShapeProperties::from),
+            shape_properties: p
+                .shape_properties
+                .as_ref()
+                .map(PyChartShapeProperties::from),
         }
     }
 }
@@ -3705,7 +4035,10 @@ impl From<&chart::ChartExDataLabel> for PyChartExDataLabel {
             visibility_value: l.visibility_value,
             number_format: l.number_format.as_ref().map(PyChartNumberFormat::from),
             separator: l.separator.clone(),
-            shape_properties: l.shape_properties.as_ref().map(PyChartShapeProperties::from),
+            shape_properties: l
+                .shape_properties
+                .as_ref()
+                .map(PyChartShapeProperties::from),
         }
     }
 }
@@ -3723,7 +4056,10 @@ impl From<&chart::ChartExFormatOverride> for PyChartExFormatOverride {
     fn from(o: &chart::ChartExFormatOverride) -> Self {
         Self {
             idx: o.idx,
-            shape_properties: o.shape_properties.as_ref().map(PyChartShapeProperties::from),
+            shape_properties: o
+                .shape_properties
+                .as_ref()
+                .map(PyChartShapeProperties::from),
         }
     }
 }
@@ -3876,7 +4212,10 @@ impl From<&chart::ChartExPlotArea> for PyChartExPlotArea {
             plot_surface: p.plot_surface.as_ref().map(PyChartShapeProperties::from),
             series: p.series.iter().map(PyChartExSeries::from).collect(),
             axes: p.axes.iter().map(PyChartExAxis::from).collect(),
-            shape_properties: p.shape_properties.as_ref().map(PyChartShapeProperties::from),
+            shape_properties: p
+                .shape_properties
+                .as_ref()
+                .map(PyChartShapeProperties::from),
         }
     }
 }
@@ -3895,30 +4234,36 @@ pub struct PyChartExDimension {
 impl From<&chart::ChartExDimension> for PyChartExDimension {
     fn from(d: &chart::ChartExDimension) -> Self {
         match d {
-            chart::ChartExDimension::String { dim_type, formula, nf_formula, .. } => {
-                Self {
-                    dim_type: match dim_type {
-                        chart::StringDimType::Cat => "cat".into(),
-                        chart::StringDimType::ColorStr => "colorStr".into(),
-                        chart::StringDimType::EntityId => "entityId".into(),
-                    },
-                    formula: formula.clone(),
-                    nf_formula: nf_formula.clone(),
-                }
-            }
-            chart::ChartExDimension::Numeric { dim_type, formula, nf_formula, .. } => {
-                Self {
-                    dim_type: match dim_type {
-                        chart::NumericDimType::Val => "val".into(),
-                        chart::NumericDimType::X => "x".into(),
-                        chart::NumericDimType::Y => "y".into(),
-                        chart::NumericDimType::Size => "size".into(),
-                        chart::NumericDimType::ColorVal => "colorVal".into(),
-                    },
-                    formula: formula.clone(),
-                    nf_formula: nf_formula.clone(),
-                }
-            }
+            chart::ChartExDimension::String {
+                dim_type,
+                formula,
+                nf_formula,
+                ..
+            } => Self {
+                dim_type: match dim_type {
+                    chart::StringDimType::Cat => "cat".into(),
+                    chart::StringDimType::ColorStr => "colorStr".into(),
+                    chart::StringDimType::EntityId => "entityId".into(),
+                },
+                formula: formula.clone(),
+                nf_formula: nf_formula.clone(),
+            },
+            chart::ChartExDimension::Numeric {
+                dim_type,
+                formula,
+                nf_formula,
+                ..
+            } => Self {
+                dim_type: match dim_type {
+                    chart::NumericDimType::Val => "val".into(),
+                    chart::NumericDimType::X => "x".into(),
+                    chart::NumericDimType::Y => "y".into(),
+                    chart::NumericDimType::Size => "size".into(),
+                    chart::NumericDimType::ColorVal => "colorVal".into(),
+                },
+                formula: formula.clone(),
+                nf_formula: nf_formula.clone(),
+            },
         }
     }
 }
@@ -3973,7 +4318,10 @@ impl From<&chart::ChartExDataLabels> for PyChartExDataLabels {
             visibility_value: l.visibility_value,
             number_format: l.number_format.as_ref().map(PyChartNumberFormat::from),
             separator: l.separator.clone(),
-            shape_properties: l.shape_properties.as_ref().map(PyChartShapeProperties::from),
+            shape_properties: l
+                .shape_properties
+                .as_ref()
+                .map(PyChartShapeProperties::from),
             overrides: l.overrides.iter().map(PyChartExDataLabel::from).collect(),
             hidden_labels: l.hidden_labels.clone(),
         }
@@ -4005,7 +4353,10 @@ impl From<&chart::ChartExTitle> for PyChartExTitle {
             align: t.align.clone(),
             overlay: t.overlay,
             offset: t.offset.as_ref().map(PyChartExOffset::from),
-            shape_properties: t.shape_properties.as_ref().map(PyChartShapeProperties::from),
+            shape_properties: t
+                .shape_properties
+                .as_ref()
+                .map(PyChartShapeProperties::from),
         }
     }
 }
@@ -4032,7 +4383,10 @@ impl From<&chart::ChartExLegend> for PyChartExLegend {
             align: l.align.clone(),
             overlay: l.overlay,
             offset: l.offset.as_ref().map(PyChartExOffset::from),
-            shape_properties: l.shape_properties.as_ref().map(PyChartShapeProperties::from),
+            shape_properties: l
+                .shape_properties
+                .as_ref()
+                .map(PyChartShapeProperties::from),
         }
     }
 }
@@ -4116,7 +4470,10 @@ impl From<&chart::ChartExAxis> for PyChartExAxis {
             minor_tick_marks: a.minor_tick_marks.clone(),
             tick_labels: a.tick_labels,
             number_format: a.number_format.as_ref().map(PyChartNumberFormat::from),
-            shape_properties: a.shape_properties.as_ref().map(PyChartShapeProperties::from),
+            shape_properties: a
+                .shape_properties
+                .as_ref()
+                .map(PyChartShapeProperties::from),
         }
     }
 }
@@ -4169,8 +4526,14 @@ impl From<&chart::ChartExSeries> for PyChartExSeries {
             layout_properties: s.layout_properties.as_ref().map(PyChartExLayoutPr::from),
             axis_ids: s.axis_ids.clone(),
             value_colors: s.value_colors.is_some(),
-            value_color_positions: s.value_color_positions.as_ref().map(PyChartExValueColorPositions::from),
-            shape_properties: s.shape_properties.as_ref().map(PyChartShapeProperties::from),
+            value_color_positions: s
+                .value_color_positions
+                .as_ref()
+                .map(PyChartExValueColorPositions::from),
+            shape_properties: s
+                .shape_properties
+                .as_ref()
+                .map(PyChartShapeProperties::from),
         }
     }
 }
@@ -4224,8 +4587,15 @@ impl From<&chart::ChartEx> for PyChartEx {
             plot_area: PyChartExPlotArea::from(&c.plot_area),
             legend: c.legend.as_ref().map(PyChartExLegend::from),
             anchor: PyDrawingAnchor::from(&c.anchor),
-            shape_properties: c.shape_properties.as_ref().map(PyChartShapeProperties::from),
-            format_overrides: c.format_overrides.iter().map(PyChartExFormatOverride::from).collect(),
+            shape_properties: c
+                .shape_properties
+                .as_ref()
+                .map(PyChartShapeProperties::from),
+            format_overrides: c
+                .format_overrides
+                .iter()
+                .map(PyChartExFormatOverride::from)
+                .collect(),
             print_settings: c.print_settings.as_ref().map(PyChartExPrintSettings::from),
             external_data_rel_id: c.external_data.as_ref().map(|e| e.rel_id.clone()),
             external_data_auto_update: c.external_data.as_ref().and_then(|e| e.auto_update),

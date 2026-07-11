@@ -4,11 +4,11 @@ use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
 use super::{
-    catch_panic, to_napi_err, JsAutoFilter, JsColor, JsComment, JsCommentEntry,
-    JsConditionalFormatRule, JsDataValidation, JsFormControl, JsFormulaCell, JsFreezePanes, JsHyperlink,
-    JsHyperlinkEntry, JsImageInfo, JsMergeSpan, JsMergedRegion, JsPageBreak, JsPageSetup, JsRow,
-    JsRowCell, JsRowsOptions, JsSelection, JsSheetProtection, JsSpillSource, JsSplitPanes, JsStyle,
-    JsTable, JsChart, JsChartEx, JsEmbeddedImage, Worksheet,
+    catch_panic, to_napi_err, JsAutoFilter, JsChart, JsChartEx, JsColor, JsComment, JsCommentEntry,
+    JsConditionalFormatRule, JsDataValidation, JsEmbeddedImage, JsFormControl, JsFormulaCell,
+    JsFreezePanes, JsHyperlink, JsHyperlinkEntry, JsImageInfo, JsMergeSpan, JsMergedRegion,
+    JsPageBreak, JsPageSetup, JsProtectedRange, JsRow, JsRowCell, JsRowsOptions, JsSelection,
+    JsSheetProtection, JsSpillSource, JsSplitPanes, JsStyle, JsTable, Worksheet,
 };
 
 #[napi]
@@ -780,6 +780,22 @@ impl Worksheet {
                 .worksheet(self.sheet_index)
                 .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
             Ok(ws.protection().map(JsSheetProtection::from))
+        })
+    }
+
+    /// Protected editable ranges on this worksheet.
+    #[napi(getter)]
+    pub fn protected_ranges(&self) -> Result<Vec<JsProtectedRange>> {
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            Ok(ws
+                .protected_ranges()
+                .iter()
+                .map(JsProtectedRange::from)
+                .collect())
         })
     }
 

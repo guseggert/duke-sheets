@@ -36,6 +36,7 @@ pub mod form_control;
 pub mod hyperlink;
 pub mod locale;
 pub mod named_range;
+pub mod protection;
 pub mod range;
 pub mod rich_text;
 pub mod row;
@@ -51,7 +52,8 @@ pub use auto_filter::{
     Top10Filter, ValueFilter,
 };
 pub use cell::{
-    format_cell_value, CellAddress, CellData, CellError, CellRange, CellValue, CellView, FormulaData,
+    format_cell_value, CellAddress, CellData, CellError, CellRange, CellValue, CellView,
+    FormulaData,
 };
 pub use column::{Column, ColumnData};
 pub use comment::CellComment;
@@ -63,6 +65,7 @@ pub use error::{Error, Result};
 pub use form_control::{radio_groups, CheckState, FormControl, FormControlKind, ListSelection};
 pub use hyperlink::Hyperlink;
 pub use locale::Locale;
+pub use protection::{hash_legacy_protection_password, ProtectedRange, WorkbookProtection};
 pub use rich_text::{rich_text_to_plain, RichTextRun, RunFont};
 pub use table::{Table, TableColumn, TableStyleInfo, TotalsRowFunction};
 pub use validation::{DataValidation, ValidationErrorStyle, ValidationOperator, ValidationType};

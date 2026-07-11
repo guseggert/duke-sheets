@@ -12,6 +12,7 @@ use crate::biff12::records;
 use crate::biff12::token_parser;
 use crate::biff12::RecordIter;
 use crate::error::{XlsbError, XlsbResult};
+use duke_sheets_core::WorkbookProtection;
 
 #[derive(Debug)]
 pub(crate) struct SheetEntry {
@@ -29,6 +30,7 @@ pub(crate) struct WorkbookProps {
     pub sheets: Vec<SheetEntry>,
     pub date_1904: bool,
     pub active_sheet: usize,
+    pub workbook_protection: Option<WorkbookProtection>,
     pub formula_ctx: FormulaContext,
     pub named_ranges: Vec<(String, u32, String, bool, Option<String>)>,
     pub print_areas: Vec<PrintSetting>,
@@ -110,13 +112,14 @@ pub(crate) fn read_workbook<R: Read + Seek>(
     let mut sheets = Vec::new();
     let mut date_1904 = false;
     let mut active_sheet: usize = 0;
+    let mut workbook_protection = None;
     let mut extern_sheet_entries = Vec::new();
     let mut names = Vec::new();
     let mut supbooks: Vec<SupBook> = Vec::new();
     let mut extern_names: Vec<ExternName> = Vec::new();
     let mut in_sup_book = false;
-        let mut current_sup_book: Option<SupBook> = None;
-        let mut last_sup_book_idx: Option<u16> = None;
+    let mut current_sup_book: Option<SupBook> = None;
+    let mut last_sup_book_idx: Option<u16> = None;
 
     let mut name_hidden_flags: Vec<bool> = Vec::new();
 
@@ -136,6 +139,27 @@ pub(crate) fn read_workbook<R: Read + Seek>(
             records::BRT_WB_PROP => {
                 if len >= 1 {
                     date_1904 = (buf[0] & 0x01) != 0;
+                }
+            }
+            records::BRT_BOOK_PROTECTION => {
+                if len >= 6 {
+                    let password_hash = parser::read_u16(&buf, 0);
+                    let flags = parser::read_u16(&buf, 4);
+                    let protection = WorkbookProtection {
+                        structure: (flags & 0x0001) != 0,
+                        windows: (flags & 0x0002) != 0,
+                        password_hash: if password_hash != 0 {
+                            Some(password_hash)
+                        } else {
+                            None
+                        },
+                    };
+                    if protection.structure
+                        || protection.windows
+                        || protection.password_hash.is_some()
+                    {
+                        workbook_protection = Some(protection);
+                    }
                 }
             }
             0x009E => {
@@ -312,6 +336,7 @@ pub(crate) fn read_workbook<R: Read + Seek>(
         sheets,
         date_1904,
         active_sheet,
+        workbook_protection,
         formula_ctx,
         named_ranges,
         print_areas,

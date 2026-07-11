@@ -360,7 +360,8 @@ pub fn roundtrip_through_excel_xls_bytes(
     pull_file_from_vm(&output);
     let output_bytes = std::fs::read(&output.host_path)
         .unwrap_or_else(|e| panic!("read {}: {e}", output.host_path.display()));
-    let result = XlsReader::read_file(&output.host_path).expect("XlsReader::read_file");
+    let result = XlsReader::read_file_with_password(&output.host_path, None, true)
+        .expect("XlsReader::read_file_with_password");
 
     cleanup_fixture(&input);
     cleanup_fixture(&output);

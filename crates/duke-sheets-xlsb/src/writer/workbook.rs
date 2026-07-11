@@ -37,6 +37,23 @@ pub(crate) fn write_workbook<W: Write + Seek>(
     wb_prop.extend_from_slice(&encode_wide_str(""));
     rw.write_record(records::BRT_WB_PROP, &wb_prop)?;
 
+    if let Some(protection) = workbook.workbook_protection() {
+        if protection.structure || protection.windows || protection.password_hash.is_some() {
+            let mut payload = Vec::with_capacity(6);
+            payload.extend_from_slice(&protection.password_hash.unwrap_or(0).to_le_bytes());
+            payload.extend_from_slice(&0u16.to_le_bytes()); // revision protection password
+            let mut flags: u16 = 0;
+            if protection.structure {
+                flags |= 0x0001;
+            }
+            if protection.windows {
+                flags |= 0x0002;
+            }
+            payload.extend_from_slice(&flags.to_le_bytes());
+            rw.write_record(records::BRT_BOOK_PROTECTION, &payload)?;
+        }
+    }
+
     write_book_views(&mut rw, workbook.active_sheet())?;
 
     rw.write_record(0x008F, &[])?; // BrtBeginBundleShs
@@ -137,9 +154,9 @@ fn write_xlfn_name_records<W: Write>(
         payload.extend_from_slice(&encode_wide_str(&prefixed));
         payload.extend_from_slice(&0u32.to_le_bytes()); // cce (rgce size = 0)
         payload.extend_from_slice(&0u32.to_le_bytes()); // cb (rgcb size = 0)
-        // Trailing strings per [MS-XLSB] §2.4.718 BrtName: the comment
-        // (XLNullableWideString), then four strings that MUST exist if
-        // and only if fProc is set. We never write macro names.
+                                                        // Trailing strings per [MS-XLSB] §2.4.718 BrtName: the comment
+                                                        // (XLNullableWideString), then four strings that MUST exist if
+                                                        // and only if fProc is set. We never write macro names.
         payload.extend_from_slice(&encode_nullable_wide_str(None));
         rw.write_record(records::BRT_NAME, &payload)?;
     }
@@ -364,7 +381,11 @@ fn write_extern_sheet<W: Write>(
         payload.extend_from_slice(&0xFFFF_FFFEu32.to_le_bytes()); // firstSheet = -2
         payload.extend_from_slice(&0xFFFF_FFFEu32.to_le_bytes()); // lastSheet = -2
     }
-    let self_sup = if external_names.is_empty() { 0u32 } else { 1u32 };
+    let self_sup = if external_names.is_empty() {
+        0u32
+    } else {
+        1u32
+    };
     for i in 0..sheet_count {
         let idx = i as u32;
         payload.extend_from_slice(&self_sup.to_le_bytes());

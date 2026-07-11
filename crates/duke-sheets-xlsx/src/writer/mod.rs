@@ -1218,6 +1218,24 @@ impl XlsxWriter {
                     .write_empty()?;
             }
 
+            if let Some(protection) = workbook.workbook_protection() {
+                if protection.structure || protection.windows || protection.password_hash.is_some()
+                {
+                    let mut tag = BytesStart::new("workbookProtection");
+                    if protection.structure {
+                        tag.push_attribute(("lockStructure", "1"));
+                    }
+                    if protection.windows {
+                        tag.push_attribute(("lockWindows", "1"));
+                    }
+                    if let Some(hash) = protection.password_hash {
+                        let h = format!("{:04X}", hash);
+                        tag.push_attribute(("workbookPassword", h.as_str()));
+                    }
+                    w.write_event(Event::Empty(tag))?;
+                }
+            }
+
             // bookViews
             let active = workbook.active_sheet();
             if active > 0 {
@@ -1871,6 +1889,7 @@ impl XlsxWriter {
 
             // sheetProtection
             Self::write_sheet_protection(w, sheet)?;
+            Self::write_protected_ranges(w, sheet)?;
 
             Self::write_auto_filter(w, sheet)?;
 
@@ -2762,6 +2781,46 @@ impl XlsxWriter {
         }
 
         w.write_event(Event::Empty(tag))?;
+        Ok(())
+    }
+
+    fn write_protected_ranges(
+        w: &mut XmlWriter,
+        sheet: &duke_sheets_core::Worksheet,
+    ) -> XlsxResult<()> {
+        let protected_ranges: Vec<_> = sheet
+            .protected_ranges()
+            .iter()
+            .filter(|protected_range| {
+                !protected_range.name.is_empty() && !protected_range.ranges.is_empty()
+            })
+            .collect();
+        if protected_ranges.is_empty() {
+            return Ok(());
+        }
+
+        w.write_event(Event::Start(BytesStart::new("protectedRanges")))?;
+        for protected_range in protected_ranges {
+            let sqref = protected_range
+                .ranges
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(" ");
+            let mut tag = BytesStart::new("protectedRange");
+            tag.push_attribute(("name", protected_range.name.as_str()));
+            tag.push_attribute(("sqref", sqref.as_str()));
+            let hash;
+            if let Some(password_hash) = protected_range.password_hash {
+                hash = format!("{:04X}", password_hash);
+                tag.push_attribute(("password", hash.as_str()));
+            }
+            if let Some(security_descriptor) = protected_range.security_descriptor.as_deref() {
+                tag.push_attribute(("securityDescriptor", security_descriptor));
+            }
+            w.write_event(Event::Empty(tag))?;
+        }
+        w.write_event(Event::End(BytesEnd::new("protectedRanges")))?;
         Ok(())
     }
 

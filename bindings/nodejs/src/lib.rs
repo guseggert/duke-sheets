@@ -39,11 +39,9 @@ fn parse_encryption_profile(
         Some("standard") | Some("ooxml-standard") => EncryptionProfile::OoxmlStandard {
             key_bits: key_bits.unwrap_or(128),
         },
-        Some("rc4-cryptoapi") | Some("xls-rc4-cryptoapi") => {
-            EncryptionProfile::XlsRc4CryptoApi {
-                key_bits: key_bits.unwrap_or(128),
-            }
-        }
+        Some("rc4-cryptoapi") | Some("xls-rc4-cryptoapi") => EncryptionProfile::XlsRc4CryptoApi {
+            key_bits: key_bits.unwrap_or(128),
+        },
         Some("rc4-legacy") | Some("xls-rc4-legacy") => EncryptionProfile::XlsRc4Legacy,
         Some("xor") | Some("xls-xor") => EncryptionProfile::XlsXor,
         Some(other) => return Err(format!("unknown encryption profile: {other:?}")),
@@ -97,7 +95,7 @@ fn cell_error_to_string(e: &CellError) -> &'static str {
 fn try_get_property<'a, T: FromNapiValue + ValidateNapiValue>(
     obj: &Object<'a>,
     key: &str,
-    ) -> napi::Result<Option<T>> {
+) -> napi::Result<Option<T>> {
     if !obj.has_named_property(key)? {
         return Ok(None);
     }
@@ -109,7 +107,6 @@ fn try_get_property<'a, T: FromNapiValue + ValidateNapiValue>(
     let v = obj.value();
     unsafe { T::from_napi_value(v.env, val.raw()).map(Some) }
 }
-
 
 /// Represents a cell value in a spreadsheet.
 ///
@@ -243,7 +240,7 @@ pub struct JsCalculationOptions {
     /// - 1: force serial evaluation
     /// - n: use at most n threads
     pub max_threads: Option<u32>,
-    }
+}
 
 impl JsCalculationOptions {
     fn into_core(self) -> CalculationOptions {
@@ -318,7 +315,6 @@ impl CalculationStats {
     pub fn iterations(&self) -> u32 {
         self.inner.iterations as u32
     }
-
 }
 
 /// The used range of a worksheet, describing the bounding box of all cells
@@ -471,6 +467,39 @@ impl Worksheet {
                 ws.set_cell_style_at(addr.row, addr.col, &core_style)
                     .map_err(to_napi_err)?;
             }
+            Ok(())
+        })
+    }
+
+    /// Set or clear sheet protection settings.
+    #[napi(js_name = "setProtection")]
+    pub fn set_protection(&self, protection: Option<JsSheetProtectionInput>) -> Result<()> {
+        catch_panic(|| {
+            let mut wb = self.workbook.write().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet_mut(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            let protection = protection
+                .map(JsSheetProtectionInput::into_core)
+                .transpose()?;
+            ws.set_protection(protection);
+            Ok(())
+        })
+    }
+
+    /// Replace the protected editable ranges for this sheet.
+    #[napi(js_name = "setProtectedRanges")]
+    pub fn set_protected_ranges(&self, ranges: Vec<JsProtectedRangeInput>) -> Result<()> {
+        catch_panic(|| {
+            let mut wb = self.workbook.write().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet_mut(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            let ranges = ranges
+                .into_iter()
+                .map(JsProtectedRangeInput::into_core)
+                .collect::<Result<Vec<_>>>()?;
+            ws.set_protected_ranges(ranges);
             Ok(())
         })
     }
@@ -990,6 +1019,22 @@ impl Workbook {
         })
     }
 
+    /// Set or clear workbook structure/window protection settings.
+    #[napi(js_name = "setWorkbookProtection")]
+    pub fn set_workbook_protection(
+        &self,
+        protection: Option<JsWorkbookProtectionInput>,
+    ) -> Result<()> {
+        catch_panic(|| {
+            let mut wb = self.inner.write().map_err(to_napi_err)?;
+            let protection = protection
+                .map(JsWorkbookProtectionInput::into_core)
+                .transpose()?;
+            wb.set_workbook_protection(protection);
+            Ok(())
+        })
+    }
+
     /// Remove a worksheet by index
     ///
     /// @param index - Zero-based index of the worksheet to remove
@@ -1011,14 +1056,12 @@ impl Workbook {
     /// @param options - Optional calculation options
     /// @returns Statistics about the calculation
     #[napi]
-    pub fn calculate(
-        &self,
-        options: Option<JsCalculationOptions>,
-    ) -> Result<CalculationStats> {
+    pub fn calculate(&self, options: Option<JsCalculationOptions>) -> Result<CalculationStats> {
         catch_panic(|| {
             let mut wb = self.inner.write().map_err(to_napi_err)?;
             let stats = if let Some(opts) = options {
-                wb.calculate_with_options(&opts.into_core()).map_err(to_napi_err)?
+                wb.calculate_with_options(&opts.into_core())
+                    .map_err(to_napi_err)?
             } else {
                 wb.calculate().map_err(to_napi_err)?
             };
@@ -1212,21 +1255,22 @@ impl Workbook {
             let max_change: Option<f64> = try_get_property(&options, "maxChange")?;
             let force_full_calculation: Option<bool> =
                 try_get_property(&options, "forceFullCalculation")?;
-            let calculate_volatile: Option<bool> =
-                try_get_property(&options, "calculateVolatile")?;
+            let calculate_volatile: Option<bool> = try_get_property(&options, "calculateVolatile")?;
             let sheets: Option<Vec<u32>> = try_get_property(&options, "sheets")?;
             let max_threads: Option<u32> = try_get_property(&options, "maxThreads")?;
 
             // Extract callback functions and build ThreadsafeFunctions
             let web_service_js_fn: Option<Function<'env, String, Promise<Option<String>>>> =
                 try_get_property(&options, "webServiceFn")?;
-            let rtd_js_fn: Option<Function<'env, (String, String, Vec<String>), Promise<Option<String>>>> =
-                try_get_property(&options, "rtdFn")?;
-            let external_js_fn: Option<Function<'env, (String, String, Vec<String>), Promise<Option<String>>>> =
-                match try_get_property(&options, "externalFn")? {
-                    Some(f) => Some(f),
-                    None => try_get_property(&options, "externalFnFn")?,
-                };
+            let rtd_js_fn: Option<
+                Function<'env, (String, String, Vec<String>), Promise<Option<String>>>,
+            > = try_get_property(&options, "rtdFn")?;
+            let external_js_fn: Option<
+                Function<'env, (String, String, Vec<String>), Promise<Option<String>>>,
+            > = match try_get_property(&options, "externalFn")? {
+                Some(f) => Some(f),
+                None => try_get_property(&options, "externalFnFn")?,
+            };
 
             let web_service_fn: Option<Arc<dyn Fn(&str) -> Option<String> + Send + Sync>> =
                 if let Some(js_fn) = web_service_js_fn {
@@ -1244,23 +1288,26 @@ impl Workbook {
                     None
                 };
 
-            let external_fn: Option<Arc<dyn Fn(&str, &str, &[String]) -> Option<FormulaValue> + Send + Sync>> =
-                if let Some(js_fn) = external_js_fn {
-                    let tsfn = js_fn
-                        .build_threadsafe_function::<(String, String, Vec<String>)>()
-                        .build_callback(|ctx| Ok(FnArgs { data: ctx.value }))?;
-                    let tsfn = Arc::new(tsfn);
-                    Some(Arc::new(move |book: &str, name: &str, args: &[String]| -> Option<FormulaValue> {
+            let external_fn: Option<
+                Arc<dyn Fn(&str, &str, &[String]) -> Option<FormulaValue> + Send + Sync>,
+            > = if let Some(js_fn) = external_js_fn {
+                let tsfn = js_fn
+                    .build_threadsafe_function::<(String, String, Vec<String>)>()
+                    .build_callback(|ctx| Ok(FnArgs { data: ctx.value }))?;
+                let tsfn = Arc::new(tsfn);
+                Some(Arc::new(
+                    move |book: &str, name: &str, args: &[String]| -> Option<FormulaValue> {
                         let args = (book.to_string(), name.to_string(), args.to_vec());
                         let tsfn = Arc::clone(&tsfn);
                         napi::bindgen_prelude::block_on(async move {
                             let promise = tsfn.call_async(args).await.ok()?;
                             promise.await.ok().flatten().map(FormulaValue::String)
                         })
-                    }))
-                } else {
-                    None
-                };
+                    },
+                ))
+            } else {
+                None
+            };
 
             let rtd_fn: Option<Arc<dyn Fn(&str, &str, &[String]) -> Option<String> + Send + Sync>> =
                 if let Some(js_fn) = rtd_js_fn {
@@ -1268,14 +1315,16 @@ impl Workbook {
                         .build_threadsafe_function::<(String, String, Vec<String>)>()
                         .build_callback(|ctx| Ok(FnArgs { data: ctx.value }))?;
                     let tsfn = Arc::new(tsfn);
-                    Some(Arc::new(move |prog_id: &str, server: &str, topics: &[String]| -> Option<String> {
-                        let args = (prog_id.to_string(), server.to_string(), topics.to_vec());
-                        let tsfn = Arc::clone(&tsfn);
-                        napi::bindgen_prelude::block_on(async move {
-                            let promise = tsfn.call_async(args).await.ok()?;
-                            promise.await.ok().flatten()
-                        })
-                    }))
+                    Some(Arc::new(
+                        move |prog_id: &str, server: &str, topics: &[String]| -> Option<String> {
+                            let args = (prog_id.to_string(), server.to_string(), topics.to_vec());
+                            let tsfn = Arc::clone(&tsfn);
+                            napi::bindgen_prelude::block_on(async move {
+                                let promise = tsfn.call_async(args).await.ok()?;
+                                promise.await.ok().flatten()
+                            })
+                        },
+                    ))
                 } else {
                     None
                 };

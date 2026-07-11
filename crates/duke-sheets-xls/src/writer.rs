@@ -46,6 +46,9 @@ const PANE_RECORD: u16 = 0x0041;
 const WINDOW1_RECORD: u16 = 0x003D;
 const PROTECT_RECORD: u16 = 0x0012;
 const PASSWORD_RECORD: u16 = 0x0013;
+const WINDOWPROTECT_RECORD: u16 = 0x0019;
+const FEATHDR_RECORD: u16 = 0x0867;
+const FEAT_RECORD: u16 = 0x0868;
 const SETUP_RECORD: u16 = 0x00A1;
 const HEADER_RECORD: u16 = 0x0014;
 const FOOTER_RECORD: u16 = 0x0015;
@@ -230,6 +233,7 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
     let mut stream = Vec::new();
     write_bof(&mut stream, DT_WORKBOOK_GLOBALS);
     write_window1(&mut stream, workbook);
+    write_workbook_protection_records(&mut stream, workbook);
     styles.write_font_records(&mut stream)?;
     styles.write_format_records(&mut stream)?;
     styles.write_xf_records(&mut stream);
@@ -245,7 +249,13 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
     let externsheet_table = build_externsheet_table(workbook, !addin_table.is_empty());
     let name_table = build_name_table(workbook);
     write_supbook_and_externsheet(&mut stream, &externsheet_table, &addin_table);
-    write_user_name_records(&mut stream, workbook, &externsheet_table, &name_table, &addin_table);
+    write_user_name_records(
+        &mut stream,
+        workbook,
+        &externsheet_table,
+        &name_table,
+        &addin_table,
+    );
     write_print_name_records(&mut stream, workbook);
     sst.write_records(&mut stream)?;
     let drawing_state =
@@ -258,6 +268,7 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
         let bof_pos = stream.len() as u32;
         write_bof(&mut stream, DT_WORKSHEET);
         write_protect_records(&mut stream, sheet);
+        write_protected_range_records(&mut stream, sheet)?;
         write_colinfo_records(&mut stream, sheet);
         write_dimension(&mut stream, sheet);
         write_row_records(&mut stream, sheet);
@@ -283,7 +294,13 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
         write_mergecells(&mut stream, sheet);
         write_hlink_records(&mut stream, sheet);
         write_autofilter_records(&mut stream, sheet);
-        write_data_validations(&mut stream, sheet, &externsheet_table, &name_table, &addin_table);
+        write_data_validations(
+            &mut stream,
+            sheet,
+            &externsheet_table,
+            &name_table,
+            &addin_table,
+        );
         write_conditional_formats(
             &mut stream,
             sheet,
@@ -1209,6 +1226,21 @@ fn write_window1(stream: &mut Vec<u8>, workbook: &Workbook) {
     stream.extend_from_slice(&600u16.to_le_bytes()); // wTabRatio (600 = 60%)
 }
 
+fn write_workbook_protection_records(stream: &mut Vec<u8>, workbook: &Workbook) {
+    let Some(protection) = workbook.workbook_protection() else {
+        return;
+    };
+    if protection.structure {
+        write_biff_record(stream, PROTECT_RECORD, &1u16.to_le_bytes());
+    }
+    if protection.windows {
+        write_biff_record(stream, WINDOWPROTECT_RECORD, &1u16.to_le_bytes());
+    }
+    if let Some(password_hash) = protection.password_hash {
+        write_biff_record(stream, PASSWORD_RECORD, &password_hash.to_le_bytes());
+    }
+}
+
 /// Emit a minimal WINDOW2 record (MS-XLS §2.4.349). The reader extracts
 /// only the frozen-pane bit, but real Excel and LibreOffice expect this
 /// record as a structural cue that the worksheet stream is well-formed.
@@ -1381,6 +1413,60 @@ fn write_protect_records(stream: &mut Vec<u8>, sheet: &Worksheet) {
     stream.extend_from_slice(&PASSWORD_RECORD.to_le_bytes());
     stream.extend_from_slice(&2u16.to_le_bytes());
     stream.extend_from_slice(&password_hash.to_le_bytes());
+}
+
+fn write_protected_range_records(stream: &mut Vec<u8>, sheet: &Worksheet) -> XlsResult<()> {
+    let ranges: Vec<_> = sheet
+        .protected_ranges()
+        .iter()
+        .filter(|protected_range| {
+            !protected_range.name.is_empty()
+                && !protected_range.ranges.is_empty()
+                && protected_range.ranges.iter().all(|range| {
+                    range.start.row <= u16::MAX as u32 && range.end.row <= u16::MAX as u32
+                })
+        })
+        .collect();
+    if ranges.is_empty() {
+        return Ok(());
+    }
+
+    let mut hdr = Vec::new();
+    push_frt_header(&mut hdr, FEATHDR_RECORD);
+    hdr.extend_from_slice(&2u16.to_le_bytes()); // ISFPROTECTION
+    hdr.push(1u8); // reserved
+    hdr.extend_from_slice(&0u32.to_le_bytes()); // no worksheet header data
+    write_biff_record(stream, FEATHDR_RECORD, &hdr);
+
+    for protected_range in ranges {
+        let mut body = Vec::new();
+        push_frt_header(&mut body, FEAT_RECORD);
+        body.extend_from_slice(&2u16.to_le_bytes()); // ISFPROTECTION
+        body.push(0u8);
+        body.extend_from_slice(&0u32.to_le_bytes());
+        body.extend_from_slice(&(protected_range.ranges.len() as u16).to_le_bytes());
+        body.extend_from_slice(&0u32.to_le_bytes()); // cbFeatData ignored for ISFPROTECTION
+        body.extend_from_slice(&0u16.to_le_bytes());
+        for range in &protected_range.ranges {
+            body.extend_from_slice(&(range.start.row as u16).to_le_bytes());
+            body.extend_from_slice(&(range.end.row as u16).to_le_bytes());
+            body.extend_from_slice(&range.start.col.to_le_bytes());
+            body.extend_from_slice(&range.end.col.to_le_bytes());
+        }
+        body.extend_from_slice(&0u32.to_le_bytes()); // fSD=false + reserved
+        body.extend_from_slice(&(protected_range.password_hash.unwrap_or(0) as u32).to_le_bytes());
+        push_xlunicode_string(&mut body, &protected_range.name)?;
+        write_biff_record(stream, FEAT_RECORD, &body);
+    }
+
+    Ok(())
+}
+
+fn push_frt_header(body: &mut Vec<u8>, record_type: u16) {
+    body.extend_from_slice(&record_type.to_le_bytes());
+    body.extend_from_slice(&0u16.to_le_bytes());
+    body.extend_from_slice(&0u32.to_le_bytes());
+    body.extend_from_slice(&0u32.to_le_bytes());
 }
 
 /// Emit a ROW record (MS-XLS §2.4.220) per row that has any non-
@@ -2034,7 +2120,8 @@ fn collect_addin_names_expr(
                     // Canonical (uppercase) name so EXTERNNAME spelling and
                     // sort order are independent of how the user typed it.
                     let canonical = function_name(idx).to_string();
-                    out.entry(canonical.to_ascii_uppercase()).or_insert(canonical);
+                    out.entry(canonical.to_ascii_uppercase())
+                        .or_insert(canonical);
                 }
             }
             for arg in args {
@@ -3360,7 +3447,15 @@ fn compile_ptgs_with_context(
                 UnaryOperator::Paren => operand_class,
                 _ => OperandClass::V,
             };
-            compile_ptgs_with_context(operand, out, extra, externsheet, names, addins, inner_class)?;
+            compile_ptgs_with_context(
+                operand,
+                out,
+                extra,
+                externsheet,
+                names,
+                addins,
+                inner_class,
+            )?;
             out.push(match op {
                 UnaryOperator::Plus => 0x12,    // PtgUplus
                 UnaryOperator::Negate => 0x13,  // PtgUminus
@@ -3440,8 +3535,15 @@ fn compile_ptgs_with_context(
             // ([MS-XLS] §2.5.198.40). Like IF, Excel always emits this so
             // matching is required for byte-for-byte parity.
             if idx == 100 && args.len() >= 2 {
-                if emit_optimized_choose(args, out, extra, externsheet, names, addins, operand_class)?
-                {
+                if emit_optimized_choose(
+                    args,
+                    out,
+                    extra,
+                    externsheet,
+                    names,
+                    addins,
+                    operand_class,
+                )? {
                     return Ok(());
                 }
             }
@@ -3451,7 +3553,13 @@ fn compile_ptgs_with_context(
                 } else {
                     let arg_class = function_arg_class(idx, arg_idx);
                     compile_ptgs_with_context(
-                        arg, out, extra, externsheet, names, addins, arg_class,
+                        arg,
+                        out,
+                        extra,
+                        externsheet,
+                        names,
+                        addins,
+                        arg_class,
                     )?;
                 }
             }
@@ -3516,9 +3624,7 @@ fn compile_ptgs_with_context(
         FormulaExpr::Array(rows) => {
             emit_array_constant(rows, out, extra)?;
         }
-        FormulaExpr::StructuredRef(_)
-        | FormulaExpr::ExternalRef(_)
-        | FormulaExpr::Empty => {
+        FormulaExpr::StructuredRef(_) | FormulaExpr::ExternalRef(_) | FormulaExpr::Empty => {
             return Err(UnsupportedToken);
         }
     }
@@ -3944,9 +4050,7 @@ fn emit_optimized_choose(
     // Jump-table offsets. The k-th offset points to the start of choice k
     // (or PtgFuncVar for k = nc). All are measured from the start of the
     // offset table itself, which sits immediately after `19 04 nc_lo nc_hi`.
-    let table_size = (nc + 1)
-        .checked_mul(2)
-        .ok_or(UnsupportedToken)?;
+    let table_size = (nc + 1).checked_mul(2).ok_or(UnsupportedToken)?;
     let mut offsets: Vec<u16> = Vec::with_capacity(nc + 1);
     let mut running: usize = table_size;
     for choice in &choice_bytes {
@@ -6045,7 +6149,10 @@ mod tests {
             &AddinTable::default(),
             OperandClass::V,
         );
-        assert!(matches!(r, Ok(false)), "expected overflow → Ok(false), got {r:?}");
+        assert!(
+            matches!(r, Ok(false)),
+            "expected overflow → Ok(false), got {r:?}"
+        );
         assert_eq!(
             out,
             vec![0xABu8],
@@ -6083,7 +6190,10 @@ mod tests {
             &AddinTable::default(),
             OperandClass::V,
         );
-        assert!(matches!(r, Ok(false)), "expected overflow → Ok(false), got {r:?}");
+        assert!(
+            matches!(r, Ok(false)),
+            "expected overflow → Ok(false), got {r:?}"
+        );
         assert_eq!(
             out,
             vec![0xCDu8],

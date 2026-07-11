@@ -342,6 +342,7 @@ impl XlsxReader {
         // Create workbook
         let mut workbook = Workbook::empty();
         workbook.settings_mut().date_1904 = wb_props.date_1904;
+        workbook.set_workbook_protection(wb_props.workbook_protection);
 
         // Add named ranges
         for nr in wb_props.named_ranges {
@@ -798,6 +799,10 @@ impl XlsxReader {
         let mut in_af_filters = false;
         let mut in_af_custom_filters = false;
 
+        // Protected range state
+        let mut current_protected_range: Option<duke_sheets_core::ProtectedRange> = None;
+        let mut in_protected_range_security_descriptor = false;
+
         loop {
             match xml_reader.read_event_into(&mut buf) {
                 Ok(Event::Start(e)) => {
@@ -988,6 +993,12 @@ impl XlsxReader {
                         }
                         b"sheetProtection" => {
                             Self::parse_sheet_protection_element(worksheet, &e);
+                        }
+                        b"protectedRange" => {
+                            current_protected_range = Self::parse_protected_range_element(&e);
+                        }
+                        b"securityDescriptor" if current_protected_range.is_some() => {
+                            in_protected_range_security_descriptor = true;
                         }
                         b"pageMargins" => {
                             let mut ps = worksheet.page_setup().clone();
@@ -1692,6 +1703,15 @@ impl XlsxReader {
                                 auto_filter_columns.clear();
                             }
                         }
+                        b"securityDescriptor" if in_protected_range_security_descriptor => {
+                            in_protected_range_security_descriptor = false;
+                        }
+                        b"protectedRange" => {
+                            if let Some(protected_range) = current_protected_range.take() {
+                                worksheet.add_protected_range(protected_range);
+                            }
+                            in_protected_range_security_descriptor = false;
+                        }
                         _ => {}
                     }
                 }
@@ -1797,6 +1817,12 @@ impl XlsxReader {
                             let mut ps = worksheet.page_setup().clone();
                             ps.first_footer = Some(text.to_string());
                             worksheet.set_page_setup(ps);
+                        }
+                    } else if in_protected_range_security_descriptor {
+                        if let (Some(ref mut protected_range), Ok(text)) =
+                            (&mut current_protected_range, e.unescape())
+                        {
+                            protected_range.security_descriptor = Some(text.to_string());
                         }
                     }
                 }
@@ -2009,6 +2035,11 @@ impl XlsxReader {
                         }
                         b"sheetProtection" => {
                             Self::parse_sheet_protection_element(worksheet, &e);
+                        }
+                        b"protectedRange" => {
+                            if let Some(protected_range) = Self::parse_protected_range_element(&e) {
+                                worksheet.add_protected_range(protected_range);
+                            }
                         }
                         b"pane" => Self::parse_pane_attrs(&e, worksheet),
                         b"f" if in_cell => {
@@ -2807,9 +2838,10 @@ impl XlsxReader {
 
     /// Parse `<sheetProtection sheet="1" password="HHHH" .../>` into
     /// the sheet's `SheetProtection` model. Per ECMA-376 §18.3.1.85,
-    /// absent attribute or value `"1"` means the action is **not**
-    /// allowed; `"0"` means it **is** allowed. The writer follows the
-    /// same convention.
+    /// value `"1"` means the action is **not** allowed; `"0"` means it
+    /// **is** allowed. The writer follows the same convention. The
+    /// selectLockedCells/selectUnlockedCells attributes default to false
+    /// in OOXML, so absence means selection is allowed.
     fn parse_sheet_protection_element(
         worksheet: &mut duke_sheets_core::Worksheet,
         e: &quick_xml::events::BytesStart<'_>,
@@ -2818,6 +2850,8 @@ impl XlsxReader {
 
         let mut prot = SheetProtection {
             protected: true,
+            select_locked_cells: true,
+            select_unlocked_cells: true,
             ..Default::default()
         };
         let mut explicit_sheet = false;
@@ -2924,6 +2958,51 @@ impl XlsxReader {
         }
 
         worksheet.set_protection(Some(prot));
+    }
+
+    fn parse_protected_range_element(
+        e: &quick_xml::events::BytesStart<'_>,
+    ) -> Option<duke_sheets_core::ProtectedRange> {
+        let mut name = None;
+        let mut ranges = Vec::new();
+        let mut password_hash = None;
+        let mut security_descriptor = None;
+
+        for attr in e.attributes().flatten() {
+            let Ok(value) = attr.unescape_value() else {
+                continue;
+            };
+            match attr.key.local_name().as_ref() {
+                b"name" => name = Some(value.to_string()),
+                b"sqref" => {
+                    for piece in value.split_whitespace() {
+                        match CellRange::parse(piece) {
+                            Ok(range) => ranges.push(range),
+                            Err(err) => log::warn!(
+                                "Invalid protectedRange sqref piece '{}': {}",
+                                piece,
+                                err
+                            ),
+                        }
+                    }
+                }
+                b"password" => {
+                    if let Ok(h) = u16::from_str_radix(value.as_ref(), 16) {
+                        password_hash = Some(h);
+                    }
+                }
+                b"securityDescriptor" => security_descriptor = Some(value.to_string()),
+                _ => {}
+            }
+        }
+
+        let name = name?;
+        Some(duke_sheets_core::ProtectedRange {
+            name,
+            ranges,
+            password_hash,
+            security_descriptor,
+        })
     }
 
     fn parse_hyperlink_element(

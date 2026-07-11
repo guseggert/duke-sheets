@@ -8,6 +8,7 @@ use crate::cell::{CellAddress, CellError, CellValue};
 use crate::error::{Error, Result};
 use crate::form_control::{radio_groups, CheckState, FormControlKind, ListSelection};
 use crate::named_range::{NameScope, NamedRange, NamedRangeCollection};
+use crate::protection::WorkbookProtection;
 use crate::worksheet::{SheetVisibility, Worksheet};
 use crate::MAX_SHEET_NAME_LEN;
 use duke_sheets_chart::Chart;
@@ -35,6 +36,8 @@ pub struct Workbook {
     sheet_order: Vec<SheetSlot>,
     /// Workbook settings
     settings: WorkbookSettings,
+    /// Workbook structure/window protection.
+    workbook_protection: Option<WorkbookProtection>,
     /// Active sheet index
     active_sheet: usize,
     /// Named ranges (defined names)
@@ -58,6 +61,7 @@ impl Workbook {
             chartsheets: Vec::new(),
             sheet_order: Vec::new(),
             settings: WorkbookSettings::default(),
+            workbook_protection: None,
             active_sheet: 0,
             named_ranges: NamedRangeCollection::new(),
             calc_cache: None,
@@ -75,6 +79,7 @@ impl Workbook {
             chartsheets: Vec::new(),
             sheet_order: Vec::new(),
             settings: WorkbookSettings::default(),
+            workbook_protection: None,
             active_sheet: 0,
             named_ranges: NamedRangeCollection::new(),
             calc_cache: None,
@@ -511,6 +516,7 @@ impl Workbook {
             settings: self.settings.clone(),
             active_sheet: self.active_sheet,
             named_ranges: self.named_ranges.clone(),
+            workbook_protection: self.workbook_protection.clone(),
             calc_cache: None,
             structural_generation: self.structural_generation,
             nonce: self.nonce,
@@ -662,7 +668,8 @@ impl Workbook {
 
         // Update sheet_order: remove the entry and decrement indices above it
         if !self.sheet_order.is_empty() {
-            self.sheet_order.retain(|slot| *slot != SheetSlot::Worksheet(index));
+            self.sheet_order
+                .retain(|slot| *slot != SheetSlot::Worksheet(index));
             for slot in &mut self.sheet_order {
                 if let SheetSlot::Worksheet(ref mut idx) = slot {
                     if *idx > index {
@@ -762,6 +769,43 @@ impl Workbook {
         &mut self.settings
     }
 
+    /// Get workbook protection settings, honoring legacy `WorkbookSettings`
+    /// aliases for structure/password while preserving the new windows flag.
+    pub fn workbook_protection(&self) -> Option<WorkbookProtection> {
+        if let Some(protection) = &self.workbook_protection {
+            let mut protection = protection.clone();
+            protection.structure = self.settings.protected;
+            protection.password_hash = self.settings.password_hash;
+            Some(protection)
+        } else {
+            if self.settings.protected || self.settings.password_hash.is_some() {
+                Some(WorkbookProtection {
+                    structure: self.settings.protected,
+                    windows: false,
+                    password_hash: self.settings.password_hash,
+                })
+            } else {
+                None
+            }
+        }
+    }
+
+    /// Set workbook protection settings.
+    ///
+    /// This keeps the legacy `WorkbookSettings::protected` and
+    /// `WorkbookSettings::password_hash` fields synchronized as aliases for
+    /// structure protection.
+    pub fn set_workbook_protection(&mut self, protection: Option<WorkbookProtection>) {
+        if let Some(ref protection) = protection {
+            self.settings.protected = protection.structure;
+            self.settings.password_hash = protection.password_hash;
+        } else {
+            self.settings.protected = false;
+            self.settings.password_hash = None;
+        }
+        self.workbook_protection = protection;
+    }
+
     /// Define a new workbook-scoped named range
     ///
     /// # Example
@@ -818,7 +862,8 @@ impl Workbook {
 
     /// Remove a sheet-scoped named range
     pub fn remove_name_from_sheet(&mut self, name: &str, sheet_index: usize) -> Option<NamedRange> {
-        let result = self.named_ranges
+        let result = self
+            .named_ranges
             .remove(name, &NameScope::Sheet(sheet_index));
         if result.is_some() {
             self.structural_generation += 1;
@@ -1038,6 +1083,24 @@ mod tests {
         let wb = Workbook::new();
         assert_eq!(wb.sheet_count(), 1);
         assert_eq!(wb.worksheet(0).unwrap().name(), "Sheet1");
+    }
+
+    #[test]
+    fn workbook_settings_remain_protection_aliases() {
+        let mut wb = Workbook::new();
+        wb.set_workbook_protection(Some(WorkbookProtection {
+            structure: true,
+            windows: true,
+            password_hash: Some(0x1111),
+        }));
+
+        wb.settings_mut().protected = false;
+        wb.settings_mut().password_hash = Some(0x2222);
+
+        let protection = wb.workbook_protection().unwrap();
+        assert!(!protection.structure);
+        assert!(protection.windows);
+        assert_eq!(protection.password_hash, Some(0x2222));
     }
 
     #[test]
