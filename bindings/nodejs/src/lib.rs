@@ -808,7 +808,10 @@ impl Workbook {
         })
     }
 
-    /// Save the workbook to a file
+    /// Save the workbook to a file.
+    ///
+    /// For Excel formats, form-control state is synchronized into linked cells
+    /// in the serialized file, replacing existing values and formulas there.
     ///
     /// The format is determined by the file extension:
     /// - `.xlsx` for Excel format
@@ -826,7 +829,9 @@ impl Workbook {
         })
     }
 
-    /// Save the workbook to a password-protected file. The encryption
+    /// Save the workbook to a password-protected file. Form-control state is
+    /// synchronized into linked cells in the serialized file, replacing
+    /// existing values and formulas there. The encryption
     /// variant is selected via `profile`:
     ///
     /// - `"default"` (or null) - Agile-256 for .xlsx, RC4 CryptoAPI 128 for .xls
@@ -1164,6 +1169,8 @@ pub fn from_bytes_async(data: Buffer) -> AsyncTask<OpenBytesTask> {
 #[napi]
 impl Workbook {
     /// Save the workbook to a file asynchronously (non-blocking).
+    /// For Excel formats, form-control state is synchronized into linked cells
+    /// in the serialized file without changing this workbook.
     ///
     /// @param path - Path to save to
     /// @returns Promise<void>

@@ -14,6 +14,13 @@
 //! that a *linked cell* still receives Excel's one-based value at
 //! runtime.
 //!
+//! [`crate::Workbook::sync_form_control_links`] projects control state
+//! into linked cells using Excel's runtime conventions. The high-level
+//! Excel-format save APIs serialize a synchronized snapshot without changing
+//! the caller's workbook. Synchronization replaces existing cell values and
+//! formulas in the output; low-level format writers are immutable and require
+//! an explicit call before writing.
+//!
 //! ## Example
 //!
 //! ```rust

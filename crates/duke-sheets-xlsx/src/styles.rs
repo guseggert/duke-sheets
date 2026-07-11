@@ -1,7 +1,7 @@
 //! XLSX styles (styles.xml) read/write helpers
 
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::hash::{Hash, Hasher};
 use std::io::{BufReader, Cursor, Read};
 use std::sync::{Mutex, OnceLock};
@@ -68,15 +68,18 @@ fn workbook_style_fingerprint(workbook: &Workbook) -> u64 {
     for (sheet_idx, sheet) in workbook.worksheets().enumerate() {
         sheet_idx.hash(&mut hasher);
         sheet.name().hash(&mut hasher);
-        sheet.cell_count().hash(&mut hasher);
-        for (row, col, cell) in sheet.iter_cells() {
-            row.hash(&mut hasher);
-            col.hash(&mut hasher);
-            cell.style_index.hash(&mut hasher);
-            if let Some(style) = sheet.style_by_index(cell.style_index) {
-                style.hash(&mut hasher);
+        let mut style_hashes = BTreeSet::new();
+        for style_index in std::iter::once(0)
+            .chain(sheet.iter_cells().map(|(_, _, cell)| cell.style_index))
+        {
+            let mut style_hasher = DefaultHasher::new();
+            style_index.hash(&mut style_hasher);
+            if let Some(style) = sheet.style_by_index(style_index) {
+                style.hash(&mut style_hasher);
             }
+            style_hashes.insert(style_hasher.finish());
         }
+        style_hashes.hash(&mut hasher);
     }
     hasher.finish()
 }

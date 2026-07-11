@@ -746,15 +746,20 @@ impl Workbook {
         })
     }
 
+    /// Save XLSX bytes with form-control state synchronized into linked cells,
+    /// replacing existing values and formulas in the output.
     #[wasm_bindgen(js_name = saveXlsxBytes)]
     pub fn save_xlsx_bytes(&self) -> Result<Vec<u8>, JsError> {
         let wb = self.inner.borrow();
+        let snapshot = wb.synchronized_for_save();
+        let wb = snapshot.as_ref().unwrap_or_else(|| &*wb);
         let mut buf = Vec::new();
-        XlsxWriter::write(&wb, Cursor::new(&mut buf)).map_err(to_js_error)?;
+        XlsxWriter::write(wb, Cursor::new(&mut buf)).map_err(to_js_error)?;
         Ok(buf)
     }
 
-    /// Save the workbook as encrypted XLSX bytes. `profile` selects
+    /// Save the workbook as encrypted XLSX bytes after synchronizing
+    /// form-control state into linked cells. `profile` selects
     /// the encryption variant; passing `null`/`undefined` uses the
     /// Agile-256 default. Valid values: `"agile"`, `"standard"`.
     /// `keyBits` and `spinCount` override the defaults where the
@@ -767,13 +772,16 @@ impl Workbook {
         key_bits: Option<u32>,
         spin_count: Option<u32>,
     ) -> Result<Vec<u8>, JsError> {
-        let wb = self.inner.borrow();
         let xlsx_profile = parse_xlsx_profile(profile.as_deref(), key_bits, spin_count)
             .map_err(|e| JsError::new(&e))?;
-        XlsxWriter::write_to_bytes_encrypted(&wb, password, &xlsx_profile).map_err(to_js_error)
+        let wb = self.inner.borrow();
+        let snapshot = wb.synchronized_for_save();
+        let wb = snapshot.as_ref().unwrap_or_else(|| &*wb);
+        XlsxWriter::write_to_bytes_encrypted(wb, password, &xlsx_profile).map_err(to_js_error)
     }
 
-    /// Save the workbook as encrypted XLS bytes. `profile` selects
+    /// Save the workbook as encrypted XLS bytes after synchronizing
+    /// form-control state into linked cells. `profile` selects
     /// the FilePass variant; `null` defaults to RC4 CryptoAPI 128.
     /// Valid values: `"rc4-cryptoapi"`, `"rc4-legacy"`, `"xor"`.
     /// `keyBits` controls RC4 CryptoAPI key size (40 or 128). XOR is
@@ -785,18 +793,24 @@ impl Workbook {
         profile: Option<String>,
         key_bits: Option<u32>,
     ) -> Result<Vec<u8>, JsError> {
-        let wb = self.inner.borrow();
         let variant =
             parse_xls_variant(profile.as_deref(), key_bits).map_err(|e| JsError::new(&e))?;
-        duke_sheets_xls::XlsWriter::write_to_bytes_encrypted(&wb, password, variant)
+        let wb = self.inner.borrow();
+        let snapshot = wb.synchronized_for_save();
+        let wb = snapshot.as_ref().unwrap_or_else(|| &*wb);
+        duke_sheets_xls::XlsWriter::write_to_bytes_encrypted(wb, password, variant)
             .map_err(to_js_error)
     }
 
+    /// Save XLSB bytes with form-control state synchronized into linked cells,
+    /// replacing existing values and formulas in the output.
     #[wasm_bindgen(js_name = saveXlsbBytes)]
     pub fn save_xlsb_bytes(&self) -> Result<Vec<u8>, JsError> {
         let wb = self.inner.borrow();
+        let snapshot = wb.synchronized_for_save();
+        let wb = snapshot.as_ref().unwrap_or_else(|| &*wb);
         let mut buf = Vec::new();
-        XlsbWriter::write(&wb, Cursor::new(&mut buf)).map_err(to_js_error)?;
+        XlsbWriter::write(wb, Cursor::new(&mut buf)).map_err(to_js_error)?;
         Ok(buf)
     }
 

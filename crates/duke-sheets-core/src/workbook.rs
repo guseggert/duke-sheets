@@ -1,13 +1,16 @@
 //! Workbook type - the main document structure
 
+use std::any::Any;
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use std::any::Any;
+use crate::cell::{CellAddress, CellError, CellValue};
 use crate::error::{Error, Result};
+use crate::form_control::{radio_groups, CheckState, FormControlKind, ListSelection};
 use crate::named_range::{NameScope, NamedRange, NamedRangeCollection};
 use crate::worksheet::{SheetVisibility, Worksheet};
-use duke_sheets_chart::Chart;
 use crate::MAX_SHEET_NAME_LEN;
+use duke_sheets_chart::Chart;
 
 static NEXT_WORKBOOK_NONCE: AtomicU64 = AtomicU64::new(1);
 
@@ -139,6 +142,184 @@ impl Workbook {
     /// Iterate over all worksheets mutably
     pub fn worksheets_mut(&mut self) -> impl Iterator<Item = &mut Worksheet> {
         self.worksheets.iter_mut()
+    }
+
+    /// Synchronize form-control state into each control's linked cell.
+    ///
+    /// This mirrors Excel's runtime behavior: checkboxes write booleans
+    /// (`#N/A` for mixed), single-select lists and dropdowns write a
+    /// one-based item index, option-button groups write their one-based
+    /// selected index, and scrollbars/spinners write their numeric value.
+    /// Fresh unchecked/no-selection/multi-select links preserve a blank cell;
+    /// an existing linked value is reset to `FALSE` or `0`. Existing formulas
+    /// are replaced. Malformed, external-workbook, and unknown-sheet links are
+    /// left unchanged. If multiple controls target one cell, the last control
+    /// in worksheet order wins.
+    ///
+    /// Returns the number of distinct linked cells updated.
+    pub fn sync_form_control_links(&mut self) -> usize {
+        let mut updates: BTreeMap<(usize, u32, u16), CellValue> = BTreeMap::new();
+
+        for source_sheet in 0..self.worksheets.len() {
+            let controls = self.worksheets[source_sheet].form_controls();
+            let mut radio_values = vec![None; controls.len()];
+            for group in radio_groups(controls) {
+                let value = group
+                    .iter()
+                    .position(|&index| {
+                        matches!(
+                            controls[index].kind,
+                            FormControlKind::OptionButton {
+                                state: CheckState::Checked,
+                                ..
+                            }
+                        )
+                    })
+                    .map(|index| CellValue::Number(index as f64 + 1.0))
+                    .unwrap_or(CellValue::Empty);
+                for index in group {
+                    radio_values[index] = Some(value.clone());
+                }
+            }
+
+            for (index, control) in controls.iter().enumerate() {
+                let (link, value) = match &control.kind {
+                    FormControlKind::Checkbox {
+                        state, cell_link, ..
+                    } => {
+                        let value = match state {
+                            CheckState::Unchecked => CellValue::Boolean(false),
+                            CheckState::Checked => CellValue::Boolean(true),
+                            CheckState::Mixed => CellValue::Error(CellError::Na),
+                        };
+                        (cell_link.as_deref(), value)
+                    }
+                    FormControlKind::ListBox {
+                        cell_link,
+                        selection,
+                        selected,
+                        ..
+                    } => {
+                        let value = if *selection == ListSelection::Single {
+                            selected
+                                .first()
+                                .map(|index| CellValue::Number(f64::from(*index) + 1.0))
+                                .unwrap_or(CellValue::Empty)
+                        } else {
+                            CellValue::Empty
+                        };
+                        (cell_link.as_deref(), value)
+                    }
+                    FormControlKind::Dropdown {
+                        cell_link,
+                        selected,
+                        ..
+                    } => (
+                        cell_link.as_deref(),
+                        selected
+                            .map(|index| CellValue::Number(f64::from(index) + 1.0))
+                            .unwrap_or(CellValue::Empty),
+                    ),
+                    FormControlKind::Scrollbar {
+                        cell_link, value, ..
+                    }
+                    | FormControlKind::Spinner {
+                        cell_link, value, ..
+                    } => (cell_link.as_deref(), CellValue::Number(f64::from(*value))),
+                    FormControlKind::OptionButton { cell_link, .. } => (
+                        cell_link.as_deref(),
+                        radio_values[index].clone().unwrap_or(CellValue::Empty),
+                    ),
+                    FormControlKind::Button { .. }
+                    | FormControlKind::Label { .. }
+                    | FormControlKind::GroupBox { .. } => continue,
+                };
+
+                if let Some((sheet, address)) =
+                    link.and_then(|link| self.resolve_control_link(source_sheet, link))
+                {
+                    let existing = self.worksheets[sheet].get_value_at(address.row, address.col);
+                    let fresh_blank = existing == CellValue::Empty
+                        && !self.worksheets[sheet].has_formula_at(address.row, address.col);
+                    let value = if matches!(
+                        &control.kind,
+                        FormControlKind::Checkbox {
+                            state: CheckState::Unchecked,
+                            ..
+                        }
+                    ) && fresh_blank
+                    {
+                        CellValue::Empty
+                    } else if value == CellValue::Empty && !fresh_blank {
+                        CellValue::Number(0.0)
+                    } else {
+                        value
+                    };
+                    updates.insert((sheet, address.row, address.col), value);
+                }
+            }
+
+        }
+
+        let mut updated = 0;
+        for ((sheet, row, col), value) in updates {
+            if self.worksheets[sheet]
+                .set_cell_value_at(row, col, value)
+                .is_ok()
+            {
+                updated += 1;
+            }
+        }
+        updated
+    }
+
+    /// Create a serialization snapshot with form-control linked cells
+    /// synchronized. Calculation caches are omitted; persisted workbook state
+    /// and the roundtrip nonce are retained.
+    #[doc(hidden)]
+    pub fn synchronized_for_save(&self) -> Option<Self> {
+        if !self
+            .worksheets
+            .iter()
+            .flat_map(|sheet| sheet.form_controls())
+            .any(|control| control.cell_link().is_some())
+        {
+            return None;
+        }
+        let mut snapshot = Self {
+            worksheets: self.worksheets.clone(),
+            chartsheets: self.chartsheets.clone(),
+            sheet_order: self.sheet_order.clone(),
+            settings: self.settings.clone(),
+            active_sheet: self.active_sheet,
+            named_ranges: self.named_ranges.clone(),
+            calc_cache: None,
+            structural_generation: self.structural_generation,
+            nonce: self.nonce,
+        };
+        snapshot.sync_form_control_links();
+        Some(snapshot)
+    }
+
+    fn resolve_control_link(
+        &self,
+        source_sheet: usize,
+        link: &str,
+    ) -> Option<(usize, CellAddress)> {
+        let link = link.trim().strip_prefix('=').unwrap_or(link.trim());
+        let (sheet, address) = match link.rsplit_once('!') {
+            Some((sheet, address)) => {
+                let sheet = parse_link_sheet_name(sheet)?;
+                let folded = sheet.to_lowercase();
+                let index = self
+                    .worksheets
+                    .iter()
+                    .position(|worksheet| worksheet.name().to_lowercase() == folded)?;
+                (index, address)
+            }
+            None => (source_sheet, link),
+        };
+        Some((sheet, CellAddress::parse(address).ok()?))
     }
 
     /// Structural generation counter - incremented when sheets are added,
@@ -526,6 +707,33 @@ impl Workbook {
     }
 }
 
+fn parse_link_sheet_name(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.contains(['[', ']']) {
+        return None;
+    }
+    if let Some(quoted) = value.strip_prefix('\'') {
+        let quoted = quoted.strip_suffix('\'')?;
+        let mut name = String::with_capacity(quoted.len());
+        let mut chars = quoted.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch == '\'' {
+                if chars.next() != Some('\'') {
+                    return None;
+                }
+                name.push('\'');
+            } else {
+                name.push(ch);
+            }
+        }
+        (!name.is_empty()).then_some(name)
+    } else if value.is_empty() || value.contains('\'') {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
 impl Default for Workbook {
     fn default() -> Self {
         Self::new()
@@ -576,6 +784,7 @@ pub struct ChartSheet {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{CellError, CellValue, CheckState, FormControl, FormControlKind, ListSelection};
 
     #[test]
     fn test_new_workbook() {
@@ -726,5 +935,178 @@ mod tests {
         wb.add_chartsheet(cs).unwrap();
         assert_eq!(wb.sheet_order().len(), 2);
         assert_eq!(wb.sheet_order()[1], SheetSlot::ChartSheet(0));
+    }
+
+    #[test]
+    fn sync_form_control_links_matches_excel_semantics() {
+        let mut wb = Workbook::new();
+        wb.rename_worksheet(0, "Controls").unwrap();
+        wb.add_worksheet_with_name("Linked Data").unwrap();
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_cell_formula("A8", "=FALSE").unwrap();
+        ws.set_cell_formula("A11", "=0").unwrap();
+        ws.set_cell_value("A3", 99.0).unwrap();
+        ws.set_cell_value("A10", true).unwrap();
+
+        let kinds = [
+            FormControlKind::Checkbox {
+                caption: "mixed".into(),
+                state: CheckState::Mixed,
+                cell_link: Some("$A$1".into()),
+                no_3d: false,
+            },
+            FormControlKind::ListBox {
+                input_range: None,
+                cell_link: Some("$A$2".into()),
+                selection: ListSelection::Single,
+                selected: vec![2],
+                no_3d: false,
+            },
+            FormControlKind::ListBox {
+                input_range: None,
+                cell_link: Some("$A$3".into()),
+                selection: ListSelection::Multi,
+                selected: vec![0, 2, 3],
+                no_3d: false,
+            },
+            FormControlKind::Dropdown {
+                input_range: None,
+                cell_link: Some("$A$4".into()),
+                selected: None,
+                lines: 8,
+                no_3d: false,
+            },
+            FormControlKind::Scrollbar {
+                value: 55,
+                min: 0,
+                max: 100,
+                increment: 1,
+                page: 10,
+                horizontal: false,
+                cell_link: Some("$A$5".into()),
+            },
+            FormControlKind::Spinner {
+                value: 18,
+                min: 0,
+                max: 30,
+                increment: 1,
+                cell_link: Some("'Linked Data'!$A$1".into()),
+            },
+            FormControlKind::OptionButton {
+                caption: "one".into(),
+                state: CheckState::Unchecked,
+                cell_link: Some("$A$7".into()),
+                first_in_group: false,
+                no_3d: false,
+            },
+            FormControlKind::OptionButton {
+                caption: "two".into(),
+                state: CheckState::Checked,
+                cell_link: Some("$A$7".into()),
+                first_in_group: false,
+                no_3d: false,
+            },
+            FormControlKind::Checkbox {
+                caption: "formula overwrite".into(),
+                state: CheckState::Checked,
+                cell_link: Some("$A$8".into()),
+                no_3d: false,
+            },
+            FormControlKind::Checkbox {
+                caption: "fresh unchecked".into(),
+                state: CheckState::Unchecked,
+                cell_link: Some("$A$9".into()),
+                no_3d: false,
+            },
+            FormControlKind::Checkbox {
+                caption: "changed unchecked".into(),
+                state: CheckState::Unchecked,
+                cell_link: Some("$A$10".into()),
+                no_3d: false,
+            },
+            FormControlKind::Dropdown {
+                input_range: None,
+                cell_link: Some("$A$11".into()),
+                selected: None,
+                lines: 8,
+                no_3d: false,
+            },
+        ];
+        for kind in kinds {
+            ws.add_form_control(FormControl::new(kind));
+        }
+
+        assert_eq!(wb.sync_form_control_links(), 11);
+        let ws = wb.worksheet(0).unwrap();
+        assert_eq!(ws.get_value("A1").unwrap(), CellValue::Error(CellError::Na));
+        assert_eq!(ws.get_value("A2").unwrap(), CellValue::Number(3.0));
+        assert_eq!(ws.get_value("A3").unwrap(), CellValue::Number(0.0));
+        assert_eq!(ws.get_value("A4").unwrap(), CellValue::Empty);
+        assert_eq!(ws.get_value("A5").unwrap(), CellValue::Number(55.0));
+        assert_eq!(ws.get_value("A7").unwrap(), CellValue::Number(2.0));
+        assert_eq!(ws.get_value("A8").unwrap(), CellValue::Boolean(true));
+        assert_eq!(ws.get_value("A9").unwrap(), CellValue::Empty);
+        assert_eq!(ws.get_value("A10").unwrap(), CellValue::Boolean(false));
+        assert_eq!(ws.get_value("A11").unwrap(), CellValue::Number(0.0));
+        assert!(!ws.has_formula_at(10, 0));
+        assert!(!ws.has_formula_at(7, 0));
+        assert_eq!(
+            wb.worksheet(1).unwrap().get_value("A1").unwrap(),
+            CellValue::Number(18.0)
+        );
+    }
+
+    #[test]
+    fn sync_form_control_links_resolves_quoted_sheets_and_skips_unsupported_links() {
+        let mut wb = Workbook::new();
+        wb.add_worksheet_with_name("It's A! Sheet").unwrap();
+        let ws = wb.worksheet_mut(0).unwrap();
+        for link in [
+            "='It''s A! Sheet'!$B$2",
+            "SUM(A1:A3)",
+            "[Other.xlsx]Sheet1!$A$1",
+            "Missing!$A$1",
+            "=''!$A$1",
+            "='Bob's'!$A$1",
+        ] {
+            ws.add_form_control(FormControl::new(FormControlKind::Checkbox {
+                caption: link.into(),
+                state: CheckState::Checked,
+                cell_link: Some(link.into()),
+                no_3d: false,
+            }));
+        }
+
+        assert_eq!(wb.sync_form_control_links(), 1);
+        assert_eq!(
+            wb.worksheet(1).unwrap().get_value("B2").unwrap(),
+            CellValue::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn sync_form_control_links_uses_control_order_for_duplicate_targets() {
+        let mut wb = Workbook::new();
+        assert!(wb.synchronized_for_save().is_none());
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.add_form_control(FormControl::new(FormControlKind::Spinner {
+            value: 7,
+            min: 0,
+            max: 10,
+            increment: 1,
+            cell_link: Some("$A$1".into()),
+        }));
+        ws.add_form_control(FormControl::new(FormControlKind::Checkbox {
+            caption: "later".into(),
+            state: CheckState::Checked,
+            cell_link: Some("$A$1".into()),
+            no_3d: false,
+        }));
+
+        assert_eq!(wb.sync_form_control_links(), 1);
+        assert_eq!(
+            wb.worksheet(0).unwrap().get_value("A1").unwrap(),
+            CellValue::Boolean(true)
+        );
     }
 }

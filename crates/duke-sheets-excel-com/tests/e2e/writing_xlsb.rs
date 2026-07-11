@@ -1476,11 +1476,6 @@ fn excel_can_read_xlsb_form_controls_we_emit() {
     for (i, item) in ["Alpha", "Beta", "Gamma", "Delta"].iter().enumerate() {
         ws.set_cell_value_at(i as u32, 7, *item).expect("list item");
     }
-    // Linked-cell values are one-based (Excel's runtime convention),
-    // so they are model index + 1.
-    ws.set_cell_value_at(1, 3, true).expect("D2");
-    ws.set_cell_value_at(3, 3, 3.0).expect("D4");
-    ws.set_cell_value_at(5, 3, 40.0).expect("D6");
     ws.set_cell_value_at(0, 9, "Name").expect("J1");
     ws.set_cell_value_at(1, 9, "Alice").expect("J2");
     ws.add_table(Table {
@@ -1563,9 +1558,13 @@ fn excel_can_read_xlsb_form_controls_we_emit() {
         let row = 1 + 2 * i as u32;
         ws.add_form_control(FormControl::with_anchor(kind, anchor(1, row, 3, row + 1)));
     }
+    assert_eq!(wb.sync_form_control_links(), 3);
 
     let result = roundtrip_through_excel_xlsb(&wb);
     let sheet = result.worksheet(0).unwrap();
+    assert_eq!(sheet.get_value("D2").unwrap(), CellValue::Boolean(true));
+    assert_eq!(sheet.get_value("D4").unwrap(), CellValue::Number(3.0));
+    assert_eq!(sheet.get_value("D6").unwrap(), CellValue::Number(40.0));
     let controls = sheet.form_controls();
     assert_eq!(controls.len(), count, "every control survives Excel");
     for (i, control) in controls.iter().enumerate() {

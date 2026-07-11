@@ -698,7 +698,10 @@ impl PyWorkbook {
         })
     }
 
-    /// Save the workbook to a file
+    /// Save the workbook to a file.
+    ///
+    /// For Excel formats, form-control state is synchronized into linked cells
+    /// in the serialized file, replacing existing values and formulas there.
     ///
     /// The format is determined by the file extension:
     /// - .xlsx for Excel format
@@ -717,7 +720,9 @@ impl PyWorkbook {
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 
-    /// Save the workbook to a password-protected file.
+    /// Save the workbook to a password-protected file. Form-control state is
+    /// synchronized into linked cells in the serialized file, replacing
+    /// existing values and formulas there.
     ///
     /// The encryption variant is chosen by `profile`:
     /// - "default" (or None): Agile AES-256 for .xlsx, RC4 CryptoAPI 128

@@ -8,7 +8,7 @@ use ahash::AHashMap;
 /// Excel files typically have many cells sharing the same style.
 /// The style pool ensures each unique style is stored only once,
 /// and cells reference styles by index.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StylePool {
     /// All unique styles (index 0 is default)
     styles: Vec<Style>,

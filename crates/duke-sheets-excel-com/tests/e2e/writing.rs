@@ -1408,17 +1408,6 @@ fn excel_can_read_xlsx_form_controls_we_emit() {
     for (i, item) in ["Alpha", "Beta", "Gamma", "Delta"].iter().enumerate() {
         ws.set_cell_value_at(i as u32, 7, *item).expect("list item");
     }
-    // Linked cells must agree with control states: Excel drives
-    // linked controls from their cells on load.
-    // Linked-cell values are one-based (Excel's runtime convention),
-    // so they are model index + 1.
-    ws.set_cell_value("D2", true).expect("D2");
-    ws.set_cell_value("D3", 1.0).expect("D3");
-    ws.set_cell_value("D4", 3.0).expect("D4");
-    ws.set_cell_value("D5", 4.0).expect("D5");
-    ws.set_cell_value("D6", 40.0).expect("D6");
-    ws.set_cell_value("D7", 12.0).expect("D7");
-
     let kinds: Vec<FormControlKind> = vec![
         FormControlKind::Button {
             caption: "Run Report".to_string(),
@@ -1500,9 +1489,16 @@ fn excel_can_read_xlsx_form_controls_we_emit() {
         let row = 1 + 2 * i as u32;
         ws.add_form_control(FormControl::with_anchor(kind, anchor(1, row, 3, row + 1)));
     }
+    assert_eq!(wb.sync_form_control_links(), 6);
 
     let result = roundtrip_through_excel(&wb);
     let sheet = result.worksheet(0).unwrap();
+    assert_eq!(sheet.get_value("D2").unwrap(), CellValue::Boolean(true));
+    assert_eq!(sheet.get_value("D3").unwrap(), CellValue::Number(1.0));
+    assert_eq!(sheet.get_value("D4").unwrap(), CellValue::Number(3.0));
+    assert_eq!(sheet.get_value("D5").unwrap(), CellValue::Number(4.0));
+    assert_eq!(sheet.get_value("D6").unwrap(), CellValue::Number(40.0));
+    assert_eq!(sheet.get_value("D7").unwrap(), CellValue::Number(12.0));
     let controls = sheet.form_controls();
     assert_eq!(controls.len(), count, "every control survives Excel");
     for (i, control) in controls.iter().enumerate() {
