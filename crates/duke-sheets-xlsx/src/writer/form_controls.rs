@@ -15,13 +15,13 @@ use duke_sheets_core::{
     CheckState, DrawingMeta, FormControl, FormControlKind, HorizontalAlignment, ListSelection,
     VerticalAlignment, Worksheet,
 };
-use duke_sheets_vml::anchor_cell_markers;
+use duke_sheets_vml::anchor_cell_markers_with_metrics;
 
 use super::{XlsxError, XlsxResult};
 
 /// The `formControlPr/@objectType` name (differs from the VML
 /// ObjectType for checkboxes: `CheckBox` vs `Checkbox`).
-pub(super) fn ctrl_prop_object_type(kind: &FormControlKind) -> &'static str {
+pub(super) fn ctrl_prop_object_type(kind: &FormControlKind) -> &str {
     match kind {
         FormControlKind::Button { .. } => "Button",
         FormControlKind::Checkbox { .. } => "CheckBox",
@@ -32,6 +32,7 @@ pub(super) fn ctrl_prop_object_type(kind: &FormControlKind) -> &'static str {
         FormControlKind::Dropdown { .. } => "Drop",
         FormControlKind::Scrollbar { .. } => "Scroll",
         FormControlKind::Spinner { .. } => "Spin",
+        FormControlKind::Unknown { object_type, .. } => object_type,
     }
 }
 
@@ -73,6 +74,7 @@ pub(super) fn write_ctrl_prop_part<W: Write + Seek>(
     control: &FormControl,
     first_button: bool,
 ) -> XlsxResult<()> {
+    control.validate()?;
     let path = format!("xl/ctrlProps/ctrlProp{num}.xml");
     let options = zip::write::SimpleFileOptions::default();
     zip.start_file(path, options).map_err(XlsxError::from)?;
@@ -235,6 +237,13 @@ pub(super) fn write_ctrl_prop_part<W: Write + Seek>(
             attrs.push(("page", "10".to_string()));
             attrs.push(("val", value.to_string()));
         }
+        FormControlKind::Unknown { raw_properties, .. } => {
+            for (name, value) in raw_properties {
+                if name != "objectType" && name != "xmlns" && !name.starts_with("xmlns:") {
+                    attrs.push((name.as_str(), value.clone()));
+                }
+            }
+        }
     }
     if let Some(caption) = control.caption() {
         if let Some(alignment) = caption.horizontal_alignment {
@@ -274,7 +283,10 @@ pub(super) fn write_ctrl_prop_part<W: Write + Seek>(
 /// Requires="x14"><controls>...` block referencing the sheet's
 /// controls. `entries` pairs each control with its shape id, rel id,
 /// display name, and radio-group-head flag.
-pub(super) fn controls_block(entries: &[ControlEntry<'_>]) -> String {
+pub(super) fn controls_block(
+    entries: &[ControlEntry<'_>],
+    metrics: &(impl duke_sheets_chart::DrawingMetrics + ?Sized),
+) -> String {
     const MC_NS: &str = "http://schemas.openxmlformats.org/markup-compatibility/2006";
     let mut xml = String::new();
     xml.push_str(&format!(
@@ -320,7 +332,8 @@ pub(super) fn controls_block(entries: &[ControlEntry<'_>]) -> String {
             FormControlKind::GroupBox { .. }
             | FormControlKind::ListBox { .. }
             | FormControlKind::Scrollbar { .. }
-            | FormControlKind::Spinner { .. } => {
+            | FormControlKind::Spinner { .. }
+            | FormControlKind::Unknown { .. } => {
                 xml.push_str(" autoPict=\"0\"");
             }
         }
@@ -350,7 +363,7 @@ pub(super) fn controls_block(entries: &[ControlEntry<'_>]) -> String {
             xml.push_str(" sizeWithCells=\"1\"");
         }
         xml.push('>');
-        let (from, to) = anchor_cell_markers(&entry.anchor);
+        let (from, to) = anchor_cell_markers_with_metrics(&entry.anchor, metrics);
         for (tag, marker) in [("from", &from), ("to", &to)] {
             xml.push_str(&format!(
                 "<{tag}><xdr:col>{}</xdr:col><xdr:colOff>{}</xdr:colOff><xdr:row>{}</xdr:row><xdr:rowOff>{}</xdr:rowOff></{tag}>",

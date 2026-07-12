@@ -2810,9 +2810,20 @@ impl XlsReader {
     /// re-emit the appropriate variant.
     fn client_anchor_to_drawing_anchor(
         anchor: &crate::biff::escher::OfficeArtClientAnchor,
+        metrics: &dyn duke_sheets_chart::DrawingMetrics,
     ) -> duke_sheets_chart::DrawingAnchor {
-        const DX_EMU_PER_UNIT: i64 = 595;
-        const DY_EMU_PER_UNIT: i64 = 744;
+        let fraction_to_emu = |units: i16, extent: i64, denominator: i128| -> i64 {
+            if extent <= 0 {
+                return 0;
+            }
+            let numerator = i128::from(units) * i128::from(extent);
+            let rounded = if numerator >= 0 {
+                (numerator + denominator / 2) / denominator
+            } else {
+                (numerator - denominator / 2) / denominator
+            };
+            rounded.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
+        };
         let edit_as = match anchor.flag {
             2 => Some(duke_sheets_chart::EditAs::OneCell),
             3 => Some(duke_sheets_chart::EditAs::Absolute),
@@ -2821,15 +2832,31 @@ impl XlsReader {
         duke_sheets_chart::DrawingAnchor::TwoCell {
             from: duke_sheets_chart::CellMarker {
                 col: anchor.col_l,
-                col_offset_emu: anchor.dx_l as i64 * DX_EMU_PER_UNIT,
+                col_offset_emu: fraction_to_emu(
+                    anchor.dx_l,
+                    metrics.column_width_emu(anchor.col_l),
+                    1024,
+                ),
                 row: anchor.row_t as u32,
-                row_offset_emu: anchor.dy_t as i64 * DY_EMU_PER_UNIT,
+                row_offset_emu: fraction_to_emu(
+                    anchor.dy_t,
+                    metrics.row_height_emu(u32::from(anchor.row_t)),
+                    256,
+                ),
             },
             to: duke_sheets_chart::CellMarker {
                 col: anchor.col_r,
-                col_offset_emu: anchor.dx_r as i64 * DX_EMU_PER_UNIT,
+                col_offset_emu: fraction_to_emu(
+                    anchor.dx_r,
+                    metrics.column_width_emu(anchor.col_r),
+                    1024,
+                ),
                 row: anchor.row_b as u32,
-                row_offset_emu: anchor.dy_b as i64 * DY_EMU_PER_UNIT,
+                row_offset_emu: fraction_to_emu(
+                    anchor.dy_b,
+                    metrics.row_height_emu(u32::from(anchor.row_b)),
+                    256,
+                ),
             },
             edit_as,
         }
@@ -2881,6 +2908,7 @@ impl XlsReader {
                     blip_store,
                     formula_ctx,
                     &mut hoisted,
+                    ws,
                 ) {
                     ws.add_drawing(object);
                 }
@@ -2906,7 +2934,8 @@ impl XlsReader {
             flatten(&nodes, &mut flat);
             for node in flat {
                 if let Some(payload) = Self::image_payload_from_node(node, blip_store) {
-                    ws.add_drawing(Self::top_level_image(node, payload, None));
+                    let object = Self::top_level_image(node, payload, None, ws);
+                    ws.add_drawing(object);
                 }
             }
             // Comments straight from their NOTE records.
@@ -2973,6 +3002,7 @@ impl XlsReader {
         blip_store: &[BlipData],
         formula_ctx: &FormulaContext,
         hoisted: &mut Vec<duke_sheets_core::DrawingObject>,
+        metrics: &dyn duke_sheets_chart::DrawingMetrics,
     ) -> Option<duke_sheets_core::DrawingObject> {
         use crate::biff::obj;
 
@@ -2989,11 +3019,12 @@ impl XlsReader {
                 blip_store,
                 formula_ctx,
                 hoisted,
+                metrics,
             );
             let anchor = node
                 .client_anchor
                 .as_ref()
-                .map(Self::client_anchor_to_drawing_anchor)
+                .map(|anchor| Self::client_anchor_to_drawing_anchor(anchor, metrics))
                 .unwrap_or_default();
             let mut object = duke_sheets_core::DrawingObject::group(group);
             object.anchor = anchor;
@@ -3002,7 +3033,7 @@ impl XlsReader {
         }
 
         if let Some(payload) = Self::image_payload_from_node(node, blip_store) {
-            return Some(Self::top_level_image(node, payload, parsed.as_ref()));
+            return Some(Self::top_level_image(node, payload, parsed.as_ref(), metrics));
         }
 
         let parsed = parsed?;
@@ -3022,7 +3053,7 @@ impl XlsReader {
                 CellComment::new(note.author.clone(), text),
             );
             if let Some(anchor) = &node.client_anchor {
-                object.anchor = Self::client_anchor_to_drawing_anchor(anchor);
+                object.anchor = Self::client_anchor_to_drawing_anchor(anchor, metrics);
             }
             object.meta.hidden = !note.visible;
             return Some(object);
@@ -3033,7 +3064,7 @@ impl XlsReader {
             let anchor = node
                 .client_anchor
                 .as_ref()
-                .map(Self::client_anchor_to_drawing_anchor)
+                .map(|anchor| Self::client_anchor_to_drawing_anchor(anchor, metrics))
                 .unwrap_or_default();
             let mut object = duke_sheets_core::DrawingObject::shape(shape).with_anchor(anchor);
             object.meta = Self::node_meta(node, Some(&parsed));
@@ -3045,7 +3076,7 @@ impl XlsReader {
         let anchor = node
             .client_anchor
             .as_ref()
-            .map(Self::client_anchor_to_drawing_anchor)
+            .map(|anchor| Self::client_anchor_to_drawing_anchor(anchor, metrics))
             .unwrap_or_default();
         let mut object = duke_sheets_core::DrawingObject::form_control(control).with_anchor(anchor);
         object.meta = Self::node_meta(node, Some(&parsed));
@@ -3074,15 +3105,16 @@ impl XlsReader {
         blip_store: &[BlipData],
         formula_ctx: &FormulaContext,
         hoisted: &mut Vec<duke_sheets_core::DrawingObject>,
+        metrics: &dyn duke_sheets_chart::DrawingMetrics,
     ) -> duke_sheets_core::Group {
         use duke_sheets_core::{DrawingKind, GroupChild, GroupTransform};
 
         let fspgr = node.fspgr.unwrap_or_default();
         // The group's own placement mirrors its sheet anchor in the
-        // default-metric EMU space (or the parent child space for
-        // nested groups), matching what the writer emits.
+        // worksheet's metric-aware EMU space (or the parent child
+        // space for nested groups), matching what the writer emits.
         let (x_emu, y_emu, cx_emu, cy_emu) = if let Some(anchor) = &node.client_anchor {
-            let (x1, y1, x2, y2) = Self::client_anchor_rect_emu(anchor);
+            let (x1, y1, x2, y2) = Self::client_anchor_rect_emu(anchor, metrics);
             (x1, y1, (x2 - x1).max(0), (y2 - y1).max(0))
         } else if let Some(child) = &node.child_anchor {
             (
@@ -3122,6 +3154,7 @@ impl XlsReader {
                     blip_store,
                     formula_ctx,
                     hoisted,
+                    metrics,
                 );
                 children.push(GroupChild {
                     meta: Self::node_meta(child, parsed.as_ref()),
@@ -3339,24 +3372,22 @@ impl XlsReader {
     }
 
     /// Wrap an image payload into a top-level drawing object,
-    /// synthesising the extent from the anchored cell range plus
-    /// default cell sizes. Excel does not store an absolute EMU
-    /// dimension on XLS pictures — the bounding box is implicit in
-    /// the cell anchor — so this is a best-effort estimate using
-    /// Excel's default column width (8.43 char ≈ 64 px ≈ 609,600 EMU)
-    /// and row height (15 pt = 190,500 EMU).
+    /// synthesising the extent from the anchored cell range and the
+    /// worksheet's row and column metrics. Excel does not store a
+    /// separate absolute EMU dimension on XLS pictures.
     fn top_level_image(
         node: &EscherShapeNode,
         mut payload: duke_sheets_chart::EmbeddedImage,
         parsed: Option<&crate::biff::obj::ParsedObj>,
+        metrics: &dyn duke_sheets_chart::DrawingMetrics,
     ) -> duke_sheets_core::DrawingObject {
         let anchor = node.client_anchor.unwrap_or_default();
-        let (x1, y1, x2, y2) = Self::client_anchor_rect_emu(&anchor);
+        let (x1, y1, x2, y2) = Self::client_anchor_rect_emu(&anchor, metrics);
         payload.width_emu = (x2 - x1).max(0);
         payload.height_emu = (y2 - y1).max(0);
 
         let mut object = duke_sheets_core::DrawingObject::image(payload)
-            .with_anchor(Self::client_anchor_to_drawing_anchor(&anchor));
+            .with_anchor(Self::client_anchor_to_drawing_anchor(&anchor, metrics));
         object.meta = Self::node_meta(node, parsed);
         object.meta.name = Some(
             node.name
@@ -3366,22 +3397,20 @@ impl XlsReader {
         object
     }
 
-    /// Absolute EMU rectangle of a client anchor at Excel's default
-    /// cell metrics, reversing the writer's EMU quantisation.
+    /// Absolute EMU rectangle of a client anchor using worksheet metrics.
     fn client_anchor_rect_emu(
         anchor: &crate::biff::escher::OfficeArtClientAnchor,
+        metrics: &dyn duke_sheets_chart::DrawingMetrics,
     ) -> (i64, i64, i64, i64) {
-        const DEFAULT_COL_EMU: i64 = 609_600;
-        const DEFAULT_ROW_EMU: i64 = 190_500;
-        let x1 = i64::from(anchor.col_l) * DEFAULT_COL_EMU
-            + i64::from(anchor.dx_l) * crate::writer::ANCHOR_DX_EMU_PER_UNIT;
-        let y1 = i64::from(anchor.row_t) * DEFAULT_ROW_EMU
-            + i64::from(anchor.dy_t) * crate::writer::ANCHOR_DY_EMU_PER_UNIT;
-        let x2 = i64::from(anchor.col_r) * DEFAULT_COL_EMU
-            + i64::from(anchor.dx_r) * crate::writer::ANCHOR_DX_EMU_PER_UNIT;
-        let y2 = i64::from(anchor.row_b) * DEFAULT_ROW_EMU
-            + i64::from(anchor.dy_b) * crate::writer::ANCHOR_DY_EMU_PER_UNIT;
-        (x1, y1, x2, y2)
+        let duke_sheets_chart::DrawingAnchor::TwoCell { from, to, .. } =
+            Self::client_anchor_to_drawing_anchor(anchor, metrics)
+        else {
+            unreachable!("client anchors always convert to TwoCell")
+        };
+        let (x1, y1) = duke_sheets_chart::marker_position_emu(&from, metrics);
+        let (x2, y2) = duke_sheets_chart::marker_position_emu(&to, metrics);
+        let clamp = |value: i128| value.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64;
+        (clamp(x1), clamp(y1), clamp(x2), clamp(y2))
     }
 
     /// Build a [`duke_sheets_core::FormControl`] from a parsed OBJ
@@ -3409,6 +3438,8 @@ impl XlsReader {
                 | ot::DROPDOWN
                 | ot::SCROLLBAR
                 | ot::SPINNER
+                | ot::EDIT_BOX
+                | ot::DIALOG_BOX
         );
         if !is_control {
             return None;
@@ -3573,6 +3604,18 @@ impl XlsReader {
                     }
                 }
             }
+            ot::EDIT_BOX | ot::DIALOG_BOX => FormControlKind::Unknown {
+                object_type: if parsed.ot == ot::EDIT_BOX {
+                    "EditBox".to_string()
+                } else {
+                    "Dialog".to_string()
+                },
+                legacy_object_type: Some(parsed.ot),
+                caption: caption(),
+                raw_properties: Vec::new(),
+                raw_client_data: Vec::new(),
+                raw_obj: Some(parsed.raw_body.clone()),
+            },
             _ => unreachable!(),
         };
 

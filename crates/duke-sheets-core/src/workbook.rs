@@ -254,7 +254,8 @@ impl Workbook {
                     ),
                     FormControlKind::Button { .. }
                     | FormControlKind::Label { .. }
-                    | FormControlKind::GroupBox { .. } => continue,
+                    | FormControlKind::GroupBox { .. }
+                    | FormControlKind::Unknown { .. } => continue,
                 };
 
                 if let Some((sheet, address)) =

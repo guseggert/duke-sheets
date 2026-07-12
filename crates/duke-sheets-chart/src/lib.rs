@@ -33,7 +33,10 @@ pub use chart::{
     DrawingAnchor, EditAs, EmbeddedImage, ImageFormat, OfPieType, SplitType, Surface, UpDownBars,
 };
 pub use config::{ChartDataTable, DisplayBlanksAs, Layout, ManualLayout, View3D};
-pub use drawing::{ChildTransform, GroupTransform};
+pub use drawing::{
+    column_width_to_emu, marker_at_emu, marker_position_emu, row_height_to_emu, ChildTransform,
+    DefaultDrawingMetrics, DrawingMetrics, GroupTransform, EMU_PER_PIXEL, EMU_PER_POINT,
+};
 pub use data_labels::{DataLabel, DataLabelPosition, DataLabels, DataPoint};
 pub use error_bars::{ErrorBarDirection, ErrorBarType, ErrorBars, ErrorValueType};
 pub use formatting::{ChartColor, ChartLine, ChartShapeProperties, NumberFormat, PictureOptions};

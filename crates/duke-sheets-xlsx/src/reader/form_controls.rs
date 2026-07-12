@@ -105,6 +105,7 @@ pub(super) struct CtrlProp {
     pub text_h_align: Option<HorizontalAlignment>,
     pub text_v_align: Option<VerticalAlignment>,
     pub macro_name: Option<String>,
+    pub raw_properties: Vec<(String, String)>,
 }
 
 fn parse_horizontal_alignment(value: &str) -> Option<HorizontalAlignment> {
@@ -146,9 +147,20 @@ pub(super) fn parse_ctrl_prop(bytes: &[u8]) -> Option<CtrlProp> {
                     ..Default::default()
                 };
                 for attr in e.attributes().flatten() {
-                    let value = String::from_utf8_lossy(&attr.value).into_owned();
+                    let name = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+                    let value = attr
+                        .unescape_value()
+                        .map(|value| value.into_owned())
+                        .unwrap_or_else(|_| String::from_utf8_lossy(&attr.value).into_owned());
                     let num = value.parse::<u16>().ok();
                     let truthy = value == "1" || value.eq_ignore_ascii_case("true");
+                    if !matches!(
+                        attr.key.local_name().as_ref(),
+                        b"objectType" | b"macro" | b"textHAlign" | b"textVAlign" | b"xmlns"
+                    ) && !name.starts_with("xmlns:")
+                    {
+                        pr.raw_properties.push((name.clone(), value.clone()));
+                    }
                     match attr.key.local_name().as_ref() {
                         b"objectType" => pr.object_type = value,
                         b"checked" => {
@@ -309,9 +321,21 @@ pub(super) fn assemble(
             increment: pr.inc,
             cell_link: pr.fmla_link.clone(),
         },
-        // EditBox / Dialog are dialog-sheet controls; unknown types
-        // are skipped.
-        _ => return None,
+        object_type
+            if object_type.trim().is_empty()
+                || object_type.eq_ignore_ascii_case("Note")
+                || duke_sheets_core::form_control::is_activex_object_type(object_type) =>
+        {
+            return None
+        }
+        object_type => FormControlKind::Unknown {
+            object_type: object_type.to_string(),
+            legacy_object_type: None,
+            caption,
+            raw_properties: pr.raw_properties.clone(),
+            raw_client_data: Vec::new(),
+            raw_obj: None,
+        },
     };
 
     let mut control = FormControl::new(kind);
@@ -330,9 +354,23 @@ pub(super) fn assemble_with_vml(
     pr: &CtrlProp,
     vml: Option<&duke_sheets_vml::VmlControl>,
 ) -> Option<DrawingObject> {
+    if vml.is_some_and(|shape| {
+        shape.object_type.eq_ignore_ascii_case("Note")
+            || duke_sheets_core::form_control::is_activex_object_type(&shape.object_type)
+    }) {
+        return None;
+    }
     let caption = vml.map(|shape| shape.text.clone()).unwrap_or_default();
     let mut object = assemble(pending, pr, caption)?;
     if let Some(control) = object.kind.as_form_control_mut() {
+        if let FormControlKind::Unknown {
+            raw_client_data, ..
+        } = &mut control.kind
+        {
+            *raw_client_data = vml
+                .map(|shape| shape.raw_client_data.clone())
+                .unwrap_or_default();
+        }
         if control.macro_name.is_none() {
             control.macro_name = vml.and_then(|shape| shape.macro_name.clone());
         }

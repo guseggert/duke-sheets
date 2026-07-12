@@ -2046,7 +2046,7 @@ impl XlsxWriter {
                         }),
                     })
                     .collect();
-                let block = form_controls::controls_block(&entries);
+                let block = form_controls::controls_block(&entries, sheet);
                 w.get_mut().write_all(block.as_bytes())?;
             }
 

@@ -202,11 +202,12 @@ pub(super) fn write_drawing<W: Write + Seek>(
 ) -> XlsxResult<()> {
     let path = format!("xl/drawings/drawing{}.xml", drawing_num);
     let shape_base = (sheet_index + 1) * 1024 + 1 + sheet.comment_count();
-    let bytes = part_write::write_drawing_part(
+    let bytes = part_write::write_drawing_part_with_metrics(
         &part_objects(sheet),
         plan,
         TwinStyle::CompatExtSp,
         shape_base,
+        sheet,
     )?;
     zip.start_file(&path, zip::write::SimpleFileOptions::default())?;
     zip.write_all(&bytes)?;

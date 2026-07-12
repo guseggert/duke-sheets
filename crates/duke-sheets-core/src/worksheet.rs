@@ -14,8 +14,8 @@ use crate::cell::{CellAddress, CellData, CellRange, CellStorage, CellValue, Form
 use crate::comment::CellComment;
 use crate::conditional_format::ConditionalFormatRule;
 use crate::drawing::{
-    anchor_rect_emu, map_child_rect, CommentRef, DrawingKind, DrawingNodeMut, DrawingNodeRef,
-    DrawingObject, DrawingPath, Drawn, Shape,
+    anchor_rect_emu_with_metrics, map_child_rect, CommentRef, DrawingKind, DrawingNodeMut,
+    DrawingNodeRef, DrawingObject, DrawingPath, Drawn, Shape,
 };
 use crate::error::{Error, Result};
 use crate::form_control::{FormControl, PlacedControl};
@@ -1704,7 +1704,7 @@ impl Worksheet {
 
     /// Every form control in the drawing tree (including inside
     /// groups), in depth-first order, with its path and its absolute
-    /// EMU rectangle at Excel's default cell metrics.
+    /// EMU rectangle using this worksheet's row and column metrics.
     pub fn placed_form_controls(&self) -> Vec<PlacedControl<'_>> {
         fn walk<'a>(
             kind: &'a DrawingKind,
@@ -1731,7 +1731,7 @@ impl Worksheet {
         let mut out = Vec::new();
         for (i, object) in self.drawings.iter().enumerate() {
             let path = vec![i];
-            let rect = anchor_rect_emu(&object.anchor);
+            let rect = anchor_rect_emu_with_metrics(&object.anchor, self);
             if let DrawingKind::FormControl(control) = &object.kind {
                 out.push(PlacedControl {
                     path: path.clone(),
@@ -2151,6 +2151,34 @@ impl Worksheet {
     ) -> bool {
         self.cells
             .can_spill_to(source_row, source_col, num_rows, num_cols)
+    }
+}
+
+impl duke_sheets_chart::DrawingMetrics for Worksheet {
+    fn column_width_emu(&self, col: u16) -> i64 {
+        duke_sheets_chart::column_width_to_emu(self.column_width(col))
+    }
+
+    fn row_height_emu(&self, row: u32) -> i64 {
+        duke_sheets_chart::row_height_to_emu(self.row_height(row))
+    }
+
+    fn column_position_emu(&self, col: u16) -> i128 {
+        let default = duke_sheets_chart::column_width_to_emu(self.default_column_width());
+        let mut position = i128::from(col) * i128::from(default);
+        for (_, width) in self.custom_column_widths().range(..col) {
+            position += i128::from(duke_sheets_chart::column_width_to_emu(*width) - default);
+        }
+        position
+    }
+
+    fn row_position_emu(&self, row: u32) -> i128 {
+        let default = duke_sheets_chart::row_height_to_emu(self.default_row_height());
+        let mut position = i128::from(row) * i128::from(default);
+        for (_, height) in self.custom_row_heights().range(..row) {
+            position += i128::from(duke_sheets_chart::row_height_to_emu(*height) - default);
+        }
+        position
     }
 }
 

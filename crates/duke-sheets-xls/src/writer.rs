@@ -315,7 +315,7 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
             &addin_table,
         );
         if let Some(sheet_drawing) = drawing_state.sheets.get(&sheet_idx) {
-            write_sheet_drawing_records(&mut stream, sheet_drawing)?;
+            write_sheet_drawing_records(&mut stream, sheet_drawing, sheet)?;
         }
         write_eof(&mut stream);
         sheet_bof_offsets.push(bof_pos);
@@ -4608,10 +4608,14 @@ impl EmitAnchor {
     /// Serialise the matching anchor atom. Child anchors carry the
     /// model's raw child-space units (the group's FSPGR rectangle
     /// defines the space, so no unit conversion applies).
-    fn write_to(&self, out: &mut Vec<u8>) -> XlsResult<()> {
+    fn write_to(
+        &self,
+        out: &mut Vec<u8>,
+        metrics: &dyn duke_sheets_chart::DrawingMetrics,
+    ) -> XlsResult<()> {
         match self {
             EmitAnchor::Sheet(anchor) => {
-                client_anchor_from_drawing_anchor(anchor)?.write_to(out);
+                client_anchor_from_drawing_anchor_with_metrics(anchor, metrics)?.write_to(out);
                 Ok(())
             }
             EmitAnchor::Child(transform) => {
@@ -5185,6 +5189,7 @@ impl ShapeBuilder<'_> {
         control: &duke_sheets_core::FormControl,
     ) -> XlsResult<SheetShape> {
         use duke_sheets_core::FormControlKind;
+        control.validate()?;
         let spid = self.alloc_spid()?;
         let obj_id = self.alloc_obj_id()?;
         let text_id = control.caption().is_some().then(|| self.alloc_text_id());
@@ -5408,7 +5413,11 @@ fn write_msodrawinggroup(stream: &mut Vec<u8>, state: &DrawingState) {
 /// across the entire concatenated drawing stream. Readers
 /// concatenate the bodies of all `MSODRAWING` records for a sheet,
 /// then walk the resulting Escher tree.
-fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) -> XlsResult<()> {
+fn write_sheet_drawing_records(
+    stream: &mut Vec<u8>,
+    drawing: &SheetDrawing,
+    metrics: &dyn duke_sheets_chart::DrawingMetrics,
+) -> XlsResult<()> {
     use crate::biff::escher::{
         rec_type as er, write_patriarch_sp_container, OfficeArtFdg, OfficeArtRecordHeader,
         HEADER_LEN,
@@ -5416,7 +5425,7 @@ fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) -> 
 
     let mut flats: Vec<FlatShape> = Vec::new();
     for shape in &drawing.shapes {
-        flatten_shape(shape, &mut flats)?;
+        flatten_shape(shape, &mut flats, metrics)?;
     }
 
     // The patriarch SP_CONTAINER (FSPGR + FSP) is always emitted
@@ -5538,7 +5547,11 @@ impl FlatShape {
 
 /// Flatten one shape (and, for groups, its subtree) into the
 /// interleaved emission list, in pre-order.
-fn flatten_shape(shape: &SheetShape, out: &mut Vec<FlatShape>) -> XlsResult<()> {
+fn flatten_shape(
+    shape: &SheetShape,
+    out: &mut Vec<FlatShape>,
+    metrics: &dyn duke_sheets_chart::DrawingMetrics,
+) -> XlsResult<()> {
     use crate::biff::escher::{
         comment_fopt, complex_string_entry, fsp_flags, rec_type as er, shape_type,
         write_client_data, write_client_textbox, FoptEntry, FoptTable, OfficeArtClientAnchor,
@@ -5572,7 +5585,7 @@ fn flatten_shape(shape: &SheetShape, out: &mut Vec<FlatShape>) -> XlsResult<()> 
                 picture.hidden,
             )
             .write_to(&mut pre);
-            picture.anchor.write_to(&mut pre)?;
+            picture.anchor.write_to(&mut pre, metrics)?;
             write_client_data(&mut pre);
 
             let mut obj = Vec::new();
@@ -5597,7 +5610,7 @@ fn flatten_shape(shape: &SheetShape, out: &mut Vec<FlatShape>) -> XlsResult<()> 
             }
             .write_to(shape.shape_type, &mut pre);
             basic_shape_fopt(shape).write_to(&mut pre);
-            shape.anchor.write_to(&mut pre)?;
+            shape.anchor.write_to(&mut pre, metrics)?;
             write_client_data(&mut pre);
 
             let mut post = Vec::new();
@@ -5662,7 +5675,7 @@ fn flatten_shape(shape: &SheetShape, out: &mut Vec<FlatShape>) -> XlsResult<()> 
                 control.hidden,
             )
             .write_to(&mut pre);
-            control.anchor.write_to(&mut pre)?;
+            control.anchor.write_to(&mut pre, metrics)?;
             write_client_data(&mut pre);
 
             // Captioned controls carry their text like comments do:
@@ -5687,7 +5700,7 @@ fn flatten_shape(shape: &SheetShape, out: &mut Vec<FlatShape>) -> XlsResult<()> 
         SheetShape::Group(group) => {
             let mut kids: Vec<FlatShape> = Vec::new();
             for child in &group.children {
-                flatten_shape(child, &mut kids)?;
+                flatten_shape(child, &mut kids, metrics)?;
             }
 
             // The group's own SP container: FSPGR (child coordinate
@@ -5735,7 +5748,7 @@ fn flatten_shape(shape: &SheetShape, out: &mut Vec<FlatShape>) -> XlsResult<()> 
             if !fopt.is_empty() {
                 fopt.write_to(&mut sp_payload);
             }
-            group.anchor.write_to(&mut sp_payload)?;
+            group.anchor.write_to(&mut sp_payload, metrics)?;
             write_client_data(&mut sp_payload);
 
             // SPGR rec_len spans the group SP container plus every
@@ -5872,23 +5885,18 @@ fn drawing_dash_to_officeart(dash: &str) -> u32 {
     }
 }
 
-/// One EMU unit of the ClientAnchor `dxL`/`dxR` field, in EMUs.
-/// MS-XLS encodes within-cell horizontal offsets in 1024ths of the
-/// cell's width; with Excel's default column width of 64 pixels
-/// (609,600 EMU) one `dxL` unit equals 595 EMU.
-pub(crate) const ANCHOR_DX_EMU_PER_UNIT: i64 = 595;
-/// One EMU unit of the ClientAnchor `dyT`/`dyB` field, in EMUs.
-/// MS-XLS encodes within-cell vertical offsets in 256ths of the
-/// row's height; with Excel's default row height of 15 pt
-/// (190,500 EMU) one `dyT` unit equals 744 EMU.
-pub(crate) const ANCHOR_DY_EMU_PER_UNIT: i64 = 744;
-
-fn emu_to_dx_units(emu: i64) -> i16 {
-    (emu / ANCHOR_DX_EMU_PER_UNIT).clamp(i16::MIN as i64, 1023) as i16
-}
-
-fn emu_to_dy_units(emu: i64) -> i16 {
-    (emu / ANCHOR_DY_EMU_PER_UNIT).clamp(i16::MIN as i64, 255) as i16
+fn emu_to_fraction_units(emu: i64, extent_emu: i64, denominator: i128, max: i128) -> i16 {
+    if extent_emu <= 0 {
+        return 0;
+    }
+    let numerator = i128::from(emu) * denominator;
+    let divisor = i128::from(extent_emu);
+    let rounded = if numerator >= 0 {
+        (numerator + divisor / 2) / divisor
+    } else {
+        (numerator - divisor / 2) / divisor
+    };
+    rounded.clamp(i128::from(i16::MIN), max) as i16
 }
 
 /// Translate a `duke_sheets_chart::DrawingAnchor` to the
@@ -5905,21 +5913,14 @@ fn emu_to_dy_units(emu: i64) -> i16 {
 ///       `xdr:absoluteAnchor`)
 ///
 /// Within-cell EMU offsets carried by the source `CellMarker` are
-/// quantised to the anchor's 1024ths-of-cell-width / 256ths-of-cell-
-/// height units. The reader inverts the same quantisation, so EMU
-/// values that are multiples of `ANCHOR_DX_EMU_PER_UNIT` /
-/// `ANCHOR_DY_EMU_PER_UNIT` round-trip exactly; others snap to the
-/// nearest unit boundary.
-fn client_anchor_from_drawing_anchor(
+/// quantised to 1/1024 of that marker's current column width and
+/// 1/256 of its current row height.
+fn client_anchor_from_drawing_anchor_with_metrics(
     anchor: &duke_sheets_chart::DrawingAnchor,
+    metrics: &dyn duke_sheets_chart::DrawingMetrics,
 ) -> XlsResult<crate::biff::escher::OfficeArtClientAnchor> {
     use crate::biff::escher::OfficeArtClientAnchor;
     use duke_sheets_chart::{DrawingAnchor, EditAs};
-
-    /// Default column width in EMU (8.43 char ≈ 64 px).
-    const DEFAULT_COL_EMU: i64 = 609_600;
-    /// Default row height in EMU (15 pt).
-    const DEFAULT_ROW_EMU: i64 = 190_500;
 
     /// Convert an `EditAs` enum into the ClientAnchor flag.
     fn edit_as_to_flag(edit_as: &Option<EditAs>) -> u16 {
@@ -5928,48 +5929,6 @@ fn client_anchor_from_drawing_anchor(
             Some(EditAs::OneCell) => 2,
             Some(EditAs::Absolute) => 3,
         }
-    }
-
-    /// For OneCell / Absolute → compute the (col_r, dx_r, row_b,
-    /// dy_b) fields by adding width/height EMU to the (col, offset)
-    /// starting point at default cell sizes.
-    fn extend_anchor(
-        start_col: u16,
-        start_off_x: i64,
-        width: i64,
-        start_row: u32,
-        start_off_y: i64,
-        height: i64,
-    ) -> XlsResult<(u16, i64, u32, i64)> {
-        if width < 0 || height < 0 {
-            return Err(XlsError::InvalidFormat(
-                "XLS drawing anchor width/height cannot be negative".into(),
-            ));
-        }
-        let total_x =
-            start_col as i128 * DEFAULT_COL_EMU as i128 + start_off_x as i128 + width as i128;
-        let total_y =
-            start_row as i128 * DEFAULT_ROW_EMU as i128 + start_off_y as i128 + height as i128;
-        if total_x < 0 || total_y < 0 {
-            return Err(XlsError::InvalidFormat(
-                "XLS drawing anchor coordinates cannot be negative".into(),
-            ));
-        }
-        let end_col = total_x / DEFAULT_COL_EMU as i128;
-        let end_row = total_y / DEFAULT_ROW_EMU as i128;
-        if end_col > 0xFF || end_row > u16::MAX as i128 {
-            return Err(XlsError::InvalidFormat(
-                "XLS drawing anchor exceeds the BIFF8 sheet grid".into(),
-            ));
-        }
-        let end_off_x = total_x - end_col * DEFAULT_COL_EMU as i128;
-        let end_off_y = total_y - end_row * DEFAULT_ROW_EMU as i128;
-        Ok((
-            end_col as u16,
-            end_off_x as i64,
-            end_row as u32,
-            end_off_y as i64,
-        ))
     }
 
     let validate_marker = |marker: &duke_sheets_chart::CellMarker| -> XlsResult<()> {
@@ -5981,85 +5940,56 @@ fn client_anchor_from_drawing_anchor(
         Ok(())
     };
 
-    let result = match anchor {
-        DrawingAnchor::TwoCell { from, to, edit_as } => {
-            validate_marker(from)?;
-            validate_marker(to)?;
-            if (to.col, to.col_offset_emu) < (from.col, from.col_offset_emu)
-                || (to.row, to.row_offset_emu) < (from.row, from.row_offset_emu)
-            {
-                return Err(XlsError::InvalidFormat(
-                    "XLS drawing anchor endpoints are reversed".into(),
-                ));
-            }
-            OfficeArtClientAnchor {
-                flag: edit_as_to_flag(edit_as),
-                col_l: from.col,
-                dx_l: emu_to_dx_units(from.col_offset_emu),
-                row_t: from.row as u16,
-                dy_t: emu_to_dy_units(from.row_offset_emu),
-                col_r: to.col,
-                dx_r: emu_to_dx_units(to.col_offset_emu),
-                row_b: to.row as u16,
-                dy_b: emu_to_dy_units(to.row_offset_emu),
-            }
-        }
-        DrawingAnchor::OneCell {
-            from,
-            width_emu,
-            height_emu,
-        } => {
-            validate_marker(from)?;
-            let (col_r, off_r, row_b, off_b) = extend_anchor(
-                from.col,
-                from.col_offset_emu,
-                *width_emu,
-                from.row,
-                from.row_offset_emu,
-                *height_emu,
-            )?;
-            OfficeArtClientAnchor {
-                flag: 2,
-                col_l: from.col,
-                dx_l: emu_to_dx_units(from.col_offset_emu),
-                row_t: from.row as u16,
-                dy_t: emu_to_dy_units(from.row_offset_emu),
-                col_r,
-                dx_r: emu_to_dx_units(off_r),
-                row_b: row_b.min(u16::MAX as u32) as u16,
-                dy_b: emu_to_dy_units(off_b),
-            }
-        }
-        DrawingAnchor::Absolute {
-            x_emu,
-            y_emu,
-            width_emu,
-            height_emu,
-        } => {
-            if *x_emu < 0 || *y_emu < 0 {
-                return Err(XlsError::InvalidFormat(
-                    "XLS absolute drawing anchor cannot start at a negative position".into(),
-                ));
-            }
-            // Absolute coordinates are relative to (0, 0); position
-            // the from cell at the origin with the x/y offsets.
-            let (col_l, off_l, row_t, off_t) = extend_anchor(0, 0, *x_emu, 0, 0, *y_emu)?;
-            let (col_r, off_r, row_b, off_b) =
-                extend_anchor(col_l, off_l, *width_emu, row_t, off_t, *height_emu)?;
-            OfficeArtClientAnchor {
-                flag: 3,
-                col_l,
-                dx_l: emu_to_dx_units(off_l),
-                row_t: row_t.min(u16::MAX as u32) as u16,
-                dy_t: emu_to_dy_units(off_t),
-                col_r,
-                dx_r: emu_to_dx_units(off_r),
-                row_b: row_b.min(u16::MAX as u32) as u16,
-                dy_b: emu_to_dy_units(off_b),
-            }
-        }
+    if matches!(anchor, DrawingAnchor::Absolute { x_emu, y_emu, .. } if *x_emu < 0 || *y_emu < 0)
+    {
+        return Err(XlsError::InvalidFormat(
+            "XLS absolute drawing anchor cannot start at a negative position".into(),
+        ));
+    }
+    let flag = match anchor {
+        DrawingAnchor::TwoCell { edit_as, .. } => edit_as_to_flag(edit_as),
+        DrawingAnchor::OneCell { .. } => 2,
+        DrawingAnchor::Absolute { .. } => 3,
     };
-    Ok(result)
+    let DrawingAnchor::TwoCell { from, to, .. } = anchor.to_two_cell_with_metrics(metrics) else {
+        unreachable!("to_two_cell_with_metrics always returns TwoCell");
+    };
+    validate_marker(&from)?;
+    validate_marker(&to)?;
+    if (to.col, to.col_offset_emu) < (from.col, from.col_offset_emu)
+        || (to.row, to.row_offset_emu) < (from.row, from.row_offset_emu)
+    {
+        return Err(XlsError::InvalidFormat(
+            "XLS drawing anchor endpoints are reversed".into(),
+        ));
+    }
+    let dx = |marker: &duke_sheets_chart::CellMarker| {
+        emu_to_fraction_units(
+            marker.col_offset_emu,
+            metrics.column_width_emu(marker.col),
+            1024,
+            1023,
+        )
+    };
+    let dy = |marker: &duke_sheets_chart::CellMarker| {
+        emu_to_fraction_units(
+            marker.row_offset_emu,
+            metrics.row_height_emu(marker.row),
+            256,
+            255,
+        )
+    };
+    Ok(OfficeArtClientAnchor {
+        flag,
+        col_l: from.col,
+        dx_l: dx(&from),
+        row_t: from.row as u16,
+        dy_t: dy(&from),
+        col_r: to.col,
+        dx_r: dx(&to),
+        row_b: to.row as u16,
+        dy_b: dy(&to),
+    })
 }
 
 /// Emit an `OBJ` record (BIFF 0x005D) for a picture shape. Carries
@@ -6473,6 +6403,13 @@ fn control_fopt(
             t.push(FoptEntry::simple(0x007F, 0x0104_0104));
             t.push(FoptEntry::simple(0x00BF, 0x0008_0008));
         }
+        FormControlKind::Unknown { .. } => {
+            t.push(FoptEntry::simple(0x007F, 0x0100_0100));
+            t.push(FoptEntry::simple(0x0080, text_id.unwrap_or(0)));
+            t.push(FoptEntry::simple(0x0085, 0x0000_0001));
+            t.push(FoptEntry::simple(0x008B, 0x0000_0002));
+            t.push(FoptEntry::simple(0x00BF, 0x001A_0008));
+        }
     }
     // 0x0380/0x0381/0x03BF sort after every per-kind entry, so
     // appending keeps the required ascending opid order.
@@ -6500,6 +6437,49 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
     use duke_sheets_core::{CheckState, FormControlKind, ListSelection};
 
     let kind = &control.control.kind;
+    if let FormControlKind::Unknown {
+        legacy_object_type,
+        raw_obj,
+        ..
+    } = kind
+    {
+        let Some(raw_obj) = raw_obj else {
+            return Err(XlsError::InvalidFormat(
+                "XLS unknown controls require a raw OBJ body captured from an XLS file".into(),
+            ));
+        };
+        let parsed = obj::parse_obj(raw_obj).map_err(|_| {
+            XlsError::InvalidFormat("XLS unknown control has an invalid raw OBJ body".into())
+        })?;
+        if !matches!(parsed.ot, ot::EDIT_BOX | ot::DIALOG_BOX) {
+            return Err(XlsError::InvalidFormat(format!(
+                "XLS passthrough does not support unknown OBJ type 0x{:04X}",
+                parsed.ot
+            )));
+        }
+        if legacy_object_type.is_some_and(|object_type| object_type != parsed.ot) {
+            return Err(XlsError::InvalidFormat(
+                "XLS unknown control legacy object type does not match its raw OBJ body".into(),
+            ));
+        }
+        if raw_obj.len() < 10 {
+            return Err(XlsError::InvalidFormat(
+                "XLS unknown control raw OBJ body is truncated".into(),
+            ));
+        }
+        let mut body = raw_obj.clone();
+        body[6..8].copy_from_slice(&control.obj_id.to_le_bytes());
+        let mut grbit = u16::from_le_bytes([body[8], body[9]]);
+        grbit &= !(obj::cmo_flags::LOCKED | obj::cmo_flags::PRINT);
+        if control.locked {
+            grbit |= obj::cmo_flags::LOCKED;
+        }
+        if control.printable {
+            grbit |= obj::cmo_flags::PRINT;
+        }
+        body[8..10].copy_from_slice(&grbit.to_le_bytes());
+        return write_control_obj_records(out, &mut body, None);
+    }
     let ot_code = match kind {
         FormControlKind::Button { .. } => ot::BUTTON,
         FormControlKind::Checkbox { .. } => ot::CHECKBOX,
@@ -6510,6 +6490,7 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
         FormControlKind::Dropdown { .. } => ot::DROPDOWN,
         FormControlKind::Scrollbar { .. } => ot::SCROLLBAR,
         FormControlKind::Spinner { .. } => ot::SPINNER,
+        FormControlKind::Unknown { .. } => unreachable!("unknown controls return above"),
     };
     // Undefined ftCmo grbit bits 13/14, mirrored per kind from Excel
     // output for byte parity.
@@ -6518,6 +6499,7 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
         FormControlKind::Button { .. }
         | FormControlKind::Dropdown { .. }
         | FormControlKind::Label { .. } => obj::cmo_flags::UNDEFINED_14,
+        FormControlKind::Unknown { .. } => unreachable!("unknown controls return above"),
         _ => obj::cmo_flags::UNDEFINED_13 | obj::cmo_flags::UNDEFINED_14,
     };
     let mut grbit = base_bits;
@@ -6739,6 +6721,7 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
             .write_to(&mut body)?;
             needs_end = false;
         }
+        FormControlKind::Unknown { .. } => unreachable!("unknown controls return above"),
     }
     if needs_end {
         obj::push_end(&mut body)?;

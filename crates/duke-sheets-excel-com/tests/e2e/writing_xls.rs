@@ -2787,6 +2787,51 @@ fn excel_preserves_xls_control_visual_metadata_we_emit() {
     assert_eq!(blue.underline, Some(Underline::Single));
 }
 
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xls_custom_metric_control_anchor_we_emit() {
+    use duke_sheets_core::{CheckState, FormControl, FormControlKind};
+
+    let mut workbook = Workbook::new();
+    let sheet = workbook.worksheet_mut(0).unwrap();
+    sheet.set_column_width(0, 20.0);
+    sheet.set_row_height(0, 30.0);
+    sheet.add_form_control(
+        FormControl::new(FormControlKind::Checkbox {
+            caption: "metric anchor".into(),
+            state: CheckState::Unchecked,
+            cell_link: None,
+            no_3d: false,
+        }),
+        DrawingAnchor::OneCell {
+            from: CellMarker::default(),
+            width_emu: 609_600,
+            height_emu: 190_500,
+        },
+    );
+
+    let result = roundtrip_through_excel_xls(&workbook);
+    let drawn = result.worksheet(0).unwrap().form_controls().next().unwrap();
+    match &drawn.object.anchor {
+        DrawingAnchor::TwoCell { from, to, .. } => {
+            assert_eq!((from.col, from.col_offset_emu), (0, 0));
+            assert_eq!((from.row, from.row_offset_emu), (0, 0));
+            assert_eq!((to.col, to.row), (0, 0));
+            assert!(
+                (to.col_offset_emu - 609_600).abs() <= 2_000,
+                "XLS 1/1024-column anchor offset drifted: {}",
+                to.col_offset_emu
+            );
+            assert!(
+                (to.row_offset_emu - 190_500).abs() <= 2_000,
+                "XLS 1/256-row anchor offset drifted: {}",
+                to.row_offset_emu
+            );
+        }
+        other => panic!("expected Excel-resaved TwoCell control anchor, got {other:?}"),
+    }
+}
+
 /// Excel's own interpretation of persisted selections pins the
 /// zero-based model ↔ one-based file conversion. A symmetric
 /// writer/reader offset bug survives a model round-trip, but not

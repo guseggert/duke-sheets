@@ -12,7 +12,10 @@ use std::io::{Cursor, Write};
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
 
-use crate::{CellMarker, ChildTransform, DrawingAnchor, EditAs, EmbeddedImage, GroupTransform};
+use crate::{
+    marker_position_emu, CellMarker, ChildTransform, DefaultDrawingMetrics, DrawingAnchor,
+    DrawingMetrics, EditAs, EmbeddedImage, GroupTransform,
+};
 
 use super::{
     ShapeFill, ShapeLine, TwinColor, TwinHorizontalAlignment, TwinText, TwinUnderline,
@@ -305,6 +308,25 @@ pub fn write_drawing_part(
     twin_style: TwinStyle,
     shape_base: usize,
 ) -> WriteResult<Vec<u8>> {
+    write_drawing_part_with_metrics(
+        objects,
+        plan,
+        twin_style,
+        shape_base,
+        &DefaultDrawingMetrics,
+    )
+}
+
+/// Serialize one sheet's drawing part with worksheet metrics available
+/// for control twins and other marker conversions. Native OneCell and
+/// Absolute wrappers remain in their original exact forms.
+pub fn write_drawing_part_with_metrics(
+    objects: &[PartObject<'_>],
+    plan: &DrawingPlan,
+    twin_style: TwinStyle,
+    shape_base: usize,
+    metrics: &dyn DrawingMetrics,
+) -> WriteResult<Vec<u8>> {
     let mut w = Writer::new(Cursor::new(Vec::new()));
     w.write_event(Event::Decl(BytesDecl::new(
         "1.0",
@@ -400,7 +422,7 @@ pub fn write_drawing_part(
             }
             PartKind::Shape(shape) => {
                 let cnv_id = ctx.next_cnv_id();
-                let placement = placement_from_anchor(object.anchor, shape);
+                let placement = placement_from_anchor(object.anchor, shape, metrics);
                 write_anchor_wrapper(&mut w, object, |w| {
                     write_shape_element(
                         w,
@@ -445,7 +467,15 @@ pub fn write_drawing_part(
                 let shape_id = ctx.shape_base + ctx.control_ordinal;
                 ctx.control_ordinal += 1;
                 let cnv_id = ctx.next_cnv_id();
-                write_control_twin_anchor(&mut w, object, name, shape_id, cnv_id, twin_style)?;
+                write_control_twin_anchor(
+                    &mut w,
+                    object,
+                    name,
+                    shape_id,
+                    cnv_id,
+                    twin_style,
+                    metrics,
+                )?;
             }
             PartKind::Raw { bytes, .. } => {
                 w.get_mut().write_all(bytes)?;
@@ -469,17 +499,16 @@ struct Placement {
     flip_v: bool,
 }
 
-fn placement_from_anchor(anchor: &DrawingAnchor, shape: &PartShape<'_>) -> Placement {
-    const COL_EMU: i64 = 609_600;
-    const ROW_EMU: i64 = 190_500;
+fn placement_from_anchor(
+    anchor: &DrawingAnchor,
+    shape: &PartShape<'_>,
+    metrics: &dyn DrawingMetrics,
+) -> Placement {
     let marker_xy = |marker: &CellMarker| {
+        let (x, y) = marker_position_emu(marker, metrics);
         (
-            i64::from(marker.col)
-                .saturating_mul(COL_EMU)
-                .saturating_add(marker.col_offset_emu),
-            i64::from(marker.row)
-                .saturating_mul(ROW_EMU)
-                .saturating_add(marker.row_offset_emu),
+            x.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64,
+            y.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64,
         )
     };
     let (x, y, cx, cy) = match anchor {
@@ -1127,8 +1156,9 @@ fn write_control_twin_anchor(
     shape_id: usize,
     cnv_id: usize,
     twin_style: TwinStyle,
+    metrics: &dyn DrawingMetrics,
 ) -> WriteResult<()> {
-    let (from, to) = anchor_cell_markers(object.anchor);
+    let (from, to) = anchor_cell_markers(object.anchor, metrics);
     let edit_as = twin_edit_as(object.anchor);
     write_mc_a14_choice(w, |w| {
         let mut tag = BytesStart::new("xdr:twoCellAnchor");
@@ -1188,48 +1218,15 @@ fn twin_edit_as(anchor: &DrawingAnchor) -> Option<&'static str> {
     }
 }
 
-/// Resolve any anchor variant to concrete from/to cell markers at
-/// Excel's default cell metrics (64 px columns, 20 px rows, 9525 EMU
-/// per px). Mirrors the legacy VML anchor conversion.
-fn anchor_cell_markers(anchor: &DrawingAnchor) -> (CellMarker, CellMarker) {
-    const COL_EMU: i128 = 64 * 9525;
-    const ROW_EMU: i128 = 20 * 9525;
-    let marker_at = |x: i128, y: i128| -> CellMarker {
-        let max_x = u16::MAX as i128 * COL_EMU + COL_EMU - 1;
-        let max_y = u32::MAX as i128 * ROW_EMU + ROW_EMU - 1;
-        let x = x.clamp(0, max_x);
-        let y = y.clamp(0, max_y);
-        CellMarker {
-            col: (x / COL_EMU) as u16,
-            col_offset_emu: (x % COL_EMU) as i64,
-            row: (y / ROW_EMU) as u32,
-            row_offset_emu: (y % ROW_EMU) as i64,
-        }
-    };
-    let extend = |from: &CellMarker, width_emu: i64, height_emu: i64| -> CellMarker {
-        let total_x =
-            from.col as i128 * COL_EMU + from.col_offset_emu as i128 + width_emu.max(0) as i128;
-        let total_y =
-            from.row as i128 * ROW_EMU + from.row_offset_emu as i128 + height_emu.max(0) as i128;
-        marker_at(total_x, total_y)
-    };
-    match anchor {
-        DrawingAnchor::TwoCell { from, to, .. } => (from.clone(), to.clone()),
-        DrawingAnchor::OneCell {
-            from,
-            width_emu,
-            height_emu,
-        } => (from.clone(), extend(from, *width_emu, *height_emu)),
-        DrawingAnchor::Absolute {
-            x_emu,
-            y_emu,
-            width_emu,
-            height_emu,
-        } => {
-            let from = marker_at(*x_emu as i128, *y_emu as i128);
-            let to = extend(&from, *width_emu, *height_emu);
-            (from, to)
-        }
+/// Resolve any anchor variant to concrete from/to cell markers using
+/// the worksheet metrics supplied by the format adapter.
+fn anchor_cell_markers(
+    anchor: &DrawingAnchor,
+    metrics: &dyn DrawingMetrics,
+) -> (CellMarker, CellMarker) {
+    match anchor.to_two_cell_with_metrics(metrics) {
+        DrawingAnchor::TwoCell { from, to, .. } => (from, to),
+        _ => unreachable!("to_two_cell_with_metrics always returns TwoCell"),
     }
 }
 

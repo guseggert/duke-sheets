@@ -1643,6 +1643,43 @@ fn excel_can_read_xlsx_form_controls_we_emit() {
 
 #[test]
 #[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xlsx_custom_metric_control_anchor_we_emit() {
+    use duke_sheets_chart::{CellMarker, DrawingAnchor};
+    use duke_sheets_core::{CheckState, FormControl, FormControlKind};
+
+    let mut workbook = Workbook::new();
+    let sheet = workbook.worksheet_mut(0).unwrap();
+    sheet.set_column_width(0, 20.0);
+    sheet.set_row_height(0, 30.0);
+    sheet.add_form_control(
+        FormControl::new(FormControlKind::Checkbox {
+            caption: "metric anchor".into(),
+            state: CheckState::Unchecked,
+            cell_link: None,
+            no_3d: false,
+        }),
+        DrawingAnchor::OneCell {
+            from: CellMarker::default(),
+            width_emu: 609_600,
+            height_emu: 190_500,
+        },
+    );
+
+    let result = roundtrip_through_excel(&workbook);
+    let drawn = result.worksheet(0).unwrap().form_controls().next().unwrap();
+    match &drawn.object.anchor {
+        DrawingAnchor::TwoCell { from, to, .. } => {
+            assert_eq!((from.col, from.col_offset_emu), (0, 0));
+            assert_eq!((from.row, from.row_offset_emu), (0, 0));
+            assert_eq!((to.col, to.col_offset_emu), (0, 609_600));
+            assert_eq!((to.row, to.row_offset_emu), (0, 190_500));
+        }
+        other => panic!("expected Excel-resaved TwoCell control anchor, got {other:?}"),
+    }
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_preserves_xlsx_control_visual_metadata_we_emit() {
     use duke_sheets_chart::{CellMarker, DrawingAnchor};
     use duke_sheets_core::style::Underline;

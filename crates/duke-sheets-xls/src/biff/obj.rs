@@ -617,6 +617,8 @@ pub struct ParsedObj {
     pub lbs_malformed: bool,
     /// fNo3d from FtGboData (group box only).
     pub gbo_no_3d: Option<bool>,
+    /// Original OBJ record body for unsupported-control passthrough.
+    pub raw_body: Vec<u8>,
 }
 
 /// Walk an Obj record body into a [`ParsedObj`].
@@ -633,6 +635,7 @@ pub fn parse_obj(body: &[u8]) -> XlsResult<ParsedObj> {
         ot: cmo.ot,
         id: cmo.id,
         grbit: cmo.grbit,
+        raw_body: body.to_vec(),
         ..ParsedObj::default()
     };
 

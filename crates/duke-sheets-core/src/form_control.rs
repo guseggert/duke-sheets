@@ -197,6 +197,38 @@ pub enum FormControlKind {
         /// Cell receiving the current value.
         cell_link: Option<String>,
     },
+    /// Placeholder for an unsupported legacy Forms control.
+    ///
+    /// Unknown controls preserve enough source-format data for
+    /// passthrough and inspection, but are not guaranteed to remain
+    /// interactive. ActiveX/OLE controls are deliberately excluded.
+    Unknown {
+        /// OOXML/VML object type name, such as `EditBox` or `Dialog`.
+        object_type: String,
+        /// BIFF `FtCmo.ot` value when the control came from XLS.
+        legacy_object_type: Option<u16>,
+        /// Text displayed by the legacy shape.
+        caption: ControlText,
+        /// Unmodeled XLSX `formControlPr` attributes.
+        #[doc(hidden)]
+        raw_properties: Vec<(String, String)>,
+        /// Unmodeled VML `ClientData` child elements.
+        #[doc(hidden)]
+        raw_client_data: Vec<Vec<u8>>,
+        /// Original BIFF OBJ body, required for XLS passthrough.
+        #[doc(hidden)]
+        raw_obj: Option<Vec<u8>>,
+    },
+}
+
+/// Whether a VML/OOXML object type belongs to ActiveX/OLE rather than
+/// legacy Forms controls.
+#[doc(hidden)]
+pub fn is_activex_object_type(object_type: &str) -> bool {
+    matches!(
+        object_type.trim().to_ascii_lowercase().as_str(),
+        "pict" | "activex" | "ole" | "oleobject"
+    )
 }
 
 impl FormControlKind {
@@ -207,7 +239,8 @@ impl FormControlKind {
             | FormControlKind::Checkbox { caption, .. }
             | FormControlKind::OptionButton { caption, .. }
             | FormControlKind::Label { caption }
-            | FormControlKind::GroupBox { caption, .. } => Some(caption),
+            | FormControlKind::GroupBox { caption, .. }
+            | FormControlKind::Unknown { caption, .. } => Some(caption),
             _ => None,
         }
     }
@@ -219,7 +252,8 @@ impl FormControlKind {
             | FormControlKind::Checkbox { caption, .. }
             | FormControlKind::OptionButton { caption, .. }
             | FormControlKind::Label { caption }
-            | FormControlKind::GroupBox { caption, .. } => Some(caption),
+            | FormControlKind::GroupBox { caption, .. }
+            | FormControlKind::Unknown { caption, .. } => Some(caption),
             _ => None,
         }
     }
@@ -340,6 +374,21 @@ impl FormControlKind {
                 validate_numeric_control(*value, *min, *max, *increment)?;
                 nonempty_formula("cell link", cell_link)?;
             }
+            FormControlKind::Unknown { object_type, .. } => {
+                if object_type.trim().is_empty() {
+                    return Err(Error::other("unknown control object type cannot be empty"));
+                }
+                if is_activex_object_type(object_type) {
+                    return Err(Error::other(
+                        "ActiveX/OLE controls cannot be represented as unknown Forms controls",
+                    ));
+                }
+                if object_type.trim().eq_ignore_ascii_case("Note") {
+                    return Err(Error::other(
+                        "cell-comment Note shapes are not unknown Forms controls",
+                    ));
+                }
+            }
         }
         Ok(())
     }
@@ -429,7 +478,7 @@ impl FormControl {
 pub struct PlacedControl<'a> {
     /// Path to the control in the drawing tree.
     pub path: DrawingPath,
-    /// Absolute EMU rectangle at Excel's default cell metrics.
+    /// Absolute EMU rectangle using the worksheet's row and column metrics.
     pub rect_emu: RectEmu,
     /// The control payload.
     pub control: &'a FormControl,
@@ -446,11 +495,7 @@ pub struct PlacedControl<'a> {
 /// and within each group). Non-radio controls never appear in the
 /// result.
 ///
-/// Containment is evaluated in EMU at Excel's default cell metrics
-/// (609,600 EMU per column, 190,500 EMU per row), matching the
-/// quantisation used by the binary anchor encodings; custom row and
-/// column sizes that visually move a radio across a box edge are not
-/// accounted for.
+/// Containment is evaluated in the resolved worksheet EMU coordinate space.
 pub fn radio_groups(controls: &[PlacedControl<'_>]) -> Vec<Vec<usize>> {
     let box_rects: Vec<RectEmu> = controls
         .iter()

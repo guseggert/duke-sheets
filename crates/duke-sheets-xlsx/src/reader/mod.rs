@@ -871,6 +871,30 @@ impl XlsxReader {
             }
         }
 
+        // Older or partially-authored workbooks can carry Forms shapes
+        // only in VML. Surface any shape not represented by a ctrlProps
+        // entry, including unknown legacy Forms controls. Pict/ActiveX and
+        // Note shapes return None and remain outside the form-control model.
+        let mut represented: std::collections::HashSet<u32> =
+            controls.iter().map(|control| control.shape_id).collect();
+        for shape in &vml_shapes {
+            let duke_sheets_vml::VmlShapeKind::Control(vml) = &shape.kind else {
+                continue;
+            };
+            if represented.contains(&shape.shape_num) {
+                continue;
+            }
+            if let Some(object) = vml.to_drawing_object() {
+                represented.insert(shape.shape_num);
+                controls.push(AssembledControl {
+                    shape_id: shape.shape_num,
+                    object,
+                    anchor_defaulted: vml.anchor_px.is_none(),
+                    consumed: false,
+                });
+            }
+        }
+
         // Drawing part entries in document order.
         let mut natives: Vec<(DrawingObject, Option<u32>)> = Vec::new();
         let mut drawing_targets: Vec<(String, String)> = sheet_rels

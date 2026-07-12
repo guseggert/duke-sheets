@@ -176,8 +176,9 @@ pub use duke_sheets_formula::{
 
 // Re-export chart types
 pub use duke_sheets_chart::{
-    Axis, AxisPosition, CellMarker, Chart, ChartEx, ChartType, DataReference, DataSeries,
-    DrawingAnchor, EditAs, EmbeddedImage, ImageFormat, Legend,
+    column_width_to_emu, row_height_to_emu, Axis, AxisPosition, CellMarker, Chart, ChartEx,
+    ChartType, DataReference, DataSeries, DrawingAnchor, DrawingMetrics, EditAs, EmbeddedImage,
+    ImageFormat, Legend,
 };
 
 // Re-export I/O types

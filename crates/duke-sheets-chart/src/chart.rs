@@ -308,24 +308,18 @@ impl DrawingAnchor {
     /// normalize onto the grid origin. TwoCell anchors are returned
     /// unchanged.
     pub fn to_two_cell(&self) -> DrawingAnchor {
-        const COL_EMU: i128 = 609_600;
-        const ROW_EMU: i128 = 190_500;
-        let marker = |col_total: i128, row_total: i128| CellMarker {
-            col: col_total
-                .div_euclid(COL_EMU)
-                .clamp(0, i128::from(u16::MAX)) as u16,
-            col_offset_emu: col_total.rem_euclid(COL_EMU) as i64,
-            row: row_total
-                .div_euclid(ROW_EMU)
-                .clamp(0, i128::from(u32::MAX)) as u32,
-            row_offset_emu: row_total.rem_euclid(ROW_EMU) as i64,
-        };
-        let from_total = |from: &CellMarker| {
-            (
-                i128::from(from.col) * COL_EMU + i128::from(from.col_offset_emu),
-                i128::from(from.row) * ROW_EMU + i128::from(from.row_offset_emu),
-            )
-        };
+        self.to_two_cell_with_metrics(&crate::DefaultDrawingMetrics)
+    }
+
+    /// The canonical two-cell form of this anchor using the worksheet's
+    /// actual row heights and column widths. TwoCell anchors are returned
+    /// unchanged; OneCell and Absolute anchors retain their sizing behavior
+    /// in `edit_as` while their endpoint markers are resolved through
+    /// `metrics`.
+    pub fn to_two_cell_with_metrics(
+        &self,
+        metrics: &(impl crate::DrawingMetrics + ?Sized),
+    ) -> DrawingAnchor {
         match self {
             DrawingAnchor::TwoCell { .. } => self.clone(),
             DrawingAnchor::OneCell {
@@ -333,12 +327,13 @@ impl DrawingAnchor {
                 width_emu,
                 height_emu,
             } => {
-                let (x, y) = from_total(from);
+                let (x, y) = crate::marker_position_emu(from, metrics);
                 DrawingAnchor::TwoCell {
                     from: from.clone(),
-                    to: marker(
+                    to: crate::marker_at_emu(
                         x + i128::from((*width_emu).max(0)),
                         y + i128::from((*height_emu).max(0)),
+                        metrics,
                     ),
                     edit_as: Some(EditAs::OneCell),
                 }
@@ -349,10 +344,11 @@ impl DrawingAnchor {
                 width_emu,
                 height_emu,
             } => DrawingAnchor::TwoCell {
-                from: marker(i128::from(*x_emu), i128::from(*y_emu)),
-                to: marker(
+                from: crate::marker_at_emu(i128::from(*x_emu), i128::from(*y_emu), metrics),
+                to: crate::marker_at_emu(
                     i128::from(*x_emu) + i128::from((*width_emu).max(0)),
                     i128::from(*y_emu) + i128::from((*height_emu).max(0)),
+                    metrics,
                 ),
                 edit_as: Some(EditAs::Absolute),
             },

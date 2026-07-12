@@ -80,12 +80,13 @@ pub(super) fn write_vml_drawing<W: Write + Seek>(
         control_base: usize,
         z_index: &mut usize,
         ordinal: &mut usize,
+        metrics: &duke_sheets_core::Worksheet,
     ) {
         match kind {
             duke_sheets_core::DrawingKind::FormControl(_) => {
                 let control = &controls[*ordinal];
                 *z_index += 1;
-                duke_sheets_vml::write_control_shape(
+                duke_sheets_vml::write_control_shape_with_metrics(
                     xml,
                     control_base + *ordinal,
                     *z_index,
@@ -93,6 +94,7 @@ pub(super) fn write_vml_drawing<W: Write + Seek>(
                     &control.anchor,
                     control.payload,
                     heads[*ordinal],
+                    metrics,
                 );
                 *ordinal += 1;
             }
@@ -106,6 +108,7 @@ pub(super) fn write_vml_drawing<W: Write + Seek>(
                         control_base,
                         z_index,
                         ordinal,
+                        metrics,
                     );
                 }
             }
@@ -125,6 +128,7 @@ pub(super) fn write_vml_drawing<W: Write + Seek>(
                     *col,
                     &object.anchor,
                     !object.meta.hidden,
+                    sheet,
                 );
             }
             kind => walk_controls(
@@ -135,6 +139,7 @@ pub(super) fn write_vml_drawing<W: Write + Seek>(
                 control_base,
                 &mut z_index,
                 &mut ordinal,
+                sheet,
             ),
         }
     }
@@ -155,12 +160,18 @@ fn write_note_shape(
     col: u16,
     anchor: &duke_sheets_chart::DrawingAnchor,
     visible: bool,
+    metrics: &duke_sheets_core::Worksheet,
 ) {
-    let a = duke_sheets_vml::anchor_to_px(anchor);
-    let left = a[0] * duke_sheets_vml::DEFAULT_COL_PX + a[1];
-    let top = a[2] * duke_sheets_vml::DEFAULT_ROW_PX + a[3];
-    let width = (a[4] * duke_sheets_vml::DEFAULT_COL_PX + a[5]) - left;
-    let height = (a[6] * duke_sheets_vml::DEFAULT_ROW_PX + a[7]) - top;
+    let a = duke_sheets_vml::anchor_to_px_with_metrics(anchor, metrics);
+    let (from, to) = duke_sheets_vml::anchor_cell_markers_with_metrics(anchor, metrics);
+    let (left_emu, top_emu) = duke_sheets_chart::marker_position_emu(&from, metrics);
+    let (right_emu, bottom_emu) = duke_sheets_chart::marker_position_emu(&to, metrics);
+    let left = (left_emu / i128::from(duke_sheets_vml::EMU_PER_PX)) as i64;
+    let top = (top_emu / i128::from(duke_sheets_vml::EMU_PER_PX)) as i64;
+    let width = ((right_emu - left_emu).max(0)
+        / i128::from(duke_sheets_vml::EMU_PER_PX)) as i64;
+    let height = ((bottom_emu - top_emu).max(0)
+        / i128::from(duke_sheets_vml::EMU_PER_PX)) as i64;
     let visibility = if visible { "visible" } else { "hidden" };
 
     xml.push_str(&format!(

@@ -703,8 +703,7 @@ pub struct GroupChild {
 /// drawing list, subsequent elements index group children.
 pub type DrawingPath = Vec<usize>;
 
-/// Absolute rectangle in EMU at Excel's default cell metrics:
-/// `(x1, y1, x2, y2)`.
+/// Absolute rectangle in an EMU coordinate space: `(x1, y1, x2, y2)`.
 pub type RectEmu = (i128, i128, i128, i128);
 
 /// A filtered view item: a typed payload together with its wrapper
@@ -924,25 +923,29 @@ pub fn validate_anchor(anchor: &DrawingAnchor) -> Result<()> {
 }
 
 /// Absolute EMU rectangle (x1, y1, x2, y2) for a drawing anchor at
-/// Excel's default cell metrics (609,600 EMU per column, 190,500 EMU
-/// per row).
+/// Excel's default cell metrics.
+#[cfg(test)]
 pub(crate) fn anchor_rect_emu(anchor: &DrawingAnchor) -> RectEmu {
-    const COL_EMU: i128 = 609_600;
-    const ROW_EMU: i128 = 190_500;
+    anchor_rect_emu_with_metrics(anchor, &duke_sheets_chart::DefaultDrawingMetrics)
+}
+
+/// Absolute EMU rectangle using the supplied worksheet metrics.
+pub(crate) fn anchor_rect_emu_with_metrics(
+    anchor: &DrawingAnchor,
+    metrics: &(impl duke_sheets_chart::DrawingMetrics + ?Sized),
+) -> RectEmu {
     match anchor {
-        DrawingAnchor::TwoCell { from, to, .. } => (
-            from.col as i128 * COL_EMU + from.col_offset_emu as i128,
-            from.row as i128 * ROW_EMU + from.row_offset_emu as i128,
-            to.col as i128 * COL_EMU + to.col_offset_emu as i128,
-            to.row as i128 * ROW_EMU + to.row_offset_emu as i128,
-        ),
+        DrawingAnchor::TwoCell { from, to, .. } => {
+            let (x1, y1) = duke_sheets_chart::marker_position_emu(from, metrics);
+            let (x2, y2) = duke_sheets_chart::marker_position_emu(to, metrics);
+            (x1, y1, x2, y2)
+        }
         DrawingAnchor::OneCell {
             from,
             width_emu,
             height_emu,
         } => {
-            let x1 = from.col as i128 * COL_EMU + from.col_offset_emu as i128;
-            let y1 = from.row as i128 * ROW_EMU + from.row_offset_emu as i128;
+            let (x1, y1) = duke_sheets_chart::marker_position_emu(from, metrics);
             (
                 x1,
                 y1,

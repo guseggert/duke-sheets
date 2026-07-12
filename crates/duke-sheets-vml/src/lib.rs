@@ -16,7 +16,9 @@
 //! move / size with cells (cross-referenced against the same file's
 //! `controlPr@moveWithCells/sizeWithCells` attributes).
 
-use duke_sheets_chart::{CellMarker, DrawingAnchor, EditAs};
+use duke_sheets_chart::{
+    marker_position_emu, CellMarker, DefaultDrawingMetrics, DrawingAnchor, DrawingMetrics, EditAs,
+};
 use duke_sheets_core::style::Underline;
 use duke_sheets_core::{
     CheckState, Color, ControlText, DrawingMeta, DrawingObject, FormControl, FormControlKind,
@@ -56,12 +58,13 @@ pub fn default_control_name(kind: &FormControlKind, seq: usize) -> String {
         FormControlKind::Dropdown { .. } => "Drop Down",
         FormControlKind::Scrollbar { .. } => "Scroll Bar",
         FormControlKind::Spinner { .. } => "Spinner",
+        FormControlKind::Unknown { object_type, .. } => object_type.as_str(),
     };
     format!("{base} {seq}")
 }
 
 /// The VML `x:ClientData/@ObjectType` name for a control kind.
-pub fn vml_object_type(kind: &FormControlKind) -> &'static str {
+pub fn vml_object_type(kind: &FormControlKind) -> &str {
     match kind {
         FormControlKind::Button { .. } => "Button",
         FormControlKind::Checkbox { .. } => "Checkbox",
@@ -72,6 +75,7 @@ pub fn vml_object_type(kind: &FormControlKind) -> &'static str {
         FormControlKind::Dropdown { .. } => "Drop",
         FormControlKind::Scrollbar { .. } => "Scroll",
         FormControlKind::Spinner { .. } => "Spin",
+        FormControlKind::Unknown { object_type, .. } => object_type,
     }
 }
 
@@ -97,7 +101,15 @@ pub fn decode_macro_formula(formula: &str) -> String {
 /// One-cell and absolute anchors are extended to a cell footprint at
 /// default cell metrics.
 pub fn anchor_to_px(anchor: &DrawingAnchor) -> [i64; 8] {
-    let (from, to) = anchor_cell_markers(anchor);
+    anchor_to_px_with_metrics(anchor, &DefaultDrawingMetrics)
+}
+
+/// The 8-value VML `x:Anchor` tuple resolved with worksheet metrics.
+pub fn anchor_to_px_with_metrics(
+    anchor: &DrawingAnchor,
+    metrics: &(impl DrawingMetrics + ?Sized),
+) -> [i64; 8] {
+    let (from, to) = anchor_cell_markers_with_metrics(anchor, metrics);
     [
         from.col as i64,
         from.col_offset_emu / EMU_PER_PX,
@@ -113,44 +125,18 @@ pub fn anchor_to_px(anchor: &DrawingAnchor) -> [i64; 8] {
 /// Resolve any anchor variant to concrete from/to cell markers at
 /// default cell metrics.
 pub fn anchor_cell_markers(anchor: &DrawingAnchor) -> (CellMarker, CellMarker) {
-    const COL_EMU: i128 = (DEFAULT_COL_PX * EMU_PER_PX) as i128;
-    const ROW_EMU: i128 = (DEFAULT_ROW_PX * EMU_PER_PX) as i128;
-    let marker_at = |x: i128, y: i128| -> CellMarker {
-        let max_x = u16::MAX as i128 * COL_EMU + COL_EMU - 1;
-        let max_y = u32::MAX as i128 * ROW_EMU + ROW_EMU - 1;
-        let x = x.clamp(0, max_x);
-        let y = y.clamp(0, max_y);
-        CellMarker {
-            col: (x / COL_EMU) as u16,
-            col_offset_emu: (x % COL_EMU) as i64,
-            row: (y / ROW_EMU) as u32,
-            row_offset_emu: (y % ROW_EMU) as i64,
-        }
-    };
-    let extend = |from: &CellMarker, width_emu: i64, height_emu: i64| -> CellMarker {
-        let total_x =
-            from.col as i128 * COL_EMU + from.col_offset_emu as i128 + width_emu.max(0) as i128;
-        let total_y =
-            from.row as i128 * ROW_EMU + from.row_offset_emu as i128 + height_emu.max(0) as i128;
-        marker_at(total_x, total_y)
-    };
-    match anchor {
-        DrawingAnchor::TwoCell { from, to, .. } => (from.clone(), to.clone()),
-        DrawingAnchor::OneCell {
-            from,
-            width_emu,
-            height_emu,
-        } => (from.clone(), extend(from, *width_emu, *height_emu)),
-        DrawingAnchor::Absolute {
-            x_emu,
-            y_emu,
-            width_emu,
-            height_emu,
-        } => {
-            let from = marker_at(*x_emu as i128, *y_emu as i128);
-            let to = extend(&from, *width_emu, *height_emu);
-            (from, to)
-        }
+    anchor_cell_markers_with_metrics(anchor, &DefaultDrawingMetrics)
+}
+
+/// Resolve any anchor variant to concrete from/to markers using worksheet
+/// row heights and column widths.
+pub fn anchor_cell_markers_with_metrics(
+    anchor: &DrawingAnchor,
+    metrics: &(impl DrawingMetrics + ?Sized),
+) -> (CellMarker, CellMarker) {
+    match anchor.to_two_cell_with_metrics(metrics) {
+        DrawingAnchor::TwoCell { from, to, .. } => (from, to),
+        _ => unreachable!("to_two_cell_with_metrics always returns TwoCell"),
     }
 }
 
@@ -383,13 +369,40 @@ pub fn write_control_shape(
     control: &FormControl,
     first_button: bool,
 ) {
+    write_control_shape_with_metrics(
+        xml,
+        shape_id,
+        z_index,
+        meta,
+        anchor,
+        control,
+        first_button,
+        &DefaultDrawingMetrics,
+    );
+}
+
+/// Append one control VML shape using worksheet row and column metrics.
+#[allow(clippy::too_many_arguments)]
+pub fn write_control_shape_with_metrics(
+    xml: &mut String,
+    shape_id: usize,
+    z_index: usize,
+    meta: &DrawingMeta,
+    anchor: &DrawingAnchor,
+    control: &FormControl,
+    first_button: bool,
+    metrics: &(impl DrawingMetrics + ?Sized),
+) {
     use FormControlKind as K;
     let kind = &control.kind;
-    let a = anchor_to_px(anchor);
-    let left = a[0] * DEFAULT_COL_PX + a[1];
-    let top = a[2] * DEFAULT_ROW_PX + a[3];
-    let width = (a[4] * DEFAULT_COL_PX + a[5]) - left;
-    let height = (a[6] * DEFAULT_ROW_PX + a[7]) - top;
+    let a = anchor_to_px_with_metrics(anchor, metrics);
+    let (from, to) = anchor_cell_markers_with_metrics(anchor, metrics);
+    let (left_emu, top_emu) = marker_position_emu(&from, metrics);
+    let (right_emu, bottom_emu) = marker_position_emu(&to, metrics);
+    let left = (left_emu / i128::from(EMU_PER_PX)) as i64;
+    let top = (top_emu / i128::from(EMU_PER_PX)) as i64;
+    let width = ((right_emu - left_emu).max(0) / i128::from(EMU_PER_PX)) as i64;
+    let height = ((bottom_emu - top_emu).max(0) / i128::from(EMU_PER_PX)) as i64;
 
     let wrap_tight = matches!(
         kind,
@@ -398,6 +411,7 @@ pub fn write_control_shape(
             | K::OptionButton { .. }
             | K::GroupBox { .. }
             | K::Label { .. }
+            | K::Unknown { .. }
     );
 
     xml.push_str(&format!(
@@ -453,7 +467,7 @@ pub fn write_control_shape(
             xml.push_str("  <v:fill color2=\"window [65]\"/>\n");
             xml.push_str("  <o:lock v:ext=\"edit\" rotation=\"t\"/>\n");
         }
-        K::Label { .. } => {
+        K::Label { .. } | K::Unknown { .. } => {
             xml.push_str(
                 "  filled=\"f\" fillcolor=\"windowText [64]\" strokecolor=\"windowText [64]\" o:insetmode=\"auto\">\n",
             );
@@ -704,6 +718,15 @@ pub fn write_control_shape(
             xml.push_str(&format!("   <x:Inc>{increment}</x:Inc>\n"));
             xml.push_str("   <x:Page>10</x:Page>\n   <x:Dx>22</x:Dx>\n");
         }
+        K::Unknown {
+            raw_client_data, ..
+        } => {
+            for child in raw_client_data {
+                xml.push_str("   ");
+                xml.push_str(&String::from_utf8_lossy(child));
+                xml.push('\n');
+            }
+        }
     }
     xml.push_str("  </x:ClientData>\n");
     xml.push_str(" </v:shape>\n");
@@ -847,6 +870,8 @@ pub struct VmlControl {
     pub no_3d: bool,
     /// `x:FirstButton` present.
     pub first_button: bool,
+    /// Unmodeled immediate children of `x:ClientData`.
+    pub raw_client_data: Vec<Vec<u8>>,
 }
 
 impl VmlControl {
@@ -964,7 +989,18 @@ impl VmlControl {
                 increment: self.inc,
                 cell_link: self.fmla_link.clone(),
             },
-            _ => return None,
+            object_type if object_type.eq_ignore_ascii_case("Note") => return None,
+            object_type if duke_sheets_core::form_control::is_activex_object_type(object_type) => {
+                return None
+            }
+            object_type => FormControlKind::Unknown {
+                object_type: object_type.to_string(),
+                legacy_object_type: None,
+                caption: caption(),
+                raw_properties: Vec::new(),
+                raw_client_data: self.raw_client_data.clone(),
+                raw_obj: None,
+            },
         };
 
         let anchor = self
@@ -1365,6 +1401,108 @@ fn parse_raw_shapes(bytes: &[u8]) -> Vec<RawShape> {
             }
             Ok(Event::Eof) => break,
             Err(_) => break, // permissive: keep completed shapes
+            _ => {}
+        }
+        buf.clear();
+    }
+    let raw_client_data = parse_raw_client_data(bytes);
+    for shape in &mut out {
+        if let Some(children) = raw_client_data.get(&shape.control.shape_num) {
+            shape.control.raw_client_data = children.clone();
+        }
+    }
+    out
+}
+
+fn is_modeled_client_data_child(name: &[u8]) -> bool {
+    matches!(
+        name,
+        b"Anchor"
+            | b"Locked"
+            | b"PrintObject"
+            | b"MoveWithCells"
+            | b"SizeWithCells"
+            | b"FmlaMacro"
+            | b"TextHAlign"
+            | b"TextVAlign"
+            | b"Row"
+            | b"Column"
+            | b"Visible"
+    )
+}
+
+/// Capture complete immediate `ClientData` children that the modeled
+/// parser does not understand. Byte slicing keeps prefixes, attributes,
+/// nested content, and whitespace intact for passthrough.
+fn parse_raw_client_data(bytes: &[u8]) -> std::collections::HashMap<u32, Vec<Vec<u8>>> {
+    let mut reader = Reader::from_reader(bytes);
+    reader.config_mut().trim_text(false);
+    reader.config_mut().check_end_names = false;
+    let mut out: std::collections::HashMap<u32, Vec<Vec<u8>>> =
+        std::collections::HashMap::new();
+    let mut buf = Vec::new();
+    let mut shape_num = 0u32;
+    let mut in_client_data = false;
+    let mut capture: Option<(usize, u32)> = None;
+
+    loop {
+        let event_start = reader.buffer_position() as usize;
+        let event = match reader.read_event_into(&mut buf) {
+            Ok(event) => event,
+            Err(_) => break,
+        };
+        let event_end = reader.buffer_position() as usize;
+
+        if let Some((start, depth)) = capture.as_mut() {
+            match &event {
+                Event::Start(_) => *depth += 1,
+                Event::End(_) => *depth = depth.saturating_sub(1),
+                Event::Eof => break,
+                _ => {}
+            }
+            if *depth == 0 {
+                out.entry(shape_num)
+                    .or_default()
+                    .push(bytes[*start..event_end].to_vec());
+                capture = None;
+            }
+            buf.clear();
+            continue;
+        }
+
+        match &event {
+            Event::Start(e) | Event::Empty(e) if e.local_name().as_ref() == b"shape" => {
+                shape_num = 0;
+                for attr in e.attributes().flatten() {
+                    if attr.key.local_name().as_ref() == b"id" {
+                        let id = String::from_utf8_lossy(&attr.value);
+                        shape_num = id
+                            .rsplit(['s', 'S'])
+                            .next()
+                            .and_then(|value| value.parse().ok())
+                            .unwrap_or(0);
+                    }
+                }
+            }
+            Event::Start(e) if e.local_name().as_ref() == b"ClientData" => {
+                in_client_data = true;
+            }
+            Event::End(e) if e.local_name().as_ref() == b"ClientData" => {
+                in_client_data = false;
+            }
+            Event::Start(e)
+                if in_client_data && !is_modeled_client_data_child(e.local_name().as_ref()) =>
+            {
+                capture = Some((event_start, 1));
+            }
+            Event::Empty(e)
+                if in_client_data && !is_modeled_client_data_child(e.local_name().as_ref()) =>
+            {
+                out.entry(shape_num)
+                    .or_default()
+                    .push(bytes[event_start..event_end].to_vec());
+            }
+            Event::Eof => break,
             _ => {}
         }
         buf.clear();

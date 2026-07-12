@@ -308,8 +308,13 @@ pub(crate) fn write_drawing_parts<W: Write + Seek>(
     let plan =
         part_write::plan_drawing_rels(&objects, &chart_globals, &chartex_globals, &image_parts);
     let shape_base = (sheet_index + 1) * 1024 + 1 + ws.comment_count();
-    let drawing_bytes =
-        part_write::write_drawing_part(&objects, &plan, TwinStyle::CompatSpFrame, shape_base)?;
+    let drawing_bytes = part_write::write_drawing_part_with_metrics(
+        &objects,
+        &plan,
+        TwinStyle::CompatSpFrame,
+        shape_base,
+        ws,
+    )?;
 
     let drawing_path = format!("xl/drawings/drawing{}.xml", numbering.drawing_num);
     zip.start_file(&drawing_path, *options)?;
