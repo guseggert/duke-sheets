@@ -1602,7 +1602,7 @@ fn excel_can_read_xlsb_form_controls_we_emit() {
     let expected = kinds.clone();
     for (i, kind) in kinds.into_iter().enumerate() {
         let row = 1 + 2 * i as u32;
-        ws.add_form_control(FormControl::with_anchor(kind, anchor(1, row, 3, row + 1)));
+        ws.add_form_control(FormControl::new(kind), anchor(1, row, 3, row + 1));
     }
     assert_eq!(wb.sync_form_control_links(), 3);
 
@@ -1611,13 +1611,16 @@ fn excel_can_read_xlsb_form_controls_we_emit() {
     assert_eq!(sheet.get_value("D2").unwrap(), CellValue::Boolean(true));
     assert_eq!(sheet.get_value("D4").unwrap(), CellValue::Number(3.0));
     assert_eq!(sheet.get_value("D6").unwrap(), CellValue::Number(40.0));
-    let controls = sheet.form_controls();
+    let controls: Vec<_> = sheet.form_controls().collect();
     assert_eq!(controls.len(), count, "every control survives Excel");
     for (i, control) in controls.iter().enumerate() {
         let mut want = expected[i].clone();
         if let FormControlKind::OptionButton { first_in_group, .. } = &mut want {
             *first_in_group = true;
         }
-        assert_eq!(control.kind, want, "control {i} kind mismatch after Excel");
+        assert_eq!(
+            control.payload.kind, want,
+            "control {i} kind mismatch after Excel"
+        );
     }
 }

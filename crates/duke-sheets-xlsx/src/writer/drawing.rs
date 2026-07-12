@@ -3,6 +3,7 @@ use std::io::{Seek, Write};
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 
 use duke_sheets_chart::{CellMarker, Chart, ChartEx, DrawingAnchor, EmbeddedImage};
+use duke_sheets_core::Drawn;
 
 use super::{write_xml_part, XlsxResult, XmlWriter, NS_DOC_RELS, NS_RELATIONSHIPS, RT_CHART};
 
@@ -23,16 +24,16 @@ pub(super) const RT_IMAGE: &str =
 /// pair lets the drawing writer and the rels writer agree on which
 /// rId points at which media part.
 pub(super) struct DrawingImage<'a> {
-    pub image: &'a EmbeddedImage,
+    pub image: &'a Drawn<'a, EmbeddedImage>,
     pub global_num: usize,
 }
 
 pub(super) fn write_drawing<W: Write + Seek>(
     zip: &mut zip::ZipWriter<W>,
-    charts: &[&Chart],
-    charts_ex: &[&ChartEx],
+    charts: &[&Drawn<'_, Chart>],
+    charts_ex: &[&Drawn<'_, ChartEx>],
     images: &[DrawingImage<'_>],
-    raw_drawing_objects: &[Vec<u8>],
+    raw_drawing_objects: &[&[u8]],
     drawing_num: usize,
 ) -> XlsxResult<()> {
     let path = format!("xl/drawings/drawing{}.xml", drawing_num);
@@ -45,7 +46,7 @@ pub(super) fn write_drawing<W: Write + Seek>(
 
         for (i, chart) in charts.iter().enumerate() {
             let rid = format!("rId{}", i + 1);
-            write_two_cell_anchor(w, &chart.anchor, &rid, i)?;
+            write_two_cell_anchor(w, &chart.object.anchor, &rid, i)?;
         }
 
         let chartex_rid_start = charts.len() + 1;
@@ -54,10 +55,10 @@ pub(super) fn write_drawing<W: Write + Seek>(
             let obj_idx = charts.len() + i;
             write_chartex_two_cell_anchor(
                 w,
-                &cx.anchor,
+                &cx.object.anchor,
                 &rid,
                 obj_idx,
-                cx.raw_mc_fallback.as_deref(),
+                cx.payload.raw_mc_fallback.as_deref(),
             )?;
         }
 
@@ -83,14 +84,14 @@ pub(super) fn write_drawing<W: Write + Seek>(
 
 /// Emit an `<xdr:twoCellAnchor>` / `<xdr:oneCellAnchor>` /
 /// `<xdr:absoluteAnchor>` wrapper around an `<xdr:pic>` element,
-/// dispatching on the source `DrawingAnchor` variant.
+/// dispatching on the wrapper object's `DrawingAnchor` variant.
 fn write_picture_anchor(
     w: &mut XmlWriter,
-    image: &EmbeddedImage,
+    image: &Drawn<'_, EmbeddedImage>,
     rid: &str,
     shape_idx: usize,
 ) -> XlsxResult<()> {
-    match &image.anchor {
+    match &image.object.anchor {
         DrawingAnchor::TwoCell { from, to, edit_as } => {
             let mut tag = BytesStart::new("xdr:twoCellAnchor");
             if let Some(ea) = edit_as {
@@ -162,10 +163,11 @@ fn write_picture_anchor(
 /// wrapper). Used by all three anchor variants.
 fn write_picture_element(
     w: &mut XmlWriter,
-    image: &EmbeddedImage,
+    drawn: &Drawn<'_, EmbeddedImage>,
     rid: &str,
     shape_idx: usize,
 ) -> XlsxResult<()> {
+    let image = drawn.payload;
     w.write_event(Event::Start(BytesStart::new("xdr:pic")))?;
 
     // <xdr:nvPicPr> non-visual picture properties.
@@ -173,8 +175,8 @@ fn write_picture_element(
     let cnv_id = (shape_idx + 2).to_string();
     let mut cnv_pr = BytesStart::new("xdr:cNvPr");
     cnv_pr.push_attribute(("id", cnv_id.as_str()));
-    cnv_pr.push_attribute(("name", image.name.as_str()));
-    if let Some(desc) = image.description.as_deref() {
+    cnv_pr.push_attribute(("name", drawn.object.meta.name.as_deref().unwrap_or("")));
+    if let Some(desc) = drawn.object.meta.alt_text.as_deref() {
         cnv_pr.push_attribute(("descr", desc));
     }
     w.write_event(Event::Empty(cnv_pr))?;

@@ -172,26 +172,25 @@ fn lo_can_open_xls_with_comments_we_emit() {
 
 #[test]
 fn visible_comment_flag_round_trips() {
-    // The CellComment.visible bit must survive: writer sets NOTE
+    // The comment's popup visibility must survive: writer sets NOTE
     // flags bit 1 (0x0002), reader pulls it back out.
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "v").unwrap();
-    ws.set_comment_at(
-        0,
-        0,
-        CellComment::new("Alice", "Visible note").with_visible(true),
-    );
+    ws.set_comment_at(0, 0, CellComment::new("Alice", "Visible note"));
+    ws.set_comment_visible(0, 0, true);
     ws.set_comment_at(1, 0, CellComment::new("Alice", "Hidden note"));
 
     let parsed = write_then_read(&wb);
     let ws_in = parsed.worksheet(0).unwrap();
-    assert!(
-        ws_in.comment_at(0, 0).unwrap().visible,
+    assert_eq!(
+        ws_in.comment_visible(0, 0),
+        Some(true),
         "visible=true must round-trip"
     );
-    assert!(
-        !ws_in.comment_at(1, 0).unwrap().visible,
+    assert_eq!(
+        ws_in.comment_visible(1, 0),
+        Some(false),
         "visible=false must round-trip"
     );
 }

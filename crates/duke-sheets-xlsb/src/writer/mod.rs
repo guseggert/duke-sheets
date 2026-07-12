@@ -213,8 +213,16 @@ impl XlsbWriter {
                 external_ixti,
             };
 
-            let has_raw_drawing = !ws.raw_drawing_objects.is_empty();
-            let has_charts = !ws.charts().is_empty() || !ws.charts_ex().is_empty();
+            let raw_drawing_objects: Vec<&Vec<u8>> = ws
+                .drawings()
+                .iter()
+                .filter_map(|o| match &o.kind {
+                    duke_sheets_core::DrawingKind::Raw(raw) => Some(&raw.bytes),
+                    _ => None,
+                })
+                .collect();
+            let has_raw_drawing = !raw_drawing_objects.is_empty();
+            let has_charts = ws.chart_count() > 0 || ws.chart_ex_count() > 0;
             let emit_brt_drawing = has_charts;
 
             let mut result = worksheet::write_worksheet(
@@ -247,7 +255,7 @@ impl XlsbWriter {
 
             let drawing_result = if has_raw_drawing || has_charts {
                 let dr =
-                    drawing::write_drawing_parts(&mut zip, &options, &ws.raw_drawing_objects, i)?;
+                    drawing::write_drawing_parts(&mut zip, &options, &raw_drawing_objects, i)?;
                 all_drawing_overrides.extend(dr.content_type_overrides.iter().cloned());
                 Some(dr)
             } else {

@@ -24,8 +24,13 @@ pub(super) fn write_vml_drawing<W: Write + Seek>(
     zip.start_file(path, options)?;
 
     let sheet_idx = sheet_index + 1;
-    let mut comments: Vec<_> = sheet.comments().collect();
-    comments.sort_by_key(|((row, col), _)| (*row, *col));
+    // (row, col, popup-visible); visibility lives on the wrapping
+    // drawing object (`!hidden`).
+    let mut comments: Vec<(u32, u16, bool)> = sheet
+        .comments_drawn()
+        .map(|cr| (cr.row, cr.col, !cr.object.meta.hidden))
+        .collect();
+    comments.sort_by_key(|(row, col, _)| (*row, *col));
 
     let mut xml = String::new();
     xml.push_str("<xml xmlns:v=\"urn:schemas-microsoft-com:vml\"\n");
@@ -48,15 +53,13 @@ pub(super) fn write_vml_drawing<W: Write + Seek>(
         xml.push_str(duke_sheets_vml::CONTROL_SHAPETYPE);
     }
 
-    for (shape_index, ((row, col), comment)) in comments.iter().enumerate() {
-        let row = *row;
-        let col = *col;
+    for (shape_index, &(row, col, visible)) in comments.iter().enumerate() {
         let row_above = row.saturating_sub(1);
         let shape_id = sheet_idx * 1024 + 1 + shape_index;
         let z_index = shape_index + 1;
         let left = (u32::from(col) + 1) * 64;
         let top = row * 15;
-        let visibility = if comment.visible { "visible" } else { "hidden" };
+        let visibility = if visible { "visible" } else { "hidden" };
 
         xml.push_str(&format!(
             " <v:shape id=\"_x0000_s{}\" type=\"#_x0000_t202\"\n",
@@ -93,16 +96,18 @@ pub(super) fn write_vml_drawing<W: Write + Seek>(
     // Form control shapes follow the comment shapes; their shape ids
     // continue the same per-sheet 1024 block and must match the
     // worksheet <control shapeId> values.
-    let controls = sheet.form_controls();
+    let controls: Vec<_> = sheet.form_controls().collect();
     if !controls.is_empty() {
-        let heads = super::form_controls::radio_head_flags(controls);
+        let heads = super::form_controls::radio_head_flags(sheet);
         let shape_base = sheet_idx * 1024 + 1 + comments.len();
-        for (j, control) in controls.iter().enumerate() {
+        for (j, drawn) in controls.iter().enumerate() {
             duke_sheets_vml::write_control_shape(
                 &mut xml,
                 shape_base + j,
                 comments.len() + j + 1,
-                control,
+                &drawn.object.meta,
+                &drawn.object.anchor,
+                drawn.payload,
                 heads[j],
             );
         }
@@ -134,7 +139,7 @@ pub(super) fn write_comments<W: Write + Seek>(
 
         w.write_event(Event::Start(BytesStart::new("authors")))?;
         let authors = sheet.comment_authors();
-        for author in authors {
+        for author in &authors {
             w.create_element("author")
                 .write_text_content(BytesText::new(author))?;
         }

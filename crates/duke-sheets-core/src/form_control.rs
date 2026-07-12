@@ -4,6 +4,11 @@
 //! option (radio) buttons, labels, group boxes, list boxes,
 //! dropdowns (combo boxes), scrollbars, and spinners.
 //!
+//! A form control is a drawing object: its placement, shape name,
+//! and locked/printable/hidden flags live on the wrapping
+//! [`crate::DrawingObject`] in the worksheet's z-ordered drawing
+//! list. [`FormControl`] carries the control-specific state.
+//!
 //! Cell links and input ranges are stored as A1-style formula text
 //! with an optional sheet prefix (e.g. `"$A$1"` or `"Sheet2!$B$2:$B$9"`),
 //! matching the convention used by data validation formulas.
@@ -31,24 +36,27 @@
 //! ## Example
 //!
 //! ```rust
-//! use duke_sheets_core::{Workbook, FormControl, FormControlKind, CheckState};
+//! use duke_sheets_core::{
+//!     CheckState, DrawingObject, FormControl, FormControlKind, Workbook,
+//! };
 //!
 //! let mut workbook = Workbook::new();
 //! let sheet = workbook.worksheet_mut(0).unwrap();
 //!
-//! sheet.try_add_form_control(FormControl::new(FormControlKind::Checkbox {
-//!     caption: "Enable feature".to_string(),
-//!     state: CheckState::Checked,
-//!     cell_link: Some("$D$2".to_string()),
-//!     no_3d: false,
-//! })).unwrap();
+//! sheet.try_add_drawing(DrawingObject::form_control(FormControl::new(
+//!     FormControlKind::Checkbox {
+//!         caption: "Enable feature".to_string(),
+//!         state: CheckState::Checked,
+//!         cell_link: Some("$D$2".to_string()),
+//!         no_3d: false,
+//!     },
+//! ))).unwrap();
 //!
 //! assert_eq!(sheet.form_control_count(), 1);
 //! ```
 
-use duke_sheets_chart::DrawingAnchor;
-
-use crate::{Error, Result, MAX_COLS, MAX_ROWS};
+use crate::drawing::{DrawingPath, RectEmu};
+use crate::{Error, Result};
 
 /// State of a checkbox or option button.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -324,44 +332,19 @@ fn validate_numeric_control(value: u16, min: u16, max: u16, increment: u16) -> R
 }
 
 /// A worksheet form control (Forms toolbar object).
+///
+/// Placement, shape name, and protection/print/hidden flags live on
+/// the wrapping [`crate::DrawingObject`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct FormControl {
-    /// Shape name (e.g. "Check Box 1"). `None` lets the writer pick one.
-    pub name: Option<String>,
-    /// Placement of the control on the sheet.
-    pub anchor: DrawingAnchor,
     /// Kind-specific properties.
     pub kind: FormControlKind,
-    /// Whether the control is locked when the sheet is protected.
-    pub locked: bool,
-    /// Whether the control is included when the sheet is printed.
-    pub printable: bool,
 }
 
 impl FormControl {
-    /// Create a control of the given kind with a default anchor.
+    /// Create a control of the given kind.
     pub fn new(kind: FormControlKind) -> Self {
-        Self {
-            name: None,
-            anchor: DrawingAnchor::default(),
-            kind,
-            locked: true,
-            printable: true,
-        }
-    }
-
-    /// Create a control of the given kind at the given anchor.
-    pub fn with_anchor(kind: FormControlKind, anchor: DrawingAnchor) -> Self {
-        Self {
-            anchor,
-            ..Self::new(kind)
-        }
-    }
-
-    /// Set the shape name.
-    pub fn with_name(mut self, name: impl Into<String>) -> Self {
-        self.name = Some(name.into());
-        self
+        Self { kind }
     }
 
     /// The control's caption text, for kinds that have one.
@@ -374,59 +357,26 @@ impl FormControl {
         self.kind.cell_link()
     }
 
-    /// Validate the anchor and kind-specific properties.
+    /// Validate kind-specific properties.
     pub fn validate(&self) -> Result<()> {
-        validate_anchor(&self.anchor)?;
         self.kind.validate()
     }
 }
 
-fn validate_anchor(anchor: &DrawingAnchor) -> Result<()> {
-    let validate_marker = |marker: &duke_sheets_chart::CellMarker| -> Result<()> {
-        if marker.row >= MAX_ROWS {
-            return Err(Error::RowOutOfBounds(marker.row, MAX_ROWS - 1));
-        }
-        if marker.col >= MAX_COLS {
-            return Err(Error::ColumnOutOfBounds(marker.col, MAX_COLS - 1));
-        }
-        Ok(())
-    };
-    match anchor {
-        DrawingAnchor::TwoCell { from, to, .. } => {
-            validate_marker(from)?;
-            validate_marker(to)?;
-            if (to.col, to.col_offset_emu) < (from.col, from.col_offset_emu)
-                || (to.row, to.row_offset_emu) < (from.row, from.row_offset_emu)
-            {
-                return Err(Error::other("form control anchor endpoints are reversed"));
-            }
-        }
-        DrawingAnchor::OneCell {
-            from,
-            width_emu,
-            height_emu,
-        } => {
-            validate_marker(from)?;
-            if *width_emu < 0 || *height_emu < 0 {
-                return Err(Error::other(
-                    "form control anchor dimensions cannot be negative",
-                ));
-            }
-        }
-        DrawingAnchor::Absolute {
-            x_emu,
-            y_emu,
-            width_emu,
-            height_emu,
-        } => {
-            if *x_emu < 0 || *y_emu < 0 || *width_emu < 0 || *height_emu < 0 {
-                return Err(Error::other(
-                    "absolute form control anchor values cannot be negative",
-                ));
-            }
-        }
-    }
-    Ok(())
+/// A form control located in the worksheet's drawing tree: its path,
+/// its resolved on-sheet rectangle, and the control payload.
+///
+/// Produced by [`crate::Worksheet::placed_form_controls`] in
+/// depth-first order (top-level objects in z-order, group children
+/// within their group).
+#[derive(Debug)]
+pub struct PlacedControl<'a> {
+    /// Path to the control in the drawing tree.
+    pub path: DrawingPath,
+    /// Absolute EMU rectangle at Excel's default cell metrics.
+    pub rect_emu: RectEmu,
+    /// The control payload.
+    pub control: &'a FormControl,
 }
 
 /// Partition a sheet's option buttons into radio groups, mirroring
@@ -434,28 +384,27 @@ fn validate_anchor(anchor: &DrawingAnchor) -> Result<()> {
 /// group box whose rectangle contains the radio's center point, and
 /// radios outside every box form the sheet-level group.
 ///
-/// Returns groups of indices into `controls`, in insertion order
-/// (both across groups and within each group). Non-radio controls
-/// never appear in the result.
+/// Takes the sheet's controls as produced by
+/// [`crate::Worksheet::placed_form_controls`] and returns groups of
+/// indices into that slice, in traversal order (both across groups
+/// and within each group). Non-radio controls never appear in the
+/// result.
 ///
 /// Containment is evaluated in EMU at Excel's default cell metrics
 /// (609,600 EMU per column, 190,500 EMU per row), matching the
 /// quantisation used by the binary anchor encodings; custom row and
 /// column sizes that visually move a radio across a box edge are not
 /// accounted for.
-pub fn radio_groups(controls: &[FormControl]) -> Vec<Vec<usize>> {
-    let box_rects: Vec<(i128, i128, i128, i128)> = controls
+pub fn radio_groups(controls: &[PlacedControl<'_>]) -> Vec<Vec<usize>> {
+    let box_rects: Vec<RectEmu> = controls
         .iter()
-        .filter(|c| matches!(c.kind, FormControlKind::GroupBox { .. }))
-        .map(|c| anchor_rect_emu(&c.anchor))
+        .filter(|placed| matches!(placed.control.kind, FormControlKind::GroupBox { .. }))
+        .map(|placed| placed.rect_emu)
         .collect();
 
-    let containing_box = |anchor: &DrawingAnchor| -> Option<usize> {
-        let (x1, y1, x2, y2) = anchor_rect_emu(anchor);
-        let (cx, cy) = (
-            x1.saturating_add(x2) / 2,
-            y1.saturating_add(y2) / 2,
-        );
+    let containing_box = |rect: RectEmu| -> Option<usize> {
+        let (x1, y1, x2, y2) = rect;
+        let (cx, cy) = (x1.saturating_add(x2) / 2, y1.saturating_add(y2) / 2);
         box_rects
             .iter()
             .enumerate()
@@ -463,19 +412,17 @@ pub fn radio_groups(controls: &[FormControl]) -> Vec<Vec<usize>> {
                 (*bx1..=*bx2).contains(&cx) && (*by1..=*by2).contains(&cy)
             })
             .min_by_key(|(_, (bx1, by1, bx2, by2))| {
-                (bx2 - bx1)
-                    .max(0)
-                    .saturating_mul((by2 - by1).max(0))
+                (bx2 - bx1).max(0).saturating_mul((by2 - by1).max(0))
             })
             .map(|(i, _)| i)
     };
 
     let mut groups: Vec<(Option<usize>, Vec<usize>)> = Vec::new();
-    for (idx, control) in controls.iter().enumerate() {
-        if !matches!(control.kind, FormControlKind::OptionButton { .. }) {
+    for (idx, placed) in controls.iter().enumerate() {
+        if !matches!(placed.control.kind, FormControlKind::OptionButton { .. }) {
             continue;
         }
-        let key = containing_box(&control.anchor);
+        let key = containing_box(placed.rect_emu);
         match groups.iter_mut().find(|(k, _)| *k == key) {
             Some((_, members)) => members.push(idx),
             None => groups.push((key, vec![idx])),
@@ -484,50 +431,11 @@ pub fn radio_groups(controls: &[FormControl]) -> Vec<Vec<usize>> {
     groups.into_iter().map(|(_, members)| members).collect()
 }
 
-/// Absolute EMU rectangle (x1, y1, x2, y2) for a drawing anchor at
-/// Excel's default cell metrics.
-fn anchor_rect_emu(anchor: &DrawingAnchor) -> (i128, i128, i128, i128) {
-    const COL_EMU: i128 = 609_600;
-    const ROW_EMU: i128 = 190_500;
-    match anchor {
-        DrawingAnchor::TwoCell { from, to, .. } => (
-            from.col as i128 * COL_EMU + from.col_offset_emu as i128,
-            from.row as i128 * ROW_EMU + from.row_offset_emu as i128,
-            to.col as i128 * COL_EMU + to.col_offset_emu as i128,
-            to.row as i128 * ROW_EMU + to.row_offset_emu as i128,
-        ),
-        DrawingAnchor::OneCell {
-            from,
-            width_emu,
-            height_emu,
-        } => {
-            let x1 = from.col as i128 * COL_EMU + from.col_offset_emu as i128;
-            let y1 = from.row as i128 * ROW_EMU + from.row_offset_emu as i128;
-            (
-                x1,
-                y1,
-                x1 + (*width_emu).max(0) as i128,
-                y1 + (*height_emu).max(0) as i128,
-            )
-        }
-        DrawingAnchor::Absolute {
-            x_emu,
-            y_emu,
-            width_emu,
-            height_emu,
-        } => (
-            *x_emu as i128,
-            *y_emu as i128,
-            *x_emu as i128 + (*width_emu).max(0) as i128,
-            *y_emu as i128 + (*height_emu).max(0) as i128,
-        ),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use duke_sheets_chart::CellMarker;
+    use crate::drawing::DrawingObject;
+    use duke_sheets_chart::{CellMarker, DrawingAnchor};
 
     fn two_cell(from_col: u16, from_row: u32, to_col: u16, to_row: u32) -> DrawingAnchor {
         DrawingAnchor::TwoCell {
@@ -547,17 +455,43 @@ mod tests {
         }
     }
 
-    fn radio(anchor: DrawingAnchor) -> FormControl {
-        FormControl::with_anchor(
-            FormControlKind::OptionButton {
-                caption: String::new(),
-                state: CheckState::Unchecked,
-                cell_link: None,
-                first_in_group: false,
-                no_3d: false,
-            },
-            anchor,
-        )
+    fn radio(anchor: DrawingAnchor) -> DrawingObject {
+        DrawingObject::form_control(FormControl::new(FormControlKind::OptionButton {
+            caption: String::new(),
+            state: CheckState::Unchecked,
+            cell_link: None,
+            first_in_group: false,
+            no_3d: false,
+        }))
+        .with_anchor(anchor)
+    }
+
+    fn group_box(caption: &str, anchor: DrawingAnchor) -> DrawingObject {
+        DrawingObject::form_control(FormControl::new(FormControlKind::GroupBox {
+            caption: caption.to_string(),
+            no_3d: false,
+        }))
+        .with_anchor(anchor)
+    }
+
+    fn placed(objects: &[DrawingObject]) -> Vec<PlacedControl<'_>> {
+        let mut sheet = crate::Worksheet::new("t");
+        for object in objects {
+            sheet.add_drawing(object.clone());
+        }
+        // Re-borrow from the slice we were given: rebuild placements
+        // through a worksheet to exercise the real traversal.
+        objects
+            .iter()
+            .enumerate()
+            .filter_map(|(i, object)| {
+                object.kind.as_form_control().map(|control| PlacedControl {
+                    path: vec![i],
+                    rect_emu: crate::drawing::anchor_rect_emu(&object.anchor),
+                    control,
+                })
+            })
+            .collect()
     }
 
     #[test]
@@ -565,9 +499,6 @@ mod tests {
         let ctrl = FormControl::new(FormControlKind::Button {
             caption: "Run".to_string(),
         });
-        assert!(ctrl.name.is_none());
-        assert!(ctrl.locked);
-        assert!(ctrl.printable);
         assert_eq!(ctrl.caption(), Some("Run"));
         assert_eq!(ctrl.cell_link(), None);
     }
@@ -585,72 +516,38 @@ mod tests {
     }
 
     #[test]
-    fn with_name_builder() {
-        let ctrl = FormControl::new(FormControlKind::Label {
-            caption: "Info".to_string(),
-        })
-        .with_name("Label 7");
-        assert_eq!(ctrl.name.as_deref(), Some("Label 7"));
-    }
-
-    #[test]
     fn radio_groups_by_enclosing_box() {
-        let controls = vec![
-            FormControl::with_anchor(
-                FormControlKind::GroupBox {
-                    caption: "A".to_string(),
-                    no_3d: false,
-                },
-                two_cell(0, 0, 2, 6),
-            ),
-            FormControl::with_anchor(
-                FormControlKind::GroupBox {
-                    caption: "B".to_string(),
-                    no_3d: false,
-                },
-                two_cell(4, 0, 6, 6),
-            ),
+        let objects = vec![
+            group_box("A", two_cell(0, 0, 2, 6)),
+            group_box("B", two_cell(4, 0, 6, 6)),
             radio(two_cell(1, 1, 2, 2)), // in A
             radio(two_cell(5, 1, 6, 2)), // in B
             radio(two_cell(1, 3, 2, 4)), // in A
             radio(two_cell(8, 1, 9, 2)), // loose
         ];
+        let controls = placed(&objects);
         let groups = radio_groups(&controls);
         assert_eq!(groups, vec![vec![2, 4], vec![3], vec![5]]);
     }
 
     #[test]
     fn radio_groups_nested_boxes_pick_innermost() {
-        let controls = vec![
-            FormControl::with_anchor(
-                FormControlKind::GroupBox {
-                    caption: "outer".to_string(),
-                    no_3d: false,
-                },
-                two_cell(0, 0, 10, 20),
-            ),
-            FormControl::with_anchor(
-                FormControlKind::GroupBox {
-                    caption: "inner".to_string(),
-                    no_3d: false,
-                },
-                two_cell(1, 1, 4, 6),
-            ),
-            radio(two_cell(2, 2, 3, 3)), // inner box
+        let objects = vec![
+            group_box("outer", two_cell(0, 0, 10, 20)),
+            group_box("inner", two_cell(1, 1, 4, 6)),
+            radio(two_cell(2, 2, 3, 3)),   // inner box
             radio(two_cell(6, 10, 7, 11)), // outer box only
         ];
+        let controls = placed(&objects);
         let groups = radio_groups(&controls);
         assert_eq!(groups, vec![vec![2], vec![3]]);
     }
 
     #[test]
     fn radio_groups_handles_extreme_anchor_offsets() {
-        let controls = vec![
-            FormControl::with_anchor(
-                FormControlKind::GroupBox {
-                    caption: "huge".to_string(),
-                    no_3d: false,
-                },
+        let objects = vec![
+            group_box(
+                "huge",
                 DrawingAnchor::Absolute {
                     x_emu: i64::MIN,
                     y_emu: i64::MIN,
@@ -665,11 +562,12 @@ mod tests {
                 height_emu: i64::MAX,
             }),
         ];
+        let controls = placed(&objects);
         assert_eq!(radio_groups(&controls), vec![vec![1]]);
     }
 
     #[test]
-    fn validates_kind_and_anchor_invariants() {
+    fn validates_kind_invariants() {
         let invalid_radio = FormControl::new(FormControlKind::OptionButton {
             caption: "radio".to_string(),
             state: CheckState::Mixed,
@@ -677,7 +575,11 @@ mod tests {
             first_in_group: false,
             no_3d: false,
         });
-        assert!(invalid_radio.validate().unwrap_err().to_string().contains("mixed"));
+        assert!(invalid_radio
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("mixed"));
 
         let invalid_list = FormControl::new(FormControlKind::ListBox {
             input_range: None,
@@ -828,63 +730,38 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("increment"));
-
-        let invalid_anchor = FormControl::with_anchor(
-            FormControlKind::Button {
-                caption: "button".to_string(),
-            },
-            DrawingAnchor::TwoCell {
-                from: CellMarker {
-                    col: 4,
-                    col_offset_emu: 0,
-                    row: 4,
-                    row_offset_emu: 0,
-                },
-                to: CellMarker {
-                    col: 2,
-                    col_offset_emu: 0,
-                    row: 2,
-                    row_offset_emu: 0,
-                },
-                edit_as: None,
-            },
-        );
-        assert!(invalid_anchor
-            .validate()
-            .unwrap_err()
-            .to_string()
-            .contains("reversed"));
     }
 
     #[test]
-    fn worksheet_indexed_mutations_validate_and_shift_indices() {
+    fn worksheet_drawing_mutations_validate_and_shift_indices() {
         let mut worksheet = crate::Worksheet::new("Sheet1");
         let first = worksheet
-            .try_add_form_control(FormControl::new(FormControlKind::Button {
-                caption: "one".to_string(),
-            }))
+            .try_add_drawing(DrawingObject::form_control(FormControl::new(
+                FormControlKind::Button {
+                    caption: "one".to_string(),
+                },
+            )))
             .unwrap();
         let second = worksheet
-            .try_add_form_control(FormControl::new(FormControlKind::Label {
-                caption: "two".to_string(),
-            }))
+            .try_add_drawing(DrawingObject::form_control(FormControl::new(
+                FormControlKind::Label {
+                    caption: "two".to_string(),
+                },
+            )))
             .unwrap();
         assert_eq!((first, second), (0, 1));
         assert_eq!(worksheet.form_control_count(), 2);
 
-        worksheet
-            .set_form_control(
-                0,
-                FormControl::new(FormControlKind::Label {
-                    caption: "replaced".to_string(),
-                }),
-            )
-            .unwrap();
-        assert_eq!(worksheet.form_control(0).unwrap().caption(), Some("replaced"));
-
-        let removed = worksheet.remove_form_control(0).unwrap();
-        assert_eq!(removed.caption(), Some("replaced"));
-        assert_eq!(worksheet.form_control(0).unwrap().caption(), Some("two"));
-        assert!(worksheet.remove_form_control(1).is_err());
+        let removed = worksheet.remove_drawing(0).unwrap();
+        assert_eq!(
+            removed.kind.as_form_control().unwrap().caption(),
+            Some("one")
+        );
+        let remaining: Vec<_> = worksheet
+            .form_controls()
+            .map(|drawn| drawn.payload.caption().unwrap().to_string())
+            .collect();
+        assert_eq!(remaining, vec!["two"]);
+        assert!(worksheet.remove_drawing(1).is_err());
     }
 }

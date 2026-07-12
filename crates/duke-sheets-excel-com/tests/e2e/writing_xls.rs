@@ -1521,11 +1521,20 @@ fn excel_can_read_xls_picture_and_comment_on_same_sheet_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "anchor").unwrap();
-    ws.add_image(EmbeddedImage {
-        id: 1,
-        name: "MixedPic".into(),
-        description: None,
-        anchor: DrawingAnchor::TwoCell {
+    ws.add_image(
+        EmbeddedImage {
+            format: ImageFormat::Png,
+            media_path: String::new(),
+            svg_media_path: None,
+            width_emu: 1_000_000,
+            height_emu: 1_000_000,
+            rotation: None,
+            flip_h: false,
+            flip_v: false,
+            data: TEST_PNG_1X1.to_vec(),
+            svg_data: None,
+        },
+        DrawingAnchor::TwoCell {
             from: CellMarker {
                 col: 1,
                 col_offset_emu: 0,
@@ -1540,17 +1549,7 @@ fn excel_can_read_xls_picture_and_comment_on_same_sheet_we_emit() {
             },
             edit_as: None,
         },
-        format: ImageFormat::Png,
-        media_path: String::new(),
-        svg_media_path: None,
-        width_emu: 1_000_000,
-        height_emu: 1_000_000,
-        rotation: None,
-        flip_h: false,
-        flip_v: false,
-        data: TEST_PNG_1X1.to_vec(),
-        svg_data: None,
-    });
+    );
     ws.set_comment_at(
         7,
         5,
@@ -1561,7 +1560,7 @@ fn excel_can_read_xls_picture_and_comment_on_same_sheet_we_emit() {
     let s = result.worksheet(0).unwrap();
     assert_eq!(s.image_count(), 1, "picture must survive Excel re-save");
     assert_eq!(s.comment_count(), 1, "comment must survive Excel re-save");
-    let img = &s.images()[0];
+    let img = s.images().next().unwrap().payload;
     assert_eq!(img.format, ImageFormat::Png);
     assert_eq!(img.data, TEST_PNG_1X1, "PNG bytes preserved");
     let c = s.comment_at(7, 5).expect("comment at G8 must exist");
@@ -1581,27 +1580,10 @@ fn excel_can_read_xls_picture_and_comment_on_same_sheet_we_emit() {
 #[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_xls_pictures_across_multiple_sheets_we_emit() {
     use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
+    use duke_sheets_core::DrawingObject;
 
-    fn pic(name: &str, col: u16, row: u32) -> EmbeddedImage {
-        EmbeddedImage {
-            id: 1,
-            name: name.to_string(),
-            description: None,
-            anchor: DrawingAnchor::TwoCell {
-                from: CellMarker {
-                    col,
-                    col_offset_emu: 0,
-                    row,
-                    row_offset_emu: 0,
-                },
-                to: CellMarker {
-                    col: col + 2,
-                    col_offset_emu: 0,
-                    row: row + 2,
-                    row_offset_emu: 0,
-                },
-                edit_as: None,
-            },
+    fn pic(name: &str, col: u16, row: u32) -> DrawingObject {
+        DrawingObject::image(EmbeddedImage {
             format: ImageFormat::Png,
             media_path: String::new(),
             svg_media_path: None,
@@ -1612,7 +1594,23 @@ fn excel_can_read_xls_pictures_across_multiple_sheets_we_emit() {
             flip_v: false,
             data: TEST_PNG_1X1.to_vec(),
             svg_data: None,
-        }
+        })
+        .with_anchor(DrawingAnchor::TwoCell {
+            from: CellMarker {
+                col,
+                col_offset_emu: 0,
+                row,
+                row_offset_emu: 0,
+            },
+            to: CellMarker {
+                col: col + 2,
+                col_offset_emu: 0,
+                row: row + 2,
+                row_offset_emu: 0,
+            },
+            edit_as: None,
+        })
+        .with_name(name)
     }
 
     let mut wb = Workbook::new();
@@ -1624,10 +1622,10 @@ fn excel_can_read_xls_pictures_across_multiple_sheets_we_emit() {
     // cluster entries with non-contiguous drawing IDs.
     wb.worksheet_mut(0)
         .unwrap()
-        .add_image(pic("Pic on Alpha", 1, 1));
+        .add_drawing(pic("Pic on Alpha", 1, 1));
     wb.worksheet_mut(2)
         .unwrap()
-        .add_image(pic("Pic on Gamma", 3, 3));
+        .add_drawing(pic("Pic on Gamma", 3, 3));
 
     let result = roundtrip_through_excel_xls(&wb);
     assert_eq!(
@@ -1646,12 +1644,26 @@ fn excel_can_read_xls_pictures_across_multiple_sheets_we_emit() {
         "Gamma's picture must survive"
     );
     assert_eq!(
-        result.worksheet(0).unwrap().images()[0].data,
+        result
+            .worksheet(0)
+            .unwrap()
+            .images()
+            .next()
+            .unwrap()
+            .payload
+            .data,
         TEST_PNG_1X1,
         "Alpha PNG bytes preserved"
     );
     assert_eq!(
-        result.worksheet(2).unwrap().images()[0].data,
+        result
+            .worksheet(2)
+            .unwrap()
+            .images()
+            .next()
+            .unwrap()
+            .payload
+            .data,
         TEST_PNG_1X1,
         "Gamma PNG bytes preserved"
     );
@@ -1751,11 +1763,20 @@ fn excel_can_read_xls_png_image_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "anchor").unwrap();
-    ws.add_image(EmbeddedImage {
-        id: 1,
-        name: "Picture 1".into(),
-        description: None,
-        anchor: DrawingAnchor::TwoCell {
+    ws.add_image(
+        EmbeddedImage {
+            format: ImageFormat::Png,
+            media_path: String::new(),
+            svg_media_path: None,
+            width_emu: 1_000_000,
+            height_emu: 1_000_000,
+            rotation: None,
+            flip_h: false,
+            flip_v: false,
+            data: TEST_PNG_1X1.to_vec(),
+            svg_data: None,
+        },
+        DrawingAnchor::TwoCell {
             from: CellMarker {
                 col: 2,
                 col_offset_emu: 0,
@@ -1770,28 +1791,18 @@ fn excel_can_read_xls_png_image_we_emit() {
             },
             edit_as: None,
         },
-        format: ImageFormat::Png,
-        media_path: String::new(),
-        svg_media_path: None,
-        width_emu: 1_000_000,
-        height_emu: 1_000_000,
-        rotation: None,
-        flip_h: false,
-        flip_v: false,
-        data: TEST_PNG_1X1.to_vec(),
-        svg_data: None,
-    });
+    );
 
     let result = roundtrip_through_excel_xls(&wb);
-    let images = result.worksheet(0).unwrap().images();
+    let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
     assert_eq!(images.len(), 1, "image must survive Excel re-save");
-    let img = &images[0];
+    let img = images[0].payload;
     assert_eq!(img.format, ImageFormat::Png);
     assert_eq!(
         img.data, TEST_PNG_1X1,
         "PNG bytes must round-trip through Excel verbatim"
     );
-    match &img.anchor {
+    match &images[0].object.anchor {
         DrawingAnchor::TwoCell { from, to, .. } => {
             // Excel may adjust within-cell EMU offsets when it
             // re-saves; we only assert the cell *range* is preserved
@@ -1878,11 +1889,20 @@ fn excel_can_read_xls_picture_rotation_and_flip_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "rotated").unwrap();
-    ws.add_image(EmbeddedImage {
-        id: 1,
-        name: "RotatedPic".into(),
-        description: None,
-        anchor: DrawingAnchor::TwoCell {
+    ws.add_image(
+        EmbeddedImage {
+            format: ImageFormat::Png,
+            media_path: String::new(),
+            svg_media_path: None,
+            width_emu: 1_000_000,
+            height_emu: 1_000_000,
+            rotation: Some(5_400_000), // 90 degrees clockwise
+            flip_h: true,
+            flip_v: false,
+            data: TEST_PNG_1X1.to_vec(),
+            svg_data: None,
+        },
+        DrawingAnchor::TwoCell {
             from: CellMarker {
                 col: 1,
                 col_offset_emu: 0,
@@ -1897,26 +1917,16 @@ fn excel_can_read_xls_picture_rotation_and_flip_we_emit() {
             },
             edit_as: None,
         },
-        format: ImageFormat::Png,
-        media_path: String::new(),
-        svg_media_path: None,
-        width_emu: 1_000_000,
-        height_emu: 1_000_000,
-        rotation: Some(5_400_000), // 90 degrees clockwise
-        flip_h: true,
-        flip_v: false,
-        data: TEST_PNG_1X1.to_vec(),
-        svg_data: None,
-    });
+    );
 
     let result = roundtrip_through_excel_xls(&wb);
-    let images = result.worksheet(0).unwrap().images();
+    let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
     assert_eq!(
         images.len(),
         1,
         "rotated picture must survive Excel re-save"
     );
-    let img = &images[0];
+    let img = images[0].payload;
     assert_eq!(
         img.rotation,
         Some(5_400_000),
@@ -1941,11 +1951,20 @@ fn excel_can_read_xls_onecell_image_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "onecell-anchor").unwrap();
-    ws.add_image(EmbeddedImage {
-        id: 1,
-        name: "OneCellPic".into(),
-        description: None,
-        anchor: DrawingAnchor::OneCell {
+    ws.add_image(
+        EmbeddedImage {
+            format: ImageFormat::Png,
+            media_path: String::new(),
+            svg_media_path: None,
+            width_emu: 2 * COL_EMU,
+            height_emu: 3 * ROW_EMU,
+            rotation: None,
+            flip_h: false,
+            flip_v: false,
+            data: TEST_PNG_1X1.to_vec(),
+            svg_data: None,
+        },
+        DrawingAnchor::OneCell {
             from: CellMarker {
                 col: 2,
                 col_offset_emu: 0,
@@ -1955,28 +1974,18 @@ fn excel_can_read_xls_onecell_image_we_emit() {
             width_emu: 2 * COL_EMU,
             height_emu: 3 * ROW_EMU,
         },
-        format: ImageFormat::Png,
-        media_path: String::new(),
-        svg_media_path: None,
-        width_emu: 2 * COL_EMU,
-        height_emu: 3 * ROW_EMU,
-        rotation: None,
-        flip_h: false,
-        flip_v: false,
-        data: TEST_PNG_1X1.to_vec(),
-        svg_data: None,
-    });
+    );
 
     let result = roundtrip_through_excel_xls(&wb);
-    let images = result.worksheet(0).unwrap().images();
+    let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
     assert_eq!(
         images.len(),
         1,
         "OneCell picture must survive Excel re-save"
     );
-    let img = &images[0];
+    let img = images[0].payload;
     assert_eq!(img.format, ImageFormat::Png);
-    match &img.anchor {
+    match &images[0].object.anchor {
         DrawingAnchor::TwoCell { from, to, .. } => {
             // OneCell at (col=2, row=3) + 2 cols × 3 rows of default
             // cells means the picture spans columns 2..4 and rows
@@ -2005,38 +2014,37 @@ fn excel_can_read_xls_absolute_image_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "absolute-anchor").unwrap();
-    ws.add_image(EmbeddedImage {
-        id: 1,
-        name: "AbsolutePic".into(),
-        description: None,
-        anchor: DrawingAnchor::Absolute {
+    ws.add_image(
+        EmbeddedImage {
+            format: ImageFormat::Png,
+            media_path: String::new(),
+            svg_media_path: None,
+            width_emu: 2 * COL_EMU,
+            height_emu: 4 * ROW_EMU,
+            rotation: None,
+            flip_h: false,
+            flip_v: false,
+            data: TEST_PNG_1X1.to_vec(),
+            svg_data: None,
+        },
+        DrawingAnchor::Absolute {
             x_emu: 3 * COL_EMU,
             y_emu: 2 * ROW_EMU,
             width_emu: 2 * COL_EMU,
             height_emu: 4 * ROW_EMU,
         },
-        format: ImageFormat::Png,
-        media_path: String::new(),
-        svg_media_path: None,
-        width_emu: 2 * COL_EMU,
-        height_emu: 4 * ROW_EMU,
-        rotation: None,
-        flip_h: false,
-        flip_v: false,
-        data: TEST_PNG_1X1.to_vec(),
-        svg_data: None,
-    });
+    );
 
     let result = roundtrip_through_excel_xls(&wb);
-    let images = result.worksheet(0).unwrap().images();
+    let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
     assert_eq!(
         images.len(),
         1,
         "Absolute picture must survive Excel re-save"
     );
-    let img = &images[0];
+    let img = images[0].payload;
     assert_eq!(img.format, ImageFormat::Png);
-    match &img.anchor {
+    match &images[0].object.anchor {
         DrawingAnchor::TwoCell { from, to, .. } => {
             // Absolute (x=3 cols, y=2 rows) + (2 cols × 4 rows) at
             // default cell sizes lands the picture starting at col=3
@@ -2072,11 +2080,20 @@ fn excel_can_read_xls_bmp_image_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "bmp-anchor").unwrap();
-    ws.add_image(EmbeddedImage {
-        id: 1,
-        name: "BmpPic".into(),
-        description: None,
-        anchor: DrawingAnchor::TwoCell {
+    ws.add_image(
+        EmbeddedImage {
+            format: ImageFormat::Bmp,
+            media_path: String::new(),
+            svg_media_path: None,
+            width_emu: 1_000_000,
+            height_emu: 1_000_000,
+            rotation: None,
+            flip_h: false,
+            flip_v: false,
+            data: TEST_BMP_1X1.to_vec(),
+            svg_data: None,
+        },
+        DrawingAnchor::TwoCell {
             from: CellMarker {
                 col: 1,
                 col_offset_emu: 0,
@@ -2091,27 +2108,17 @@ fn excel_can_read_xls_bmp_image_we_emit() {
             },
             edit_as: None,
         },
-        format: ImageFormat::Bmp,
-        media_path: String::new(),
-        svg_media_path: None,
-        width_emu: 1_000_000,
-        height_emu: 1_000_000,
-        rotation: None,
-        flip_h: false,
-        flip_v: false,
-        data: TEST_BMP_1X1.to_vec(),
-        svg_data: None,
-    });
+    );
 
     let result = roundtrip_through_excel_xls(&wb);
-    let images = result.worksheet(0).unwrap().images();
+    let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
     assert_eq!(
         images.len(),
         1,
         "BMP picture must survive Excel re-save (possibly as PNG)"
     );
     // Excel re-encodes BMP as PNG on SaveAs; format may flip to PNG.
-    let img = &images[0];
+    let img = images[0].payload;
     assert!(
         matches!(img.format, ImageFormat::Bmp | ImageFormat::Png),
         "expected BMP or PNG after Excel round-trip, got {:?}",
@@ -2130,11 +2137,20 @@ fn excel_can_read_xls_jpeg_image_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "jpeg-anchor").unwrap();
-    ws.add_image(EmbeddedImage {
-        id: 1,
-        name: "JpegPic".into(),
-        description: None,
-        anchor: DrawingAnchor::TwoCell {
+    ws.add_image(
+        EmbeddedImage {
+            format: ImageFormat::Jpeg,
+            media_path: String::new(),
+            svg_media_path: None,
+            width_emu: 1_000_000,
+            height_emu: 1_000_000,
+            rotation: None,
+            flip_h: false,
+            flip_v: false,
+            data: TEST_JPEG_1X1.to_vec(),
+            svg_data: None,
+        },
+        DrawingAnchor::TwoCell {
             from: CellMarker {
                 col: 1,
                 col_offset_emu: 0,
@@ -2149,22 +2165,12 @@ fn excel_can_read_xls_jpeg_image_we_emit() {
             },
             edit_as: None,
         },
-        format: ImageFormat::Jpeg,
-        media_path: String::new(),
-        svg_media_path: None,
-        width_emu: 1_000_000,
-        height_emu: 1_000_000,
-        rotation: None,
-        flip_h: false,
-        flip_v: false,
-        data: TEST_JPEG_1X1.to_vec(),
-        svg_data: None,
-    });
+    );
 
     let result = roundtrip_through_excel_xls(&wb);
-    let images = result.worksheet(0).unwrap().images();
+    let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
     assert_eq!(images.len(), 1, "JPEG must survive Excel re-save");
-    let img = &images[0];
+    let img = images[0].payload;
     assert_eq!(img.format, ImageFormat::Jpeg, "format must stay JPEG");
     assert_eq!(
         img.data, TEST_JPEG_1X1,
@@ -2536,10 +2542,7 @@ fn excel_can_read_form_controls_we_emit() {
     let count = kinds.len();
     for (i, kind) in kinds.into_iter().enumerate() {
         let row = 1 + 2 * i as u32;
-        ws.add_form_control(FormControl::with_anchor(
-            kind,
-            control_anchor(1, row, 3, row + 1),
-        ));
+        ws.add_form_control(FormControl::new(kind), control_anchor(1, row, 3, row + 1));
     }
     assert_eq!(wb.sync_form_control_links(), 6);
 
@@ -2551,18 +2554,18 @@ fn excel_can_read_form_controls_we_emit() {
     assert_eq!(sheet.get_value("D5").unwrap(), CellValue::Number(4.0));
     assert_eq!(sheet.get_value("D6").unwrap(), CellValue::Number(40.0));
     assert_eq!(sheet.get_value("D7").unwrap(), CellValue::Number(12.0));
-    let controls = sheet.form_controls();
+    let controls: Vec<_> = sheet.form_controls().collect();
     assert_eq!(
         controls.len(),
         count,
         "every control must survive the Excel round-trip"
     );
 
-    match &controls[0].kind {
+    match &controls[0].payload.kind {
         FormControlKind::Button { caption } => assert_eq!(caption, "Run Report"),
         other => panic!("control 0: expected Button, got {other:?}"),
     }
-    match &controls[1].kind {
+    match &controls[1].payload.kind {
         FormControlKind::Checkbox {
             caption,
             state,
@@ -2575,14 +2578,14 @@ fn excel_can_read_form_controls_we_emit() {
         }
         other => panic!("control 1: expected Checkbox, got {other:?}"),
     }
-    match &controls[2].kind {
+    match &controls[2].payload.kind {
         FormControlKind::Checkbox { caption, state, .. } => {
             assert_eq!(caption, "Tri state");
             assert_eq!(*state, CheckState::Mixed, "mixed state must survive");
         }
         other => panic!("control 2: expected Checkbox, got {other:?}"),
     }
-    match &controls[3].kind {
+    match &controls[3].payload.kind {
         FormControlKind::OptionButton {
             caption,
             state,
@@ -2597,22 +2600,22 @@ fn excel_can_read_form_controls_we_emit() {
         }
         other => panic!("control 3: expected OptionButton, got {other:?}"),
     }
-    match &controls[4].kind {
+    match &controls[4].payload.kind {
         FormControlKind::OptionButton { caption, state, .. } => {
             assert_eq!(caption, "Opt B");
             assert_eq!(*state, CheckState::Unchecked);
         }
         other => panic!("control 4: expected OptionButton, got {other:?}"),
     }
-    match &controls[5].kind {
+    match &controls[5].payload.kind {
         FormControlKind::Label { caption } => assert_eq!(caption, "Status label"),
         other => panic!("control 5: expected Label, got {other:?}"),
     }
-    match &controls[6].kind {
+    match &controls[6].payload.kind {
         FormControlKind::GroupBox { caption, .. } => assert_eq!(caption, "Choices"),
         other => panic!("control 6: expected GroupBox, got {other:?}"),
     }
-    match &controls[7].kind {
+    match &controls[7].payload.kind {
         FormControlKind::ListBox {
             input_range,
             cell_link,
@@ -2627,7 +2630,7 @@ fn excel_can_read_form_controls_we_emit() {
         }
         other => panic!("control 7: expected ListBox, got {other:?}"),
     }
-    match &controls[8].kind {
+    match &controls[8].payload.kind {
         FormControlKind::Dropdown {
             input_range,
             cell_link,
@@ -2642,7 +2645,7 @@ fn excel_can_read_form_controls_we_emit() {
         }
         other => panic!("control 8: expected Dropdown, got {other:?}"),
     }
-    match &controls[9].kind {
+    match &controls[9].payload.kind {
         FormControlKind::Scrollbar {
             value,
             min,
@@ -2662,7 +2665,7 @@ fn excel_can_read_form_controls_we_emit() {
         }
         other => panic!("control 9: expected Scrollbar, got {other:?}"),
     }
-    match &controls[10].kind {
+    match &controls[10].payload.kind {
         FormControlKind::Spinner {
             value,
             min,
@@ -2678,7 +2681,7 @@ fn excel_can_read_form_controls_we_emit() {
         }
         other => panic!("control 10: expected Spinner, got {other:?}"),
     }
-    match &controls[11].kind {
+    match &controls[11].payload.kind {
         FormControlKind::ListBox {
             selection,
             selected,
@@ -2692,7 +2695,7 @@ fn excel_can_read_form_controls_we_emit() {
 
     // Anchors survive (cell coordinates; offsets are requantised by
     // Excel and asserted in the in-process layer instead).
-    match &controls[0].anchor {
+    match &controls[0].object.anchor {
         DrawingAnchor::TwoCell { from, to, .. } => {
             assert_eq!((from.col, from.row), (1, 1), "button anchor from");
             assert_eq!((to.col, to.row), (3, 2), "button anchor to");
@@ -2717,26 +2720,26 @@ fn excel_interprets_xls_list_selections_one_based() {
     for (i, item) in ["Alpha", "Beta", "Gamma", "Delta"].iter().enumerate() {
         ws.set_cell_value_at(i as u32, 7, *item).expect("item");
     }
-    ws.add_form_control(FormControl::with_anchor(
-        FormControlKind::ListBox {
+    ws.add_form_control(
+        FormControl::new(FormControlKind::ListBox {
             input_range: Some("$H$1:$H$4".to_string()),
             cell_link: None,
             selection: ListSelection::Single,
             selected: vec![2],
             no_3d: false,
-        },
+        }),
         control_anchor(1, 1, 3, 3),
-    ));
-    ws.add_form_control(FormControl::with_anchor(
-        FormControlKind::Dropdown {
+    );
+    ws.add_form_control(
+        FormControl::new(FormControlKind::Dropdown {
             input_range: Some("$H$1:$H$4".to_string()),
             cell_link: None,
             selected: Some(1),
             lines: 8,
             no_3d: false,
-        },
+        }),
         control_anchor(1, 5, 3, 6),
-    ));
+    );
 
     let fixture = temp_fixture_xls();
     let bytes = XlsWriter::write_to_bytes(&wb).expect("write xls");
@@ -2852,14 +2855,18 @@ fn excel_interprets_xls_list_selections_one_based() {
     excel.release(sheet_shapes).ok();
     pull_file_from_vm(&out_xls);
     let authored_model = duke_sheets_xls::XlsReader::read_file(&out_xls.host_path).expect("read");
-    let authored_controls = authored_model.worksheet(0).unwrap().form_controls();
-    match &authored_controls[0].kind {
+    let authored_controls: Vec<_> = authored_model
+        .worksheet(0)
+        .unwrap()
+        .form_controls()
+        .collect();
+    match &authored_controls[0].payload.kind {
         FormControlKind::ListBox { selected, .. } => {
             assert_eq!(selected, &vec![2], "Excel item 3 is model index 2");
         }
         other => panic!("expected ListBox, got {other:?}"),
     }
-    match &authored_controls[1].kind {
+    match &authored_controls[1].payload.kind {
         FormControlKind::Dropdown { selected, .. } => {
             assert_eq!(*selected, Some(1), "Excel item 2 is model index 1");
         }
@@ -3198,7 +3205,8 @@ fn excel_authored_xls_form_control_linked_cell_semantics() {
         model.worksheet(1).unwrap().get_value("A1").unwrap(),
         CellValue::Boolean(true)
     );
-    match &controls_sheet.form_controls()[2].kind {
+    let controls: Vec<_> = controls_sheet.form_controls().collect();
+    match &controls[2].payload.kind {
         FormControlKind::ListBox {
             cell_link,
             selection,
@@ -3217,10 +3225,9 @@ fn excel_authored_xls_form_control_linked_cell_semantics() {
         controls_sheet.get_value("B1").unwrap(),
         CellValue::Boolean(true)
     );
-    let named_link = controls_sheet
-        .form_controls()
+    let named_link = controls
         .iter()
-        .filter_map(|control| control.cell_link())
+        .filter_map(|control| control.payload.cell_link())
         .find(|link| link.contains("LinkedTarget"));
     assert_eq!(named_link, Some("LinkedTarget"));
     cleanup_fixture(&fixture);
@@ -3423,9 +3430,9 @@ fn excel_authored_xls_linked_formulas_drive_controls() {
     assert_eq!(sheet.get_value("A4").unwrap(), CellValue::Number(0.0));
 
     // The persisted control states match the last formula-driven states.
-    let controls = sheet.form_controls();
+    let controls: Vec<_> = sheet.form_controls().collect();
     assert_eq!(controls.len(), 5, "all controls survive the save");
-    match &controls[0].kind {
+    match &controls[0].payload.kind {
         FormControlKind::Checkbox {
             state, cell_link, ..
         } => {
@@ -3438,7 +3445,7 @@ fn excel_authored_xls_linked_formulas_drive_controls() {
         }
         other => panic!("expected Checkbox, got {other:?}"),
     }
-    match &controls[1].kind {
+    match &controls[1].payload.kind {
         FormControlKind::Scrollbar {
             value,
             min,
@@ -3451,7 +3458,7 @@ fn excel_authored_xls_linked_formulas_drive_controls() {
         }
         other => panic!("expected Scrollbar, got {other:?}"),
     }
-    match &controls[2].kind {
+    match &controls[2].payload.kind {
         FormControlKind::ListBox {
             selected,
             cell_link,
@@ -3468,7 +3475,7 @@ fn excel_authored_xls_linked_formulas_drive_controls() {
     }
     let radios: Vec<(CheckState, Option<&str>, bool)> = controls[3..]
         .iter()
-        .map(|control| match &control.kind {
+        .map(|control| match &control.payload.kind {
             FormControlKind::OptionButton {
                 state,
                 cell_link,
@@ -3502,16 +3509,16 @@ fn excel_preserves_unselected_radio_group_over_stale_link() {
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("D1", 2.0).expect("stale link value");
     for (caption, row) in [("First", 1), ("Second", 3)] {
-        ws.add_form_control(FormControl::with_anchor(
-            FormControlKind::OptionButton {
+        ws.add_form_control(
+            FormControl::new(FormControlKind::OptionButton {
                 caption: caption.to_string(),
                 state: CheckState::Unchecked,
                 cell_link: Some("$D$1".to_string()),
                 first_in_group: false,
                 no_3d: true,
-            },
+            }),
             control_anchor(1, row, 2, row + 1),
-        ));
+        );
     }
     assert_eq!(wb.sync_form_control_links(), 1);
     assert_eq!(
@@ -3524,8 +3531,7 @@ fn excel_preserves_unselected_radio_group_over_stale_link() {
     assert_eq!(sheet.get_value("D1").unwrap(), CellValue::Number(0.0));
     let states: Vec<CheckState> = sheet
         .form_controls()
-        .iter()
-        .map(|control| match &control.kind {
+        .map(|control| match &control.payload.kind {
             FormControlKind::OptionButton { state, .. } => *state,
             other => panic!("expected OptionButton, got {other:?}"),
         })
@@ -3561,43 +3567,43 @@ fn excel_can_read_radio_groups_we_emit() {
         caption: caption.to_string(),
         no_3d: true,
     };
-    ws.add_form_control(FormControl::with_anchor(
-        group_box("Box A"),
+    ws.add_form_control(
+        FormControl::new(group_box("Box A")),
         control_anchor(0, 0, 2, 6),
-    ));
-    ws.add_form_control(FormControl::with_anchor(
-        group_box("Box B"),
+    );
+    ws.add_form_control(
+        FormControl::new(group_box("Box B")),
         control_anchor(4, 0, 6, 6),
-    ));
-    ws.add_form_control(FormControl::with_anchor(
-        radio("A1", CheckState::Checked),
+    );
+    ws.add_form_control(
+        FormControl::new(radio("A1", CheckState::Checked)),
         control_anchor(1, 1, 2, 2),
-    ));
-    ws.add_form_control(FormControl::with_anchor(
-        radio("B1", CheckState::Unchecked),
+    );
+    ws.add_form_control(
+        FormControl::new(radio("B1", CheckState::Unchecked)),
         control_anchor(5, 1, 6, 2),
-    ));
-    ws.add_form_control(FormControl::with_anchor(
-        radio("A2", CheckState::Unchecked),
+    );
+    ws.add_form_control(
+        FormControl::new(radio("A2", CheckState::Unchecked)),
         control_anchor(1, 3, 2, 4),
-    ));
-    ws.add_form_control(FormControl::with_anchor(
-        radio("B2", CheckState::Checked),
+    );
+    ws.add_form_control(
+        FormControl::new(radio("B2", CheckState::Checked)),
         control_anchor(5, 3, 6, 4),
-    ));
-    ws.add_form_control(FormControl::with_anchor(
-        radio("Loose", CheckState::Unchecked),
+    );
+    ws.add_form_control(
+        FormControl::new(radio("Loose", CheckState::Unchecked)),
         control_anchor(8, 1, 9, 2),
-    ));
+    );
 
     let result = roundtrip_through_excel_xls(&wb);
     let sheet = result.worksheet(0).unwrap();
-    let controls = sheet.form_controls();
+    let controls: Vec<_> = sheet.form_controls().collect();
     assert_eq!(controls.len(), 7, "all controls survive");
 
     let radios: Vec<(String, CheckState, bool)> = controls
         .iter()
-        .filter_map(|c| match &c.kind {
+        .filter_map(|c| match &c.payload.kind {
             FormControlKind::OptionButton {
                 caption,
                 state,
@@ -3639,44 +3645,43 @@ fn excel_can_read_mixed_control_comment_picture_we_emit() {
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", 7.0).expect("A1");
     ws.set_cell_value("D2", true).expect("D2");
-    ws.add_image(duke_sheets_chart::EmbeddedImage {
-        id: 1,
-        name: "Pic".to_string(),
-        description: None,
-        anchor: control_anchor(6, 1, 8, 4),
-        format: duke_sheets_chart::ImageFormat::Png,
-        media_path: String::new(),
-        svg_media_path: None,
-        width_emu: 1_000_000,
-        height_emu: 1_000_000,
-        rotation: None,
-        flip_h: false,
-        flip_v: false,
-        data: TEST_PNG_1X1.to_vec(),
-        svg_data: None,
-    });
+    ws.add_image(
+        duke_sheets_chart::EmbeddedImage {
+            format: duke_sheets_chart::ImageFormat::Png,
+            media_path: String::new(),
+            svg_media_path: None,
+            width_emu: 1_000_000,
+            height_emu: 1_000_000,
+            rotation: None,
+            flip_h: false,
+            flip_v: false,
+            data: TEST_PNG_1X1.to_vec(),
+            svg_data: None,
+        },
+        control_anchor(6, 1, 8, 4),
+    );
     ws.set_comment_at(
         0,
         0,
         duke_sheets_core::CellComment::new("Author", "a note"),
     );
-    ws.add_form_control(FormControl::with_anchor(
-        FormControlKind::Checkbox {
+    ws.add_form_control(
+        FormControl::new(FormControlKind::Checkbox {
             caption: "mixed sheet".to_string(),
             state: CheckState::Checked,
             cell_link: Some("$D$2".to_string()),
             no_3d: true,
-        },
+        }),
         control_anchor(1, 1, 3, 2),
-    ));
+    );
 
     let result = roundtrip_through_excel_xls(&wb);
     let sheet = result.worksheet(0).unwrap();
     assert_eq!(sheet.image_count(), 1, "picture survives");
     assert_eq!(sheet.comment_count(), 1, "comment survives");
-    let controls = sheet.form_controls();
+    let controls: Vec<_> = sheet.form_controls().collect();
     assert_eq!(controls.len(), 1, "control survives");
-    match &controls[0].kind {
+    match &controls[0].payload.kind {
         FormControlKind::Checkbox {
             caption,
             state,
@@ -3700,35 +3705,35 @@ fn excel_can_read_large_xls_list_control_we_emit() {
     use duke_sheets_core::{FormControl, FormControlKind, ListSelection};
 
     let mut wb = Workbook::new();
-    wb.worksheet_mut(0)
-        .unwrap()
-        .add_form_control(FormControl::with_anchor(
-            FormControlKind::ListBox {
-                input_range: Some("$H$1:$H$10000".to_string()),
-                cell_link: None,
-                selection: ListSelection::Multi,
-                selected: vec![0, 4_999, 9_999],
-                no_3d: false,
+    wb.worksheet_mut(0).unwrap().add_form_control(
+        FormControl::new(FormControlKind::ListBox {
+            input_range: Some("$H$1:$H$10000".to_string()),
+            cell_link: None,
+            selection: ListSelection::Multi,
+            selected: vec![0, 4_999, 9_999],
+            no_3d: false,
+        }),
+        DrawingAnchor::TwoCell {
+            from: CellMarker {
+                col: 0,
+                col_offset_emu: 0,
+                row: 0,
+                row_offset_emu: 0,
             },
-            DrawingAnchor::TwoCell {
-                from: CellMarker {
-                    col: 0,
-                    col_offset_emu: 0,
-                    row: 0,
-                    row_offset_emu: 0,
-                },
-                to: CellMarker {
-                    col: 2,
-                    col_offset_emu: 0,
-                    row: 10,
-                    row_offset_emu: 0,
-                },
-                edit_as: None,
+            to: CellMarker {
+                col: 2,
+                col_offset_emu: 0,
+                row: 10,
+                row_offset_emu: 0,
             },
-        ));
+            edit_as: None,
+        },
+    );
 
     let result = roundtrip_through_excel_xls(&wb);
-    match &result.worksheet(0).unwrap().form_controls()[0].kind {
+    let sheet = result.worksheet(0).unwrap();
+    let control = sheet.form_controls().next().expect("control survives");
+    match &control.payload.kind {
         FormControlKind::ListBox {
             selection,
             selected,

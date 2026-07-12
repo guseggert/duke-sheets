@@ -19,6 +19,24 @@ mod tests {
         XlsbReader::read(Cursor::new(&buf)).unwrap()
     }
 
+    fn add_raw_drawing(ws: &mut duke_sheets_core::Worksheet, bytes: Vec<u8>) {
+        use duke_sheets_core::{DrawingObject, RawDrawing};
+        ws.add_drawing(DrawingObject::raw(RawDrawing {
+            bytes,
+            rels: vec![],
+        }));
+    }
+
+    fn raw_drawing_bytes(ws: &duke_sheets_core::Worksheet) -> Vec<&Vec<u8>> {
+        ws.drawings()
+            .iter()
+            .filter_map(|o| match &o.kind {
+                duke_sheets_core::DrawingKind::Raw(raw) => Some(&raw.bytes),
+                _ => None,
+            })
+            .collect()
+    }
+
     #[test]
     fn empty_workbook() {
         let wb = Workbook::new();
@@ -1350,10 +1368,7 @@ mod tests {
         let encoded = bundle.encode();
 
         let mut wb = Workbook::new();
-        wb.worksheet_mut(0)
-            .unwrap()
-            .raw_drawing_objects
-            .push(encoded);
+        add_raw_drawing(wb.worksheet_mut(0).unwrap(), encoded);
 
         let mut buf = Vec::new();
         XlsbWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -1397,9 +1412,10 @@ mod tests {
 
         let wb2 = XlsbReader::read(Cursor::new(&buf)).unwrap();
         let ws2 = wb2.worksheet(0).unwrap();
-        assert_eq!(ws2.raw_drawing_objects.len(), 1);
+        let raw2 = raw_drawing_bytes(ws2);
+        assert_eq!(raw2.len(), 1);
 
-        let bundle2 = DrawingBundle::decode(&ws2.raw_drawing_objects[0]).unwrap();
+        let bundle2 = DrawingBundle::decode(raw2[0]).unwrap();
         let (_, round_tripped) = bundle2
             .entries
             .iter()
@@ -1428,10 +1444,7 @@ mod tests {
         bundle.push("xl/charts/chart1.xml".into(), chart_xml.to_vec());
 
         let mut wb = Workbook::new();
-        wb.worksheet_mut(0)
-            .unwrap()
-            .raw_drawing_objects
-            .push(bundle.encode());
+        add_raw_drawing(wb.worksheet_mut(0).unwrap(), bundle.encode());
 
         let mut buf = Vec::new();
         XlsbWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -1455,8 +1468,9 @@ mod tests {
 
         let wb2 = XlsbReader::read(Cursor::new(&buf)).unwrap();
         let ws2 = wb2.worksheet(0).unwrap();
-        assert_eq!(ws2.raw_drawing_objects.len(), 1);
-        let bundle2 = DrawingBundle::decode(&ws2.raw_drawing_objects[0]).unwrap();
+        let raw2 = raw_drawing_bytes(ws2);
+        assert_eq!(raw2.len(), 1);
+        let bundle2 = DrawingBundle::decode(raw2[0]).unwrap();
         assert!(bundle2
             .entries
             .iter()
@@ -1491,10 +1505,7 @@ mod tests {
         let anchor = b"<xdr:twoCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>5</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>5</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:sp/><xdr:clientData/></xdr:twoCellAnchor>";
 
         let mut wb = Workbook::new();
-        wb.worksheet_mut(0)
-            .unwrap()
-            .raw_drawing_objects
-            .push(anchor.to_vec());
+        add_raw_drawing(wb.worksheet_mut(0).unwrap(), anchor.to_vec());
 
         let mut buf = Vec::new();
         XlsbWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -2924,25 +2935,22 @@ mod tests {
         let count = kinds.len();
         for (i, kind) in kinds.iter().enumerate() {
             let row = 1 + 2 * i as u32;
-            ws.add_form_control(FormControl::with_anchor(
-                kind.clone(),
-                anchor(1, row, 3, row + 1),
-            ));
+            ws.add_form_control(FormControl::new(kind.clone()), anchor(1, row, 3, row + 1));
         }
 
         let wb2 = round_trip(&wb);
-        let controls = wb2.worksheet(0).unwrap().form_controls();
+        let controls: Vec<_> = wb2.worksheet(0).unwrap().form_controls().collect();
         assert_eq!(controls.len(), count, "every control survives");
-        for (i, control) in controls.iter().enumerate() {
+        for (i, drawn) in controls.iter().enumerate() {
             // The writer recomputes radio grouping; the single radio
             // becomes its own group head.
             let mut expected = kinds[i].clone();
             if let FormControlKind::OptionButton { first_in_group, .. } = &mut expected {
                 *first_in_group = true;
             }
-            assert_eq!(control.kind, expected, "control {i} kind mismatch");
+            assert_eq!(drawn.payload.kind, expected, "control {i} kind mismatch");
         }
-        match &controls[0].anchor {
+        match &controls[0].object.anchor {
             DrawingAnchor::TwoCell { from, to, .. } => {
                 assert_eq!((from.col, from.row), (1, 1));
                 assert_eq!((to.col, to.row), (3, 2));
@@ -2960,13 +2968,13 @@ mod tests {
         let mut wb = Workbook::new();
         let ws = wb.worksheet_mut(0).unwrap();
         ws.set_comment_at(0, 0, CellComment::new("Author", "note"));
-        ws.add_form_control(FormControl::with_anchor(
-            FormControlKind::Checkbox {
+        ws.add_form_control(
+            FormControl::new(FormControlKind::Checkbox {
                 caption: "check".to_string(),
                 state: CheckState::Checked,
                 cell_link: None,
                 no_3d: false,
-            },
+            }),
             DrawingAnchor::TwoCell {
                 from: CellMarker {
                     col: 1,
@@ -2982,13 +2990,16 @@ mod tests {
                 },
                 edit_as: None,
             },
-        ));
+        );
 
         let wb2 = round_trip(&wb);
         let ws2 = wb2.worksheet(0).unwrap();
         assert_eq!(ws2.comment_count(), 1, "comment survives");
         assert_eq!(ws2.form_control_count(), 1, "control survives");
-        assert_eq!(ws2.form_controls()[0].caption(), Some("check"));
+        assert_eq!(
+            ws2.form_controls().next().unwrap().payload.caption(),
+            Some("check")
+        );
     }
 
     #[test]
@@ -3021,13 +3032,13 @@ mod tests {
             totals_row_count: 0,
             totals_row_shown: false,
         });
-        ws.add_form_control(FormControl::with_anchor(
-            FormControlKind::Checkbox {
+        ws.add_form_control(
+            FormControl::new(FormControlKind::Checkbox {
                 caption: "check".to_string(),
                 state: CheckState::Checked,
                 cell_link: None,
                 no_3d: false,
-            },
+            }),
             DrawingAnchor::TwoCell {
                 from: CellMarker {
                     col: 2,
@@ -3043,7 +3054,7 @@ mod tests {
                 },
                 edit_as: None,
             },
-        ));
+        );
 
         let mut bytes = Vec::new();
         XlsbWriter::write(&wb, Cursor::new(&mut bytes)).unwrap();

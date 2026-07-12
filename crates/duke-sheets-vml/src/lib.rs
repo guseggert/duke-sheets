@@ -17,7 +17,9 @@
 //! `controlPr@moveWithCells/sizeWithCells` attributes).
 
 use duke_sheets_chart::{CellMarker, DrawingAnchor, EditAs};
-use duke_sheets_core::{CheckState, FormControl, FormControlKind, ListSelection};
+use duke_sheets_core::{
+    CheckState, DrawingMeta, DrawingObject, FormControl, FormControlKind, ListSelection,
+};
 use quick_xml::events::Event;
 use quick_xml::Reader;
 
@@ -175,17 +177,20 @@ fn xml_escape(text: &str) -> String {
 /// Append one control `<v:shape>` to a VML part body. `shape_id` is
 /// the numeric part of `_x0000_s{id}` (must match the worksheet
 /// `control/@shapeId` in XLSX); `first_button` is the recomputed
-/// radio-group-head flag for option buttons.
+/// radio-group-head flag for option buttons. `meta` and `anchor`
+/// come from the control's wrapping drawing object.
 pub fn write_control_shape(
     xml: &mut String,
     shape_id: usize,
     z_index: usize,
+    meta: &DrawingMeta,
+    anchor: &DrawingAnchor,
     control: &FormControl,
     first_button: bool,
 ) {
     use FormControlKind as K;
     let kind = &control.kind;
-    let a = anchor_to_px(&control.anchor);
+    let a = anchor_to_px(anchor);
     let left = a[0] * DEFAULT_COL_PX + a[1];
     let top = a[2] * DEFAULT_ROW_PX + a[3];
     let width = (a[4] * DEFAULT_COL_PX + a[5]) - left;
@@ -280,10 +285,10 @@ pub fn write_control_shape(
         "  <x:ClientData ObjectType=\"{}\">\n",
         vml_object_type(kind)
     ));
-    if !control.locked {
+    if !meta.locked {
         xml.push_str("   <x:Locked>False</x:Locked>\n");
     }
-    let (no_move, no_size) = negated_move_size(&control.anchor);
+    let (no_move, no_size) = negated_move_size(anchor);
     if no_move {
         xml.push_str("   <x:MoveWithCells/>\n");
     }
@@ -294,7 +299,7 @@ pub fn write_control_shape(
         "   <x:Anchor>\n    {}, {}, {}, {}, {}, {}, {}, {}</x:Anchor>\n",
         a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]
     ));
-    if !control.printable {
+    if !meta.printable {
         xml.push_str("   <x:PrintObject>False</x:PrintObject>\n");
     }
 
@@ -525,9 +530,10 @@ impl VmlControl {
         }
     }
 
-    /// Convert to a model [`FormControl`]. Returns `None` for
-    /// non-control shapes (comments) and unsupported object types.
-    pub fn to_form_control(&self) -> Option<FormControl> {
+    /// Convert to a model [`DrawingObject`] wrapping a
+    /// [`FormControl`]. Returns `None` for non-control shapes
+    /// (comments) and unsupported object types.
+    pub fn to_drawing_object(&self) -> Option<DrawingObject> {
         let caption = || self.caption.clone();
         let state = match self.checked {
             2 => CheckState::Mixed,
@@ -628,10 +634,11 @@ impl VmlControl {
             .anchor_px
             .map(|a| px_to_anchor(&a, self.move_with_cells, self.size_with_cells))
             .unwrap_or_default();
-        let mut control = FormControl::with_anchor(kind, anchor);
-        control.locked = self.locked;
-        control.printable = self.print_object;
-        Some(control)
+        let mut object =
+            DrawingObject::form_control(FormControl::new(kind)).with_anchor(anchor);
+        object.meta.locked = self.locked;
+        object.meta.printable = self.print_object;
+        Some(object)
     }
 }
 
@@ -865,31 +872,45 @@ fn apply_client_data_text(ctrl: &mut VmlControl, elem: &str, text: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use duke_sheets_core::DrawingKind;
 
-    fn checkbox(cell_link: Option<&str>) -> FormControl {
-        FormControl::with_anchor(
-            FormControlKind::Checkbox {
-                caption: "Enable audit".to_string(),
-                state: CheckState::Checked,
-                cell_link: cell_link.map(str::to_string),
-                no_3d: true,
+    fn checkbox(cell_link: Option<&str>) -> DrawingObject {
+        DrawingObject::form_control(FormControl::new(FormControlKind::Checkbox {
+            caption: "Enable audit".to_string(),
+            state: CheckState::Checked,
+            cell_link: cell_link.map(str::to_string),
+            no_3d: true,
+        }))
+        .with_anchor(DrawingAnchor::TwoCell {
+            from: CellMarker {
+                col: 0,
+                col_offset_emu: 13 * EMU_PER_PX,
+                row: 3,
+                row_offset_emu: 0,
             },
-            DrawingAnchor::TwoCell {
-                from: CellMarker {
-                    col: 0,
-                    col_offset_emu: 13 * EMU_PER_PX,
-                    row: 3,
-                    row_offset_emu: 0,
-                },
-                to: CellMarker {
-                    col: 2,
-                    col_offset_emu: 18 * EMU_PER_PX,
-                    row: 4,
-                    row_offset_emu: 4 * EMU_PER_PX,
-                },
-                edit_as: Some(EditAs::OneCell),
+            to: CellMarker {
+                col: 2,
+                col_offset_emu: 18 * EMU_PER_PX,
+                row: 4,
+                row_offset_emu: 4 * EMU_PER_PX,
             },
-        )
+            edit_as: Some(EditAs::OneCell),
+        })
+    }
+
+    fn shape_xml(object: &DrawingObject, shape_id: usize, z_index: usize, first: bool) -> String {
+        let mut xml = String::new();
+        let control = object.kind.as_form_control().expect("form control");
+        write_control_shape(
+            &mut xml,
+            shape_id,
+            z_index,
+            &object.meta,
+            &object.anchor,
+            control,
+            first,
+        );
+        xml
     }
 
     fn wrap(xml_body: &str) -> String {
@@ -900,9 +921,8 @@ mod tests {
 
     #[test]
     fn checkbox_shape_round_trips() {
-        let control = checkbox(Some("$D$2"));
-        let mut xml = String::new();
-        write_control_shape(&mut xml, 1026, 2, &control, false);
+        let object = checkbox(Some("$D$2"));
+        let xml = shape_xml(&object, 1026, 2, false);
         let full = wrap(&xml);
 
         let parsed = parse_vml_controls(full.as_bytes());
@@ -918,10 +938,10 @@ mod tests {
         assert_eq!(vml.fmla_link.as_deref(), Some("$D$2"));
         assert!(vml.no_3d);
 
-        let back = vml.to_form_control().expect("control");
-        assert_eq!(back.kind, control.kind);
-        assert!(back.locked);
-        assert!(back.printable);
+        let back = vml.to_drawing_object().expect("control");
+        assert_eq!(back.kind, object.kind);
+        assert!(back.meta.locked);
+        assert!(back.meta.printable);
     }
 
     #[test]
@@ -960,10 +980,15 @@ mod tests {
         assert!(!vml.size_with_cells);
         assert!(vml.move_with_cells);
         assert_eq!(vml.fmla_link.as_deref(), Some("$D$2"));
-        let control = vml.to_form_control().expect("control");
-        match control.kind {
-            FormControlKind::Checkbox { state, .. } => assert_eq!(state, CheckState::Checked),
-            other => panic!("expected Checkbox, got {other:?}"),
+        let object = vml.to_drawing_object().expect("control");
+        match &object.kind {
+            DrawingKind::FormControl(control) => match &control.kind {
+                FormControlKind::Checkbox { state, .. } => {
+                    assert_eq!(state, &CheckState::Checked)
+                }
+                other => panic!("expected Checkbox, got {other:?}"),
+            },
+            other => panic!("expected form control, got {other:?}"),
         }
     }
 
@@ -1019,11 +1044,10 @@ mod tests {
             },
         ];
         let mut xml = String::new();
-        let controls: Vec<FormControl> = kinds
+        let objects: Vec<DrawingObject> = kinds
             .into_iter()
             .map(|kind| {
-                FormControl::with_anchor(
-                    kind,
+                DrawingObject::form_control(FormControl::new(kind)).with_anchor(
                     DrawingAnchor::TwoCell {
                         from: CellMarker {
                             col: 1,
@@ -1042,9 +1066,10 @@ mod tests {
                 )
             })
             .collect();
-        for (i, control) in controls.iter().enumerate() {
+        for (i, object) in objects.iter().enumerate() {
+            let control = object.kind.as_form_control().unwrap();
             let first = matches!(control.kind, FormControlKind::OptionButton { .. });
-            write_control_shape(&mut xml, 1025 + i, i + 1, control, first);
+            xml.push_str(&shape_xml(object, 1025 + i, i + 1, first));
         }
 
         // Zero-based model selections serialize one-based on disk.
@@ -1052,34 +1077,34 @@ mod tests {
         assert!(xml.contains("<x:Sel>3</x:Sel>"), "{xml}");
 
         let parsed = parse_vml_controls(wrap(&xml).as_bytes());
-        assert_eq!(parsed.len(), controls.len());
-        for (vml, original) in parsed.iter().zip(&controls) {
-            let back = vml.to_form_control().expect("control");
+        assert_eq!(parsed.len(), objects.len());
+        for (vml, original) in parsed.iter().zip(&objects) {
+            let back = vml.to_drawing_object().expect("control");
             assert_eq!(back.kind, original.kind, "kind mismatch for {vml:?}");
         }
     }
 
     #[test]
     fn unlocked_unprintable_flags_round_trip() {
-        let mut control = checkbox(None);
-        control.locked = false;
-        control.printable = false;
-        let mut xml = String::new();
-        write_control_shape(&mut xml, 1025, 1, &control, false);
+        let mut object = checkbox(None);
+        object.meta.locked = false;
+        object.meta.printable = false;
+        let xml = shape_xml(&object, 1025, 1, false);
         let parsed = parse_vml_controls(wrap(&xml).as_bytes());
-        let back = parsed[0].to_form_control().expect("control");
-        assert!(!back.locked);
-        assert!(!back.printable);
+        let back = parsed[0].to_drawing_object().expect("control");
+        assert!(!back.meta.locked);
+        assert!(!back.meta.printable);
     }
 
     #[test]
     fn multiline_caption_round_trips_as_multiple_divs() {
-        let mut control = checkbox(None);
-        if let FormControlKind::Checkbox { caption, .. } = &mut control.kind {
-            *caption = "Line one\nLine two\n".to_string();
+        let mut object = checkbox(None);
+        if let DrawingKind::FormControl(control) = &mut object.kind {
+            if let FormControlKind::Checkbox { caption, .. } = &mut control.kind {
+                *caption = "Line one\nLine two\n".to_string();
+            }
         }
-        let mut xml = String::new();
-        write_control_shape(&mut xml, 1025, 1, &control, false);
+        let xml = shape_xml(&object, 1025, 1, false);
         assert_eq!(xml.matches("<div ").count(), 3);
 
         let parsed = parse_vml_controls(wrap(&xml).as_bytes());
@@ -1098,7 +1123,7 @@ mod tests {
 "##;
         let parsed = parse_vml_controls(wrap(body).as_bytes());
         assert_eq!(parsed.len(), 1);
-        assert!(parsed[0].to_form_control().is_none());
+        assert!(parsed[0].to_drawing_object().is_none());
     }
 
     #[test]
@@ -1128,7 +1153,7 @@ mod tests {
         let mut vml = VmlControl::new();
         vml.object_type = "Drop".to_string();
         vml.lct = "AutoFilter".to_string();
-        assert!(vml.to_form_control().is_none());
+        assert!(vml.to_drawing_object().is_none());
     }
 
     #[test]

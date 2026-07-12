@@ -2450,7 +2450,7 @@ impl XlsReader {
     /// Inspect an `SP_CONTAINER` body. If its FSP shape type is
     /// `PICTURE_FRAME` and its FOPT contains a `pib` (`0x0104`)
     /// entry resolving into `blip_store`, build an `EmbeddedImage`
-    /// and call `ws.add_image()`.
+    /// and add it to the worksheet's drawing list.
     fn extract_picture(
         sp_body: &[u8],
         blip_store: &[BlipData],
@@ -2575,24 +2575,6 @@ impl XlsReader {
             _ => None,
         };
         let image = duke_sheets_chart::EmbeddedImage {
-            id: fsp_spid,
-            name,
-            description: None,
-            anchor: duke_sheets_chart::DrawingAnchor::TwoCell {
-                from: duke_sheets_chart::CellMarker {
-                    col: anchor.col_l,
-                    col_offset_emu: from_col_off,
-                    row: anchor.row_t as u32,
-                    row_offset_emu: from_row_off,
-                },
-                to: duke_sheets_chart::CellMarker {
-                    col: anchor.col_r,
-                    col_offset_emu: to_col_off,
-                    row: anchor.row_b as u32,
-                    row_offset_emu: to_row_off,
-                },
-                edit_as,
-            },
             format: blip.format,
             media_path: String::new(),
             svg_media_path: None,
@@ -2604,7 +2586,26 @@ impl XlsReader {
             data: blip.data.clone(),
             svg_data: None,
         };
-        ws.add_image(image);
+        let drawing_anchor = duke_sheets_chart::DrawingAnchor::TwoCell {
+            from: duke_sheets_chart::CellMarker {
+                col: anchor.col_l,
+                col_offset_emu: from_col_off,
+                row: anchor.row_t as u32,
+                row_offset_emu: from_row_off,
+            },
+            to: duke_sheets_chart::CellMarker {
+                col: anchor.col_r,
+                col_offset_emu: to_col_off,
+                row: anchor.row_b as u32,
+                row_offset_emu: to_row_off,
+            },
+            edit_as,
+        };
+        ws.add_drawing(
+            duke_sheets_core::DrawingObject::image(image)
+                .with_anchor(drawing_anchor)
+                .with_name(name),
+        );
     }
 
     /// Collect every non-patriarch `SP_CONTAINER` in the per-sheet
@@ -2944,10 +2945,12 @@ impl XlsReader {
                 duke_sheets_chart::DrawingAnchor::default()
             };
 
-            let mut control = FormControl::with_anchor(kind, anchor);
-            control.locked = parsed.grbit & obj::cmo_flags::LOCKED != 0;
-            control.printable = parsed.grbit & obj::cmo_flags::PRINT != 0;
-            ws.add_form_control(control);
+            let mut object =
+                duke_sheets_core::DrawingObject::form_control(FormControl::new(kind))
+                    .with_anchor(anchor);
+            object.meta.locked = parsed.grbit & obj::cmo_flags::LOCKED != 0;
+            object.meta.printable = parsed.grbit & obj::cmo_flags::PRINT != 0;
+            ws.add_drawing(object);
         }
     }
 
@@ -3182,8 +3185,8 @@ impl XlsReader {
         let text = obj_texts.get(&obj_id).cloned().unwrap_or_default();
 
         let visible = (flags & 0x0002) != 0;
-        let comment = CellComment::new(author, text).with_visible(visible);
-        ws.set_comment_at(row, col, comment);
+        ws.set_comment_at(row, col, CellComment::new(author, text));
+        ws.set_comment_visible(row, col, visible);
         Ok(())
     }
 
@@ -4245,7 +4248,7 @@ mod tests {
         let comment = ws.comment_at(2, 3).expect("comment should exist");
         assert_eq!(comment.author, "John");
         assert_eq!(comment.text, "Review this");
-        assert!(comment.visible);
+        assert_eq!(ws.comment_visible(2, 3), Some(true));
     }
 
     #[test]
@@ -4327,13 +4330,13 @@ mod tests {
         // degrades to a default anchor, not a dropped control.
         let ws = parse(vec![rec(records::OBJ, checkbox_obj_body(3))]);
         assert_eq!(ws.form_control_count(), 1);
-        let control = &ws.form_controls()[0];
+        let control = ws.form_controls().next().unwrap();
         assert_eq!(
-            control.anchor,
+            control.object.anchor,
             duke_sheets_chart::DrawingAnchor::default(),
             "mismatched pairing falls back to the default anchor"
         );
-        match &control.kind {
+        match &control.payload.kind {
             duke_sheets_core::FormControlKind::Checkbox { state, .. } => {
                 assert_eq!(*state, duke_sheets_core::CheckState::Checked);
             }
@@ -4361,7 +4364,8 @@ mod tests {
 
         let ws = parse(vec![rec(records::OBJ, body)]);
         assert_eq!(ws.form_control_count(), 1);
-        match &ws.form_controls()[0].kind {
+        let control = ws.form_controls().next().unwrap();
+        match &control.payload.kind {
             duke_sheets_core::FormControlKind::OptionButton { state, .. } => {
                 assert_eq!(*state, duke_sheets_core::CheckState::Checked);
             }

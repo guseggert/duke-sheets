@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::cell::{CellAddress, CellError, CellValue};
+use crate::drawing::DrawingPath;
 use crate::error::{Error, Result};
 use crate::form_control::{radio_groups, CheckState, FormControlKind, ListSelection};
 use crate::named_range::{NameScope, NamedRange, NamedRangeCollection};
@@ -182,14 +183,14 @@ impl Workbook {
         let mut updates: BTreeMap<(usize, u32, u16), CellValue> = BTreeMap::new();
 
         for source_sheet in 0..self.worksheets.len() {
-            let controls = self.worksheets[source_sheet].form_controls();
+            let controls = self.worksheets[source_sheet].placed_form_controls();
             let mut radio_values = vec![None; controls.len()];
-            for group in radio_groups(controls) {
+            for group in radio_groups(&controls) {
                 let value = group
                     .iter()
                     .position(|&index| {
                         matches!(
-                            controls[index].kind,
+                            controls[index].control.kind,
                             FormControlKind::OptionButton {
                                 state: CheckState::Checked,
                                 ..
@@ -203,8 +204,8 @@ impl Workbook {
                 }
             }
 
-            for (index, control) in controls.iter().enumerate() {
-                let (link, value) = match &control.kind {
+            for (index, placed) in controls.iter().enumerate() {
+                let (link, value) = match &placed.control.kind {
                     FormControlKind::Checkbox {
                         state, cell_link, ..
                     } => {
@@ -267,7 +268,7 @@ impl Workbook {
                     let existing = self.worksheets[sheet].get_value_at(address.row, address.col);
                     let fresh_blank = existing == CellValue::Empty && !has_formula;
                     let value = if matches!(
-                        &control.kind,
+                        &placed.control.kind,
                         FormControlKind::Checkbox {
                             state: CheckState::Unchecked,
                             ..
@@ -349,14 +350,15 @@ impl Workbook {
             })
         };
 
-        let mut planned: Vec<(usize, usize, Driven)> = Vec::new();
+        let mut planned: Vec<(usize, DrawingPath, Driven)> = Vec::new();
         for source_sheet in 0..self.worksheets.len() {
-            let controls = self.worksheets[source_sheet].form_controls();
+            let controls = self.worksheets[source_sheet].placed_form_controls();
 
-            for group in radio_groups(controls) {
+            for group in radio_groups(&controls) {
                 // Excel persists the group's link on the first radio.
                 let Some(value) = group.iter().find_map(|&index| {
                     controls[index]
+                        .control
                         .cell_link()
                         .and_then(|link| driving_value(self, source_sheet, link))
                 }) else {
@@ -371,12 +373,12 @@ impl Workbook {
                     } else {
                         CheckState::Unchecked
                     };
-                    planned.push((source_sheet, index, Driven::Check(state)));
+                    planned.push((source_sheet, controls[index].path.clone(), Driven::Check(state)));
                 }
             }
 
-            for (index, control) in controls.iter().enumerate() {
-                match &control.kind {
+            for placed in &controls {
+                match &placed.control.kind {
                     FormControlKind::Checkbox { cell_link, .. } => {
                         let Some(value) = cell_link
                             .as_deref()
@@ -393,7 +395,7 @@ impl Workbook {
                             CellValue::Error(CellError::Na) => CheckState::Mixed,
                             _ => continue,
                         };
-                        planned.push((source_sheet, index, Driven::Check(state)));
+                        planned.push((source_sheet, placed.path.clone(), Driven::Check(state)));
                     }
                     FormControlKind::ListBox {
                         cell_link,
@@ -416,7 +418,7 @@ impl Workbook {
                         } else {
                             vec![selected - 1]
                         };
-                        planned.push((source_sheet, index, Driven::ListSelection(selected)));
+                        planned.push((source_sheet, placed.path.clone(), Driven::ListSelection(selected)));
                     }
                     FormControlKind::Dropdown {
                         cell_link,
@@ -434,7 +436,7 @@ impl Workbook {
                             continue;
                         };
                         let selected = (selected > 0).then(|| selected - 1);
-                        planned.push((source_sheet, index, Driven::DropSelection(selected)));
+                        planned.push((source_sheet, placed.path.clone(), Driven::DropSelection(selected)));
                     }
                     FormControlKind::Scrollbar {
                         cell_link,
@@ -460,7 +462,7 @@ impl Workbook {
                         let clamped = number
                             .trunc()
                             .clamp(f64::from(*min), f64::from(*max)) as u16;
-                        planned.push((source_sheet, index, Driven::Value(clamped)));
+                        planned.push((source_sheet, placed.path.clone(), Driven::Value(clamped)));
                     }
                     _ => {}
                 }
@@ -468,8 +470,10 @@ impl Workbook {
         }
 
         let mut changed = 0;
-        for (sheet, index, driven) in planned {
-            let control = &mut self.worksheets[sheet].form_controls_mut()[index];
+        for (sheet, path, driven) in planned {
+            let Some(control) = self.worksheets[sheet].form_control_at_path_mut(&path) else {
+                continue;
+            };
             let did_change = match (&mut control.kind, driven) {
                 (
                     FormControlKind::Checkbox { state, .. }
@@ -501,12 +505,12 @@ impl Workbook {
     /// and the roundtrip nonce are retained.
     #[doc(hidden)]
     pub fn synchronized_for_save(&self) -> Option<Self> {
-        if !self
-            .worksheets
-            .iter()
-            .flat_map(|sheet| sheet.form_controls())
-            .any(|control| control.cell_link().is_some())
-        {
+        if !self.worksheets.iter().any(|sheet| {
+            sheet
+                .placed_form_controls()
+                .iter()
+                .any(|placed| placed.control.cell_link().is_some())
+        }) {
             return None;
         }
         let mut snapshot = Self {
@@ -1076,7 +1080,10 @@ pub struct ChartSheet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CellError, CellValue, CheckState, FormControl, FormControlKind, ListSelection};
+    use crate::{
+        CellError, CellValue, CheckState, DrawingObject, FormControl, FormControlKind,
+        ListSelection,
+    };
 
     #[test]
     fn test_new_workbook() {
@@ -1351,7 +1358,7 @@ mod tests {
             },
         ];
         for kind in kinds {
-            ws.add_form_control(FormControl::new(kind));
+            ws.add_drawing(DrawingObject::form_control(FormControl::new(kind)));
         }
 
         assert_eq!(wb.sync_form_control_links(), 9);
@@ -1391,12 +1398,12 @@ mod tests {
             "=''!$A$1",
             "='Bob's'!$A$1",
         ] {
-            ws.add_form_control(FormControl::new(FormControlKind::Checkbox {
+            ws.add_drawing(DrawingObject::form_control(FormControl::new(FormControlKind::Checkbox {
                 caption: link.into(),
                 state: CheckState::Checked,
                 cell_link: Some(link.into()),
                 no_3d: false,
-            }));
+            })));
         }
 
         assert_eq!(wb.sync_form_control_links(), 1);
@@ -1435,13 +1442,13 @@ mod tests {
             ("LoopA", 55),
             ("NoSuchName", 66),
         ] {
-            ws.add_form_control(FormControl::new(FormControlKind::Spinner {
+            ws.add_drawing(DrawingObject::form_control(FormControl::new(FormControlKind::Spinner {
                 value,
                 min: 0,
                 max: 100,
                 increment: 1,
                 cell_link: Some(link.into()),
-            }));
+            })));
         }
 
         assert_eq!(wb.sync_form_control_links(), 2);
@@ -1530,11 +1537,11 @@ mod tests {
             checkbox("$A$9", CheckState::Checked),
         ];
         for kind in kinds {
-            ws.add_form_control(FormControl::new(kind));
+            ws.add_drawing(DrawingObject::form_control(FormControl::new(kind)));
         }
 
         assert_eq!(wb.sync_form_controls_from_linked_cells(), 8);
-        let controls = wb.worksheet(0).unwrap().form_controls();
+        let controls: Vec<_> = wb.worksheet(0).unwrap().form_controls().map(|d| d.payload).collect();
         let state = |index: usize| match &controls[index].kind {
             FormControlKind::Checkbox { state, .. }
             | FormControlKind::OptionButton { state, .. } => *state,
@@ -1572,19 +1579,19 @@ mod tests {
         let mut wb = Workbook::new();
         assert!(wb.synchronized_for_save().is_none());
         let ws = wb.worksheet_mut(0).unwrap();
-        ws.add_form_control(FormControl::new(FormControlKind::Spinner {
+        ws.add_drawing(DrawingObject::form_control(FormControl::new(FormControlKind::Spinner {
             value: 7,
             min: 0,
             max: 10,
             increment: 1,
             cell_link: Some("$A$1".into()),
-        }));
-        ws.add_form_control(FormControl::new(FormControlKind::Checkbox {
+        })));
+        ws.add_drawing(DrawingObject::form_control(FormControl::new(FormControlKind::Checkbox {
             caption: "later".into(),
             state: CheckState::Checked,
             cell_link: Some("$A$1".into()),
             no_3d: false,
-        }));
+        })));
 
         assert_eq!(wb.sync_form_control_links(), 1);
         assert_eq!(

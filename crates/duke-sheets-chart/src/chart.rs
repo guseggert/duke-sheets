@@ -126,8 +126,6 @@ pub struct Chart {
     pub series_axis: Option<Axis>,
     /// Legend
     pub legend: Option<Legend>,
-    /// Position anchor
-    pub anchor: DrawingAnchor,
     pub data_labels: Option<DataLabels>,
     pub view_3d: Option<View3D>,
     pub data_table: Option<ChartDataTable>,
@@ -190,7 +188,6 @@ impl Chart {
             value_axis: None,
             series_axis: None,
             legend: None,
-            anchor: DrawingAnchor::default(),
             data_labels: None,
             view_3d: None,
             data_table: None,
@@ -406,12 +403,11 @@ impl ImageFormat {
 }
 
 /// An image embedded in a worksheet drawing.
+///
+/// Placement, shape name, and description (alt text) live on the
+/// wrapping drawing object in `duke-sheets-core`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EmbeddedImage {
-    pub id: u32,
-    pub name: String,
-    pub description: Option<String>,
-    pub anchor: DrawingAnchor,
     pub format: ImageFormat,
     pub media_path: String,
     pub svg_media_path: Option<String>,

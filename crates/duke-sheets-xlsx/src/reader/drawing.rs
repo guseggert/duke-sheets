@@ -7,6 +7,7 @@ use quick_xml::Writer;
 use super::archive_by_name;
 use crate::error::{XlsxError, XlsxResult};
 use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
+use duke_sheets_core::DrawingObject;
 
 /// A chart reference discovered in a drawing XML, paired with its anchor position.
 pub(crate) struct DrawingChartRef {
@@ -21,9 +22,14 @@ pub(crate) struct DrawingChartRef {
 }
 
 /// Chart refs, image refs, and raw non-chart drawing anchors from a drawing XML.
+///
+/// Images are wrapped in `DrawingObject`s carrying the shape name /
+/// alt text / anchor; the embedded `media_path` still holds the blip
+/// relationship id until the caller resolves it against the drawing
+/// rels.
 pub(crate) struct DrawingContents {
     pub chart_refs: Vec<DrawingChartRef>,
-    pub images: Vec<EmbeddedImage>,
+    pub images: Vec<DrawingObject>,
     pub raw_non_chart_anchors: Vec<Vec<u8>>,
 }
 
@@ -56,7 +62,7 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
 
     let mut buf = Vec::new();
     let mut chart_refs = Vec::new();
-    let mut images: Vec<EmbeddedImage> = Vec::new();
+    let mut images: Vec<DrawingObject> = Vec::new();
     let mut raw_non_chart_anchors: Vec<Vec<u8>> = Vec::new();
 
     let mut in_two_cell_anchor = false;
@@ -86,7 +92,6 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
     // Image (pic) parsing state
     let mut in_pic = false;
     let mut _in_grp_sp = false;
-    let mut pic_id: u32 = 0;
     let mut pic_name = String::new();
     let mut pic_descr: Option<String> = None;
     let mut blip_rel_id: Option<String> = None;
@@ -206,7 +211,6 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                     }
                     b"pic" if in_any_anchor => {
                         in_pic = true;
-                        pic_id = 0;
                         pic_name = String::new();
                         pic_descr = None;
                         blip_rel_id = None;
@@ -223,13 +227,6 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                     b"cNvPr" if in_pic => {
                         for attr in e.attributes().flatten() {
                             match attr.key.local_name().as_ref() {
-                                b"id" => {
-                                    pic_id = attr
-                                        .unescape_value()
-                                        .ok()
-                                        .and_then(|s| s.parse().ok())
-                                        .unwrap_or(0);
-                                }
                                 b"name" => {
                                     pic_name = attr
                                         .unescape_value()
@@ -362,13 +359,6 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                         b"cNvPr" => {
                             for attr in e.attributes().flatten() {
                                 match attr.key.local_name().as_ref() {
-                                    b"id" => {
-                                        pic_id = attr
-                                            .unescape_value()
-                                            .ok()
-                                            .and_then(|s| s.parse().ok())
-                                            .unwrap_or(0);
-                                    }
                                     b"name" => {
                                         pic_name = attr
                                             .unescape_value()
@@ -522,11 +512,7 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                                         edit_as: twocell_edit_as.clone(),
                                     }
                                 };
-                                images.push(EmbeddedImage {
-                                    id: pic_id,
-                                    name: std::mem::take(&mut pic_name),
-                                    description: pic_descr.take(),
-                                    anchor,
+                                let image = EmbeddedImage {
                                     format: ImageFormat::Png, // placeholder, resolved later from media path
                                     media_path: rel_id,
                                     svg_media_path: svg_blip_rel_id.take(),
@@ -537,7 +523,15 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                                     flip_v: pic_flip_v,
                                     data: Vec::new(), // populated later from archive
                                     svg_data: None,   // populated later from archive
-                                });
+                                };
+                                let mut object =
+                                    DrawingObject::image(image).with_anchor(anchor);
+                                // Preserve the cNvPr name verbatim
+                                // (even when empty) so the writer
+                                // re-emits name="" byte-identically.
+                                object.meta.name = Some(std::mem::take(&mut pic_name));
+                                object.meta.alt_text = pic_descr.take();
+                                images.push(object);
                             }
                             in_pic = false;
                         }
@@ -871,10 +865,10 @@ mod tests {
         assert!(contents.chart_refs.is_empty());
         assert_eq!(contents.raw_non_chart_anchors.len(), 1);
 
-        let img = &contents.images[0];
-        assert_eq!(img.id, 2);
-        assert_eq!(img.name, "Picture 1");
-        assert_eq!(img.description, Some("A test image".to_string()));
+        let object = &contents.images[0];
+        let img = object.kind.as_image().expect("image payload");
+        assert_eq!(object.meta.name.as_deref(), Some("Picture 1"));
+        assert_eq!(object.meta.alt_text.as_deref(), Some("A test image"));
         assert_eq!(img.media_path, "rId1");
         assert_eq!(img.width_emu, 1000000);
         assert_eq!(img.height_emu, 2000000);
@@ -883,7 +877,7 @@ mod tests {
         assert!(!img.flip_v);
         assert!(img.svg_media_path.is_none());
 
-        if let DrawingAnchor::TwoCell { from, to, .. } = &img.anchor {
+        if let DrawingAnchor::TwoCell { from, to, .. } = &object.anchor {
             assert_eq!(from.col, 1);
             assert_eq!(from.col_offset_emu, 100);
             assert_eq!(from.row, 2);
@@ -928,9 +922,9 @@ mod tests {
         assert_eq!(contents.images.len(), 1);
         assert!(contents.chart_refs.is_empty());
 
-        let img = &contents.images[0];
-        assert_eq!(img.id, 3);
-        assert_eq!(img.name, "SVG Pic");
+        let object = &contents.images[0];
+        let img = object.kind.as_image().expect("image payload");
+        assert_eq!(object.meta.name.as_deref(), Some("SVG Pic"));
         assert_eq!(img.media_path, "rId2");
         assert_eq!(img.svg_media_path, Some("rId3".to_string()));
         assert_eq!(img.width_emu, 500000);

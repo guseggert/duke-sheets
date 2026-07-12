@@ -249,7 +249,7 @@ fn tally_charts(
 ) {
     for si in 0..wb.sheet_count() {
         if let Some(ws) = wb.worksheet(si) {
-            for chart in ws.charts() {
+            for chart in ws.charts().map(|drawn| drawn.payload) {
                 *total_ws_charts += 1;
                 let type_name = chart_type_label(&chart.chart_type);
                 *chart_type_counts.entry(type_name).or_default() += 1;
@@ -326,7 +326,7 @@ fn chart_corpus_chartex_read() {
         let mut file_ex_count = 0usize;
         for i in 0..wb.sheet_count() {
             if let Some(ws) = wb.worksheet(i) {
-                for cx in ws.charts_ex() {
+                for cx in ws.charts_ex().map(|drawn| drawn.payload) {
                     file_ex_count += 1;
                     if cx.plot_area.series.is_empty() {
                         failures.push((fname.clone(), "chartEx has no series".into()));
@@ -384,7 +384,7 @@ fn chart_corpus_chartex_roundtrip() {
         let wb1 = XlsxReader::read_file(path).unwrap();
         let ex1: Vec<_> = (0..wb1.sheet_count())
             .filter_map(|i| wb1.worksheet(i))
-            .flat_map(|ws| ws.charts_ex().iter())
+            .flat_map(|ws| ws.charts_ex().map(|drawn| drawn.payload))
             .collect();
         eprintln!("    {} chartEx read", ex1.len());
 
@@ -397,7 +397,7 @@ fn chart_corpus_chartex_roundtrip() {
         let wb2 = XlsxReader::read(std::io::Cursor::new(&buf)).unwrap();
         let ex2: Vec<_> = (0..wb2.sheet_count())
             .filter_map(|i| wb2.worksheet(i))
-            .flat_map(|ws| ws.charts_ex().iter())
+            .flat_map(|ws| ws.charts_ex().map(|drawn| drawn.payload))
             .collect();
 
         assert_eq!(
@@ -598,7 +598,7 @@ fn collect_all_charts(wb: &Workbook) -> Vec<&duke_sheets_chart::Chart> {
     for si in 0..wb.sheet_count() {
         if let Some(ws) = wb.worksheet(si) {
             for c in ws.charts() {
-                charts.push(c);
+                charts.push(c.payload);
             }
         }
     }
@@ -615,7 +615,7 @@ fn collect_all_charts_ex(wb: &Workbook) -> Vec<&duke_sheets_chart::ChartEx> {
     for si in 0..wb.sheet_count() {
         if let Some(ws) = wb.worksheet(si) {
             for c in ws.charts_ex() {
-                charts.push(c);
+                charts.push(c.payload);
             }
         }
     }

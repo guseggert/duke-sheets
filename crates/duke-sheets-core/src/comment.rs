@@ -2,6 +2,13 @@
 //!
 //! This module provides support for cell comments in worksheets.
 //!
+//! A comment is a drawing object: its popup placement and visibility
+//! live on the wrapping [`crate::DrawingObject`] in the worksheet's
+//! z-ordered drawing list (`hidden = true`, the default, shows the
+//! note only on hover). [`CellComment`] carries the content, and the
+//! keyed accessors on [`crate::Worksheet`] provide `(row, col)`
+//! lookup over the list.
+//!
 //! ## Example
 //!
 //! ```rust
@@ -29,8 +36,6 @@ pub struct CellComment {
     pub author: String,
     /// Comment text content
     pub text: String,
-    /// Whether the comment box is visible by default
-    pub visible: bool,
 }
 
 impl CellComment {
@@ -44,13 +49,11 @@ impl CellComment {
     /// let comment = CellComment::new("John Doe", "Review this value");
     /// assert_eq!(comment.author, "John Doe");
     /// assert_eq!(comment.text, "Review this value");
-    /// assert!(!comment.visible);
     /// ```
     pub fn new(author: impl Into<String>, text: impl Into<String>) -> Self {
         Self {
             author: author.into(),
             text: text.into(),
-            visible: false,
         }
     }
 
@@ -59,14 +62,7 @@ impl CellComment {
         Self {
             author: String::new(),
             text: text.into(),
-            visible: false,
         }
-    }
-
-    /// Set whether the comment is visible by default
-    pub fn with_visible(mut self, visible: bool) -> Self {
-        self.visible = visible;
-        self
     }
 
     /// Check if this comment has an author
@@ -95,7 +91,6 @@ mod tests {
         let comment = CellComment::new("Author", "Text");
         assert_eq!(comment.author, "Author");
         assert_eq!(comment.text, "Text");
-        assert!(!comment.visible);
     }
 
     #[test]
@@ -104,12 +99,6 @@ mod tests {
         assert_eq!(comment.author, "");
         assert_eq!(comment.text, "Just text");
         assert!(!comment.has_author());
-    }
-
-    #[test]
-    fn test_with_visible() {
-        let comment = CellComment::new("A", "B").with_visible(true);
-        assert!(comment.visible);
     }
 
     #[test]

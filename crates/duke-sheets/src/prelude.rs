@@ -5,6 +5,10 @@
 //! ```
 
 pub use crate::{
+    // Drawing helpers
+    default_comment_anchor,
+    radio_groups,
+    validate_anchor,
     // Style types
     Alignment,
     BorderEdge,
@@ -27,8 +31,12 @@ pub use crate::{
     CfRuleType,
     // Chart types
     Chart,
+    ChartEx,
     ChartType,
+    // Drawing types
+    ChildTransform,
     Color,
+    CommentRef,
     ConditionalFormatRule,
 
     CsvReader,
@@ -38,6 +46,13 @@ pub use crate::{
     DataValidation,
 
     DrawingAnchor,
+    DrawingKind,
+    DrawingMeta,
+    DrawingNodeMut,
+    DrawingNodeRef,
+    DrawingObject,
+    DrawingPath,
+    Drawn,
     EmbeddedImage,
     // Error types
     Error,
@@ -48,6 +63,9 @@ pub use crate::{
     // Form control types
     FormControl,
     FormControlKind,
+    Group,
+    GroupChild,
+    GroupTransform,
     HorizontalAlignment,
     Hyperlink,
     IconSetStyle,
@@ -57,6 +75,10 @@ pub use crate::{
     ImageSizing,
     ListSelection,
     NumberFormat,
+    PlacedControl,
+    RawDrawing,
+    RawRel,
+    RectEmu,
     Result,
 
     // Rich text types

@@ -193,7 +193,7 @@ fn xlsb_chart_parity_reads_successfully() {
         val
     );
 
-    let charts = ws.charts();
+    let charts: Vec<&Chart> = ws.charts().map(|drawn| drawn.payload).collect();
     assert_eq!(charts.len(), 8, "expected 8 charts from XLSB fixture");
 
     let find_chart = |title: &str| -> &Chart {
@@ -269,8 +269,14 @@ fn xlsb_chart_roundtrip_preserves_data() {
         "{mismatches} cell value mismatches in chart round-trip"
     );
 
-    let d1 = ws1.raw_drawing_objects.len();
-    let d2 = ws2.raw_drawing_objects.len();
+    let raw_count = |ws: &Worksheet| {
+        ws.drawings()
+            .iter()
+            .filter(|d| matches!(d.kind, DrawingKind::Raw(_)))
+            .count()
+    };
+    let d1 = raw_count(ws1);
+    let d2 = raw_count(ws2);
     assert_eq!(d1, d2, "drawing object count changed in round-trip");
 }
 

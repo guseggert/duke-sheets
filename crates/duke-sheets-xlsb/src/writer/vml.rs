@@ -15,12 +15,12 @@ pub(crate) fn write_legacy_vml<W: Write + Seek>(
     sheet_index: usize,
     ws: &Worksheet,
 ) -> XlsbResult<bool> {
-    let mut comments: Vec<_> = ws.comments().collect();
-    let controls = ws.form_controls();
+    let mut comments: Vec<_> = ws.comments_drawn().collect();
+    let controls: Vec<_> = ws.form_controls().collect();
     if comments.is_empty() && controls.is_empty() {
         return Ok(false);
     }
-    comments.sort_by_key(|((row, col), _)| (*row, *col));
+    comments.sort_by_key(|c| (c.row, c.col));
 
     let path = format!("xl/drawings/vmlDrawing{}.vml", sheet_index + 1);
     zip.start_file(&path, *options)?;
@@ -48,15 +48,19 @@ pub(crate) fn write_legacy_vml<W: Write + Seek>(
         xml.push_str(duke_sheets_vml::CONTROL_SHAPETYPE);
     }
 
-    for (shape_index, ((row, col), comment)) in comments.iter().enumerate() {
-        let row = *row;
-        let col = *col;
+    for (shape_index, comment_ref) in comments.iter().enumerate() {
+        let row = comment_ref.row;
+        let col = comment_ref.col;
         let row_above = row.saturating_sub(1);
         let shape_id = sheet_idx * 1024 + 1 + shape_index;
         let z_index = shape_index + 1;
         let left = (u32::from(col) + 1) * 64;
         let top = row * 15;
-        let visibility = if comment.visible { "visible" } else { "hidden" };
+        let visibility = if !comment_ref.object.meta.hidden {
+            "visible"
+        } else {
+            "hidden"
+        };
 
         xml.push_str(&format!(
             " <v:shape id=\"_x0000_s{}\" type=\"#_x0000_t202\"\n",
@@ -93,19 +97,28 @@ pub(crate) fn write_legacy_vml<W: Write + Seek>(
     // Form control shapes follow the comment shapes in the same
     // per-sheet shape id block.
     if !controls.is_empty() {
+        let placed = ws.placed_form_controls();
         let mut head_flags = vec![false; controls.len()];
-        for group in duke_sheets_core::radio_groups(controls) {
+        for group in duke_sheets_core::radio_groups(&placed) {
             if let Some(&head) = group.first() {
-                head_flags[head] = true;
+                let path = &placed[head].path;
+                if let Some(pos) = controls
+                    .iter()
+                    .position(|drawn| path.as_slice() == [drawn.index])
+                {
+                    head_flags[pos] = true;
+                }
             }
         }
         let shape_base = sheet_idx * 1024 + 1 + comments.len();
-        for (j, control) in controls.iter().enumerate() {
+        for (j, drawn) in controls.iter().enumerate() {
             duke_sheets_vml::write_control_shape(
                 &mut xml,
                 shape_base + j,
                 comments.len() + j + 1,
-                control,
+                &drawn.object.meta,
+                &drawn.object.anchor,
+                drawn.payload,
                 head_flags[j],
             );
         }

@@ -146,7 +146,6 @@ fn write_plot_area(w: &mut XmlWriter, chart: &Chart) -> XlsxResult<()> {
             high_low_lines: group.high_low_lines.clone(),
             up_down_bars: group.up_down_bars.clone(),
             series_lines: group.series_lines.clone(),
-            anchor: chart.anchor.clone(),
             type_groups: Vec::new(),
             axes: Vec::new(),
             raw_chart_style: None,
@@ -1631,7 +1630,7 @@ mod tests {
 
     use duke_sheets_chart::{
         Axis, AxisType, Chart, ChartColor, ChartLine, ChartLines, ChartShapeProperties, ChartType,
-        DataLabels, DataReference, DataSeries, DrawingAnchor, UpDownBars,
+        DataLabels, DataReference, DataSeries, UpDownBars,
     };
 
     use super::write_chart_part;
@@ -1674,11 +1673,7 @@ mod tests {
         let mut archive = zip::ZipArchive::new(cursor).unwrap();
 
         // Read back
-        let reparsed = read_chart(
-            &mut archive,
-            "xl/charts/chart1.xml",
-            DrawingAnchor::default(),
-        )
+        let reparsed = read_chart(&mut archive, "xl/charts/chart1.xml")
         .unwrap()
         .unwrap();
 
@@ -1737,11 +1732,7 @@ mod tests {
         let cursor = zip_writer.finish().unwrap();
         let mut archive = zip::ZipArchive::new(cursor).unwrap();
 
-        let reparsed = read_chart(
-            &mut archive,
-            "xl/charts/chart1.xml",
-            DrawingAnchor::default(),
-        )
+        let reparsed = read_chart(&mut archive, "xl/charts/chart1.xml")
         .unwrap()
         .unwrap();
 
@@ -1771,11 +1762,7 @@ mod tests {
         let cursor = zip_writer.finish().unwrap();
         let mut archive = zip::ZipArchive::new(cursor).unwrap();
 
-        let reparsed = read_chart(
-            &mut archive,
-            "xl/charts/chart1.xml",
-            DrawingAnchor::default(),
-        )
+        let reparsed = read_chart(&mut archive, "xl/charts/chart1.xml")
         .unwrap()
         .unwrap();
 
@@ -1799,11 +1786,7 @@ mod tests {
         let cursor = zip_writer.finish().unwrap();
         let mut archive = zip::ZipArchive::new(cursor).unwrap();
 
-        let reparsed = read_chart(
-            &mut archive,
-            "xl/charts/chart1.xml",
-            DrawingAnchor::default(),
-        )
+        let reparsed = read_chart(&mut archive, "xl/charts/chart1.xml")
         .unwrap()
         .unwrap();
 
@@ -1818,11 +1801,7 @@ mod tests {
         write_chart_part(&mut zip_writer, chart, 1).unwrap();
         let cursor = zip_writer.finish().unwrap();
         let mut archive = zip::ZipArchive::new(cursor).unwrap();
-        read_chart(
-            &mut archive,
-            "xl/charts/chart1.xml",
-            DrawingAnchor::default(),
-        )
+        read_chart(&mut archive, "xl/charts/chart1.xml")
         .unwrap()
         .unwrap()
     }
@@ -1840,11 +1819,7 @@ mod tests {
         zip_writer.write_all(xml.as_bytes()).unwrap();
         let cursor = zip_writer.finish().unwrap();
         let mut archive = zip::ZipArchive::new(cursor).unwrap();
-        read_chart(
-            &mut archive,
-            "xl/charts/chart1.xml",
-            DrawingAnchor::default(),
-        )
+        read_chart(&mut archive, "xl/charts/chart1.xml")
         .unwrap()
         .unwrap()
     }

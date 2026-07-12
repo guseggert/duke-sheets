@@ -432,12 +432,12 @@ impl XlsxReader {
                         let Some(pr) = form_controls::parse_ctrl_prop(&bytes) else {
                             continue;
                         };
-                        if let Some(control) = form_controls::assemble_with_vml(
+                        if let Some(object) = form_controls::assemble_with_vml(
                             pending,
                             &pr,
                             vml_shapes.get(&pending.shape_id),
                         ) {
-                            ws.add_form_control(control);
+                            ws.add_drawing(object);
                         }
                     }
                 }
@@ -473,11 +473,12 @@ impl XlsxReader {
                     let drawing_contents =
                         drawing::read_drawing_contents(&mut archive, drawing_path)?;
                     for raw in drawing_contents.raw_non_chart_anchors {
-                        workbook
-                            .worksheet_mut(sheet_idx)
-                            .unwrap()
-                            .raw_drawing_objects
-                            .push(raw);
+                        workbook.worksheet_mut(sheet_idx).unwrap().add_drawing(
+                            duke_sheets_core::DrawingObject::raw(duke_sheets_core::RawDrawing {
+                                bytes: raw,
+                                ..Default::default()
+                            }),
+                        );
                     }
                     let has_charts = !drawing_contents.chart_refs.is_empty();
                     let has_images = !drawing_contents.images.is_empty();
@@ -487,7 +488,11 @@ impl XlsxReader {
                     let drawing_rels = read_sheet_rels(&mut archive, drawing_path)?;
                     if has_images {
                         let mut resolved_images = drawing_contents.images;
-                        for image in &mut resolved_images {
+                        for object in &mut resolved_images {
+                            let duke_sheets_core::DrawingKind::Image(image) = &mut object.kind
+                            else {
+                                continue;
+                            };
                             if let Some(rel) = drawing_rels.get(&image.media_path) {
                                 let ext = rel.target.rsplit('.').next().unwrap_or("");
                                 if let Some(fmt) =
@@ -516,31 +521,35 @@ impl XlsxReader {
                             }
                         }
                         let ws = workbook.worksheet_mut(sheet_idx).unwrap();
-                        for img in resolved_images {
-                            ws.add_image(img);
+                        for object in resolved_images {
+                            ws.add_drawing(object);
                         }
                     }
                     for chart_ref in drawing_contents.chart_refs {
                         if let Some(dr) = drawing_rels.get(&chart_ref.rel_id) {
                             if chart_ref.is_chart_ex {
-                                if let Some(mut cx) = chart_ex::read_chart_ex(
-                                    &mut archive,
-                                    &dr.target,
-                                    chart_ref.anchor,
-                                )? {
+                                if let Some(mut cx) =
+                                    chart_ex::read_chart_ex(&mut archive, &dr.target)?
+                                {
                                     cx.raw_mc_fallback = chart_ref.raw_mc_fallback;
                                     read_chart_style_color_for_chart_ex(
                                         &mut archive,
                                         &dr.target,
                                         &mut cx,
                                     );
-                                    workbook.worksheet_mut(sheet_idx).unwrap().add_chart_ex(cx);
+                                    workbook
+                                        .worksheet_mut(sheet_idx)
+                                        .unwrap()
+                                        .add_chart_ex(cx, chart_ref.anchor);
                                 }
                             } else if let Some(mut c) =
-                                chart::read_chart(&mut archive, &dr.target, chart_ref.anchor)?
+                                chart::read_chart(&mut archive, &dr.target)?
                             {
                                 read_chart_style_color(&mut archive, &dr.target, &mut c);
-                                workbook.worksheet_mut(sheet_idx).unwrap().add_chart(c);
+                                workbook
+                                    .worksheet_mut(sheet_idx)
+                                    .unwrap()
+                                    .add_chart(c, chart_ref.anchor);
                             }
                         }
                     }
@@ -564,7 +573,7 @@ impl XlsxReader {
                                     continue;
                                 }
                                 if let Some(mut c) =
-                                    chart::read_chart(&mut archive, &dr.target, chart_ref.anchor)?
+                                    chart::read_chart(&mut archive, &dr.target)?
                                 {
                                     read_chart_style_color(&mut archive, &dr.target, &mut c);
                                     let cs_idx = workbook.add_chartsheet_unchecked(

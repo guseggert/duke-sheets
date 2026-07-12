@@ -14,7 +14,7 @@ pub(crate) struct DrawingWriteResult {
 pub(crate) fn write_drawing_parts<W: Write + Seek>(
     zip: &mut ZipWriter<W>,
     options: &SimpleFileOptions,
-    raw_drawing_objects: &[Vec<u8>],
+    raw_drawing_objects: &[&Vec<u8>],
     sheet_index: usize,
 ) -> XlsbResult<DrawingWriteResult> {
     if raw_drawing_objects.is_empty() {
@@ -24,7 +24,7 @@ pub(crate) fn write_drawing_parts<W: Write + Seek>(
         });
     }
 
-    let first = &raw_drawing_objects[0];
+    let first = raw_drawing_objects[0];
     if is_drawing_bundle(first) {
         write_from_bundle(zip, options, first)
     } else {
@@ -79,7 +79,7 @@ fn write_from_bundle<W: Write + Seek>(
 fn write_from_anchors<W: Write + Seek>(
     zip: &mut ZipWriter<W>,
     options: &SimpleFileOptions,
-    anchors: &[Vec<u8>],
+    anchors: &[&Vec<u8>],
     sheet_index: usize,
 ) -> XlsbResult<DrawingWriteResult> {
     let drawing_num = sheet_index + 1;

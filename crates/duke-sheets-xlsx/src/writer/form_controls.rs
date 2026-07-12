@@ -11,7 +11,9 @@
 
 use std::io::{Seek, Write};
 
-use duke_sheets_core::{CheckState, FormControl, FormControlKind, ListSelection};
+use duke_sheets_core::{
+    CheckState, DrawingMeta, FormControl, FormControlKind, ListSelection, Worksheet,
+};
 use duke_sheets_vml::anchor_cell_markers;
 
 use super::{XlsxError, XlsxResult};
@@ -265,10 +267,10 @@ pub(super) fn controls_block(entries: &[ControlEntry<'_>]) -> String {
             escape_attr(&entry.name)
         ));
         xml.push_str("<controlPr defaultSize=\"0\"");
-        if !control.locked {
+        if !entry.meta.locked {
             xml.push_str(" locked=\"0\"");
         }
-        if !control.printable {
+        if !entry.meta.printable {
             xml.push_str(" print=\"0\"");
         }
         // Per-kind auto flags, mirroring Excel's emit.
@@ -292,7 +294,7 @@ pub(super) fn controls_block(entries: &[ControlEntry<'_>]) -> String {
 
         // CT_ObjectAnchor: moveWithCells / sizeWithCells default
         // false; EMU offsets.
-        let (move_wc, size_wc) = match &control.anchor {
+        let (move_wc, size_wc) = match entry.anchor {
             duke_sheets_chart::DrawingAnchor::TwoCell { edit_as, .. } => {
                 match edit_as.clone().unwrap_or(duke_sheets_chart::EditAs::TwoCell) {
                     duke_sheets_chart::EditAs::TwoCell => (true, true),
@@ -311,7 +313,7 @@ pub(super) fn controls_block(entries: &[ControlEntry<'_>]) -> String {
             xml.push_str(" sizeWithCells=\"1\"");
         }
         xml.push('>');
-        let (from, to) = anchor_cell_markers(&control.anchor);
+        let (from, to) = anchor_cell_markers(entry.anchor);
         for (tag, marker) in [("from", &from), ("to", &to)] {
             xml.push_str(&format!(
                 "<{tag}><xdr:col>{}</xdr:col><xdr:colOff>{}</xdr:colOff><xdr:row>{}</xdr:row><xdr:rowOff>{}</xdr:rowOff></{tag}>",
@@ -331,22 +333,34 @@ pub(super) fn controls_block(entries: &[ControlEntry<'_>]) -> String {
     xml
 }
 
-/// One control's identifiers for the worksheet block.
+/// One control's identifiers for the worksheet block. `meta` and
+/// `anchor` come from the control's wrapping drawing object.
 pub(super) struct ControlEntry<'a> {
     pub control: &'a FormControl,
+    pub meta: &'a DrawingMeta,
+    pub anchor: &'a duke_sheets_chart::DrawingAnchor,
     pub shape_id: usize,
     pub rid: String,
     pub name: String,
 }
 
-/// Per-control radio-group-head flags (aligned with `controls`),
-/// derived from the spatial grouping in
-/// [`duke_sheets_core::radio_groups`].
-pub(super) fn radio_head_flags(controls: &[FormControl]) -> Vec<bool> {
-    let mut flags = vec![false; controls.len()];
-    for group in duke_sheets_core::radio_groups(controls) {
+/// Per-control radio-group-head flags, aligned with the sheet's
+/// top-level [`Worksheet::form_controls`] order, derived from the
+/// spatial grouping in [`duke_sheets_core::radio_groups`].
+pub(super) fn radio_head_flags(sheet: &Worksheet) -> Vec<bool> {
+    let placed = sheet.placed_form_controls();
+    // Map drawing-list index -> position in form_controls() order for
+    // top-level controls (group children are not emitted here).
+    let top_positions: Vec<usize> = sheet.form_controls().map(|drawn| drawn.index).collect();
+    let mut flags = vec![false; top_positions.len()];
+    for group in duke_sheets_core::radio_groups(&placed) {
         if let Some(&head) = group.first() {
-            flags[head] = true;
+            let path = &placed[head].path;
+            if let [drawing_idx] = path.as_slice() {
+                if let Some(j) = top_positions.iter().position(|idx| idx == drawing_idx) {
+                    flags[j] = true;
+                }
+            }
         }
     }
     flags

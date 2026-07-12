@@ -411,6 +411,19 @@ pub(super) fn write_color_element(w: &mut XmlWriter, tag: &str, color: &Color) -
     Ok(())
 }
 
+/// Raw drawing fragments (preserved anchor XML) of a worksheet, in
+/// z-order.
+pub(super) fn sheet_raw_drawings(sheet: &duke_sheets_core::Worksheet) -> Vec<&[u8]> {
+    sheet
+        .drawings()
+        .iter()
+        .filter_map(|object| match &object.kind {
+            duke_sheets_core::DrawingKind::Raw(raw) => Some(raw.bytes.as_slice()),
+            _ => None,
+        })
+        .collect()
+}
+
 pub(super) fn write_xml_part<W: Write + Seek>(
     zip: &mut zip::ZipWriter<W>,
     path: &str,
@@ -679,18 +692,23 @@ impl XlsxWriter {
         let mut drawing_numbering: Vec<(usize, usize)> = Vec::new();
         let mut global_drawing_num = 1usize;
         for (i, sheet) in workbook.worksheets().enumerate() {
-            let has_supported = sheet
-                .charts()
-                .iter()
-                .any(|c| !matches!(c.chart_type, duke_sheets_chart::ChartType::Unsupported(_)));
+            let has_supported = sheet.charts().any(|c| {
+                !matches!(
+                    c.payload.chart_type,
+                    duke_sheets_chart::ChartType::Unsupported(_)
+                )
+            });
             let has_charts_ex = sheet.chart_ex_count() > 0;
-            let has_raw_objects = !sheet.raw_drawing_objects.is_empty();
+            let has_raw_objects = !sheet_raw_drawings(sheet).is_empty();
             let has_images = sheet.image_count() > 0;
             if has_supported || has_charts_ex || has_raw_objects || has_images {
                 drawing_numbering.push((i, global_drawing_num));
                 global_drawing_num += 1;
-                for (j, c) in sheet.charts().iter().enumerate() {
-                    if !matches!(c.chart_type, duke_sheets_chart::ChartType::Unsupported(_)) {
+                for (j, c) in sheet.charts().enumerate() {
+                    if !matches!(
+                        c.payload.chart_type,
+                        duke_sheets_chart::ChartType::Unsupported(_)
+                    ) {
                         chart_numbering.push((i, j, global_chart_num));
                         global_chart_num += 1;
                     }
@@ -810,12 +828,12 @@ impl XlsxWriter {
                 comments::write_comments(&mut zip, workbook, i)?;
             }
             if sheet.form_control_count() > 0 {
-                let heads = radio_head_flags(sheet.form_controls());
-                for (j, control) in sheet.form_controls().iter().enumerate() {
+                let heads = radio_head_flags(sheet);
+                for (j, control) in sheet.form_controls().enumerate() {
                     form_controls::write_ctrl_prop_part(
                         &mut zip,
                         ctrl_prop_start + j,
-                        control,
+                        control.payload,
                         heads[j],
                     )?;
                 }
@@ -828,15 +846,19 @@ impl XlsxWriter {
 
             // Write drawing and chart XML files for this sheet
             if let Some(dn) = drawing_num {
+                let sheet_charts: Vec<_> = sheet.charts().collect();
+                let sheet_charts_ex: Vec<_> = sheet.charts_ex().collect();
+                let sheet_images: Vec<_> = sheet.images().collect();
                 let sheet_chart_globals: Vec<(usize, usize)> = chart_numbering
                     .iter()
                     .filter(|(si, _, _)| *si == i)
                     .map(|(_, ji, gn)| (*ji, *gn))
                     .collect();
-                let chart_refs: Vec<&duke_sheets_chart::Chart> = sheet_chart_globals
-                    .iter()
-                    .map(|&(ji, _)| &sheet.charts()[ji])
-                    .collect();
+                let chart_refs: Vec<&duke_sheets_core::Drawn<'_, duke_sheets_chart::Chart>> =
+                    sheet_chart_globals
+                        .iter()
+                        .map(|&(ji, _)| &sheet_charts[ji])
+                        .collect();
                 let chart_global_nums: Vec<usize> =
                     sheet_chart_globals.iter().map(|&(_, gn)| gn).collect();
                 let sheet_chartex_globals: Vec<(usize, usize)> = chart_ex_numbering
@@ -844,10 +866,11 @@ impl XlsxWriter {
                     .filter(|(si, _, _)| *si == i)
                     .map(|(_, ji, gn)| (*ji, *gn))
                     .collect();
-                let chartex_refs: Vec<&duke_sheets_chart::ChartEx> = sheet_chartex_globals
-                    .iter()
-                    .map(|&(ji, _)| &sheet.charts_ex()[ji])
-                    .collect();
+                let chartex_refs: Vec<&duke_sheets_core::Drawn<'_, duke_sheets_chart::ChartEx>> =
+                    sheet_chartex_globals
+                        .iter()
+                        .map(|&(ji, _)| &sheet_charts_ex[ji])
+                        .collect();
                 let chartex_global_nums: Vec<usize> =
                     sheet_chartex_globals.iter().map(|&(_, gn)| gn).collect();
                 // Collect images for this sheet with their global
@@ -860,7 +883,7 @@ impl XlsxWriter {
                 let drawing_images: Vec<drawing::DrawingImage> = sheet_image_globals
                     .iter()
                     .map(|&(ji, gn)| drawing::DrawingImage {
-                        image: &sheet.images()[ji],
+                        image: &sheet_images[ji],
                         global_num: gn,
                     })
                     .collect();
@@ -869,7 +892,7 @@ impl XlsxWriter {
                     .map(|di| {
                         (
                             di.global_num,
-                            drawing::image_format_extension(di.image.format),
+                            drawing::image_format_extension(di.image.payload.format),
                         )
                     })
                     .collect();
@@ -879,7 +902,7 @@ impl XlsxWriter {
                     &chart_refs,
                     &chartex_refs,
                     &drawing_images,
-                    &sheet.raw_drawing_objects,
+                    &sheet_raw_drawings(sheet),
                     dn,
                 )?;
                 drawing::write_drawing_rels(
@@ -892,20 +915,20 @@ impl XlsxWriter {
 
                 // Write image binary parts (xl/media/imageN.<ext>).
                 for (ji, gn) in &sheet_image_globals {
-                    let img = &sheet.images()[*ji];
+                    let img = sheet_images[*ji].payload;
                     let ext = drawing::image_format_extension(img.format);
                     drawing::write_media_part(&mut zip, *gn, ext, &img.data)?;
                 }
                 for &(ji, gn) in &sheet_chart_globals {
-                    chart::write_chart_part(&mut zip, &sheet.charts()[ji], gn)?;
-                    Self::write_chart_style_color_parts(&mut zip, &sheet.charts()[ji], gn)?;
+                    chart::write_chart_part(&mut zip, sheet_charts[ji].payload, gn)?;
+                    Self::write_chart_style_color_parts(&mut zip, sheet_charts[ji].payload, gn)?;
                 }
                 for &(ji, gn) in &sheet_chartex_globals {
-                    chart_ex::write_chart_ex_part(&mut zip, &sheet.charts_ex()[ji], gn)?;
+                    chart_ex::write_chart_ex_part(&mut zip, sheet_charts_ex[ji].payload, gn)?;
                     let style_num = (global_chart_num - 1) + gn;
                     chart_ex::write_chart_ex_style_color_parts(
                         &mut zip,
-                        &sheet.charts_ex()[ji],
+                        sheet_charts_ex[ji].payload,
                         gn,
                         style_num,
                     )?;
@@ -999,7 +1022,8 @@ impl XlsxWriter {
             // [Content_Types].xml for embedded image parts.
             let mut seen_image_exts = std::collections::BTreeSet::new();
             for &(sheet_idx, image_idx, _) in image_numbering {
-                let img = &workbook.worksheets().nth(sheet_idx).unwrap().images()[image_idx];
+                let sheet = workbook.worksheets().nth(sheet_idx).unwrap();
+                let img = sheet.images().nth(image_idx).unwrap().payload;
                 let ext = drawing::image_format_extension(img.format);
                 if !seen_image_exts.insert(ext) {
                     continue;
@@ -1101,7 +1125,7 @@ impl XlsxWriter {
                     .with_attribute(("ContentType", CT_CHART))
                     .write_empty()?;
                 if let Some(sheet) = workbook.worksheet(sheet_idx) {
-                    let chart = &sheet.charts()[chart_in_sheet_idx];
+                    let chart = sheet.charts().nth(chart_in_sheet_idx).unwrap().payload;
                     if chart.raw_chart_style.is_some() {
                         let style_part = format!("/xl/charts/style{}.xml", global_num);
                         w.create_element("Override")
@@ -1149,7 +1173,7 @@ impl XlsxWriter {
                     .with_attribute(("ContentType", CT_CHART_EX))
                     .write_empty()?;
                 if let Some(sheet) = workbook.worksheet(sheet_idx) {
-                    let cx = &sheet.charts_ex()[chart_ex_in_sheet_idx];
+                    let cx = sheet.charts_ex().nth(chart_ex_in_sheet_idx).unwrap().payload;
                     if cx.raw_chart_style.is_some() {
                         let style_part =
                             format!("/xl/charts/style{}.xml", total_standard_charts + global_num);
@@ -1922,18 +1946,19 @@ impl XlsxWriter {
             // Form controls (CT_Worksheet places controls after
             // legacyDrawing and before tableParts).
             if sheet.form_control_count() > 0 {
-                let controls = sheet.form_controls();
                 let shape_base = (index + 1) * 1024 + 1 + sheet.comment_count();
-                let entries: Vec<form_controls::ControlEntry<'_>> = controls
-                    .iter()
+                let entries: Vec<form_controls::ControlEntry<'_>> = sheet
+                    .form_controls()
                     .enumerate()
-                    .map(|(j, control)| form_controls::ControlEntry {
-                        control,
+                    .map(|(j, drawn)| form_controls::ControlEntry {
+                        control: drawn.payload,
+                        meta: &drawn.object.meta,
+                        anchor: &drawn.object.anchor,
                         shape_id: shape_base + j,
                         rid: ctrl_prop_rids[j].clone(),
-                        name: control.name.clone().unwrap_or_else(|| {
+                        name: drawn.object.meta.name.clone().unwrap_or_else(|| {
                             form_controls::default_control_name(
-                                &control.kind,
+                                &drawn.payload.kind,
                                 sheet.comment_count() + j + 1,
                             )
                         }),
@@ -3833,16 +3858,15 @@ mod tests {
 
         // Read the handcrafted XLSX.
         let mut wb = XlsxReader::read(Cursor::new(&xlsx_buf)).unwrap();
-        wb.worksheet_mut(0)
-            .unwrap()
-            .add_form_control(duke_sheets_core::FormControl::new(
-                duke_sheets_core::FormControlKind::Checkbox {
-                    caption: "linked".into(),
-                    state: duke_sheets_core::CheckState::Checked,
-                    cell_link: Some("$A$1".into()),
-                    no_3d: false,
-                },
-            ));
+        wb.worksheet_mut(0).unwrap().add_form_control(
+            duke_sheets_core::FormControl::new(duke_sheets_core::FormControlKind::Checkbox {
+                caption: "linked".into(),
+                state: duke_sheets_core::CheckState::Checked,
+                cell_link: Some("$A$1".into()),
+                no_3d: false,
+            }),
+            duke_sheets_chart::DrawingAnchor::default(),
+        );
         let snapshot = wb.synchronized_for_save().unwrap();
 
         // Write a linked-cell-synchronized snapshot back out.
@@ -3880,7 +3904,7 @@ mod tests {
 
         let mut chart = Chart::new(ChartType::ColumnClustered);
         chart.title = Some("Sales Chart".to_string());
-        chart.anchor = DrawingAnchor::TwoCell {
+        let anchor = DrawingAnchor::TwoCell {
             from: CellMarker {
                 col: 2,
                 col_offset_emu: 100,
@@ -3902,7 +3926,7 @@ mod tests {
         chart.category_axis = Some(Axis::new().with_title("Category"));
         chart.value_axis = Some(Axis::new().with_title("Value").with_bounds(0.0, 100.0));
         chart.legend = Some(Legend::new(LegendPosition::Bottom));
-        sheet.add_chart(chart);
+        sheet.add_chart(chart, anchor);
 
         let mut out = Cursor::new(Vec::new());
         XlsxWriter::write(&wb, &mut out).unwrap();
@@ -3911,7 +3935,8 @@ mod tests {
         let wb2 = XlsxReader::read(Cursor::new(bytes)).unwrap();
         let sheet2 = wb2.worksheet(0).unwrap();
         assert_eq!(sheet2.chart_count(), 1);
-        let c = &sheet2.charts()[0];
+        let drawn = sheet2.charts().next().unwrap();
+        let c = drawn.payload;
         assert_eq!(c.chart_type, ChartType::ColumnClustered);
         assert_eq!(c.title.as_deref(), Some("Sales Chart"));
         assert_eq!(c.series.len(), 1);
@@ -3933,7 +3958,7 @@ mod tests {
         assert_eq!(val_ax.minimum, Some(0.0));
         assert_eq!(val_ax.maximum, Some(100.0));
         assert_eq!(c.legend.as_ref().unwrap().position, LegendPosition::Bottom);
-        if let DrawingAnchor::TwoCell { from, to, .. } = &c.anchor {
+        if let DrawingAnchor::TwoCell { from, to, .. } = &drawn.object.anchor {
             assert_eq!(from.col, 2);
             assert_eq!(from.row, 3);
             assert_eq!(from.col_offset_emu, 100);
@@ -3957,14 +3982,15 @@ mod tests {
         chart.title = Some("Pie Chart".to_string());
         let s = DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$3")).with_name("Slices");
         chart.add_series(s);
-        sheet.add_chart(chart);
+        sheet.add_chart(chart, duke_sheets_chart::DrawingAnchor::default());
 
         let mut out = Cursor::new(Vec::new());
         XlsxWriter::write(&wb, &mut out).unwrap();
         let bytes = out.into_inner();
 
         let wb2 = XlsxReader::read(Cursor::new(bytes)).unwrap();
-        let c = &wb2.worksheet(0).unwrap().charts()[0];
+        let wb2_sheet = wb2.worksheet(0).unwrap();
+        let c = wb2_sheet.charts().next().unwrap().payload;
         assert_eq!(c.chart_type, ChartType::Pie);
         assert_eq!(c.title.as_deref(), Some("Pie Chart"));
         assert_eq!(c.series.len(), 1);
@@ -3982,14 +4008,15 @@ mod tests {
         let s = DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$5"))
             .with_categories(DataReference::formula("Sheet1!$A$1:$A$5"));
         chart.add_series(s);
-        sheet.add_chart(chart);
+        sheet.add_chart(chart, duke_sheets_chart::DrawingAnchor::default());
 
         let mut out = Cursor::new(Vec::new());
         XlsxWriter::write(&wb, &mut out).unwrap();
         let bytes = out.into_inner();
 
         let wb2 = XlsxReader::read(Cursor::new(bytes)).unwrap();
-        let c = &wb2.worksheet(0).unwrap().charts()[0];
+        let wb2_sheet = wb2.worksheet(0).unwrap();
+        let c = wb2_sheet.charts().next().unwrap().payload;
         assert_eq!(c.chart_type, ChartType::ScatterSmooth);
         assert_eq!(c.series.len(), 1);
         match c.series[0].categories.as_ref().unwrap() {
@@ -4015,22 +4042,25 @@ mod tests {
         c1.title = Some("Line Chart".to_string());
         c1.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
         c1.legend = Some(Legend::new(LegendPosition::Right));
-        sheet.add_chart(c1);
+        sheet.add_chart(c1, duke_sheets_chart::DrawingAnchor::default());
 
         let mut c2 = Chart::new(ChartType::BarClustered);
         c2.title = Some("Bar Chart".to_string());
         c2.add_series(DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$5")));
-        sheet.add_chart(c2);
+        sheet.add_chart(c2, duke_sheets_chart::DrawingAnchor::default());
 
         let mut out = Cursor::new(Vec::new());
         XlsxWriter::write(&wb, &mut out).unwrap();
         let bytes = out.into_inner();
 
         let wb2 = XlsxReader::read(Cursor::new(bytes)).unwrap();
-        let charts = wb2.worksheet(0).unwrap().charts();
-        assert_eq!(charts.len(), 2);
+        let wb2_sheet = wb2.worksheet(0).unwrap();
+        assert_eq!(wb2_sheet.chart_count(), 2);
 
-        let types: Vec<&ChartType> = charts.iter().map(|c| &c.chart_type).collect();
+        let types: Vec<&ChartType> = wb2_sheet
+            .charts()
+            .map(|c| &c.payload.chart_type)
+            .collect();
         assert!(types.contains(&&ChartType::Line));
         assert!(types.contains(&&ChartType::BarClustered));
     }
@@ -4042,14 +4072,15 @@ mod tests {
         let mut wb = Workbook::new();
         let sheet = wb.worksheet_mut(0).unwrap();
         let chart = Chart::new(ChartType::Area);
-        sheet.add_chart(chart);
+        sheet.add_chart(chart, duke_sheets_chart::DrawingAnchor::default());
 
         let mut out = Cursor::new(Vec::new());
         XlsxWriter::write(&wb, &mut out).unwrap();
         let bytes = out.into_inner();
 
         let wb2 = XlsxReader::read(Cursor::new(bytes)).unwrap();
-        let c = &wb2.worksheet(0).unwrap().charts()[0];
+        let wb2_sheet = wb2.worksheet(0).unwrap();
+        let c = wb2_sheet.charts().next().unwrap().payload;
         assert_eq!(c.chart_type, ChartType::Area);
         assert_eq!(c.series.len(), 0);
     }
@@ -4063,19 +4094,22 @@ mod tests {
 
         let mut good = Chart::new(ChartType::Line);
         good.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-        sheet.add_chart(good);
+        sheet.add_chart(good, duke_sheets_chart::DrawingAnchor::default());
 
         let unsupported = Chart::new(ChartType::Unsupported("c:ofPieChart".into()));
-        sheet.add_chart(unsupported);
+        sheet.add_chart(unsupported, duke_sheets_chart::DrawingAnchor::default());
 
         let mut out = Cursor::new(Vec::new());
         XlsxWriter::write(&wb, &mut out).unwrap();
         let bytes = out.into_inner();
 
         let wb2 = XlsxReader::read(Cursor::new(bytes)).unwrap();
-        let charts = wb2.worksheet(0).unwrap().charts();
-        assert_eq!(charts.len(), 1);
-        assert_eq!(charts[0].chart_type, ChartType::Line);
+        let wb2_sheet = wb2.worksheet(0).unwrap();
+        assert_eq!(wb2_sheet.chart_count(), 1);
+        assert_eq!(
+            wb2_sheet.charts().next().unwrap().payload.chart_type,
+            ChartType::Line
+        );
     }
 
     #[test]
@@ -4103,7 +4137,7 @@ mod tests {
 
         let mut chart = Chart::new(ChartType::ColumnClustered);
         chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$B$2:$B$3")));
-        sheet.add_chart(chart);
+        sheet.add_chart(chart, duke_sheets_chart::DrawingAnchor::default());
 
         let mut out = Cursor::new(Vec::new());
         XlsxWriter::write(&wb, &mut out).unwrap();
@@ -4124,7 +4158,7 @@ mod tests {
         let sheet = wb.worksheet_mut(0).unwrap();
         let mut chart = Chart::new(ChartType::Line);
         chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-        sheet.add_chart(chart);
+        sheet.add_chart(chart, duke_sheets_chart::DrawingAnchor::default());
 
         let mut out = Cursor::new(Vec::new());
         XlsxWriter::write(&wb, &mut out).unwrap();

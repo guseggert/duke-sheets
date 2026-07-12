@@ -4446,7 +4446,7 @@ struct PictureShape {
     blip_id: u32,
     /// User-visible shape name (e.g. `"Picture 1"`).
     shape_name: String,
-    /// Cell-anchor footprint copied from the `EmbeddedImage`.
+    /// Cell-anchor footprint copied from the wrapping drawing object.
     anchor: duke_sheets_chart::DrawingAnchor,
     /// Optional rotation in 60,000ths of a degree. Goes into the
     /// picture's FOPT `0x0004` property when set.
@@ -4492,8 +4492,14 @@ struct ControlShape {
     /// `txid` for the FOPT `TEXT_ID` slot; `Some` only for captioned
     /// kinds (button, checkbox, option button, label, group box).
     text_id: Option<u32>,
-    /// The model control (kind, anchor, caption, flags).
+    /// The model control (kind, caption).
     control: duke_sheets_core::FormControl,
+    /// Cell-anchor footprint copied from the wrapping drawing object.
+    anchor: duke_sheets_chart::DrawingAnchor,
+    /// `ftCmo.grbit` fLocked, from the wrapper's `DrawingMeta`.
+    locked: bool,
+    /// `ftCmo.grbit` fPrintable, from the wrapper's `DrawingMeta`.
+    printable: bool,
     /// Compiled rgce for the cell link (empty = no link).
     link_rgce: Vec<u8>,
     /// Compiled rgce for the input range (empty = none; list and
@@ -4557,27 +4563,33 @@ fn compute_drawing_state(
             let blip_id = next_blip_id;
             next_blip_id += 1;
             state.blip_store.push(BlipEntry {
-                format: image.format,
-                data: image.data.clone(),
+                format: image.payload.format,
+                data: image.payload.data.clone(),
             });
+            let shape_name = image
+                .object
+                .meta
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("Picture {next_obj_id}"));
             pictures.push(PictureShape {
                 spid,
                 obj_id: next_obj_id as u16,
                 blip_id,
-                shape_name: image.name.clone(),
-                anchor: image.anchor.clone(),
-                rotation: image.rotation,
-                flip_h: image.flip_h,
-                flip_v: image.flip_v,
+                shape_name,
+                anchor: image.object.anchor.clone(),
+                rotation: image.payload.rotation,
+                flip_h: image.payload.flip_h,
+                flip_v: image.payload.flip_v,
             });
             next_obj_id += 1;
         }
 
-        let mut comments_sorted: Vec<_> = sheet.comments().collect();
-        comments_sorted.sort_by_key(|((row, col), _)| (*row, *col));
+        let mut comments_sorted: Vec<_> = sheet.comments_drawn().collect();
+        comments_sorted.sort_by_key(|comment| (comment.row, comment.col));
 
         let mut comments = Vec::with_capacity(comment_count);
-        for ((row, col), comment) in comments_sorted.iter() {
+        for drawn in comments_sorted.iter() {
             let spid = next_spid;
             next_spid = next_spid.checked_add(1).ok_or_else(|| {
                 XlsError::InvalidFormat("XLS OfficeArt shape id space exhausted".into())
@@ -4586,11 +4598,11 @@ fn compute_drawing_state(
                 spid,
                 obj_id: next_obj_id as u16,
                 text_id: next_text_id,
-                row: *row,
-                col: *col,
-                author: comment.author.clone(),
-                text: comment.text.clone(),
-                visible: comment.visible,
+                row: drawn.row,
+                col: drawn.col,
+                author: drawn.comment.author.clone(),
+                text: drawn.comment.text.clone(),
+                visible: !drawn.object.meta.hidden,
             });
             next_obj_id += 1;
             next_text_id = next_text_id.wrapping_add(1);
@@ -4603,7 +4615,7 @@ fn compute_drawing_state(
             next_spid = next_spid.checked_add(1).ok_or_else(|| {
                 XlsError::InvalidFormat("XLS OfficeArt shape id space exhausted".into())
             })?;
-            let text_id = if control.caption().is_some() {
+            let text_id = if control.payload.caption().is_some() {
                 let id = next_text_id;
                 next_text_id = next_text_id.wrapping_add(1);
                 Some(id)
@@ -4611,11 +4623,12 @@ fn compute_drawing_state(
                 None
             };
             let link_rgce = control
+                .payload
                 .cell_link()
                 .map(|f| encode_control_ref_formula(f, externsheet, names, addins))
                 .transpose()?
                 .unwrap_or_default();
-            let input_rgce = match &control.kind {
+            let input_rgce = match &control.payload.kind {
                 FormControlKind::ListBox { input_range, .. }
                 | FormControlKind::Dropdown { input_range, .. } => input_range
                     .as_deref()
@@ -4628,7 +4641,10 @@ fn compute_drawing_state(
                 spid,
                 obj_id: next_obj_id as u16,
                 text_id,
-                control: control.clone(),
+                control: control.payload.clone(),
+                anchor: control.object.anchor.clone(),
+                locked: control.object.meta.locked,
+                printable: control.object.meta.printable,
                 link_rgce,
                 input_rgce,
                 radio_next_id: 0,
@@ -4637,7 +4653,7 @@ fn compute_drawing_state(
             next_obj_id += 1;
         }
 
-        chain_option_buttons(&mut controls);
+        chain_option_buttons(&mut controls, sheet);
 
         highest_spid_used = highest_spid_used.max(next_spid - 1);
 
@@ -4697,10 +4713,26 @@ fn validate_sheet_drawing_counts(
 /// grouping (see [`duke_sheets_core::radio_groups`]). Within a group
 /// the chain follows insertion order, wraps to the head, and the
 /// head carries `fFirstBtn`; a single-member group points at itself.
-fn chain_option_buttons(controls: &mut [ControlShape]) {
-    let models: Vec<duke_sheets_core::FormControl> =
-        controls.iter().map(|c| c.control.clone()).collect();
-    for members in duke_sheets_core::radio_groups(&models) {
+///
+/// Grouping is computed over the sheet's placed controls; members
+/// nested inside shape groups are dropped from the chains because the
+/// XLS writer only emits top-level controls (whose traversal order
+/// matches `controls`).
+fn chain_option_buttons(controls: &mut [ControlShape], sheet: &Worksheet) {
+    let placed = sheet.placed_form_controls();
+    let mut top_level = HashMap::new();
+    let mut next_control = 0usize;
+    for (placed_idx, placed_control) in placed.iter().enumerate() {
+        if placed_control.path.len() == 1 {
+            top_level.insert(placed_idx, next_control);
+            next_control += 1;
+        }
+    }
+    for members in duke_sheets_core::radio_groups(&placed) {
+        let members: Vec<usize> = members
+            .iter()
+            .filter_map(|idx| top_level.get(idx).copied())
+            .collect();
         for (pos, &idx) in members.iter().enumerate() {
             let next_pos = (pos + 1) % members.len();
             controls[idx].radio_next_id = controls[members[next_pos]].obj_id;
@@ -4923,7 +4955,7 @@ fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) -> 
         }
         .write_to(shape_type::HOST_CONTROL, &mut pre);
         control_fopt(&control.control.kind, control.text_id).write_to(&mut pre);
-        client_anchor_from_drawing_anchor(&control.control.anchor)?.write_to(&mut pre);
+        client_anchor_from_drawing_anchor(&control.anchor)?.write_to(&mut pre);
         write_client_data(&mut pre);
 
         // Captioned controls carry their text like comments do: a
@@ -5559,10 +5591,10 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
         _ => obj::cmo_flags::UNDEFINED_13 | obj::cmo_flags::UNDEFINED_14,
     };
     let mut grbit = base_bits;
-    if control.control.locked {
+    if control.locked {
         grbit |= obj::cmo_flags::LOCKED;
     }
-    if control.control.printable {
+    if control.printable {
         grbit |= obj::cmo_flags::PRINT;
     }
 
@@ -6050,6 +6082,9 @@ mod tests {
             control: FormControl::new(FormControlKind::Button {
                 caption: "button".to_string(),
             }),
+            anchor: duke_sheets_chart::DrawingAnchor::default(),
+            locked: true,
+            printable: true,
             link_rgce: Vec::new(),
             input_rgce: Vec::new(),
             radio_next_id: 0,

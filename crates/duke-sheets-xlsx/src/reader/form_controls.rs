@@ -1,10 +1,12 @@
 //! Form control reading: worksheet `<control>` entries, `ctrlProps`
 //! part parsing ([MS-XLSX] `formControlPr`), and assembly into model
-//! [`FormControl`]s with captions sourced from the legacy VML
-//! drawing part.
+//! [`DrawingObject`]s wrapping [`FormControl`]s, with captions
+//! sourced from the legacy VML drawing part.
 
 use duke_sheets_chart::{CellMarker, DrawingAnchor, EditAs};
-use duke_sheets_core::{CheckState, FormControl, FormControlKind, ListSelection};
+use duke_sheets_core::{
+    CheckState, DrawingObject, FormControl, FormControlKind, ListSelection,
+};
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::collections::HashSet;
@@ -181,7 +183,7 @@ pub(super) fn assemble(
     pending: &PendingControl,
     pr: &CtrlProp,
     caption: String,
-) -> Option<FormControl> {
+) -> Option<DrawingObject> {
     let state = match pr.checked {
         2 => CheckState::Mixed,
         0 => CheckState::Unchecked,
@@ -272,26 +274,27 @@ pub(super) fn assemble(
         _ => return None,
     };
 
-    let mut control = FormControl::with_anchor(kind, pending.anchor.clone().unwrap_or_default());
-    control.name = pending.name.clone();
-    control.locked = pending.locked;
-    control.printable = pending.printable;
-    Some(control)
+    let mut object = DrawingObject::form_control(FormControl::new(kind))
+        .with_anchor(pending.anchor.clone().unwrap_or_default());
+    object.meta.name = pending.name.clone();
+    object.meta.locked = pending.locked;
+    object.meta.printable = pending.printable;
+    Some(object)
 }
 
 pub(super) fn assemble_with_vml(
     pending: &PendingControl,
     pr: &CtrlProp,
     vml: Option<&duke_sheets_vml::VmlControl>,
-) -> Option<FormControl> {
+) -> Option<DrawingObject> {
     let caption = vml.map(|shape| shape.caption.clone()).unwrap_or_default();
-    let mut control = assemble(pending, pr, caption)?;
+    let mut object = assemble(pending, pr, caption)?;
     if pending.anchor.is_none() {
-        if let Some(vml_control) = vml.and_then(|shape| shape.to_form_control()) {
-            control.anchor = vml_control.anchor;
+        if let Some(vml_object) = vml.and_then(|shape| shape.to_drawing_object()) {
+            object.anchor = vml_object.anchor;
         }
     }
-    Some(control)
+    Some(object)
 }
 
 #[cfg(test)]
@@ -320,9 +323,10 @@ mod tests {
         assert_eq!(pr.fmla_range.as_deref(), Some("$H$1:$H$4"));
 
         // The one-based sel attribute becomes a zero-based model index.
-        let control = assemble(&PendingControl::new(), &pr, String::new()).expect("assemble");
-        match control.kind {
-            FormControlKind::Dropdown { selected, .. } => assert_eq!(selected, Some(1)),
+        let object = assemble(&PendingControl::new(), &pr, String::new()).expect("assemble");
+        let control = object.kind.as_form_control().expect("form control");
+        match &control.kind {
+            FormControlKind::Dropdown { selected, .. } => assert_eq!(*selected, Some(1)),
             other => panic!("expected Dropdown, got {other:?}"),
         }
     }
@@ -332,8 +336,9 @@ mod tests {
         let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <formControlPr xmlns="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" objectType="Scroll" dx="22" fmlaLink="$D$6" inc="2" max="95" min="5" page="10" val="40"/>"#;
         let pr = parse_ctrl_prop(xml).expect("parse");
-        let control = assemble(&PendingControl::new(), &pr, String::new()).expect("assemble");
-        match control.kind {
+        let object = assemble(&PendingControl::new(), &pr, String::new()).expect("assemble");
+        let control = object.kind.as_form_control().expect("form control");
+        match &control.kind {
             FormControlKind::Scrollbar {
                 value,
                 min,
@@ -342,7 +347,10 @@ mod tests {
                 page,
                 ..
             } => {
-                assert_eq!((value, min, max, increment, page), (40, 5, 95, 2, 10));
+                assert_eq!(
+                    (*value, *min, *max, *increment, *page),
+                    (40, 5, 95, 2, 10)
+                );
             }
             other => panic!("expected Scrollbar, got {other:?}"),
         }
@@ -379,8 +387,8 @@ mod tests {
             size_with_cells: false,
             ..Default::default()
         };
-        let control = assemble_with_vml(&pending, &pr, Some(&vml)).unwrap();
-        match control.anchor {
+        let object = assemble_with_vml(&pending, &pr, Some(&vml)).unwrap();
+        match object.anchor {
             DrawingAnchor::TwoCell { from, to, edit_as } => {
                 assert_eq!((from.col, from.row), (1, 3));
                 assert_eq!((to.col, to.row), (5, 7));

@@ -2,25 +2,23 @@ use std::io::{Read, Seek};
 
 use super::archive_by_name;
 use crate::error::{XlsxError, XlsxResult};
-use duke_sheets_chart::{Chart, DrawingAnchor};
+use duke_sheets_chart::Chart;
 
 pub(crate) fn read_chart<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     chart_path: &str,
-    anchor: DrawingAnchor,
 ) -> XlsxResult<Option<Chart>> {
     let file = match archive_by_name(archive, chart_path) {
         Ok(f) => f,
         Err(_) => return Ok(None),
     };
 
-    let mut chart = duke_sheets_chart::parse::parse_chart_xml(file).map_err(|e| {
+    let chart = duke_sheets_chart::parse::parse_chart_xml(file).map_err(|e| {
         XlsxError::Xml(quick_xml::Error::from(std::io::Error::new(
             std::io::ErrorKind::Other,
             e.to_string(),
         )))
     })?;
-    chart.anchor = anchor;
     Ok(Some(chart))
 }
 
@@ -85,13 +83,9 @@ mod tests {
 </c:chartSpace>"#;
 
         let mut archive = zip_with_entry("xl/charts/chart1.xml", xml);
-        let chart = read_chart(
-            &mut archive,
-            "xl/charts/chart1.xml",
-            DrawingAnchor::default(),
-        )
-        .unwrap()
-        .unwrap();
+        let chart = read_chart(&mut archive, "xl/charts/chart1.xml")
+            .unwrap()
+            .unwrap();
 
         assert_eq!(chart.chart_type, ChartType::ColumnClustered);
         assert_eq!(chart.title.as_deref(), Some("Sales Chart"));
@@ -201,13 +195,14 @@ mod tests {
         let sheet = workbook.worksheet(0).unwrap();
 
         assert_eq!(sheet.chart_count(), 1);
-        let chart = &sheet.charts()[0];
+        let drawn = sheet.charts().next().unwrap();
+        let chart = drawn.payload;
 
         assert_eq!(chart.chart_type, ChartType::ColumnClustered);
         assert_eq!(chart.title.as_deref(), Some("Revenue by Quarter"));
         assert_eq!(chart.series.len(), 2);
 
-        if let DrawingAnchor::TwoCell { from, to, .. } = &chart.anchor {
+        if let DrawingAnchor::TwoCell { from, to, .. } = &drawn.object.anchor {
             assert_eq!(from.col, 2);
             assert_eq!(from.row, 3);
             assert_eq!(to.col, 12);

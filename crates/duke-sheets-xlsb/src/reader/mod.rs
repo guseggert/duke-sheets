@@ -13,9 +13,10 @@ use std::collections::HashMap;
 use std::io::{BufReader, Cursor, Read, Seek, Write};
 use std::path::Path;
 
+use duke_sheets_chart::DrawingAnchor;
 use duke_sheets_core::named_range::{NameScope, NamedRange};
 use duke_sheets_core::worksheet::SheetVisibility;
-use duke_sheets_core::Workbook;
+use duke_sheets_core::{DrawingObject, RawDrawing, Workbook};
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 use quick_xml::Writer;
@@ -139,15 +140,17 @@ impl XlsbReader {
                 if !dr.bundle.is_empty() {
                     wb.worksheet_mut(i)
                         .unwrap()
-                        .raw_drawing_objects
-                        .push(dr.bundle.encode());
+                        .add_drawing(DrawingObject::raw(RawDrawing {
+                            bytes: dr.bundle.encode(),
+                            rels: vec![],
+                        }));
                 }
                 let ws = wb.worksheet_mut(i).unwrap();
                 for c in dr.charts {
-                    ws.add_chart(c);
+                    ws.add_chart(c, DrawingAnchor::default());
                 }
                 for cx in dr.charts_ex {
-                    ws.add_chart_ex(cx);
+                    ws.add_chart_ex(cx, DrawingAnchor::default());
                 }
             }
 
@@ -162,8 +165,8 @@ impl XlsbReader {
                     if std::io::Read::read_to_end(&mut f, &mut bytes).is_ok() {
                         let ws = wb.worksheet_mut(i).unwrap();
                         for shape in duke_sheets_vml::parse_vml_controls(&bytes) {
-                            if let Some(control) = shape.to_form_control() {
-                                ws.add_form_control(control);
+                            if let Some(object) = shape.to_drawing_object() {
+                                ws.add_drawing(object);
                             }
                         }
                     }

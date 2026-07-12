@@ -79,9 +79,9 @@ pub(crate) fn read_worksheet_comments<R: Read + Seek>(
                                     .get(&(addr.row, addr.col))
                                     .copied()
                                     .unwrap_or(false);
-                                let comment = CellComment::new(author, current_text.trim())
-                                    .with_visible(visible);
+                                let comment = CellComment::new(author, current_text.trim());
                                 worksheet.set_comment_at(addr.row, addr.col, comment);
+                                worksheet.set_comment_visible(addr.row, addr.col, visible);
                             }
                             Err(e) => log::warn!("Skipping comment at '{}': {}", cell_ref, e),
                         }
@@ -352,7 +352,7 @@ mod tests {
         let comment = sheet.comment("C2").unwrap().expect("comment should exist");
         assert_eq!(comment.author, "John");
         assert_eq!(comment.text, "Visible note");
-        assert!(comment.visible);
+        assert_eq!(sheet.comment_visible(1, 2), Some(true));
     }
 
     #[test]

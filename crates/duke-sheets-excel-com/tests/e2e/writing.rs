@@ -1268,11 +1268,20 @@ fn excel_can_read_xlsx_onecell_picture_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "anchor").unwrap();
-    ws.add_image(EmbeddedImage {
-        id: 1,
-        name: "OneCellPic".into(),
-        description: None,
-        anchor: DrawingAnchor::OneCell {
+    ws.add_image(
+        EmbeddedImage {
+            format: ImageFormat::Png,
+            media_path: String::new(),
+            svg_media_path: None,
+            width_emu: 1_500_000,
+            height_emu: 800_000,
+            rotation: None,
+            flip_h: false,
+            flip_v: false,
+            data: TEST_PNG_1X1.to_vec(),
+            svg_data: None,
+        },
+        DrawingAnchor::OneCell {
             from: CellMarker {
                 col: 2,
                 col_offset_emu: 0,
@@ -1282,23 +1291,13 @@ fn excel_can_read_xlsx_onecell_picture_we_emit() {
             width_emu: 1_500_000,
             height_emu: 800_000,
         },
-        format: ImageFormat::Png,
-        media_path: String::new(),
-        svg_media_path: None,
-        width_emu: 1_500_000,
-        height_emu: 800_000,
-        rotation: None,
-        flip_h: false,
-        flip_v: false,
-        data: TEST_PNG_1X1.to_vec(),
-        svg_data: None,
-    });
+    );
 
     let result = roundtrip_through_excel(&wb);
-    let images = result.worksheet(0).unwrap().images();
+    let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
     assert_eq!(images.len(), 1, "OneCell picture must survive Excel");
     let img = &images[0];
-    match &img.anchor {
+    match &img.object.anchor {
         DrawingAnchor::OneCell {
             from,
             width_emu,
@@ -1323,33 +1322,32 @@ fn excel_can_read_xlsx_absolute_picture_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "anchor").unwrap();
-    ws.add_image(EmbeddedImage {
-        id: 1,
-        name: "AbsolutePic".into(),
-        description: None,
-        anchor: DrawingAnchor::Absolute {
+    ws.add_image(
+        EmbeddedImage {
+            format: ImageFormat::Png,
+            media_path: String::new(),
+            svg_media_path: None,
+            width_emu: 1_000_000,
+            height_emu: 900_000,
+            rotation: None,
+            flip_h: false,
+            flip_v: false,
+            data: TEST_PNG_1X1.to_vec(),
+            svg_data: None,
+        },
+        DrawingAnchor::Absolute {
             x_emu: 2_500_000,
             y_emu: 1_200_000,
             width_emu: 1_000_000,
             height_emu: 900_000,
         },
-        format: ImageFormat::Png,
-        media_path: String::new(),
-        svg_media_path: None,
-        width_emu: 1_000_000,
-        height_emu: 900_000,
-        rotation: None,
-        flip_h: false,
-        flip_v: false,
-        data: TEST_PNG_1X1.to_vec(),
-        svg_data: None,
-    });
+    );
 
     let result = roundtrip_through_excel(&wb);
-    let images = result.worksheet(0).unwrap().images();
+    let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
     assert_eq!(images.len(), 1, "Absolute picture must survive Excel");
     let img = &images[0];
-    match &img.anchor {
+    match &img.object.anchor {
         DrawingAnchor::Absolute {
             x_emu,
             y_emu,
@@ -1376,11 +1374,20 @@ fn excel_can_read_xlsx_png_image_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "anchor").unwrap();
-    ws.add_image(EmbeddedImage {
-        id: 1,
-        name: "Pic1".into(),
-        description: None,
-        anchor: DrawingAnchor::TwoCell {
+    ws.add_image(
+        EmbeddedImage {
+            format: ImageFormat::Png,
+            media_path: String::new(),
+            svg_media_path: None,
+            width_emu: 1_000_000,
+            height_emu: 2_000_000,
+            rotation: None,
+            flip_h: false,
+            flip_v: false,
+            data: TEST_PNG_1X1.to_vec(),
+            svg_data: None,
+        },
+        DrawingAnchor::TwoCell {
             from: CellMarker {
                 col: 1,
                 col_offset_emu: 0,
@@ -1395,25 +1402,15 @@ fn excel_can_read_xlsx_png_image_we_emit() {
             },
             edit_as: None,
         },
-        format: ImageFormat::Png,
-        media_path: String::new(),
-        svg_media_path: None,
-        width_emu: 1_000_000,
-        height_emu: 2_000_000,
-        rotation: None,
-        flip_h: false,
-        flip_v: false,
-        data: TEST_PNG_1X1.to_vec(),
-        svg_data: None,
-    });
+    );
 
     let result = roundtrip_through_excel(&wb);
-    let images = result.worksheet(0).unwrap().images();
+    let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
     assert_eq!(images.len(), 1, "image must survive Excel re-save");
     let img = &images[0];
-    assert_eq!(img.format, ImageFormat::Png);
+    assert_eq!(img.payload.format, ImageFormat::Png);
     assert_eq!(
-        img.data, TEST_PNG_1X1,
+        img.payload.data, TEST_PNG_1X1,
         "PNG bytes must round-trip through Excel verbatim"
     );
 }
@@ -1530,7 +1527,7 @@ fn excel_can_read_xlsx_form_controls_we_emit() {
     let expected = kinds.clone();
     for (i, kind) in kinds.into_iter().enumerate() {
         let row = 1 + 2 * i as u32;
-        ws.add_form_control(FormControl::with_anchor(kind, anchor(1, row, 3, row + 1)));
+        ws.add_form_control(FormControl::new(kind), anchor(1, row, 3, row + 1));
     }
     assert_eq!(wb.sync_form_control_links(), 6);
 
@@ -1542,7 +1539,7 @@ fn excel_can_read_xlsx_form_controls_we_emit() {
     assert_eq!(sheet.get_value("D5").unwrap(), CellValue::Number(4.0));
     assert_eq!(sheet.get_value("D6").unwrap(), CellValue::Number(40.0));
     assert_eq!(sheet.get_value("D7").unwrap(), CellValue::Number(12.0));
-    let controls = sheet.form_controls();
+    let controls: Vec<_> = sheet.form_controls().collect();
     assert_eq!(controls.len(), count, "every control survives Excel");
     for (i, control) in controls.iter().enumerate() {
         let mut want = expected[i].clone();
@@ -1550,6 +1547,9 @@ fn excel_can_read_xlsx_form_controls_we_emit() {
             // Writer recomputes grouping; first radio heads the group.
             *first_in_group = i == 3;
         }
-        assert_eq!(control.kind, want, "control {i} kind mismatch after Excel");
+        assert_eq!(
+            control.payload.kind, want,
+            "control {i} kind mismatch after Excel"
+        );
     }
 }

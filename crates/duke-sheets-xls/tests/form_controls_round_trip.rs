@@ -8,7 +8,8 @@ use std::io::Cursor;
 
 use duke_sheets_chart::{CellMarker, DrawingAnchor};
 use duke_sheets_core::{
-    CheckState, FormControl, FormControlKind, ListSelection, Workbook,
+    CheckState, DrawingObject, Drawn, FormControl, FormControlKind, ListSelection, Workbook,
+    Worksheet,
 };
 use duke_sheets_xls::{XlsReader, XlsWriter};
 
@@ -35,16 +36,24 @@ fn anchor(from_col: u16, from_row: u32, to_col: u16, to_row: u32) -> DrawingAnch
     }
 }
 
+fn control_at(kind: FormControlKind, anchor: DrawingAnchor) -> DrawingObject {
+    DrawingObject::form_control(FormControl::new(kind)).with_anchor(anchor)
+}
+
+fn controls_of(ws: &Worksheet) -> Vec<Drawn<'_, FormControl>> {
+    ws.form_controls().collect()
+}
+
 fn single_control_round_trip(kind: FormControlKind) -> FormControlKind {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "anchor").expect("A1");
-    ws.add_form_control(FormControl::with_anchor(kind, anchor(1, 1, 3, 3)));
+    ws.add_drawing(control_at(kind, anchor(1, 1, 3, 3)));
 
     let parsed = write_then_read(&wb);
-    let controls = parsed.worksheet(0).unwrap().form_controls();
+    let controls = controls_of(parsed.worksheet(0).unwrap());
     assert_eq!(controls.len(), 1, "control must survive round-trip");
-    controls[0].kind.clone()
+    controls[0].payload.kind.clone()
 }
 
 #[test]
@@ -110,7 +119,7 @@ fn option_buttons_round_trip_as_group() {
     .iter()
     .enumerate()
     {
-        ws.add_form_control(FormControl::with_anchor(
+        ws.add_drawing(control_at(
             FormControlKind::OptionButton {
                 caption: caption.to_string(),
                 state: *state,
@@ -123,10 +132,10 @@ fn option_buttons_round_trip_as_group() {
     }
 
     let parsed = write_then_read(&wb);
-    let controls = parsed.worksheet(0).unwrap().form_controls();
+    let controls = controls_of(parsed.worksheet(0).unwrap());
     assert_eq!(controls.len(), 3);
     for (i, c) in controls.iter().enumerate() {
-        match &c.kind {
+        match &c.payload.kind {
             FormControlKind::OptionButton {
                 caption,
                 state,
@@ -295,7 +304,7 @@ fn cross_sheet_cell_link_round_trips() {
     let mut wb = Workbook::new();
     wb.add_worksheet_with_name("Data").expect("second sheet");
     let ws = wb.worksheet_mut(0).unwrap();
-    ws.add_form_control(FormControl::with_anchor(
+    ws.add_drawing(control_at(
         FormControlKind::Checkbox {
             caption: "linked".to_string(),
             state: CheckState::Checked,
@@ -306,9 +315,9 @@ fn cross_sheet_cell_link_round_trips() {
     ));
 
     let parsed = write_then_read(&wb);
-    let controls = parsed.worksheet(0).unwrap().form_controls();
+    let controls = controls_of(parsed.worksheet(0).unwrap());
     assert_eq!(controls.len(), 1);
-    assert_eq!(controls[0].cell_link(), Some("Data!$B$2"));
+    assert_eq!(controls[0].payload.cell_link(), Some("Data!$B$2"));
 }
 
 #[test]
@@ -331,7 +340,7 @@ fn unicode_caption_round_trips() {
 fn control_anchor_round_trips() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
-    ws.add_form_control(FormControl::with_anchor(
+    ws.add_drawing(control_at(
         FormControlKind::Button {
             caption: "here".to_string(),
         },
@@ -339,8 +348,8 @@ fn control_anchor_round_trips() {
     ));
 
     let parsed = write_then_read(&wb);
-    let controls = parsed.worksheet(0).unwrap().form_controls();
-    match &controls[0].anchor {
+    let controls = controls_of(parsed.worksheet(0).unwrap());
+    match &controls[0].object.anchor {
         DrawingAnchor::TwoCell { from, to, .. } => {
             assert_eq!(from.col, 2);
             assert_eq!(from.row, 3);
@@ -355,7 +364,7 @@ fn control_anchor_round_trips() {
 fn locked_and_printable_flags_round_trip() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
-    let mut control = FormControl::with_anchor(
+    let mut object = control_at(
         FormControlKind::Checkbox {
             caption: "flags".to_string(),
             state: CheckState::Unchecked,
@@ -364,14 +373,14 @@ fn locked_and_printable_flags_round_trip() {
         },
         anchor(0, 0, 2, 2),
     );
-    control.locked = false;
-    control.printable = false;
-    ws.add_form_control(control);
+    object.meta.locked = false;
+    object.meta.printable = false;
+    ws.add_drawing(object);
 
     let parsed = write_then_read(&wb);
-    let controls = parsed.worksheet(0).unwrap().form_controls();
-    assert!(!controls[0].locked);
-    assert!(!controls[0].printable);
+    let controls = controls_of(parsed.worksheet(0).unwrap());
+    assert!(!controls[0].object.meta.locked);
+    assert!(!controls[0].object.meta.printable);
 }
 
 #[test]
@@ -389,24 +398,24 @@ fn controls_coexist_with_comments_and_pictures() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", 42.0).expect("A1");
-    ws.add_image(duke_sheets_chart::EmbeddedImage {
-        id: 1,
-        name: "Pic".to_string(),
-        description: None,
-        anchor: anchor(6, 1, 8, 4),
-        format: duke_sheets_chart::ImageFormat::Png,
-        media_path: String::new(),
-        svg_media_path: None,
-        width_emu: 1_000_000,
-        height_emu: 1_000_000,
-        rotation: None,
-        flip_h: false,
-        flip_v: false,
-        data: TEST_PNG_1X1.to_vec(),
-        svg_data: None,
-    });
+    ws.add_drawing(
+        DrawingObject::image(duke_sheets_chart::EmbeddedImage {
+            format: duke_sheets_chart::ImageFormat::Png,
+            media_path: String::new(),
+            svg_media_path: None,
+            width_emu: 1_000_000,
+            height_emu: 1_000_000,
+            rotation: None,
+            flip_h: false,
+            flip_v: false,
+            data: TEST_PNG_1X1.to_vec(),
+            svg_data: None,
+        })
+        .with_anchor(anchor(6, 1, 8, 4))
+        .with_name("Pic"),
+    );
     ws.set_comment_at(0, 0, duke_sheets_core::CellComment::new("Author", "note"));
-    ws.add_form_control(FormControl::with_anchor(
+    ws.add_drawing(control_at(
         FormControlKind::Checkbox {
             caption: "check".to_string(),
             state: CheckState::Checked,
@@ -415,7 +424,7 @@ fn controls_coexist_with_comments_and_pictures() {
         },
         anchor(1, 1, 3, 3),
     ));
-    ws.add_form_control(FormControl::with_anchor(
+    ws.add_drawing(control_at(
         FormControlKind::Button {
             caption: "go".to_string(),
         },
@@ -426,11 +435,11 @@ fn controls_coexist_with_comments_and_pictures() {
     let ws2 = parsed.worksheet(0).unwrap();
     assert_eq!(ws2.image_count(), 1, "picture survives");
     assert_eq!(ws2.comment_count(), 1, "comment survives");
-    let controls = ws2.form_controls();
+    let controls = controls_of(ws2);
     assert_eq!(controls.len(), 2, "controls survive");
-    assert_eq!(controls[0].caption(), Some("check"));
-    assert_eq!(controls[1].caption(), Some("go"));
-    match &controls[0].kind {
+    assert_eq!(controls[0].payload.caption(), Some("check"));
+    assert_eq!(controls[1].payload.caption(), Some("go"));
+    match &controls[0].payload.kind {
         FormControlKind::Checkbox { state, .. } => assert_eq!(*state, CheckState::Checked),
         other => panic!("expected Checkbox, got {other:?}"),
     }
@@ -442,7 +451,7 @@ fn controls_on_multiple_sheets_round_trip() {
     wb.add_worksheet_with_name("Second").expect("sheet 2");
     wb.worksheet_mut(0)
         .unwrap()
-        .add_form_control(FormControl::with_anchor(
+        .add_drawing(control_at(
             FormControlKind::Checkbox {
                 caption: "one".to_string(),
                 state: CheckState::Checked,
@@ -453,7 +462,7 @@ fn controls_on_multiple_sheets_round_trip() {
         ));
     wb.worksheet_mut(1)
         .unwrap()
-        .add_form_control(FormControl::with_anchor(
+        .add_drawing(control_at(
             FormControlKind::Spinner {
                 value: 5,
                 min: 0,
@@ -468,10 +477,10 @@ fn controls_on_multiple_sheets_round_trip() {
     assert_eq!(parsed.worksheet(0).unwrap().form_control_count(), 1);
     assert_eq!(parsed.worksheet(1).unwrap().form_control_count(), 1);
     assert_eq!(
-        parsed.worksheet(0).unwrap().form_controls()[0].caption(),
+        controls_of(parsed.worksheet(0).unwrap())[0].payload.caption(),
         Some("one")
     );
-    match &parsed.worksheet(1).unwrap().form_controls()[0].kind {
+    match &controls_of(parsed.worksheet(1).unwrap())[0].payload.kind {
         FormControlKind::Spinner { value, max, .. } => {
             assert_eq!(*value, 5);
             assert_eq!(*max, 10);
@@ -502,25 +511,25 @@ fn radio_groups_workbook() -> Workbook {
     };
     // Box A spans cols 0-2, Box B cols 4-6; radios sit inside them,
     // the loose radio at col 8 is outside both.
-    ws.add_form_control(FormControl::with_anchor(group_box("Box A"), anchor(0, 0, 2, 6)));
-    ws.add_form_control(FormControl::with_anchor(group_box("Box B"), anchor(4, 0, 6, 6)));
-    ws.add_form_control(FormControl::with_anchor(
+    ws.add_drawing(control_at(group_box("Box A"), anchor(0, 0, 2, 6)));
+    ws.add_drawing(control_at(group_box("Box B"), anchor(4, 0, 6, 6)));
+    ws.add_drawing(control_at(
         radio("A1", CheckState::Checked),
         anchor(1, 1, 2, 2),
     ));
-    ws.add_form_control(FormControl::with_anchor(
+    ws.add_drawing(control_at(
         radio("B1", CheckState::Unchecked),
         anchor(5, 1, 6, 2),
     ));
-    ws.add_form_control(FormControl::with_anchor(
+    ws.add_drawing(control_at(
         radio("A2", CheckState::Unchecked),
         anchor(1, 3, 2, 4),
     ));
-    ws.add_form_control(FormControl::with_anchor(
+    ws.add_drawing(control_at(
         radio("B2", CheckState::Checked),
         anchor(5, 3, 6, 4),
     ));
-    ws.add_form_control(FormControl::with_anchor(
+    ws.add_drawing(control_at(
         radio("Loose", CheckState::Unchecked),
         anchor(8, 1, 9, 2),
     ));
@@ -532,12 +541,12 @@ fn radio_groups_follow_enclosing_group_boxes() {
     // Each group box forms its own radio group (fFirstBtn on its
     // first radio); radios outside every box form the sheet group.
     let parsed = write_then_read(&radio_groups_workbook());
-    let controls = parsed.worksheet(0).unwrap().form_controls();
+    let controls = controls_of(parsed.worksheet(0).unwrap());
     assert_eq!(controls.len(), 7);
 
     let firsts: Vec<(Option<&str>, bool)> = controls
         .iter()
-        .filter_map(|c| match &c.kind {
+        .filter_map(|c| match &c.payload.kind {
             FormControlKind::OptionButton {
                 caption,
                 first_in_group,
@@ -633,7 +642,7 @@ fn caption_over_u16_character_limit_returns_a_clean_error() {
     let mut wb = Workbook::new();
     wb.worksheet_mut(0)
         .unwrap()
-        .add_form_control(FormControl::with_anchor(
+        .add_drawing(control_at(
             FormControlKind::Label {
                 // Each supplementary scalar is two UTF-16 units.
                 caption: "😀".repeat(32_768),
@@ -672,7 +681,7 @@ fn cross_sheet_input_range_round_trips() {
     let mut wb = Workbook::new();
     wb.add_worksheet_with_name("Data").expect("second sheet");
     let ws = wb.worksheet_mut(0).unwrap();
-    ws.add_form_control(FormControl::with_anchor(
+    ws.add_drawing(control_at(
         FormControlKind::Dropdown {
             input_range: Some("Data!$A$1:$A$5".to_string()),
             cell_link: None,
@@ -684,9 +693,9 @@ fn cross_sheet_input_range_round_trips() {
     ));
 
     let parsed = write_then_read(&wb);
-    let controls = parsed.worksheet(0).unwrap().form_controls();
+    let controls = controls_of(parsed.worksheet(0).unwrap());
     assert_eq!(controls.len(), 1);
-    match &controls[0].kind {
+    match &controls[0].payload.kind {
         FormControlKind::Dropdown {
             input_range,
             selected,
@@ -707,7 +716,7 @@ fn uncompilable_cell_link_returns_a_clean_error() {
     let mut wb = Workbook::new();
     wb.worksheet_mut(0)
         .unwrap()
-        .add_form_control(FormControl::with_anchor(
+        .add_drawing(control_at(
             FormControlKind::Checkbox {
                 caption: "bad link".to_string(),
                 state: CheckState::Checked,
@@ -746,7 +755,7 @@ fn scrollbar_values_above_i16_max_clamp() {
 fn large_multi_select_list_uses_continue_records() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
-    ws.add_form_control(FormControl::with_anchor(
+    ws.add_drawing(control_at(
         FormControlKind::ListBox {
             input_range: Some("$H$1:$H$10000".to_string()),
             cell_link: None,
@@ -758,7 +767,7 @@ fn large_multi_select_list_uses_continue_records() {
     ));
 
     let parsed = write_then_read(&wb);
-    match &parsed.worksheet(0).unwrap().form_controls()[0].kind {
+    match &controls_of(parsed.worksheet(0).unwrap())[0].payload.kind {
         FormControlKind::ListBox { selected, .. } => {
             assert_eq!(selected, &vec![0, 4_999, 9_999]);
         }
@@ -771,7 +780,7 @@ fn full_column_list_range_returns_a_clean_error() {
     let mut wb = Workbook::new();
     wb.worksheet_mut(0)
         .unwrap()
-        .add_form_control(FormControl::with_anchor(
+        .add_drawing(control_at(
             FormControlKind::ListBox {
                 input_range: Some("$H$1:$H$65536".to_string()),
                 cell_link: None,
@@ -792,7 +801,7 @@ fn list_selection_outside_input_range_returns_a_clean_error() {
     let mut wb = Workbook::new();
     wb.worksheet_mut(0)
         .unwrap()
-        .add_form_control(FormControl::with_anchor(
+        .add_drawing(control_at(
             FormControlKind::ListBox {
                 input_range: Some("$H$1:$H$4".to_string()),
                 cell_link: None,
@@ -812,7 +821,7 @@ fn control_anchor_outside_biff8_grid_returns_a_clean_error() {
     let mut wb = Workbook::new();
     wb.worksheet_mut(0)
         .unwrap()
-        .add_form_control(FormControl::with_anchor(
+        .add_drawing(control_at(
             FormControlKind::Button {
                 caption: "outside".to_string(),
             },
@@ -827,7 +836,7 @@ fn reversed_control_anchor_returns_a_clean_error() {
     let mut wb = Workbook::new();
     wb.worksheet_mut(0)
         .unwrap()
-        .add_form_control(FormControl::with_anchor(
+        .add_drawing(control_at(
             FormControlKind::Button {
                 caption: "reversed".to_string(),
             },
@@ -842,7 +851,7 @@ fn out_of_grid_control_formula_returns_a_clean_error() {
     let mut wb = Workbook::new();
     wb.worksheet_mut(0)
         .unwrap()
-        .add_form_control(FormControl::with_anchor(
+        .add_drawing(control_at(
             FormControlKind::Checkbox {
                 caption: "link".to_string(),
                 state: CheckState::Checked,
@@ -860,7 +869,7 @@ fn invalid_scrollbar_tuple_returns_a_clean_error() {
     let mut wb = Workbook::new();
     wb.worksheet_mut(0)
         .unwrap()
-        .add_form_control(FormControl::with_anchor(
+        .add_drawing(control_at(
             FormControlKind::Scrollbar {
                 value: 50,
                 min: 100,
@@ -881,7 +890,7 @@ fn mixed_option_button_returns_a_clean_error() {
     let mut wb = Workbook::new();
     wb.worksheet_mut(0)
         .unwrap()
-        .add_form_control(FormControl::with_anchor(
+        .add_drawing(control_at(
             FormControlKind::OptionButton {
                 caption: "mixed".to_string(),
                 state: CheckState::Mixed,
@@ -969,7 +978,7 @@ fn lo_can_open_xls_with_form_controls_we_emit() {
     ];
     for (i, kind) in kinds.into_iter().enumerate() {
         let row = 1 + 2 * i as u32;
-        ws.add_form_control(FormControl::with_anchor(kind, anchor(1, row, 3, row + 1)));
+        ws.add_drawing(control_at(kind, anchor(1, row, 3, row + 1)));
     }
     assert_eq!(wb.sync_form_control_links(), 1);
 

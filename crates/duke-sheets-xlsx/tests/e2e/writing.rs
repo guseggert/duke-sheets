@@ -90,7 +90,7 @@ fn lo_can_open_xlsx_with_form_controls_we_emit() {
     ];
     for (i, kind) in kinds.into_iter().enumerate() {
         let row = 1 + 2 * i as u32;
-        ws.add_form_control(FormControl::with_anchor(kind, anchor(1, row, 3, row + 1)));
+        ws.add_form_control(FormControl::new(kind), anchor(1, row, 3, row + 1));
     }
     assert_eq!(wb.sync_form_control_links(), 1);
 
