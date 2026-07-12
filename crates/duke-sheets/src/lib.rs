@@ -95,6 +95,7 @@ pub use duke_sheets_core::{
     DrawingNodeRef,
     DrawingObject,
     DrawingPath,
+    DrawingText,
     Drawn,
     // Error types
     Error,
@@ -131,6 +132,10 @@ pub use duke_sheets_core::{
     // Rich text types
     RichTextRun,
     RunFont,
+    Shape,
+    ShapeFill,
+    ShapeGeometry,
+    ShapeLine,
     SheetProtection,
     SheetSlot,
     // Style types

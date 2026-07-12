@@ -1,7 +1,7 @@
 //! Unified drawing model
 //!
-//! Every floating object on a worksheet - images, charts, form
-//! controls, cell comments, shape groups, and preserved raw drawing
+//! Every floating object on a worksheet - images, charts, basic shapes,
+//! form controls, cell comments, shape groups, and preserved raw drawing
 //! fragments - lives in one per-sheet list of [`DrawingObject`]s.
 //! **List order is z-order**, back to front: index 0 renders at the
 //! bottom, the last element on top. This mirrors Excel's own object
@@ -30,7 +30,469 @@ pub use duke_sheets_chart::{ChildTransform, GroupTransform};
 
 use crate::comment::CellComment;
 use crate::form_control::FormControl;
-use crate::{Error, Result, MAX_COLS, MAX_ROWS};
+use crate::{
+    rich_text_to_plain, Color, Error, HorizontalAlignment, Result, RichTextRun, RunFont,
+    VerticalAlignment, MAX_COLS, MAX_ROWS,
+};
+
+/// Rich text and alignment shared by drawing shapes and form controls.
+///
+/// Empty text is valid. Alignments are optional so a format's default
+/// can remain implicit.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct DrawingText {
+    /// Text runs in display order.
+    pub runs: Vec<RichTextRun>,
+    /// Explicit horizontal alignment.
+    pub horizontal_alignment: Option<HorizontalAlignment>,
+    /// Explicit vertical alignment.
+    pub vertical_alignment: Option<VerticalAlignment>,
+}
+
+impl DrawingText {
+    /// Create text containing one unformatted run.
+    pub fn plain(text: impl Into<String>) -> Self {
+        Self {
+            runs: vec![RichTextRun::plain(text)],
+            horizontal_alignment: None,
+            vertical_alignment: None,
+        }
+    }
+
+    /// Concatenate all runs without formatting.
+    pub fn plain_text(&self) -> String {
+        rich_text_to_plain(&self.runs)
+    }
+
+    /// Whether the concatenated text is empty.
+    pub fn is_empty(&self) -> bool {
+        self.runs.iter().all(|run| run.text.is_empty())
+    }
+
+    /// Convert to the model-neutral DrawingML text representation used
+    /// by the shared XLSX/XLSB drawing-part codec.
+    #[doc(hidden)]
+    pub fn to_drawing_part_text(&self) -> duke_sheets_chart::drawing_part::TwinText {
+        use duke_sheets_chart::drawing_part::{
+            TwinHorizontalAlignment as H, TwinRunFont, TwinText, TwinTextRun, TwinUnderline,
+            TwinVerticalAlignment as V,
+        };
+        let horizontal_alignment = self.horizontal_alignment.map(|alignment| match alignment {
+            HorizontalAlignment::Center | HorizontalAlignment::CenterContinuous => H::Center,
+            HorizontalAlignment::Right => H::Right,
+            HorizontalAlignment::Justify => H::Justify,
+            HorizontalAlignment::Distributed => H::Distributed,
+            HorizontalAlignment::General
+            | HorizontalAlignment::Left
+            | HorizontalAlignment::Fill => H::Left,
+        });
+        let vertical_alignment = self.vertical_alignment.map(|alignment| match alignment {
+            VerticalAlignment::Top => V::Top,
+            VerticalAlignment::Center => V::Center,
+            VerticalAlignment::Bottom => V::Bottom,
+            VerticalAlignment::Justify => V::Justify,
+            VerticalAlignment::Distributed => V::Distributed,
+        });
+        let runs = self
+            .runs
+            .iter()
+            .map(|run| TwinTextRun {
+                text: run.text.clone(),
+                font: run.font.as_ref().map(|font| TwinRunFont {
+                    name: font.name.clone(),
+                    size: font.size,
+                    color: font.color.and_then(color_to_drawing_part),
+                    bold: font.bold,
+                    italic: font.italic,
+                    underline: font.underline.and_then(|underline| match underline {
+                        crate::style::Underline::None => None,
+                        crate::style::Underline::Single => Some(TwinUnderline::Single),
+                        crate::style::Underline::Double => Some(TwinUnderline::Double),
+                        crate::style::Underline::SingleAccounting => {
+                            Some(TwinUnderline::SingleAccounting)
+                        }
+                        crate::style::Underline::DoubleAccounting => {
+                            Some(TwinUnderline::DoubleAccounting)
+                        }
+                    }),
+                    strikethrough: font.strikethrough,
+                    baseline: font.vertical_align.map(|alignment| match alignment {
+                        crate::style::FontVerticalAlign::Baseline => 0,
+                        crate::style::FontVerticalAlign::Superscript => 30_000,
+                        crate::style::FontVerticalAlign::Subscript => -25_000,
+                    }),
+                }),
+            })
+            .collect();
+        TwinText {
+            runs,
+            horizontal_alignment,
+            vertical_alignment,
+        }
+    }
+
+    /// Convert shared DrawingML text into the public drawing model.
+    #[doc(hidden)]
+    pub fn from_drawing_part_text(text: &duke_sheets_chart::drawing_part::TwinText) -> Self {
+        use duke_sheets_chart::drawing_part::{
+            TwinHorizontalAlignment as H, TwinUnderline, TwinVerticalAlignment as V,
+        };
+        Self {
+            runs: text
+                .runs
+                .iter()
+                .map(|run| RichTextRun {
+                    text: run.text.clone(),
+                    font: run.font.as_ref().map(|font| RunFont {
+                        name: font.name.clone(),
+                        size: font.size,
+                        color: font.color.map(color_from_drawing_part),
+                        bold: font.bold,
+                        italic: font.italic,
+                        underline: font.underline.map(|underline| match underline {
+                            TwinUnderline::Single => crate::style::Underline::Single,
+                            TwinUnderline::Double => crate::style::Underline::Double,
+                            TwinUnderline::SingleAccounting => {
+                                crate::style::Underline::SingleAccounting
+                            }
+                            TwinUnderline::DoubleAccounting => {
+                                crate::style::Underline::DoubleAccounting
+                            }
+                        }),
+                        strikethrough: font.strikethrough,
+                        vertical_align: font.baseline.map(|baseline| {
+                            if baseline > 0 {
+                                crate::style::FontVerticalAlign::Superscript
+                            } else if baseline < 0 {
+                                crate::style::FontVerticalAlign::Subscript
+                            } else {
+                                crate::style::FontVerticalAlign::Baseline
+                            }
+                        }),
+                        ..RunFont::default()
+                    }),
+                })
+                .collect(),
+            horizontal_alignment: text.horizontal_alignment.map(|alignment| match alignment {
+                H::Left => HorizontalAlignment::Left,
+                H::Center => HorizontalAlignment::Center,
+                H::Right => HorizontalAlignment::Right,
+                H::Justify => HorizontalAlignment::Justify,
+                H::Distributed => HorizontalAlignment::Distributed,
+            }),
+            vertical_alignment: text.vertical_alignment.map(|alignment| match alignment {
+                V::Top => VerticalAlignment::Top,
+                V::Center => VerticalAlignment::Center,
+                V::Bottom => VerticalAlignment::Bottom,
+                V::Justify => VerticalAlignment::Justify,
+                V::Distributed => VerticalAlignment::Distributed,
+            }),
+        }
+    }
+}
+
+/// Convert a core color to the shared DrawingML representation.
+#[doc(hidden)]
+pub fn color_to_drawing_part(color: Color) -> Option<duke_sheets_chart::drawing_part::TwinColor> {
+    use duke_sheets_chart::drawing_part::TwinColor;
+    match color {
+        Color::Auto => None,
+        Color::Rgb { r, g, b } | Color::Argb { r, g, b, .. } => Some(TwinColor::Rgb { r, g, b }),
+        Color::Theme { index, tint } => Some(TwinColor::Theme { index, tint }),
+        Color::Indexed(_) => {
+            let (r, g, b) = color.to_rgb();
+            Some(TwinColor::Rgb { r, g, b })
+        }
+    }
+}
+
+/// Convert a shared DrawingML color to the core representation.
+#[doc(hidden)]
+pub fn color_from_drawing_part(color: duke_sheets_chart::drawing_part::TwinColor) -> Color {
+    match color {
+        duke_sheets_chart::drawing_part::TwinColor::Rgb { r, g, b } => Color::rgb(r, g, b),
+        duke_sheets_chart::drawing_part::TwinColor::Theme { index, tint } => {
+            Color::theme(index, tint)
+        }
+    }
+}
+
+impl From<String> for DrawingText {
+    fn from(text: String) -> Self {
+        Self::plain(text)
+    }
+}
+
+impl From<&str> for DrawingText {
+    fn from(text: &str) -> Self {
+        Self::plain(text)
+    }
+}
+
+/// The geometry of a worksheet shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShapeGeometry {
+    /// A DrawingML preset geometry name, such as `rect`, `ellipse`, or
+    /// `roundRect`.
+    Preset(String),
+}
+
+impl Default for ShapeGeometry {
+    fn default() -> Self {
+        Self::Preset("rect".to_string())
+    }
+}
+
+/// Fill applied to a worksheet shape.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ShapeFill {
+    /// No visible fill.
+    #[default]
+    None,
+    /// A solid fill color.
+    Solid(Color),
+}
+
+/// Outline applied to a worksheet shape.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ShapeLine {
+    /// Outline color. `None` leaves the format default implicit.
+    pub color: Option<Color>,
+    /// Outline width in English Metric Units (12,700 EMU = 1 point).
+    pub width_emu: Option<i64>,
+    /// DrawingML preset dash name, such as `solid`, `dash`, or `dot`.
+    pub dash_style: Option<String>,
+    /// Whether the outline is explicitly disabled.
+    pub no_fill: bool,
+}
+
+/// A basic worksheet shape.
+///
+/// Modeled fields are always authoritative when writing. The hidden
+/// raw shape properties contain mergeable child fragments from OOXML
+/// `spPr`; the raw text body can retain a complete `txBody`. Parsed
+/// snapshots detect direct public-field edits, so writers regenerate
+/// changed modeled blocks instead of replaying stale XML. Unsupported
+/// effects, gradients, custom geometry, and extension children survive
+/// an untouched round trip.
+#[derive(Debug, Clone)]
+pub struct Shape {
+    /// Preset geometry.
+    pub geometry: ShapeGeometry,
+    /// Shape fill.
+    pub fill: ShapeFill,
+    /// Shape outline.
+    pub line: ShapeLine,
+    /// Optional rich text body.
+    pub text: Option<DrawingText>,
+    /// Clockwise rotation in 60,000ths of a degree.
+    pub rotation: i32,
+    /// Horizontal flip.
+    pub flip_h: bool,
+    /// Vertical flip.
+    pub flip_v: bool,
+    /// Unmodeled `spPr` child XML fragments preserved by OOXML codecs.
+    #[doc(hidden)]
+    pub raw_shape_properties: Option<Vec<u8>>,
+    /// Complete `txBody` XML preserved by OOXML codecs.
+    #[doc(hidden)]
+    pub raw_text_body: Option<Vec<u8>>,
+    /// Parsed geometry paired with raw fragments for stale-fragment detection.
+    #[doc(hidden)]
+    pub raw_geometry_snapshot: Option<ShapeGeometry>,
+    /// Parsed fill paired with raw fragments for stale-fragment detection.
+    #[doc(hidden)]
+    pub raw_fill_snapshot: Option<ShapeFill>,
+    /// Parsed line paired with raw fragments for stale-fragment detection.
+    #[doc(hidden)]
+    pub raw_line_snapshot: Option<ShapeLine>,
+    /// Parsed text paired with a retained complete OOXML `txBody`.
+    #[doc(hidden)]
+    pub raw_text_snapshot: Option<Option<DrawingText>>,
+}
+
+impl PartialEq for Shape {
+    fn eq(&self, other: &Self) -> bool {
+        self.geometry == other.geometry
+            && self.fill == other.fill
+            && self.line == other.line
+            && self.text == other.text
+            && self.rotation == other.rotation
+            && self.flip_h == other.flip_h
+            && self.flip_v == other.flip_v
+            && self.raw_shape_properties == other.raw_shape_properties
+            && self.raw_text_body == other.raw_text_body
+    }
+}
+
+impl Default for Shape {
+    fn default() -> Self {
+        Self {
+            geometry: ShapeGeometry::default(),
+            fill: ShapeFill::None,
+            line: ShapeLine::default(),
+            text: None,
+            rotation: 0,
+            flip_h: false,
+            flip_v: false,
+            raw_shape_properties: None,
+            raw_text_body: None,
+            raw_geometry_snapshot: None,
+            raw_fill_snapshot: None,
+            raw_line_snapshot: None,
+            raw_text_snapshot: None,
+        }
+    }
+}
+
+impl Shape {
+    /// Create a rectangle with no explicit fill or outline.
+    pub fn rectangle() -> Self {
+        Self::default()
+    }
+
+    /// Create a shape using a DrawingML preset geometry name.
+    pub fn preset(name: impl Into<String>) -> Self {
+        Self {
+            geometry: ShapeGeometry::Preset(name.into()),
+            ..Self::default()
+        }
+    }
+
+    /// Set the geometry.
+    pub fn set_geometry(&mut self, geometry: ShapeGeometry) {
+        self.geometry = geometry;
+    }
+
+    /// Set the geometry and return the shape.
+    pub fn with_geometry(mut self, geometry: ShapeGeometry) -> Self {
+        self.set_geometry(geometry);
+        self
+    }
+
+    /// Set the fill.
+    pub fn set_fill(&mut self, fill: ShapeFill) {
+        self.fill = fill;
+    }
+
+    /// Set the fill and return the shape.
+    pub fn with_fill(mut self, fill: ShapeFill) -> Self {
+        self.set_fill(fill);
+        self
+    }
+
+    /// Set the outline.
+    pub fn set_line(&mut self, line: ShapeLine) {
+        self.line = line;
+    }
+
+    /// Set the outline and return the shape.
+    pub fn with_line(mut self, line: ShapeLine) -> Self {
+        self.set_line(line);
+        self
+    }
+
+    /// Set the text body.
+    pub fn set_text(&mut self, text: impl Into<DrawingText>) {
+        self.text = Some(text.into());
+    }
+
+    /// Set the text body and return the shape.
+    pub fn with_text(mut self, text: impl Into<DrawingText>) -> Self {
+        self.set_text(text);
+        self
+    }
+
+    /// Remove the text body.
+    pub fn clear_text(&mut self) {
+        self.text = None;
+    }
+
+    /// Set clockwise rotation in 60,000ths of a degree.
+    pub fn set_rotation(&mut self, rotation: i32) {
+        self.rotation = rotation;
+    }
+
+    /// Set clockwise rotation and return the shape.
+    pub fn with_rotation(mut self, rotation: i32) -> Self {
+        self.set_rotation(rotation);
+        self
+    }
+
+    /// Set the horizontal flip.
+    pub fn set_flip_h(&mut self, flip_h: bool) {
+        self.flip_h = flip_h;
+    }
+
+    /// Set the horizontal flip and return the shape.
+    pub fn with_flip_h(mut self, flip_h: bool) -> Self {
+        self.set_flip_h(flip_h);
+        self
+    }
+
+    /// Set the vertical flip.
+    pub fn set_flip_v(&mut self, flip_v: bool) {
+        self.flip_v = flip_v;
+    }
+
+    /// Set the vertical flip and return the shape.
+    pub fn with_flip_v(mut self, flip_v: bool) -> Self {
+        self.set_flip_v(flip_v);
+        self
+    }
+
+    /// Record preserved OOXML `spPr` fragments and the modeled state
+    /// from which they were parsed.
+    #[doc(hidden)]
+    pub fn set_preserved_shape_properties(&mut self, fragments: Option<Vec<u8>>) {
+        self.raw_shape_properties = fragments;
+        self.raw_geometry_snapshot = Some(self.geometry.clone());
+        self.raw_fill_snapshot = Some(self.fill.clone());
+        self.raw_line_snapshot = Some(self.line.clone());
+    }
+
+    /// Record a complete OOXML `txBody` and its parsed modeled text.
+    #[doc(hidden)]
+    pub fn set_preserved_text_body(&mut self, fragments: Option<Vec<u8>>) {
+        self.raw_text_body = fragments;
+        self.raw_text_snapshot = Some(self.text.clone());
+    }
+
+    /// Whether a preserved custom geometry still corresponds to the
+    /// modeled geometry. Caller-supplied fragments have no parsed
+    /// snapshot and are treated as current.
+    #[doc(hidden)]
+    pub fn preserved_geometry_unchanged(&self) -> bool {
+        self.raw_geometry_snapshot
+            .as_ref()
+            .is_none_or(|snapshot| snapshot == &self.geometry)
+    }
+
+    /// Whether a preserved unsupported fill still corresponds to the
+    /// modeled fill.
+    #[doc(hidden)]
+    pub fn preserved_fill_unchanged(&self) -> bool {
+        self.raw_fill_snapshot
+            .as_ref()
+            .is_none_or(|snapshot| snapshot == &self.fill)
+    }
+
+    /// Whether a preserved line block still corresponds to the modeled line.
+    #[doc(hidden)]
+    pub fn preserved_line_unchanged(&self) -> bool {
+        self.raw_line_snapshot
+            .as_ref()
+            .is_none_or(|snapshot| snapshot == &self.line)
+    }
+
+    /// Whether a preserved complete text body still corresponds to modeled text.
+    #[doc(hidden)]
+    pub fn preserved_text_unchanged(&self) -> bool {
+        self.raw_text_snapshot
+            .as_ref()
+            .is_none_or(|snapshot| snapshot == &self.text)
+    }
+}
 
 /// Shared non-visual properties of a drawing object.
 ///
@@ -94,6 +556,8 @@ pub enum DrawingKind {
     ChartEx(Box<ChartEx>),
     /// A Forms-toolbar control.
     FormControl(FormControl),
+    /// A basic worksheet shape.
+    Shape(Box<Shape>),
     /// A cell comment (legacy note). The comment is attached to the
     /// cell at `(row, col)`; the wrapper anchor places the popup box.
     Comment {
@@ -148,6 +612,22 @@ impl DrawingKind {
     pub fn as_form_control_mut(&mut self) -> Option<&mut FormControl> {
         match self {
             DrawingKind::FormControl(control) => Some(control),
+            _ => None,
+        }
+    }
+
+    /// Payload as a shape, if this is a shape.
+    pub fn as_shape(&self) -> Option<&Shape> {
+        match self {
+            DrawingKind::Shape(shape) => Some(shape),
+            _ => None,
+        }
+    }
+
+    /// Mutable payload as a shape, if this is a shape.
+    pub fn as_shape_mut(&mut self) -> Option<&mut Shape> {
+        match self {
+            DrawingKind::Shape(shape) => Some(shape),
             _ => None,
         }
     }
@@ -313,6 +793,11 @@ impl DrawingObject {
         Self::new(DrawingKind::FormControl(control))
     }
 
+    /// Create a basic shape object.
+    pub fn shape(shape: Shape) -> Self {
+        Self::new(DrawingKind::Shape(Box::new(shape)))
+    }
+
     /// Create a comment object for the cell at `(row, col)`, anchored
     /// at Excel's default popup placement and hidden by default.
     pub fn comment(row: u32, col: u16, comment: CellComment) -> Self {
@@ -373,6 +858,14 @@ fn validate_kind(kind: &DrawingKind) -> Result<()> {
                     return Err(Error::other("group child extents cannot be negative"));
                 }
                 validate_kind(&child.kind)?;
+            }
+        }
+        DrawingKind::Shape(shape) => {
+            if matches!(&shape.geometry, ShapeGeometry::Preset(name) if name.trim().is_empty()) {
+                return Err(Error::other("shape preset name cannot be empty"));
+            }
+            if shape.line.width_emu.is_some_and(|width| width < 0) {
+                return Err(Error::other("shape line width cannot be negative"));
             }
         }
         DrawingKind::Image(_)

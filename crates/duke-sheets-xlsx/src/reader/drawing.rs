@@ -4,7 +4,8 @@ use super::archive_by_name;
 use crate::error::{XlsxError, XlsxResult};
 
 pub(crate) use duke_sheets_chart::drawing_part::read::{
-    DrawingChartRef, DrawingEntry, DrawingEntryKind, ParsedChild, ParsedGroup, PicShape,
+    DrawingChartRef, DrawingEntry, DrawingEntryKind, ParsedChild, ParsedGroup, ParsedShape,
+    PicShape,
 };
 
 /// Parse a SpreadsheetML drawing part into its top-level entries in

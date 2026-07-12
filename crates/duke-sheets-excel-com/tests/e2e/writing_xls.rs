@@ -4026,3 +4026,101 @@ fn excel_preserves_hidden_drawing_flags_we_emit() {
         "hidden control must survive Excel re-save with hidden intact"
     );
 }
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xls_basic_shape_we_emit() {
+    use duke_sheets_core::style::{HorizontalAlignment, VerticalAlignment};
+    use duke_sheets_core::{
+        DrawingObject, DrawingText, Shape, ShapeFill, ShapeGeometry, ShapeLine,
+    };
+
+    let text = DrawingText {
+        runs: vec![
+            RichTextRun::with_font(
+                "Bold ",
+                RunFont {
+                    name: Some("Segoe UI".into()),
+                    size: Some(10.0),
+                    bold: Some(true),
+                    ..RunFont::default()
+                },
+            ),
+            RichTextRun::with_font(
+                "Italic",
+                RunFont {
+                    name: Some("Arial".into()),
+                    size: Some(12.0),
+                    italic: Some(true),
+                    color: Some(Color::rgb(0, 0, 255)),
+                    ..RunFont::default()
+                },
+            ),
+        ],
+        horizontal_alignment: Some(HorizontalAlignment::Center),
+        vertical_alignment: Some(VerticalAlignment::Center),
+    };
+    let shape = Shape::rectangle()
+        .with_fill(ShapeFill::Solid(Color::rgb(255, 0, 0)))
+        .with_line(ShapeLine {
+            color: Some(Color::rgb(0, 0, 255)),
+            width_emu: Some(25_400),
+            dash_style: Some("dash".into()),
+            no_fill: false,
+        })
+        .with_text(text)
+        .with_rotation(900_000)
+        .with_flip_h(true);
+    let mut object = DrawingObject::shape(shape).with_anchor(DrawingAnchor::TwoCell {
+        from: CellMarker {
+            col: 1,
+            row: 2,
+            ..CellMarker::default()
+        },
+        to: CellMarker {
+            col: 5,
+            row: 8,
+            ..CellMarker::default()
+        },
+        edit_as: None,
+    });
+    object.meta.name = Some("Status panel".into());
+    object.meta.alt_text = Some("red status rectangle".into());
+    let mut workbook = Workbook::new();
+    workbook.worksheet_mut(0).unwrap().add_drawing(object);
+
+    let result = roundtrip_through_excel_xls(&workbook);
+    let drawn = result.worksheet(0).unwrap().shapes().next().expect("shape");
+    assert_eq!(drawn.object.meta.name.as_deref(), Some("Status panel"));
+    assert_eq!(
+        drawn.object.meta.alt_text.as_deref(),
+        Some("red status rectangle")
+    );
+    assert_eq!(drawn.payload.geometry, ShapeGeometry::Preset("rect".into()));
+    assert_eq!(drawn.payload.fill, ShapeFill::Solid(Color::rgb(255, 0, 0)));
+    assert_eq!(drawn.payload.line.color, Some(Color::rgb(0, 0, 255)));
+    assert_eq!(drawn.payload.line.width_emu, Some(25_400));
+    assert_eq!(drawn.payload.line.dash_style.as_deref(), Some("dash"));
+    assert_eq!(drawn.payload.rotation, 900_000);
+    assert!(drawn.payload.flip_h);
+    let text = drawn.payload.text.as_ref().expect("shape text");
+    assert_eq!(text.plain_text(), "Bold Italic");
+    assert_eq!(text.horizontal_alignment, Some(HorizontalAlignment::Center));
+    assert_eq!(text.vertical_alignment, Some(VerticalAlignment::Center));
+    assert_eq!(
+        text.runs[0].font.as_ref().unwrap().name.as_deref(),
+        Some("Segoe UI")
+    );
+    assert_eq!(text.runs[0].font.as_ref().unwrap().bold, Some(true));
+    assert_eq!(text.runs[0].font.as_ref().unwrap().size, Some(10.0));
+    assert_eq!(
+        text.runs[1].font.as_ref().unwrap().name.as_deref(),
+        Some("Arial")
+    );
+    assert_eq!(text.runs[1].font.as_ref().unwrap().italic, Some(true));
+    assert_eq!(text.runs[1].font.as_ref().unwrap().size, Some(12.0));
+    assert_eq!(
+        text.runs[1].font.as_ref().unwrap().color,
+        Some(Color::rgb(0, 0, 255))
+    );
+}

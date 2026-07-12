@@ -73,6 +73,23 @@ pub enum TwinVerticalAlignment {
     Distributed,
 }
 
+/// Fill representation shared by the XLSX/XLSB DrawingML adapters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShapeFill {
+    #[default]
+    None,
+    Solid(TwinColor),
+}
+
+/// Line representation shared by the XLSX/XLSB DrawingML adapters.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ShapeLine {
+    pub color: Option<TwinColor>,
+    pub width_emu: Option<i64>,
+    pub dash_style: Option<String>,
+    pub no_fill: bool,
+}
+
 /// OOXML relationship type for chart parts.
 pub const RT_CHART: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart";

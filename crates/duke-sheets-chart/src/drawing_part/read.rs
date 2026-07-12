@@ -8,8 +8,8 @@ use quick_xml::reader::Reader;
 use quick_xml::Writer;
 
 use super::{
-    TwinColor, TwinHorizontalAlignment, TwinRunFont, TwinText, TwinTextRun, TwinUnderline,
-    TwinVerticalAlignment,
+    ShapeFill, ShapeLine, TwinColor, TwinHorizontalAlignment, TwinRunFont, TwinText, TwinTextRun,
+    TwinUnderline, TwinVerticalAlignment,
 };
 use crate::error::{ChartParseError, ChartParseResult};
 use crate::{CellMarker, ChildTransform, DrawingAnchor, EditAs, GroupTransform};
@@ -52,6 +52,8 @@ pub enum DrawingEntryKind {
     Chart(DrawingChartRef),
     /// An `<xdr:pic>` picture.
     Image(Box<PicShape>),
+    /// An ordinary `<xdr:sp>` worksheet shape.
+    Shape(Box<ParsedShape>),
     /// The drawing twin of a legacy form control: an `<xdr:sp>` with
     /// an `a14:compatExt` spid (XLSX flavor) or an `<xdr:graphicFrame>`
     /// with a `com14:compatSp` spid (XLSB flavor).
@@ -100,6 +102,24 @@ pub struct TwinShape {
     pub xfrm: ChildTransform,
 }
 
+/// Parsed ordinary `<xdr:sp>` content.
+#[derive(Debug, Default)]
+pub struct ParsedShape {
+    pub name: String,
+    pub descr: Option<String>,
+    pub title: Option<String>,
+    pub hidden: bool,
+    pub xfrm: ChildTransform,
+    pub geometry: String,
+    pub fill: ShapeFill,
+    pub line: ShapeLine,
+    pub text: Option<TwinText>,
+    /// Unmodeled direct children of `spPr`, serialized as XML fragments.
+    pub raw_shape_properties: Option<Vec<u8>>,
+    /// Complete parsed `txBody`, retained for untouched round-trip.
+    pub raw_text_body: Option<Vec<u8>>,
+}
+
 /// Parsed `<xdr:grpSp>` content.
 #[derive(Debug, Default)]
 pub struct ParsedGroup {
@@ -116,6 +136,7 @@ pub struct ParsedGroup {
 #[derive(Debug)]
 pub enum ParsedChild {
     Pic(PicShape),
+    Shape(ParsedShape),
     Group(ParsedGroup),
     Twin(TwinShape),
 }
@@ -370,6 +391,7 @@ enum AnchorContent {
         hidden: bool,
     },
     Pic(PicShape),
+    Shape(ParsedShape),
     Twin(TwinShape),
     Group(ParsedGroup),
     /// Present but unmodeled content: keep the whole anchor raw.
@@ -506,6 +528,7 @@ fn parse_anchor(bytes: &[u8]) -> Option<DrawingEntry> {
         }),
         AnchorContent::Pic(pic) if pic.blip_rel.is_some() => DrawingEntryKind::Image(Box::new(pic)),
         AnchorContent::Twin(twin) => DrawingEntryKind::ControlTwin(twin),
+        AnchorContent::Shape(shape) => DrawingEntryKind::Shape(Box::new(shape)),
         AnchorContent::Group(group) => DrawingEntryKind::Group(group),
         _ => DrawingEntryKind::Raw,
     };
@@ -565,8 +588,8 @@ fn parse_anchor_content<R: std::io::BufRead>(
             }
         }
         b"sp" => Ok(match parse_sp(reader, start)? {
-            Some(twin) => AnchorContent::Twin(twin),
-            None => AnchorContent::Other,
+            ParsedSp::Twin(twin) => AnchorContent::Twin(twin),
+            ParsedSp::Shape(shape) => AnchorContent::Shape(shape),
         }),
         b"grpSp" => Ok(match parse_group(reader)? {
             Some(group) => AnchorContent::Group(group),
@@ -1049,86 +1072,68 @@ fn parse_twin_text<R: std::io::BufRead>(reader: &mut Reader<R>) -> ChartParseRes
     Ok(text)
 }
 
-/// Parse `<xdr:sp>` content (start consumed). Returns a twin when an
-/// `a14:compatExt` spid is present, `None` otherwise (plain shape).
+enum ParsedSp {
+    Twin(TwinShape),
+    Shape(ParsedShape),
+}
+
+/// Parse one complete `<xdr:sp>`. Capturing first lets the shape
+/// parser retain unmodeled direct child fragments while the caller's
+/// stream advances exactly once.
 fn parse_sp<R: std::io::BufRead>(
     reader: &mut Reader<R>,
     start: &BytesStart<'_>,
-) -> ChartParseResult<Option<TwinShape>> {
-    let mut buf = Vec::new();
-    let mut depth: u32 = 1;
-    let mut twin = TwinShape::default();
-    twin.macro_name = attr_string(start, b"macro").filter(|value| !value.is_empty());
-    let mut has_spid = false;
-    let mut in_sp_pr = false;
-    let mut in_xfrm = false;
+) -> ChartParseResult<ParsedSp> {
+    let bytes = capture_element(reader, start)?;
+    parse_sp_xml(&bytes)
+}
 
-    let handle = |e: &BytesStart<'_>,
-                      twin: &mut TwinShape,
-                      has_spid: &mut bool,
-                      in_sp_pr: bool,
-                      in_xfrm: bool| {
-        match e.local_name().as_ref() {
-            b"cNvPr" => {
-                if let Some(name) = attr_string(e, b"name") {
-                    twin.name = Some(name);
-                }
-                twin.descr = attr_string(e, b"descr");
-                twin.title = attr_string(e, b"title");
-            }
-            b"xfrm" if in_sp_pr => {
-                twin.xfrm.rotation = attr_i64(e, b"rot").map(|v| v as i32).unwrap_or(0);
-                twin.xfrm.flip_h = matches!(
-                    attr_string(e, b"flipH").as_deref(),
-                    Some("1") | Some("true")
-                );
-                twin.xfrm.flip_v = matches!(
-                    attr_string(e, b"flipV").as_deref(),
-                    Some("1") | Some("true")
-                );
-            }
-            b"off" if in_xfrm => {
-                twin.xfrm.x_emu = attr_i64(e, b"x").unwrap_or(0);
-                twin.xfrm.y_emu = attr_i64(e, b"y").unwrap_or(0);
-            }
-            b"ext" if in_xfrm => {
-                twin.xfrm.cx_emu = attr_i64(e, b"cx").unwrap_or(0);
-                twin.xfrm.cy_emu = attr_i64(e, b"cy").unwrap_or(0);
-            }
-            b"compatExt" => {
-                if let Some(spid) = attr_string(e, b"spid") {
-                    twin.shape_num = spid.rsplit(['s', 'S']).next().and_then(|n| n.parse().ok());
-                    twin.spid = spid;
-                    *has_spid = true;
-                }
-            }
-            _ => {}
+fn parse_sp_xml(bytes: &[u8]) -> ChartParseResult<ParsedSp> {
+    let mut reader = new_reader(bytes);
+    let mut buf = Vec::new();
+    let root = loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) => break e.into_owned(),
+            Ok(Event::Eof) => return Err(ChartParseError::Parse("empty xdr:sp".into())),
+            Err(e) => return Err(ChartParseError::Xml(e)),
+            _ => buf.clear(),
         }
     };
 
+    let mut twin = TwinShape {
+        macro_name: attr_string(&root, b"macro").filter(|value| !value.is_empty()),
+        ..TwinShape::default()
+    };
+    let mut shape = ParsedShape {
+        geometry: "rect".to_string(),
+        ..ParsedShape::default()
+    };
+    let mut has_spid = false;
+    let mut depth = 1u32;
+
     loop {
+        buf.clear();
         match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) if depth == 1 && e.local_name().as_ref() == b"spPr" => {
+                let fragment = capture_element(&mut reader, e)?;
+                parse_shape_properties(&fragment, &mut shape)?;
+            }
+            Ok(Event::Start(ref e)) if depth == 1 && e.local_name().as_ref() == b"txBody" => {
+                let fragment = capture_element(&mut reader, e)?;
+                let (text, raw) = parse_shape_text_body(&fragment)?;
+                shape.text = Some(text.clone());
+                shape.raw_text_body = raw;
+                twin.text = Some(text);
+            }
             Ok(Event::Start(ref e)) => {
                 depth += 1;
-                match e.local_name().as_ref() {
-                    b"spPr" => in_sp_pr = true,
-                    b"xfrm" if in_sp_pr => in_xfrm = true,
-                    b"txBody" => {
-                        twin.text = Some(parse_twin_text(reader)?);
-                        depth -= 1;
-                    }
-                    _ => {}
-                }
-                handle(e, &mut twin, &mut has_spid, in_sp_pr, in_xfrm);
+                parse_sp_metadata(e, &mut twin, &mut shape, &mut has_spid);
             }
-            Ok(Event::Empty(ref e)) => handle(e, &mut twin, &mut has_spid, in_sp_pr, in_xfrm),
-            Ok(Event::End(ref e)) => {
+            Ok(Event::Empty(ref e)) => {
+                parse_sp_metadata(e, &mut twin, &mut shape, &mut has_spid);
+            }
+            Ok(Event::End(_)) => {
                 depth -= 1;
-                match e.local_name().as_ref() {
-                    b"spPr" => in_sp_pr = false,
-                    b"xfrm" => in_xfrm = false,
-                    _ => {}
-                }
                 if depth == 0 {
                     break;
                 }
@@ -1137,9 +1142,280 @@ fn parse_sp<R: std::io::BufRead>(
             Err(e) => return Err(ChartParseError::Xml(e)),
             _ => {}
         }
+    }
+
+    if has_spid {
+        twin.xfrm = shape.xfrm;
+        Ok(ParsedSp::Twin(twin))
+    } else {
+        Ok(ParsedSp::Shape(shape))
+    }
+}
+
+fn parse_sp_metadata(
+    e: &BytesStart<'_>,
+    twin: &mut TwinShape,
+    shape: &mut ParsedShape,
+    has_spid: &mut bool,
+) {
+    match e.local_name().as_ref() {
+        b"cNvPr" => {
+            if let Some(name) = attr_string(e, b"name") {
+                twin.name = Some(name.clone());
+                shape.name = name;
+            }
+            twin.descr = attr_string(e, b"descr");
+            twin.title = attr_string(e, b"title");
+            shape.descr = twin.descr.clone();
+            shape.title = twin.title.clone();
+            shape.hidden = attr_bool_default_false(e, b"hidden");
+        }
+        b"compatExt" => {
+            if let Some(spid) = attr_string(e, b"spid") {
+                twin.shape_num = spid.rsplit(['s', 'S']).next().and_then(|n| n.parse().ok());
+                twin.spid = spid;
+                *has_spid = true;
+            }
+        }
+        _ => {}
+    }
+}
+
+fn parse_shape_properties(bytes: &[u8], shape: &mut ParsedShape) -> ChartParseResult<()> {
+    let mut reader = new_reader(bytes);
+    let mut buf = Vec::new();
+    // Consume spPr itself.
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(_)) => break,
+            Ok(Event::Eof) => return Ok(()),
+            Err(e) => return Err(ChartParseError::Xml(e)),
+            _ => buf.clear(),
+        }
+    }
+
+    let mut raw = Vec::new();
+    loop {
+        buf.clear();
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) => match e.local_name().as_ref() {
+                b"xfrm" => {
+                    let fragment = capture_element(&mut reader, e)?;
+                    shape.xfrm = parse_shape_xfrm(&fragment)?;
+                }
+                b"prstGeom" => {
+                    shape.geometry = attr_string(e, b"prst").unwrap_or_else(|| "rect".into());
+                    raw.extend_from_slice(&capture_element(&mut reader, e)?);
+                }
+                b"solidFill" => {
+                    let fragment = capture_element(&mut reader, e)?;
+                    if let Some(color) = parse_drawing_color(&fragment) {
+                        shape.fill = ShapeFill::Solid(color);
+                    }
+                    raw.extend_from_slice(&fragment);
+                }
+                b"noFill" => {
+                    shape.fill = ShapeFill::None;
+                    skip_element(&mut reader)?;
+                }
+                b"ln" => {
+                    let fragment = capture_element(&mut reader, e)?;
+                    shape.line = parse_shape_line(&fragment)?;
+                    raw.extend_from_slice(&fragment);
+                }
+                _ => raw.extend_from_slice(&capture_element(&mut reader, e)?),
+            },
+            Ok(Event::Empty(ref e)) => match e.local_name().as_ref() {
+                b"xfrm" => shape.xfrm = parse_xfrm_attrs(e),
+                b"prstGeom" => {
+                    shape.geometry = attr_string(e, b"prst").unwrap_or_else(|| "rect".into());
+                    write_empty_fragment(&mut raw, e)?;
+                }
+                b"noFill" => shape.fill = ShapeFill::None,
+                b"solidFill" => write_empty_fragment(&mut raw, e)?,
+                b"ln" => {
+                    shape.line.width_emu = attr_i64(e, b"w");
+                    write_empty_fragment(&mut raw, e)?;
+                }
+                _ => write_empty_fragment(&mut raw, e)?,
+            },
+            Ok(Event::End(ref e)) if e.local_name().as_ref() == b"spPr" => break,
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(ChartParseError::Xml(e)),
+            _ => {}
+        }
+    }
+    shape.raw_shape_properties = (!raw.is_empty()).then_some(raw);
+    Ok(())
+}
+
+fn parse_xfrm_attrs(e: &BytesStart<'_>) -> ChildTransform {
+    ChildTransform {
+        rotation: attr_i64(e, b"rot").unwrap_or(0) as i32,
+        flip_h: attr_bool_default_false(e, b"flipH"),
+        flip_v: attr_bool_default_false(e, b"flipV"),
+        ..ChildTransform::default()
+    }
+}
+
+fn parse_shape_xfrm(bytes: &[u8]) -> ChartParseResult<ChildTransform> {
+    let mut reader = new_reader(bytes);
+    let mut buf = Vec::new();
+    let mut transform = ChildTransform::default();
+    let mut in_root = false;
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => match e.local_name().as_ref() {
+                b"xfrm" => {
+                    transform = parse_xfrm_attrs(e);
+                    in_root = true;
+                }
+                b"off" if in_root => {
+                    transform.x_emu = attr_i64(e, b"x").unwrap_or(0);
+                    transform.y_emu = attr_i64(e, b"y").unwrap_or(0);
+                }
+                b"ext" if in_root => {
+                    transform.cx_emu = attr_i64(e, b"cx").unwrap_or(0);
+                    transform.cy_emu = attr_i64(e, b"cy").unwrap_or(0);
+                }
+                _ => {}
+            },
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(ChartParseError::Xml(e)),
+            _ => {}
+        }
         buf.clear();
     }
-    Ok(has_spid.then_some(twin))
+    Ok(transform)
+}
+
+fn parse_shape_line(bytes: &[u8]) -> ChartParseResult<ShapeLine> {
+    let mut reader = new_reader(bytes);
+    let mut buf = Vec::new();
+    let mut line = ShapeLine::default();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) => match e.local_name().as_ref() {
+                b"ln" => line.width_emu = attr_i64(e, b"w"),
+                b"solidFill" => {
+                    let fragment = capture_element(&mut reader, e)?;
+                    line.color = parse_drawing_color(&fragment);
+                }
+                b"noFill" => {
+                    line.no_fill = true;
+                    skip_element(&mut reader)?;
+                }
+                b"prstDash" => {
+                    line.dash_style = attr_string(e, b"val");
+                }
+                _ => {}
+            },
+            Ok(Event::Empty(ref e)) => match e.local_name().as_ref() {
+                b"ln" => line.width_emu = attr_i64(e, b"w"),
+                b"noFill" => line.no_fill = true,
+                b"prstDash" => line.dash_style = attr_string(e, b"val"),
+                _ => {}
+            },
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(ChartParseError::Xml(e)),
+            _ => {}
+        }
+        buf.clear();
+    }
+    Ok(line)
+}
+
+fn parse_drawing_color(bytes: &[u8]) -> Option<TwinColor> {
+    let mut reader = new_reader(bytes);
+    let mut buf = Vec::new();
+    let mut color = None;
+    loop {
+        match reader.read_event_into(&mut buf).ok()? {
+            Event::Start(ref e) | Event::Empty(ref e) => match e.local_name().as_ref() {
+                b"srgbClr" => {
+                    let value = attr_string(e, b"val")?;
+                    let value = value.trim_start_matches('#');
+                    if value.len() == 6 {
+                        color = Some(TwinColor::Rgb {
+                            r: u8::from_str_radix(&value[0..2], 16).ok()?,
+                            g: u8::from_str_radix(&value[2..4], 16).ok()?,
+                            b: u8::from_str_radix(&value[4..6], 16).ok()?,
+                        });
+                    }
+                }
+                b"schemeClr" => {
+                    let index = scheme_color_index(&attr_string(e, b"val")?)?;
+                    color = Some(TwinColor::Theme { index, tint: 0 });
+                }
+                b"lumMod" => {
+                    if let (Some(value), Some(TwinColor::Theme { index, .. })) =
+                        (attr_i64(e, b"val"), color)
+                    {
+                        color = Some(TwinColor::Theme {
+                            index,
+                            tint: ((value - 100_000) / 1_000).clamp(-100, 0) as i8,
+                        });
+                    }
+                }
+                b"lumOff" => {
+                    if let (Some(value), Some(TwinColor::Theme { index, .. })) =
+                        (attr_i64(e, b"val"), color)
+                    {
+                        color = Some(TwinColor::Theme {
+                            index,
+                            tint: (value / 1_000).clamp(0, 100) as i8,
+                        });
+                    }
+                }
+                _ => {}
+            },
+            Event::Eof => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    color
+}
+
+fn scheme_color_index(value: &str) -> Option<u8> {
+    match value {
+        "lt1" => Some(0),
+        "dk1" => Some(1),
+        "lt2" => Some(2),
+        "dk2" => Some(3),
+        "accent1" => Some(4),
+        "accent2" => Some(5),
+        "accent3" => Some(6),
+        "accent4" => Some(7),
+        "accent5" => Some(8),
+        "accent6" => Some(9),
+        _ => None,
+    }
+}
+
+fn parse_shape_text_body(bytes: &[u8]) -> ChartParseResult<(TwinText, Option<Vec<u8>>)> {
+    let mut reader = new_reader(bytes);
+    let mut buf = Vec::new();
+    let text = loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) if e.local_name().as_ref() == b"txBody" => {
+                break parse_twin_text(&mut reader)?;
+            }
+            Ok(Event::Eof) => break TwinText::default(),
+            Err(e) => return Err(ChartParseError::Xml(e)),
+            _ => buf.clear(),
+        }
+    };
+    Ok((text, Some(bytes.to_vec())))
+}
+
+fn write_empty_fragment(out: &mut Vec<u8>, e: &BytesStart<'_>) -> ChartParseResult<()> {
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    writer
+        .write_event(Event::Empty(e.to_owned()))
+        .map_err(std::io::Error::other)?;
+    out.extend_from_slice(&writer.into_inner().into_inner());
+    Ok(())
 }
 
 /// Parse `<xdr:grpSp>` content (start consumed). Returns `None` when
@@ -1195,8 +1471,8 @@ fn parse_group<R: std::io::BufRead>(
                         _ => modelable = false,
                     },
                     b"sp" if !in_nv && !in_grp_sp_pr => match parse_sp(reader, e)? {
-                        Some(twin) => group.children.push(ParsedChild::Twin(twin)),
-                        None => modelable = false,
+                        ParsedSp::Twin(twin) => group.children.push(ParsedChild::Twin(twin)),
+                        ParsedSp::Shape(shape) => group.children.push(ParsedChild::Shape(shape)),
                     },
                     b"graphicFrame" if !in_nv && !in_grp_sp_pr => {
                         match parse_graphic_frame(reader)? {
@@ -1217,6 +1493,9 @@ fn parse_group<R: std::io::BufRead>(
                             }
                             AnchorContent::Pic(pic) if pic.blip_rel.is_some() => {
                                 group.children.push(ParsedChild::Pic(pic))
+                            }
+                            AnchorContent::Shape(shape) => {
+                                group.children.push(ParsedChild::Shape(shape))
                             }
                             AnchorContent::Group(inner) => {
                                 group.children.push(ParsedChild::Group(inner))

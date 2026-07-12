@@ -10,9 +10,12 @@ use zip::ZipWriter;
 
 use duke_sheets_chart::drawing_part::image_format_extension;
 use duke_sheets_chart::drawing_part::write::{
-    self as part_write, PartChild, PartKind, PartObject, PartRel, TwinStyle,
+    self as part_write, PartChild, PartKind, PartObject, PartRel, PartShape, TwinStyle,
 };
-use duke_sheets_core::{DrawingKind, DrawingMeta, RawRel, Worksheet};
+use duke_sheets_chart::drawing_part::{ShapeFill as PartShapeFill, ShapeLine as PartShapeLine};
+use duke_sheets_core::{
+    DrawingKind, DrawingMeta, RawRel, Shape, ShapeFill, ShapeGeometry, Worksheet,
+};
 
 use crate::error::XlsbResult;
 
@@ -24,6 +27,41 @@ const CT_CHART_COLOR_STYLE: &str = "application/vnd.ms-office.chartcolorstyle+xm
 const RT_CHART_STYLE: &str = "http://schemas.microsoft.com/office/2011/relationships/chartStyle";
 const RT_CHART_COLOR_STYLE: &str =
     "http://schemas.microsoft.com/office/2011/relationships/chartColorStyle";
+
+fn shape_part(shape: &Shape) -> PartShape<'_> {
+    let geometry = match &shape.geometry {
+        ShapeGeometry::Preset(name) => name.as_str(),
+    };
+    let fill = match shape.fill {
+        ShapeFill::None => PartShapeFill::None,
+        ShapeFill::Solid(color) => duke_sheets_core::drawing::color_to_drawing_part(color)
+            .map(PartShapeFill::Solid)
+            .unwrap_or(PartShapeFill::None),
+    };
+    PartShape {
+        geometry,
+        fill,
+        line: PartShapeLine {
+            color: shape
+                .line
+                .color
+                .and_then(duke_sheets_core::drawing::color_to_drawing_part),
+            width_emu: shape.line.width_emu,
+            dash_style: shape.line.dash_style.clone(),
+            no_fill: shape.line.no_fill,
+        },
+        text: shape.text.as_ref().map(|text| text.to_drawing_part_text()),
+        rotation: shape.rotation,
+        flip_h: shape.flip_h,
+        flip_v: shape.flip_v,
+        raw_shape_properties: shape.raw_shape_properties.as_deref(),
+        raw_text_body: shape.raw_text_body.as_deref(),
+        raw_geometry_unchanged: shape.preserved_geometry_unchanged(),
+        raw_fill_unchanged: shape.preserved_fill_unchanged(),
+        raw_line_unchanged: shape.preserved_line_unchanged(),
+        raw_text_unchanged: shape.preserved_text_unchanged(),
+    }
+}
 
 pub(crate) fn is_unsupported(chart: &duke_sheets_chart::Chart) -> bool {
     matches!(
@@ -131,6 +169,7 @@ fn convert_kind<'a>(
             fallback: chart.raw_mc_fallback.as_deref(),
         }),
         DrawingKind::Image(image) => Some(PartKind::Image(image)),
+        DrawingKind::Shape(shape) => Some(PartKind::Shape(shape_part(shape))),
         DrawingKind::FormControl(control) => {
             let name = meta.name.clone().unwrap_or_else(|| {
                 duke_sheets_vml::default_control_name(

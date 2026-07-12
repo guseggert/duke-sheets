@@ -246,6 +246,38 @@ fn resolve_pic_image<R: Read + Seek>(
     image
 }
 
+fn shape_from_parsed(parsed: &drawing::ParsedShape) -> duke_sheets_core::Shape {
+    let fill = match parsed.fill {
+        duke_sheets_chart::drawing_part::ShapeFill::None => duke_sheets_core::ShapeFill::None,
+        duke_sheets_chart::drawing_part::ShapeFill::Solid(color) => {
+            duke_sheets_core::ShapeFill::Solid(duke_sheets_core::drawing::color_from_drawing_part(
+                color,
+            ))
+        }
+    };
+    let mut shape = duke_sheets_core::Shape::preset(parsed.geometry.clone());
+    shape.fill = fill;
+    shape.line = duke_sheets_core::ShapeLine {
+        color: parsed
+            .line
+            .color
+            .map(duke_sheets_core::drawing::color_from_drawing_part),
+        width_emu: parsed.line.width_emu,
+        dash_style: parsed.line.dash_style.clone(),
+        no_fill: parsed.line.no_fill,
+    };
+    shape.text = parsed
+        .text
+        .as_ref()
+        .map(duke_sheets_core::DrawingText::from_drawing_part_text);
+    shape.rotation = parsed.xfrm.rotation;
+    shape.flip_h = parsed.xfrm.flip_h;
+    shape.flip_v = parsed.xfrm.flip_v;
+    shape.set_preserved_shape_properties(parsed.raw_shape_properties.clone());
+    shape.set_preserved_text_body(parsed.raw_text_body.clone());
+    shape
+}
+
 /// Convert a parsed group into the model, resolving child images and
 /// matching control-twin children to their controls (placed in the
 /// group with the twin's child transform).
@@ -281,6 +313,20 @@ fn build_group<R: Read + Seek>(
                     meta,
                     transform,
                     kind: DrawingKind::Image(image),
+                });
+            }
+            drawing::ParsedChild::Shape(shape) => {
+                let meta = DrawingMeta {
+                    name: Some(shape.name.clone()),
+                    alt_text: shape.descr.clone(),
+                    title: shape.title.clone(),
+                    hidden: shape.hidden,
+                    ..DrawingMeta::default()
+                };
+                children.push(GroupChild {
+                    meta,
+                    transform: shape.xfrm.clone(),
+                    kind: DrawingKind::Shape(Box::new(shape_from_parsed(&shape))),
                 });
             }
             drawing::ParsedChild::Group(inner) => {
@@ -865,6 +911,17 @@ impl XlsxReader {
                         object.meta.alt_text = descr;
                         object.meta.title = title;
                         object.meta.hidden = hidden;
+                        object.meta.locked = entry.locked;
+                        object.meta.printable = entry.printable;
+                        natives.push((object, None));
+                    }
+                    drawing::DrawingEntryKind::Shape(shape) => {
+                        let mut object = DrawingObject::shape(shape_from_parsed(&shape))
+                            .with_anchor(entry.anchor);
+                        object.meta.name = Some(shape.name.clone());
+                        object.meta.alt_text = shape.descr.clone();
+                        object.meta.title = shape.title.clone();
+                        object.meta.hidden = shape.hidden;
                         object.meta.locked = entry.locked;
                         object.meta.printable = entry.printable;
                         natives.push((object, None));

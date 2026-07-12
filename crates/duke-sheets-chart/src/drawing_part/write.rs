@@ -14,7 +14,10 @@ use quick_xml::Writer;
 
 use crate::{CellMarker, ChildTransform, DrawingAnchor, EditAs, EmbeddedImage, GroupTransform};
 
-use super::{TwinColor, TwinHorizontalAlignment, TwinText, TwinUnderline, TwinVerticalAlignment};
+use super::{
+    ShapeFill, ShapeLine, TwinColor, TwinHorizontalAlignment, TwinText, TwinUnderline,
+    TwinVerticalAlignment,
+};
 use super::{RT_CHART, RT_CHART_EX, RT_IMAGE};
 
 const NS_SPREADSHEET_DRAWING: &str =
@@ -71,11 +74,29 @@ pub struct PartChild<'a> {
     pub kind: PartKind<'a>,
 }
 
+/// One modeled basic shape prepared by an XLSX/XLSB adapter.
+pub struct PartShape<'a> {
+    pub geometry: &'a str,
+    pub fill: ShapeFill,
+    pub line: ShapeLine,
+    pub text: Option<TwinText>,
+    pub rotation: i32,
+    pub flip_h: bool,
+    pub flip_v: bool,
+    pub raw_shape_properties: Option<&'a [u8]>,
+    pub raw_text_body: Option<&'a [u8]>,
+    pub raw_geometry_unchanged: bool,
+    pub raw_fill_unchanged: bool,
+    pub raw_line_unchanged: bool,
+    pub raw_text_unchanged: bool,
+}
+
 /// Kind payload of a [`PartObject`] / [`PartChild`]. Comments and
 /// unsupported charts have no drawing-part presence; the caller omits
 /// them.
 pub enum PartKind<'a> {
     Image(&'a EmbeddedImage),
+    Shape(PartShape<'a>),
     Chart,
     ChartEx {
         fallback: Option<&'a [u8]>,
@@ -243,7 +264,7 @@ pub fn plan_drawing_rels(
                     }
                 }
             }
-            PartKind::Control { .. } => {}
+            PartKind::Control { .. } | PartKind::Shape(_) => {}
         }
     }
     plan
@@ -294,6 +315,8 @@ pub fn write_drawing_part(
     tag.push_attribute(("xmlns:xdr", NS_SPREADSHEET_DRAWING));
     tag.push_attribute(("xmlns:a", NS_DRAWING_MAIN));
     tag.push_attribute(("xmlns:r", NS_DOC_RELS));
+    tag.push_attribute(("xmlns:mc", NS_MC));
+    tag.push_attribute(("xmlns:a14", NS_A14));
     w.write_event(Event::Start(tag))?;
 
     let mut ctx = EmitCtx {
@@ -375,6 +398,22 @@ pub fn write_drawing_part(
                     )
                 })?;
             }
+            PartKind::Shape(shape) => {
+                let cnv_id = ctx.next_cnv_id();
+                let placement = placement_from_anchor(object.anchor, shape);
+                write_anchor_wrapper(&mut w, object, |w| {
+                    write_shape_element(
+                        w,
+                        object.name,
+                        object.alt_text,
+                        object.title,
+                        object.hidden,
+                        cnv_id,
+                        shape,
+                        &placement,
+                    )
+                })?;
+            }
             PartKind::Group {
                 transform,
                 children,
@@ -428,6 +467,271 @@ struct Placement {
     rot: i32,
     flip_h: bool,
     flip_v: bool,
+}
+
+fn placement_from_anchor(anchor: &DrawingAnchor, shape: &PartShape<'_>) -> Placement {
+    const COL_EMU: i64 = 609_600;
+    const ROW_EMU: i64 = 190_500;
+    let marker_xy = |marker: &CellMarker| {
+        (
+            i64::from(marker.col)
+                .saturating_mul(COL_EMU)
+                .saturating_add(marker.col_offset_emu),
+            i64::from(marker.row)
+                .saturating_mul(ROW_EMU)
+                .saturating_add(marker.row_offset_emu),
+        )
+    };
+    let (x, y, cx, cy) = match anchor {
+        DrawingAnchor::TwoCell { from, to, .. } => {
+            let (x1, y1) = marker_xy(from);
+            let (x2, y2) = marker_xy(to);
+            (
+                x1,
+                y1,
+                x2.saturating_sub(x1).max(0),
+                y2.saturating_sub(y1).max(0),
+            )
+        }
+        DrawingAnchor::OneCell {
+            from,
+            width_emu,
+            height_emu,
+        } => {
+            let (x, y) = marker_xy(from);
+            (x, y, (*width_emu).max(0), (*height_emu).max(0))
+        }
+        DrawingAnchor::Absolute {
+            x_emu,
+            y_emu,
+            width_emu,
+            height_emu,
+        } => (*x_emu, *y_emu, (*width_emu).max(0), (*height_emu).max(0)),
+    };
+    Placement {
+        x,
+        y,
+        cx,
+        cy,
+        rot: shape.rotation,
+        flip_h: shape.flip_h,
+        flip_v: shape.flip_v,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_shape_element(
+    w: &mut XmlWriter,
+    name: Option<&str>,
+    alt_text: Option<&str>,
+    title: Option<&str>,
+    hidden: bool,
+    cnv_id: usize,
+    shape: &PartShape<'_>,
+    placement: &Placement,
+) -> WriteResult<()> {
+    let mut sp = BytesStart::new("xdr:sp");
+    sp.push_attribute(("macro", ""));
+    sp.push_attribute(("textlink", ""));
+    w.write_event(Event::Start(sp))?;
+
+    w.write_event(Event::Start(BytesStart::new("xdr:nvSpPr")))?;
+    let id = cnv_id.to_string();
+    let default_name = format!("Shape {}", cnv_id.saturating_sub(1));
+    let mut cnv_pr = BytesStart::new("xdr:cNvPr");
+    cnv_pr.push_attribute(("id", id.as_str()));
+    cnv_pr.push_attribute(("name", name.unwrap_or(&default_name)));
+    if let Some(alt_text) = alt_text {
+        cnv_pr.push_attribute(("descr", alt_text));
+    }
+    if let Some(title) = title {
+        cnv_pr.push_attribute(("title", title));
+    }
+    if hidden {
+        cnv_pr.push_attribute(("hidden", "1"));
+    }
+    w.write_event(Event::Empty(cnv_pr))?;
+    w.write_event(Event::Empty(BytesStart::new("xdr:cNvSpPr")))?;
+    w.write_event(Event::End(BytesEnd::new("xdr:nvSpPr")))?;
+
+    w.write_event(Event::Start(BytesStart::new("xdr:spPr")))?;
+    let mut xfrm = BytesStart::new("a:xfrm");
+    if placement.rot != 0 {
+        xfrm.push_attribute(("rot", placement.rot.to_string().as_str()));
+    }
+    if placement.flip_h {
+        xfrm.push_attribute(("flipH", "1"));
+    }
+    if placement.flip_v {
+        xfrm.push_attribute(("flipV", "1"));
+    }
+    w.write_event(Event::Start(xfrm))?;
+    write_point(w, "a:off", placement.x, placement.y)?;
+    write_extent(w, "a:ext", placement.cx, placement.cy)?;
+    w.write_event(Event::End(BytesEnd::new("a:xfrm")))?;
+
+    let raw = shape.raw_shape_properties.unwrap_or_default();
+    const RAW_GEOMETRY: &[&str] = &["prstGeom", "custGeom"];
+    let raw_geometry = shape.raw_geometry_unchanged && raw_has_any(raw, RAW_GEOMETRY);
+    if raw_geometry {
+        write_raw_shape_fragments(w, raw, RAW_GEOMETRY)?;
+    } else {
+        let mut geometry = BytesStart::new("a:prstGeom");
+        geometry.push_attribute(("prst", shape.geometry));
+        w.write_event(Event::Start(geometry))?;
+        w.write_event(Event::Empty(BytesStart::new("a:avLst")))?;
+        w.write_event(Event::End(BytesEnd::new("a:prstGeom")))?;
+    }
+
+    const RAW_FILLS: &[&str] = &["solidFill", "gradFill", "blipFill", "pattFill", "grpFill"];
+    let raw_fill = shape.raw_fill_unchanged && raw_has_any(raw, RAW_FILLS);
+    if raw_fill {
+        write_raw_shape_fragments(w, raw, RAW_FILLS)?;
+    } else {
+        match shape.fill {
+            ShapeFill::None => w.write_event(Event::Empty(BytesStart::new("a:noFill")))?,
+            ShapeFill::Solid(color) => {
+                w.write_event(Event::Start(BytesStart::new("a:solidFill")))?;
+                write_drawing_color(w, color)?;
+                w.write_event(Event::End(BytesEnd::new("a:solidFill")))?;
+            }
+        }
+    }
+
+    if shape.raw_line_unchanged && raw_has_any(raw, &["ln"]) {
+        write_raw_shape_fragments(w, raw, &["ln"])?;
+    } else {
+        let mut line = BytesStart::new("a:ln");
+        let line_width = shape.line.width_emu.map(|width| width.max(0).to_string());
+        if let Some(width) = &line_width {
+            line.push_attribute(("w", width.as_str()));
+        }
+        w.write_event(Event::Start(line))?;
+        if shape.line.no_fill {
+            w.write_event(Event::Empty(BytesStart::new("a:noFill")))?;
+        } else if let Some(color) = shape.line.color {
+            w.write_event(Event::Start(BytesStart::new("a:solidFill")))?;
+            write_drawing_color(w, color)?;
+            w.write_event(Event::End(BytesEnd::new("a:solidFill")))?;
+        }
+        if let Some(dash) = &shape.line.dash_style {
+            let mut dash_tag = BytesStart::new("a:prstDash");
+            dash_tag.push_attribute(("val", dash.as_str()));
+            w.write_event(Event::Empty(dash_tag))?;
+        }
+        w.write_event(Event::End(BytesEnd::new("a:ln")))?;
+    }
+
+    write_remaining_raw_shape_fragments(w, raw)?;
+    w.write_event(Event::End(BytesEnd::new("xdr:spPr")))?;
+
+    if let Some(text) = &shape.text {
+        if shape.raw_text_unchanged {
+            if let Some(raw_text) = shape.raw_text_body {
+                w.get_mut().write_all(raw_text)?;
+            } else {
+                write_drawing_text(w, text, None)?;
+            }
+        } else {
+            write_drawing_text(w, text, None)?;
+        }
+    }
+    w.write_event(Event::End(BytesEnd::new("xdr:sp")))?;
+    Ok(())
+}
+
+fn raw_has_any(raw: &[u8], names: &[&str]) -> bool {
+    let mut reader = quick_xml::Reader::from_reader(raw);
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+                if names
+                    .iter()
+                    .any(|name| e.local_name().as_ref() == name.as_bytes())
+                {
+                    return true;
+                }
+            }
+            Ok(Event::Eof) | Err(_) => return false,
+            _ => {}
+        }
+        buf.clear();
+    }
+}
+
+fn write_raw_shape_fragments(w: &mut XmlWriter, raw: &[u8], names: &[&str]) -> WriteResult<()> {
+    write_selected_raw_fragments(w, raw, |name| names.iter().any(|value| *value == name))
+}
+
+fn write_remaining_raw_shape_fragments(w: &mut XmlWriter, raw: &[u8]) -> WriteResult<()> {
+    const CONFLICTING: &[&str] = &[
+        "xfrm",
+        "prstGeom",
+        "custGeom",
+        "noFill",
+        "solidFill",
+        "gradFill",
+        "blipFill",
+        "pattFill",
+        "grpFill",
+        "ln",
+    ];
+    write_selected_raw_fragments(w, raw, |name| !CONFLICTING.contains(&name))
+}
+
+fn write_selected_raw_fragments(
+    w: &mut XmlWriter,
+    raw: &[u8],
+    mut include: impl FnMut(&str) -> bool,
+) -> WriteResult<()> {
+    let mut reader = quick_xml::Reader::from_reader(raw);
+    reader.config_mut().trim_text(false);
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) => {
+                let name = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
+                let mut fragment = Writer::new(Cursor::new(Vec::new()));
+                fragment.write_event(Event::Start(e.to_owned()))?;
+                let mut depth = 1u32;
+                let mut inner = Vec::new();
+                while depth > 0 {
+                    match reader.read_event_into(&mut inner) {
+                        Ok(Event::Start(e)) => {
+                            depth += 1;
+                            fragment.write_event(Event::Start(e.into_owned()))?;
+                        }
+                        Ok(Event::End(e)) => {
+                            depth -= 1;
+                            fragment.write_event(Event::End(e.into_owned()))?;
+                        }
+                        Ok(Event::Eof) => break,
+                        Ok(event) => fragment.write_event(event.into_owned())?,
+                        Err(error) => return Err(std::io::Error::other(error)),
+                    }
+                    inner.clear();
+                }
+                if include(&name) {
+                    w.get_mut().write_all(&fragment.into_inner().into_inner())?;
+                }
+            }
+            Ok(Event::Empty(ref e)) => {
+                let name = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
+                if include(&name) {
+                    w.write_event(Event::Empty(e.to_owned()))?;
+                }
+            }
+            Ok(Event::Text(ref text)) if !text.as_ref().iter().all(u8::is_ascii_whitespace) => {
+                w.write_event(Event::Text(text.to_owned()))?;
+            }
+            Ok(Event::Eof) => break,
+            Err(error) => return Err(std::io::Error::other(error)),
+            _ => {}
+        }
+        buf.clear();
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -558,7 +862,7 @@ fn write_group_child(
                     name,
                     child.alt_text,
                     child.title,
-                        child.macro_name.as_deref(),
+                    child.macro_name.as_deref(),
                     child.control_text.as_ref(),
                     shape_id,
                     cnv_id,
@@ -573,6 +877,33 @@ fn write_group_child(
                     Some(child.transform),
                 ),
             })?;
+        }
+        PartKind::Shape(shape) => {
+            let cnv_id = ctx.next_cnv_id();
+            let t = child.transform;
+            let placement = Placement {
+                x: t.x_emu,
+                y: t.y_emu,
+                cx: t.cx_emu,
+                cy: t.cy_emu,
+                rot: if shape.rotation != 0 {
+                    shape.rotation
+                } else {
+                    t.rotation
+                },
+                flip_h: shape.flip_h || t.flip_h,
+                flip_v: shape.flip_v || t.flip_v,
+            };
+            write_shape_element(
+                w,
+                child.name,
+                child.alt_text,
+                child.title,
+                child.hidden,
+                cnv_id,
+                shape,
+                &placement,
+            )?;
         }
         PartKind::Raw { bytes, .. } => {
             w.get_mut().write_all(bytes)?;
@@ -905,7 +1236,11 @@ fn anchor_cell_markers(anchor: &DrawingAnchor) -> (CellMarker, CellMarker) {
 /// The twin `<xdr:sp>` element (XLSX flavor). `xfrm` is zero for
 /// anchored twins and carries the child transform for twins inside
 /// groups.
-fn write_control_text(w: &mut XmlWriter, text: &TwinText) -> WriteResult<()> {
+fn write_drawing_text(
+    w: &mut XmlWriter,
+    text: &TwinText,
+    raw_children: Option<&[u8]>,
+) -> WriteResult<()> {
     w.write_event(Event::Start(BytesStart::new("xdr:txBody")))?;
     let mut body_pr = BytesStart::new("a:bodyPr");
     if let Some(vertical) = text.vertical_alignment {
@@ -978,53 +1313,7 @@ fn write_control_text(w: &mut XmlWriter, text: &TwinText) -> WriteResult<()> {
             w.write_event(Event::Start(r_pr))?;
             if let Some(color) = font.color {
                 w.write_event(Event::Start(BytesStart::new("a:solidFill")))?;
-                match color {
-                    TwinColor::Rgb { r, g, b } => {
-                        let value = format!("{r:02X}{g:02X}{b:02X}");
-                        let mut color = BytesStart::new("a:srgbClr");
-                        color.push_attribute(("val", value.as_str()));
-                        w.write_event(Event::Empty(color))?;
-                    }
-                    TwinColor::Theme { index, tint } => {
-                        let scheme = match index {
-                            0 => "lt1",
-                            1 => "dk1",
-                            2 => "lt2",
-                            3 => "dk2",
-                            4 => "accent1",
-                            5 => "accent2",
-                            6 => "accent3",
-                            7 => "accent4",
-                            8 => "accent5",
-                            9 => "accent6",
-                            _ => "dk1",
-                        };
-                        let mut color = BytesStart::new("a:schemeClr");
-                        color.push_attribute(("val", scheme));
-                        if tint == 0 {
-                            w.write_event(Event::Empty(color))?;
-                        } else {
-                            w.write_event(Event::Start(color))?;
-                            let tint = i32::from(tint).clamp(-100, 100);
-                            let lum_mod = if tint > 0 {
-                                100_000 - tint * 1_000
-                            } else {
-                                100_000 + tint * 1_000
-                            };
-                            let mut lum_mod_tag = BytesStart::new("a:lumMod");
-                            let lum_mod = lum_mod.to_string();
-                            lum_mod_tag.push_attribute(("val", lum_mod.as_str()));
-                            w.write_event(Event::Empty(lum_mod_tag))?;
-                            if tint > 0 {
-                                let mut lum_off_tag = BytesStart::new("a:lumOff");
-                                let lum_off = (tint * 1_000).to_string();
-                                lum_off_tag.push_attribute(("val", lum_off.as_str()));
-                                w.write_event(Event::Empty(lum_off_tag))?;
-                            }
-                            w.write_event(Event::End(BytesEnd::new("a:schemeClr")))?;
-                        }
-                    }
-                }
+                write_drawing_color(w, color)?;
                 w.write_event(Event::End(BytesEnd::new("a:solidFill")))?;
             }
             if let Some(name) = &font.name {
@@ -1053,7 +1342,61 @@ fn write_control_text(w: &mut XmlWriter, text: &TwinText) -> WriteResult<()> {
     end_pr.push_attribute(("lang", "en-US"));
     w.write_event(Event::Empty(end_pr))?;
     w.write_event(Event::End(BytesEnd::new("a:p")))?;
+    if let Some(raw_children) = raw_children {
+        w.get_mut().write_all(raw_children)?;
+    }
     w.write_event(Event::End(BytesEnd::new("xdr:txBody")))?;
+    Ok(())
+}
+
+fn write_drawing_color(w: &mut XmlWriter, color: TwinColor) -> WriteResult<()> {
+    match color {
+        TwinColor::Rgb { r, g, b } => {
+            let value = format!("{r:02X}{g:02X}{b:02X}");
+            let mut color = BytesStart::new("a:srgbClr");
+            color.push_attribute(("val", value.as_str()));
+            w.write_event(Event::Empty(color))?;
+        }
+        TwinColor::Theme { index, tint } => {
+            let scheme = match index {
+                0 => "lt1",
+                1 => "dk1",
+                2 => "lt2",
+                3 => "dk2",
+                4 => "accent1",
+                5 => "accent2",
+                6 => "accent3",
+                7 => "accent4",
+                8 => "accent5",
+                9 => "accent6",
+                _ => "dk1",
+            };
+            let mut color = BytesStart::new("a:schemeClr");
+            color.push_attribute(("val", scheme));
+            if tint == 0 {
+                w.write_event(Event::Empty(color))?;
+            } else {
+                w.write_event(Event::Start(color))?;
+                let tint = i32::from(tint).clamp(-100, 100);
+                let lum_mod = if tint > 0 {
+                    100_000 - tint * 1_000
+                } else {
+                    100_000 + tint * 1_000
+                };
+                let mut lum_mod_tag = BytesStart::new("a:lumMod");
+                let lum_mod = lum_mod.to_string();
+                lum_mod_tag.push_attribute(("val", lum_mod.as_str()));
+                w.write_event(Event::Empty(lum_mod_tag))?;
+                if tint > 0 {
+                    let mut lum_off_tag = BytesStart::new("a:lumOff");
+                    let lum_off = (tint * 1_000).to_string();
+                    lum_off_tag.push_attribute(("val", lum_off.as_str()));
+                    w.write_event(Event::Empty(lum_off_tag))?;
+                }
+                w.write_event(Event::End(BytesEnd::new("a:schemeClr")))?;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1147,7 +1490,7 @@ fn write_control_twin_sp(
     w.write_event(Event::End(BytesEnd::new("xdr:spPr")))?;
 
     if let Some(text) = text {
-        write_control_text(w, text)?;
+        write_drawing_text(w, text, None)?;
     }
 
     w.write_event(Event::End(BytesEnd::new("xdr:sp")))?;

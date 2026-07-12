@@ -56,56 +56,13 @@
 //! ```
 
 use crate::drawing::{DrawingPath, RectEmu};
-use crate::{
-    rich_text_to_plain, Error, HorizontalAlignment, Result, RichTextRun, VerticalAlignment,
-};
+use crate::{Error, Result};
 
 /// Caption text, rich formatting, and alignment for a form control.
 ///
 /// Empty captions are valid. Alignment is optional so format-specific
 /// control defaults can remain implicit.
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct ControlText {
-    /// Caption runs in display order.
-    pub runs: Vec<RichTextRun>,
-    /// Explicit horizontal alignment, or the control kind's default.
-    pub horizontal_alignment: Option<HorizontalAlignment>,
-    /// Explicit vertical alignment, or the control kind's default.
-    pub vertical_alignment: Option<VerticalAlignment>,
-}
-
-impl ControlText {
-    /// Create a caption containing one unformatted run.
-    pub fn plain(text: impl Into<String>) -> Self {
-        Self {
-            runs: vec![RichTextRun::plain(text)],
-            horizontal_alignment: None,
-            vertical_alignment: None,
-        }
-    }
-
-    /// Concatenate all caption runs without formatting.
-    pub fn plain_text(&self) -> String {
-        rich_text_to_plain(&self.runs)
-    }
-
-    /// Whether the concatenated caption text is empty.
-    pub fn is_empty(&self) -> bool {
-        self.runs.iter().all(|run| run.text.is_empty())
-    }
-}
-
-impl From<String> for ControlText {
-    fn from(text: String) -> Self {
-        Self::plain(text)
-    }
-}
-
-impl From<&str> for ControlText {
-    fn from(text: &str) -> Self {
-        Self::plain(text)
-    }
-}
+pub type ControlText = crate::drawing::DrawingText;
 
 /// State of a checkbox or option button.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

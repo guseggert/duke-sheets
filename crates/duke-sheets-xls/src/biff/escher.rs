@@ -133,6 +133,14 @@ pub mod shape_type {
     pub const NOT_PRIMITIVE: u16 = 0x0000;
     /// `msosptRectangle` — used by some picture wrappers.
     pub const RECTANGLE: u16 = 0x0001;
+    /// `msosptRoundRectangle` ([MS-ODRAW] 2.4.24).
+    pub const ROUND_RECTANGLE: u16 = 0x0002;
+    /// `msosptEllipse` ([MS-ODRAW] 2.4.24).
+    pub const ELLIPSE: u16 = 0x0003;
+    /// `msosptIsocelesTriangle` ([MS-ODRAW] 2.4.24).
+    pub const ISOSCELES_TRIANGLE: u16 = 0x0005;
+    /// `msosptLine` ([MS-ODRAW] 2.4.24).
+    pub const LINE: u16 = 0x0014;
     /// `msosptTextBox` — comments are textbox shapes anchored to a
     /// cell.
     pub const TEXT_BOX: u16 = 0x00CA;
@@ -415,6 +423,8 @@ pub mod fopt_id {
     pub const LINE_COLOR: u16 = 0x01C0;
     /// `lineWidth` (0x01CB) — line width in EMUs.
     pub const LINE_WIDTH: u16 = 0x01CB;
+    /// `lineDashing` (0x01CE) — an MSOLINEDASHING value.
+    pub const LINE_DASHING: u16 = 0x01CE;
     /// Boolean-bag of line flags (§2.3.8.44 `LineStyleBooleanProperties`).
     pub const LINE_BOOLEAN_PROPS: u16 = 0x01FF;
 

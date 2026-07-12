@@ -15,7 +15,7 @@ use crate::comment::CellComment;
 use crate::conditional_format::ConditionalFormatRule;
 use crate::drawing::{
     anchor_rect_emu, map_child_rect, CommentRef, DrawingKind, DrawingNodeMut, DrawingNodeRef,
-    DrawingObject, DrawingPath, Drawn,
+    DrawingObject, DrawingPath, Drawn, Shape,
 };
 use crate::error::{Error, Result};
 use crate::form_control::{FormControl, PlacedControl};
@@ -74,8 +74,8 @@ pub struct Worksheet {
     conditional_formats: Vec<ConditionalFormatRule>,
     /// Tables (ListObjects)
     tables: Vec<Table>,
-    /// Drawing objects (images, charts, form controls, comments,
-    /// groups, raw fragments) in z-order, back to front.
+    /// Drawing objects (images, charts, shapes, form controls,
+    /// comments, groups, raw fragments) in z-order, back to front.
     drawings: Vec<DrawingObject>,
     /// Standalone auto-filter (dropdown filter on columns)
     auto_filter: Option<AutoFilter>,
@@ -1648,6 +1648,31 @@ impl Worksheet {
     /// Number of top-level embedded images.
     pub fn image_count(&self) -> usize {
         self.images().count()
+    }
+
+    /// Add a basic worksheet shape at the given anchor. Returns the drawing index.
+    pub fn add_shape(&mut self, shape: Shape, anchor: DrawingAnchor) -> usize {
+        self.add_drawing(DrawingObject::shape(shape).with_anchor(anchor))
+    }
+
+    /// Top-level worksheet shapes in z-order.
+    pub fn shapes(&self) -> impl Iterator<Item = Drawn<'_, Shape>> {
+        self.drawings
+            .iter()
+            .enumerate()
+            .filter_map(|(index, object)| match &object.kind {
+                DrawingKind::Shape(shape) => Some(Drawn {
+                    index,
+                    object,
+                    payload: shape.as_ref(),
+                }),
+                _ => None,
+            })
+    }
+
+    /// Number of top-level worksheet shapes.
+    pub fn shape_count(&self) -> usize {
+        self.shapes().count()
     }
 
     /// Add a form control at the given anchor without validating it.

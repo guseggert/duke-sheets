@@ -1,85 +1,53 @@
 use std::io::{Seek, Write};
 
 use duke_sheets_chart::drawing_part::write::{
-    self as part_write, PartChild, PartKind, PartObject, PartRel, TwinStyle,
+    self as part_write, PartChild, PartKind, PartObject, PartRel, PartShape, TwinStyle,
 };
 use duke_sheets_chart::drawing_part::{
-    TwinColor, TwinHorizontalAlignment, TwinRunFont, TwinText, TwinTextRun, TwinUnderline,
-    TwinVerticalAlignment,
+    ShapeFill as PartShapeFill, ShapeLine as PartShapeLine, TwinText,
 };
 use duke_sheets_chart::Chart;
 use duke_sheets_core::{
-    Color, DrawingKind, DrawingMeta, FormControl, HorizontalAlignment, VerticalAlignment, Worksheet,
+    DrawingKind, DrawingMeta, FormControl, Shape, ShapeFill, ShapeGeometry, Worksheet,
 };
 
 fn control_twin_text(control: &FormControl) -> Option<TwinText> {
-    let caption = control.caption()?;
-    let horizontal_alignment = caption
-        .horizontal_alignment
-        .map(|alignment| match alignment {
-            HorizontalAlignment::Center | HorizontalAlignment::CenterContinuous => {
-                TwinHorizontalAlignment::Center
-            }
-            HorizontalAlignment::Right => TwinHorizontalAlignment::Right,
-            HorizontalAlignment::Justify => TwinHorizontalAlignment::Justify,
-            HorizontalAlignment::Distributed => TwinHorizontalAlignment::Distributed,
-            HorizontalAlignment::General
-            | HorizontalAlignment::Left
-            | HorizontalAlignment::Fill => TwinHorizontalAlignment::Left,
-        });
-    let vertical_alignment = caption.vertical_alignment.map(|alignment| match alignment {
-        VerticalAlignment::Top => TwinVerticalAlignment::Top,
-        VerticalAlignment::Center => TwinVerticalAlignment::Center,
-        VerticalAlignment::Bottom => TwinVerticalAlignment::Bottom,
-        VerticalAlignment::Justify => TwinVerticalAlignment::Justify,
-        VerticalAlignment::Distributed => TwinVerticalAlignment::Distributed,
-    });
-    let runs = caption
-        .runs
-        .iter()
-        .map(|run| TwinTextRun {
-            text: run.text.clone(),
-            font: run.font.as_ref().map(|font| TwinRunFont {
-                name: font.name.clone(),
-                size: font.size,
-                color: font.color.and_then(|color| match color {
-                    Color::Auto => None,
-                    Color::Rgb { r, g, b } | Color::Argb { r, g, b, .. } => {
-                        Some(TwinColor::Rgb { r, g, b })
-                    }
-                    Color::Theme { index, tint } => Some(TwinColor::Theme { index, tint }),
-                    Color::Indexed(_) => {
-                        let (r, g, b) = color.to_rgb();
-                        Some(TwinColor::Rgb { r, g, b })
-                    }
-                }),
-                bold: font.bold,
-                italic: font.italic,
-                underline: font.underline.and_then(|underline| match underline {
-                    duke_sheets_core::style::Underline::None => None,
-                    duke_sheets_core::style::Underline::Single => Some(TwinUnderline::Single),
-                    duke_sheets_core::style::Underline::Double => Some(TwinUnderline::Double),
-                    duke_sheets_core::style::Underline::SingleAccounting => {
-                        Some(TwinUnderline::SingleAccounting)
-                    }
-                    duke_sheets_core::style::Underline::DoubleAccounting => {
-                        Some(TwinUnderline::DoubleAccounting)
-                    }
-                }),
-                strikethrough: font.strikethrough,
-                baseline: font.vertical_align.map(|alignment| match alignment {
-                    duke_sheets_core::style::FontVerticalAlign::Baseline => 0,
-                    duke_sheets_core::style::FontVerticalAlign::Superscript => 30_000,
-                    duke_sheets_core::style::FontVerticalAlign::Subscript => -25_000,
-                }),
-            }),
-        })
-        .collect();
-    Some(TwinText {
-        runs,
-        horizontal_alignment,
-        vertical_alignment,
-    })
+    control.caption().map(|text| text.to_drawing_part_text())
+}
+
+fn shape_part(shape: &Shape) -> PartShape<'_> {
+    let geometry = match &shape.geometry {
+        ShapeGeometry::Preset(name) => name.as_str(),
+    };
+    let fill = match shape.fill {
+        ShapeFill::None => PartShapeFill::None,
+        ShapeFill::Solid(color) => duke_sheets_core::drawing::color_to_drawing_part(color)
+            .map(PartShapeFill::Solid)
+            .unwrap_or(PartShapeFill::None),
+    };
+    PartShape {
+        geometry,
+        fill,
+        line: PartShapeLine {
+            color: shape
+                .line
+                .color
+                .and_then(duke_sheets_core::drawing::color_to_drawing_part),
+            width_emu: shape.line.width_emu,
+            dash_style: shape.line.dash_style.clone(),
+            no_fill: shape.line.no_fill,
+        },
+        text: shape.text.as_ref().map(|text| text.to_drawing_part_text()),
+        rotation: shape.rotation,
+        flip_h: shape.flip_h,
+        flip_v: shape.flip_v,
+        raw_shape_properties: shape.raw_shape_properties.as_deref(),
+        raw_text_body: shape.raw_text_body.as_deref(),
+        raw_geometry_unchanged: shape.preserved_geometry_unchanged(),
+        raw_fill_unchanged: shape.preserved_fill_unchanged(),
+        raw_line_unchanged: shape.preserved_line_unchanged(),
+        raw_text_unchanged: shape.preserved_text_unchanged(),
+    }
 }
 
 use super::{XlsxResult, RT_CHART};
@@ -117,6 +85,7 @@ fn convert_kind<'a>(
             fallback: chart.raw_mc_fallback.as_deref(),
         }),
         DrawingKind::Image(image) => Some(PartKind::Image(image)),
+        DrawingKind::Shape(shape) => Some(PartKind::Shape(shape_part(shape))),
         DrawingKind::FormControl(control) => {
             let name = meta.name.clone().unwrap_or_else(|| {
                 super::form_controls::default_control_name(

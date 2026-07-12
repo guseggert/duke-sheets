@@ -53,6 +53,7 @@ pub use crate::{
     DrawingNodeRef,
     DrawingObject,
     DrawingPath,
+    DrawingText,
     Drawn,
     EmbeddedImage,
     // Error types
@@ -85,6 +86,10 @@ pub use crate::{
     // Rich text types
     RichTextRun,
     RunFont,
+    Shape,
+    ShapeFill,
+    ShapeGeometry,
+    ShapeLine,
     Style,
     ValidationErrorStyle,
     ValidationOperator,

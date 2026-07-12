@@ -488,6 +488,25 @@ impl StyleTables {
                     }
                 }
             }
+            for (_, node) in sheet.drawings_flat() {
+                let Some(shape) = node.kind.as_shape() else {
+                    continue;
+                };
+                let Some(text) = &shape.text else {
+                    continue;
+                };
+                for run in &text.runs {
+                    if let Some(rf) = &run.font {
+                        let font = run_font_to_font_style(rf);
+                        if !font_xf_index.contains_key(&font) {
+                            let on_disk = fonts_in_order.len() as u16;
+                            let xf_idx = if on_disk < 4 { on_disk } else { on_disk + 1 };
+                            fonts_in_order.push(font.clone());
+                            font_xf_index.insert(font, xf_idx);
+                        }
+                    }
+                }
+            }
         }
 
         StyleTables {
@@ -4550,9 +4569,30 @@ fn count_shapes(shapes: &[SheetShape]) -> usize {
 #[derive(Debug, Clone)]
 enum SheetShape {
     Picture(PictureShape),
+    Shape(BasicShape),
     Comment(CommentShape),
     Control(ControlShape),
     Group(GroupShape),
+}
+
+/// A first-class basic shape queued for OfficeArt/OBJ/TXO emission.
+#[derive(Debug, Clone)]
+struct BasicShape {
+    spid: u32,
+    obj_id: u16,
+    text_id: Option<u32>,
+    shape_type: u16,
+    shape_name: Option<String>,
+    alt_text: Option<String>,
+    shape: duke_sheets_core::Shape,
+    txo_runs: Vec<(u16, u16)>,
+    anchor: EmitAnchor,
+    locked: bool,
+    printable: bool,
+    hidden: bool,
+    rotation: i32,
+    flip_h: bool,
+    flip_v: bool,
 }
 
 /// Placement source for a shape's anchor atom: a sheet anchor
@@ -4816,7 +4856,7 @@ fn compute_drawing_state(
         // lives in its own cluster (matching Excel's per-drawing
         // cluster allocation in MS-ODRAW §2.2.46).
         next_spid = next_spid.checked_add(1023).ok_or_else(|| {
-                XlsError::InvalidFormat("XLS OfficeArt shape id space exhausted".into())
+            XlsError::InvalidFormat("XLS OfficeArt shape id space exhausted".into())
         })? / 1024
             * 1024;
     }
@@ -4833,7 +4873,7 @@ fn compute_drawing_state(
 fn emittable_shape_count(kind: &duke_sheets_core::DrawingKind, nested: bool) -> usize {
     use duke_sheets_core::DrawingKind;
     match kind {
-        DrawingKind::Image(_) | DrawingKind::FormControl(_) => 1,
+        DrawingKind::Image(_) | DrawingKind::Shape(_) | DrawingKind::FormControl(_) => 1,
         DrawingKind::Comment { .. } => usize::from(!nested),
         DrawingKind::Group(group) => {
             1 + group
@@ -4912,6 +4952,14 @@ impl ShapeBuilder<'_> {
                 image.flip_h,
                 image.flip_v,
             )?),
+            DrawingKind::Shape(shape) => Some(self.build_shape(
+                meta,
+                anchor,
+                shape,
+                shape.rotation,
+                shape.flip_h,
+                shape.flip_v,
+            )?),
             DrawingKind::Comment { row, col, comment } => {
                 Some(self.build_comment(*row, *col, comment, !meta.hidden)?)
             }
@@ -4960,6 +5008,18 @@ impl ShapeBuilder<'_> {
                     (child.transform.rotation != 0).then_some(child.transform.rotation),
                     child.transform.flip_h,
                     child.transform.flip_v,
+                )?),
+                DrawingKind::Shape(shape) => children.push(self.build_shape(
+                    &child.meta,
+                    child_anchor,
+                    shape,
+                    if shape.rotation != 0 {
+                        shape.rotation
+                    } else {
+                        child.transform.rotation
+                    },
+                    shape.flip_h || child.transform.flip_h,
+                    shape.flip_v || child.transform.flip_v,
                 )?),
                 DrawingKind::FormControl(control) => {
                     children.push(self.build_control(&child.meta, child_anchor, control)?)
@@ -5027,6 +5087,69 @@ impl ShapeBuilder<'_> {
             printable: meta.printable,
             hidden: meta.hidden,
             anchor,
+            rotation,
+            flip_h,
+            flip_v,
+        }))
+    }
+
+    fn build_shape(
+        &mut self,
+        meta: &duke_sheets_core::DrawingMeta,
+        anchor: EmitAnchor,
+        shape: &duke_sheets_core::Shape,
+        rotation: i32,
+        flip_h: bool,
+        flip_v: bool,
+    ) -> XlsResult<SheetShape> {
+        use crate::biff::escher::shape_type;
+        use duke_sheets_core::ShapeGeometry;
+
+        let preset = match &shape.geometry {
+            ShapeGeometry::Preset(preset) => preset.as_str(),
+        };
+        let office_shape_type = match preset {
+            "rect" => shape_type::RECTANGLE,
+            "roundRect" => shape_type::ROUND_RECTANGLE,
+            "ellipse" => shape_type::ELLIPSE,
+            "triangle" => shape_type::ISOSCELES_TRIANGLE,
+            "line" => shape_type::LINE,
+            unsupported => {
+                return Err(XlsError::InvalidFormat(format!(
+                    "XLS writer does not support shape preset '{unsupported}'"
+                )))
+            }
+        };
+        let spid = self.alloc_spid()?;
+        let obj_id = self.alloc_obj_id()?;
+        let text_id = shape.text.as_ref().map(|_| self.alloc_text_id());
+        let mut txo_runs = Vec::new();
+        if let Some(text) = &shape.text {
+            let mut offset = 0usize;
+            for run in &text.runs {
+                let font_index = run
+                    .font
+                    .as_ref()
+                    .map(run_font_to_font_style)
+                    .and_then(|font| self.styles.font_xf_index.get(&font).copied())
+                    .unwrap_or(0);
+                txo_runs.push((offset.min(u16::MAX as usize) as u16, font_index));
+                offset = offset.saturating_add(run.text.encode_utf16().count());
+            }
+        }
+        Ok(SheetShape::Shape(BasicShape {
+            spid,
+            obj_id,
+            text_id,
+            shape_type: office_shape_type,
+            shape_name: meta.name.clone(),
+            alt_text: meta.alt_text.clone(),
+            shape: shape.clone(),
+            txo_runs,
+            anchor,
+            locked: meta.locked,
+            printable: meta.printable,
+            hidden: meta.hidden,
             rotation,
             flip_h,
             flip_v,
@@ -5456,6 +5579,42 @@ fn flatten_shape(shape: &SheetShape, out: &mut Vec<FlatShape>) -> XlsResult<()> 
             write_picture_obj_to_vec(&mut obj, picture);
             out.push(FlatShape::leaf(pre, Vec::new(), obj, Vec::new()));
         }
+        SheetShape::Shape(shape) => {
+            let mut pre = Vec::new();
+            let mut grf = fsp_flags::HAVE_ANCHOR | fsp_flags::HAVE_SPT;
+            if shape.anchor.is_child() {
+                grf |= fsp_flags::CHILD;
+            }
+            if shape.flip_h {
+                grf |= fsp_flags::FLIP_H;
+            }
+            if shape.flip_v {
+                grf |= fsp_flags::FLIP_V;
+            }
+            OfficeArtFsp {
+                spid: shape.spid,
+                grf_persistence: grf,
+            }
+            .write_to(shape.shape_type, &mut pre);
+            basic_shape_fopt(shape).write_to(&mut pre);
+            shape.anchor.write_to(&mut pre)?;
+            write_client_data(&mut pre);
+
+            let mut post = Vec::new();
+            let mut post_txo = Vec::new();
+            if let Some(text) = &shape.shape.text {
+                write_client_textbox(&mut post);
+                write_txo_records(
+                    &mut post_txo,
+                    &text.plain_text(),
+                    drawing_text_txo_flags(text),
+                    &shape.txo_runs,
+                )?;
+            }
+            let mut obj = Vec::new();
+            write_basic_shape_obj_to_vec(&mut obj, shape)?;
+            out.push(FlatShape::leaf(pre, post, obj, post_txo));
+        }
         SheetShape::Comment(comment) => {
             let mut pre = Vec::new();
             OfficeArtFsp {
@@ -5602,6 +5761,115 @@ fn flatten_shape(shape: &SheetShape, out: &mut Vec<FlatShape>) -> XlsResult<()> 
         }
     }
     Ok(())
+}
+
+/// Build the OfficeArt properties for a basic shape. Shape type lives
+/// in `FSP.recInstance` ([MS-ODRAW] 2.2.40/2.4.24); visual properties
+/// live in FOPT ([MS-ODRAW] 2.3.7, 2.3.8, and 2.3.18.5).
+fn basic_shape_fopt(shape: &BasicShape) -> crate::biff::escher::FoptTable {
+    use crate::biff::escher::{
+        complex_string_entry, fopt_id, FoptEntry, FoptTable, GROUP_SHAPE_HIDDEN,
+        GROUP_SHAPE_VISIBLE,
+    };
+    use duke_sheets_core::ShapeFill;
+
+    let mut table = FoptTable::new();
+    if shape.rotation != 0 {
+        table.push(FoptEntry::simple(
+            0x0004,
+            rotation_to_officeart_fixed(shape.rotation),
+        ));
+    }
+    if let Some(text_id) = shape.text_id {
+        table.push(FoptEntry::simple(fopt_id::TEXT_ID, text_id));
+        table.push(FoptEntry::simple(fopt_id::WRAP_TEXT, 1));
+        table.push(FoptEntry::simple(fopt_id::TEXT_BOOLEAN_PROPS, 0x0008_0008));
+    }
+    match shape.shape.fill {
+        ShapeFill::None => {
+            table.push(FoptEntry::simple(fopt_id::FILL_BOOLEAN_PROPS, 0x0010_0000));
+        }
+        ShapeFill::Solid(color) => {
+            table.push(FoptEntry::simple(
+                fopt_id::FILL_COLOR,
+                color_to_officeart(color),
+            ));
+            table.push(FoptEntry::simple(fopt_id::FILL_BOOLEAN_PROPS, 0x0010_0010));
+        }
+    }
+    if let Some(color) = shape.shape.line.color {
+        table.push(FoptEntry::simple(
+            fopt_id::LINE_COLOR,
+            color_to_officeart(color),
+        ));
+    }
+    if let Some(width) = shape.shape.line.width_emu {
+        table.push(FoptEntry::simple(
+            fopt_id::LINE_WIDTH,
+            width.clamp(0, i64::from(i32::MAX)) as u32,
+        ));
+    }
+    if let Some(dash) = shape.shape.line.dash_style.as_deref() {
+        table.push(FoptEntry::simple(
+            fopt_id::LINE_DASHING,
+            drawing_dash_to_officeart(dash),
+        ));
+    }
+    table.push(FoptEntry::simple(
+        fopt_id::LINE_BOOLEAN_PROPS,
+        if shape.shape.line.no_fill {
+            0x0008_0008
+        } else {
+            0x0008_0000
+        },
+    ));
+    if let Some(name) = shape.shape_name.as_deref() {
+        table.push(complex_string_entry(0x0380, name));
+    }
+    if let Some(alt_text) = shape.alt_text.as_deref() {
+        table.push(complex_string_entry(0x0381, alt_text));
+    }
+    table.push(FoptEntry::simple(
+        fopt_id::GROUP_SHAPE_BOOLEAN_PROPS,
+        if shape.hidden {
+            GROUP_SHAPE_HIDDEN
+        } else {
+            GROUP_SHAPE_VISIBLE
+        },
+    ));
+    table.sort_entries();
+    table
+}
+
+fn rotation_to_officeart_fixed(rotation: i32) -> u32 {
+    let numerator = i64::from(rotation) * 65_536;
+    let fixed = if numerator >= 0 {
+        (numerator + 30_000) / 60_000
+    } else {
+        (numerator - 30_000) / 60_000
+    };
+    (fixed.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32) as u32
+}
+
+fn color_to_officeart(color: duke_sheets_core::Color) -> u32 {
+    let (r, g, b) = color.to_rgb();
+    u32::from(r) | (u32::from(g) << 8) | (u32::from(b) << 16)
+}
+
+fn drawing_dash_to_officeart(dash: &str) -> u32 {
+    match dash {
+        "sysDash" => 1,
+        "sysDot" => 2,
+        "sysDashDot" => 3,
+        "sysDashDotDot" => 4,
+        "dot" => 5,
+        "dash" => 6,
+        "lgDash" => 7,
+        "dashDot" => 8,
+        "lgDashDot" => 9,
+        "lgDashDotDot" => 10,
+        _ => 0,
+    }
 }
 
 /// One EMU unit of the ClientAnchor `dxL`/`dxR` field, in EMUs.
@@ -5846,6 +6114,32 @@ fn write_picture_obj_to_vec(out: &mut Vec<u8>, picture: &PictureShape) {
     write_biff_record(out, OBJ_RECORD, &body);
 }
 
+/// Emit the host record paired with an ordinary OfficeArt shape.
+/// [MS-XLS] 2.4.181 (OBJ) and 2.5.143 (FtCmo) identify object type
+/// 0x001E as "Microsoft Office drawing"; the concrete geometry remains
+/// the FSP `recInstance` ([MS-ODRAW] 2.2.40 and 2.4.24).
+fn write_basic_shape_obj_to_vec(out: &mut Vec<u8>, shape: &BasicShape) -> XlsResult<()> {
+    use crate::biff::obj::{self, cmo_flags, ot};
+
+    let mut grbit = cmo_flags::UNDEFINED_13 | cmo_flags::UNDEFINED_14;
+    if shape.locked {
+        grbit |= cmo_flags::LOCKED;
+    }
+    if shape.printable {
+        grbit |= cmo_flags::PRINT;
+    }
+    let mut body = Vec::new();
+    obj::FtCmo {
+        ot: ot::OFFICE_ART,
+        id: shape.obj_id,
+        grbit,
+    }
+    .write_to(&mut body);
+    obj::push_end(&mut body)?;
+    write_biff_record(out, OBJ_RECORD, &body);
+    Ok(())
+}
+
 /// Emit an `OBJ` record for a shape group (MS-XLS 2.4.181): ftCmo
 /// with ot=0x00 (group), the mandatory ftGmo group marker (MS-XLS
 /// 2.5.146: ft=0x0006, cb=0x0002, 2 unused bytes), and ftEnd.
@@ -5928,7 +6222,7 @@ fn deterministic_guid(seed: u32) -> [u8; 16] {
 /// Emit a `TXO` record (BIFF 0x01B6) plus its two `CONTINUE`
 /// records carrying the comment's text and a single formatting run.
 ///
-/// TXO header layout (MS-XLS §2.4.324, 18 bytes):
+/// TXO header layout (MS-XLS §2.4.329, 18 bytes):
 ///
 /// - `flags` (u16): horizontal/vertical alignment, text-locked flag.
 ///   We write `0x0212` to match Excel: halign=left, valign=top,
@@ -6052,17 +6346,29 @@ fn control_txo_flags(
         FormControlKind::Button { .. } => (HorizontalAlignment::Center, VerticalAlignment::Center),
         FormControlKind::Checkbox { .. } | FormControlKind::OptionButton { .. } => {
             (HorizontalAlignment::Left, VerticalAlignment::Center)
-    }
+        }
         _ => (HorizontalAlignment::Left, VerticalAlignment::Top),
     };
-    let horizontal = match caption.horizontal_alignment.unwrap_or(default_horizontal) {
+    drawing_text_txo_flags_with_defaults(caption, default_horizontal, default_vertical)
+}
+
+fn drawing_text_txo_flags(text: &duke_sheets_core::DrawingText) -> u16 {
+    drawing_text_txo_flags_with_defaults(text, HorizontalAlignment::Left, VerticalAlignment::Top)
+}
+
+fn drawing_text_txo_flags_with_defaults(
+    text: &duke_sheets_core::DrawingText,
+    default_horizontal: HorizontalAlignment,
+    default_vertical: VerticalAlignment,
+) -> u16 {
+    let horizontal = match text.horizontal_alignment.unwrap_or(default_horizontal) {
         HorizontalAlignment::Center | HorizontalAlignment::CenterContinuous => 2,
         HorizontalAlignment::Right => 3,
         HorizontalAlignment::Justify => 4,
         HorizontalAlignment::Distributed => 7,
         HorizontalAlignment::General | HorizontalAlignment::Left | HorizontalAlignment::Fill => 1,
     };
-    let vertical = match caption.vertical_alignment.unwrap_or(default_vertical) {
+    let vertical = match text.vertical_alignment.unwrap_or(default_vertical) {
         VerticalAlignment::Top => 1,
         VerticalAlignment::Center => 2,
         VerticalAlignment::Bottom => 3,

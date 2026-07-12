@@ -63,6 +63,13 @@ struct EscherShapeNode {
     rotation: Option<i32>,
     /// FOPT pib (0x0104): 1-based blip-store index.
     blip_id: Option<u32>,
+    /// Basic shape fill and line properties from FOPT.
+    fill_color: Option<u32>,
+    fill_enabled: Option<bool>,
+    line_color: Option<u32>,
+    line_width: Option<u32>,
+    line_dashing: Option<u32>,
+    line_no_fill: Option<bool>,
     /// FOPT wzName (0x0380).
     name: Option<String>,
     /// FOPT wzDescription (0x0381).
@@ -95,6 +102,49 @@ struct NoteData {
     visible: bool,
     obj_id: u16,
     author: String,
+}
+
+fn officeart_color_to_core(value: u32) -> Option<duke_sheets_core::Color> {
+    // [MS-ODRAW] 2.2.2: OfficeArtCOLORREF carries RGB in the low three
+    // bytes. Scheme/system-index colors need external context.
+    let flags = value >> 24;
+    // fSystemRGB/fPaletteRGB still carry usable RGB channels. System,
+    // scheme, and palette-index references require external context.
+    if flags & 0x19 != 0 {
+        return None;
+    }
+    Some(duke_sheets_core::Color::rgb(
+        value as u8,
+        (value >> 8) as u8,
+        (value >> 16) as u8,
+    ))
+}
+
+fn officeart_fixed_to_rotation(value: i32) -> i32 {
+    let numerator = i64::from(value) * 60_000;
+    let rotation = if numerator >= 0 {
+        (numerator + 32_768) / 65_536
+    } else {
+        (numerator - 32_768) / 65_536
+    };
+    rotation.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+}
+
+fn officeart_dash_to_drawing(value: u32) -> String {
+    match value {
+        1 => "sysDash",
+        2 => "sysDot",
+        3 => "sysDashDot",
+        4 => "sysDashDotDot",
+        5 => "dot",
+        6 => "dash",
+        7 => "lgDash",
+        8 => "dashDot",
+        9 => "lgDashDot",
+        10 => "lgDashDotDot",
+        _ => "solid",
+    }
+    .to_string()
 }
 
 /// Metadata for a sheet parsed from the BOUNDSHEET record.
@@ -2607,6 +2657,40 @@ impl XlsReader {
                                         node.blip_id = Some(v);
                                     }
                                 }
+                                0x0181 => {
+                                    if let FoptValue::Simple(v) = entry.value {
+                                        node.fill_color = Some(v);
+                                    }
+                                }
+                                0x01BF => {
+                                    if let FoptValue::Simple(v) = entry.value {
+                                        if v & 0x0010_0000 != 0 {
+                                            node.fill_enabled = Some(v & 0x0000_0010 != 0);
+                                        }
+                                    }
+                                }
+                                0x01C0 => {
+                                    if let FoptValue::Simple(v) = entry.value {
+                                        node.line_color = Some(v);
+                                    }
+                                }
+                                0x01CB => {
+                                    if let FoptValue::Simple(v) = entry.value {
+                                        node.line_width = Some(v);
+                                    }
+                                }
+                                0x01CE => {
+                                    if let FoptValue::Simple(v) = entry.value {
+                                        node.line_dashing = Some(v);
+                                    }
+                                }
+                                0x01FF => {
+                                    if let FoptValue::Simple(v) = entry.value {
+                                        if v & 0x0008_0000 != 0 {
+                                            node.line_no_fill = Some(v & 0x0000_0008 != 0);
+                                        }
+                                    }
+                                }
                                 0x0380 => {
                                     if let FoptValue::Complex(bytes) = &entry.value {
                                         node.name = Some(decode_utf16le_null_terminated(bytes));
@@ -2944,6 +3028,18 @@ impl XlsReader {
             return Some(object);
         }
 
+        if Self::is_shape_obj_type(parsed.ot) {
+            let shape = Self::shape_from_node(node, &parsed, obj_texts)?;
+            let anchor = node
+                .client_anchor
+                .as_ref()
+                .map(Self::client_anchor_to_drawing_anchor)
+                .unwrap_or_default();
+            let mut object = duke_sheets_core::DrawingObject::shape(shape).with_anchor(anchor);
+            object.meta = Self::node_meta(node, Some(&parsed));
+            return Some(object);
+        }
+
         let control =
             Self::control_from_obj(&parsed, Some(node.shape_type), obj_texts, formula_ctx)?;
         let anchor = node
@@ -3085,6 +3181,18 @@ impl XlsReader {
                 }
                 continue;
             }
+            if Self::is_shape_obj_type(parsed.ot) {
+                if let Some(shape) = Self::shape_from_node(child, &parsed, obj_texts) {
+                    let mut transform = Self::child_transform(child);
+                    transform.rotation = shape.rotation;
+                    children.push(GroupChild {
+                        meta: Self::node_meta(child, Some(&parsed)),
+                        transform,
+                        kind: DrawingKind::Shape(Box::new(shape)),
+                    });
+                }
+                continue;
+            }
             if let Some(control) =
                 Self::control_from_obj(&parsed, Some(child.shape_type), obj_texts, formula_ctx)
             {
@@ -3100,6 +3208,64 @@ impl XlsReader {
             transform,
             children,
         }
+    }
+
+    /// Convert a supported OfficeArt FSP + paired ftCmo(ot=0x001E)
+    /// into the public shape model. Unknown MSOSPT values are dropped
+    /// rather than being mislabeled as rectangles.
+    fn is_shape_obj_type(object_type: u16) -> bool {
+        use crate::biff::obj::ot;
+
+        matches!(
+            object_type,
+            ot::LINE
+                | ot::RECTANGLE
+                | ot::OVAL
+                | ot::ARC
+                | ot::TEXT
+                | ot::POLYGON
+                | ot::OFFICE_ART
+        )
+    }
+
+    fn shape_from_node(
+        node: &EscherShapeNode,
+        parsed: &crate::biff::obj::ParsedObj,
+        obj_texts: &std::collections::HashMap<u16, duke_sheets_core::ControlText>,
+    ) -> Option<duke_sheets_core::Shape> {
+        use crate::biff::escher::shape_type;
+        use duke_sheets_core::{Shape, ShapeFill, ShapeLine};
+
+        let preset = match node.shape_type {
+            shape_type::RECTANGLE => "rect",
+            shape_type::ROUND_RECTANGLE => "roundRect",
+            shape_type::ELLIPSE => "ellipse",
+            shape_type::ISOSCELES_TRIANGLE => "triangle",
+            shape_type::LINE => "line",
+            _ => return None,
+        };
+        let fill = match node.fill_enabled {
+            Some(false) => ShapeFill::None,
+            Some(true) => node
+                .fill_color
+                .and_then(officeart_color_to_core)
+                .map(ShapeFill::Solid)
+                .unwrap_or(ShapeFill::Solid(duke_sheets_core::Color::Auto)),
+            None => ShapeFill::None,
+        };
+        let mut shape = Shape::preset(preset);
+        shape.fill = fill;
+        shape.line = ShapeLine {
+            color: node.line_color.and_then(officeart_color_to_core),
+            width_emu: node.line_width.map(i64::from),
+            dash_style: node.line_dashing.map(officeart_dash_to_drawing),
+            no_fill: node.line_no_fill.unwrap_or(false),
+        };
+        shape.text = obj_texts.get(&parsed.id).cloned();
+        shape.rotation = node.rotation.map(officeart_fixed_to_rotation).unwrap_or(0);
+        shape.flip_h = node.flip_h;
+        shape.flip_v = node.flip_v;
+        Some(shape)
     }
 
     /// Consume the node's OBJ slot, if it has one. A malformed OBJ
