@@ -422,9 +422,33 @@ pub mod fopt_id {
     /// Boolean-bag of shadow flags.
     pub const SHADOW_BOOLEAN_PROPS: u16 = 0x023F;
 
-    // ── Shape properties (§2.3.4, ids 0x0300–0x033F) ─────────────────
-    /// Boolean-bag of group-shape flags (`fHidden`, `fPrint`, etc).
+    // Shape properties
+    /// Boolean-bag of shape flags (§2.3.2.12 `Shape Boolean
+    /// Properties`: `fBackground`, `fLockShapeType`, …).
     pub const GROUP_SHAPE_PROPS: u16 = 0x033F;
+
+    // Group-shape properties
+    /// Boolean-bag of group-shape flags (MS-ODRAW v20241112
+    /// §2.3.4.44 `Group Shape Boolean Properties`). Low word carries
+    /// the values, high word the matching use-bits: `fPrint` =
+    /// 0x00000001 (use 0x00010000), `fHidden` = 0x00000002 (use
+    /// 0x00020000). Hidden shapes carry 0x00020002; absent entry (or
+    /// clear use-bit) means the defaults: visible, printed.
+    pub const GROUP_SHAPE_BOOLEAN_PROPS: u16 = 0x03BF;
+}
+
+/// The `0x03BF` op value marking a shape hidden: `fUsefHidden |
+/// fHidden` per MS-ODRAW §2.3.4.44.
+pub const GROUP_SHAPE_HIDDEN: u32 = 0x0002_0002;
+/// The `0x03BF` op value Excel writes on visible pictures:
+/// `fUsefHidden` with `fHidden` clear (explicitly visible).
+pub const GROUP_SHAPE_VISIBLE: u32 = 0x0002_0000;
+
+/// Whether a `0x03BF` op value marks the shape hidden: the fHidden
+/// value bit only counts when its use-bit is set (MS-ODRAW
+/// §2.3.4.44).
+pub fn group_shape_props_hidden(op: u32) -> bool {
+    op & GROUP_SHAPE_HIDDEN == GROUP_SHAPE_HIDDEN
 }
 
 /// MS-ODRAW §2.2.40 `OfficeArtFSP` — shape descriptor atom.
@@ -1233,7 +1257,7 @@ pub fn write_bstore_container(fbses: &[OfficeArtFbse], out: &mut Vec<u8>) {
 /// `shape_name` is the user-visible name (e.g. "Picture 1") stored
 /// in the `wzName` complex property.
 pub fn picture_fopt(blip_id: u32, shape_name: &str) -> FoptTable {
-    picture_fopt_with(blip_id, shape_name, None, None)
+    picture_fopt_with(blip_id, shape_name, None, None, false)
 }
 
 /// Build a complex FOPT entry carrying a UTF-16LE + trailing-null
@@ -1264,6 +1288,7 @@ pub fn picture_fopt_with(
     shape_name: &str,
     rotation: Option<i32>,
     alt_text: Option<&str>,
+    hidden: bool,
 ) -> FoptTable {
     let mut t = FoptTable::new();
 
@@ -1294,8 +1319,16 @@ pub fn picture_fopt_with(
         t.push(complex_string_entry(0x0381, descr));
     }
 
-    // 0x03BF: group/shape booleans.
-    t.push(FoptEntry::simple(0x03BF, 0x0002_0000));
+    // 0x03BF: group-shape booleans; Excel writes the fHidden use-bit
+    // on every picture, value bit only when hidden.
+    t.push(FoptEntry::simple(
+        fopt_id::GROUP_SHAPE_BOOLEAN_PROPS,
+        if hidden {
+            GROUP_SHAPE_HIDDEN
+        } else {
+            GROUP_SHAPE_VISIBLE
+        },
+    ));
     t
 }
 

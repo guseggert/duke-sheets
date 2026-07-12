@@ -272,6 +272,7 @@ fn build_group<R: Read + Seek>(
                 let meta = DrawingMeta {
                     name: Some(pic.name.clone()),
                     alt_text: pic.descr.clone(),
+                    hidden: pic.hidden,
                     ..DrawingMeta::default()
                 };
                 let image = resolve_pic_image(archive, drawing_rels, pic, true);
@@ -294,6 +295,7 @@ fn build_group<R: Read + Seek>(
                 let meta = DrawingMeta {
                     name: Some(inner.name.clone()),
                     alt_text: inner.descr.clone(),
+                    hidden: inner.hidden,
                     ..DrawingMeta::default()
                 };
                 let built = build_group(archive, drawing_rels, inner, controls);
@@ -833,11 +835,13 @@ impl XlsxReader {
                         // byte-identically.
                         let name = pic.name.clone();
                         let descr = pic.descr.clone();
+                        let hidden = pic.hidden;
                         let image = resolve_pic_image(archive, &drawing_rels, pic, false);
                         let mut object =
                             DrawingObject::image(image).with_anchor(entry.anchor);
                         object.meta.name = Some(name);
                         object.meta.alt_text = descr;
+                        object.meta.hidden = hidden;
                         object.meta.locked = entry.locked;
                         object.meta.printable = entry.printable;
                         natives.push((object, None));
@@ -852,6 +856,7 @@ impl XlsxReader {
                                 read_chart_style_color_for_chart_ex(archive, &dr.target, &mut cx);
                                 let mut object = DrawingObject::chart_ex(cx)
                                     .with_anchor(chart_ref.anchor);
+                                object.meta.hidden = chart_ref.hidden;
                                 object.meta.locked = entry.locked;
                                 object.meta.printable = entry.printable;
                                 natives.push((object, None));
@@ -860,6 +865,7 @@ impl XlsxReader {
                             read_chart_style_color(archive, &dr.target, &mut c);
                             let mut object =
                                 DrawingObject::chart(c).with_anchor(chart_ref.anchor);
+                            object.meta.hidden = chart_ref.hidden;
                             object.meta.locked = entry.locked;
                             object.meta.printable = entry.printable;
                             natives.push((object, None));
@@ -868,11 +874,13 @@ impl XlsxReader {
                     drawing::DrawingEntryKind::Group(group) => {
                         let name = group.name.clone();
                         let descr = group.descr.clone();
+                        let hidden = group.hidden;
                         let built =
                             build_group(archive, &drawing_rels, group, &mut controls);
                         let mut object = DrawingObject::group(built).with_anchor(entry.anchor);
                         object.meta.name = Some(name);
                         object.meta.alt_text = descr;
+                        object.meta.hidden = hidden;
                         object.meta.locked = entry.locked;
                         object.meta.printable = entry.printable;
                         natives.push((object, None));

@@ -20,6 +20,8 @@ pub struct DrawingChartRef {
     pub is_chart_ex: bool,
     /// Raw `mc:Fallback` inner XML bytes for roundtrip (chartEx only).
     pub raw_mc_fallback: Option<Vec<u8>>,
+    /// The frame's `cNvPr/@hidden` (absent = false).
+    pub hidden: bool,
 }
 
 /// One top-level entry of a drawing part, in document order.
@@ -59,6 +61,8 @@ pub enum DrawingEntryKind {
 pub struct PicShape {
     pub name: String,
     pub descr: Option<String>,
+    /// `cNvPr/@hidden` (absent = false).
+    pub hidden: bool,
     pub blip_rel: Option<String>,
     pub svg_rel: Option<String>,
     /// spPr/a:xfrm placement; off is meaningful for group children.
@@ -89,6 +93,8 @@ pub struct TwinShape {
 pub struct ParsedGroup {
     pub name: String,
     pub descr: Option<String>,
+    /// `cNvPr/@hidden` (absent = false).
+    pub hidden: bool,
     /// grpSpPr/a:xfrm with child-space mapping.
     pub transform: GroupTransform,
     pub children: Vec<ParsedChild>,
@@ -333,6 +339,13 @@ fn attr_bool_default_true(e: &BytesStart<'_>, name: &[u8]) -> bool {
     }
 }
 
+fn attr_bool_default_false(e: &BytesStart<'_>, name: &[u8]) -> bool {
+    matches!(
+        attr_string(e, name).as_deref(),
+        Some("1") | Some("true") | Some("TRUE") | Some("True")
+    )
+}
+
 /// The content classification of an anchor's object element.
 enum AnchorContent {
     None,
@@ -340,6 +353,7 @@ enum AnchorContent {
         rel_id: String,
         is_chart_ex: bool,
         raw_mc_fallback: Option<Vec<u8>>,
+        hidden: bool,
     },
     Pic(PicShape),
     Twin(TwinShape),
@@ -456,6 +470,7 @@ fn parse_anchor(bytes: &[u8]) -> Option<DrawingEntry> {
             rel_id,
             is_chart_ex,
             raw_mc_fallback,
+            hidden,
         } => DrawingEntryKind::Chart(DrawingChartRef {
             rel_id,
             // Chart anchors normalize to two-cell markers (legacy
@@ -467,6 +482,7 @@ fn parse_anchor(bytes: &[u8]) -> Option<DrawingEntry> {
             },
             is_chart_ex,
             raw_mc_fallback,
+            hidden,
         }),
         AnchorContent::Pic(pic) if pic.blip_rel.is_some() => {
             DrawingEntryKind::Image(Box::new(pic))
@@ -503,10 +519,15 @@ fn parse_anchor_content<R: std::io::BufRead>(
     let name = start.local_name().as_ref().to_vec();
     match name.as_slice() {
         b"graphicFrame" => Ok(match parse_graphic_frame(reader)? {
-            FrameContent::Chart { rel_id, is_chart_ex } => AnchorContent::Chart {
+            FrameContent::Chart {
+                rel_id,
+                is_chart_ex,
+                hidden,
+            } => AnchorContent::Chart {
                 rel_id,
                 is_chart_ex,
                 raw_mc_fallback: None,
+                hidden,
             },
             FrameContent::Twin(twin) => AnchorContent::Twin(twin),
             FrameContent::None => AnchorContent::Other,
@@ -569,6 +590,7 @@ fn parse_anchor_alternate<R: std::io::BufRead>(
     if let AnchorContent::Chart {
         rel_id,
         is_chart_ex,
+        hidden,
         ..
     } = chosen
     {
@@ -576,6 +598,7 @@ fn parse_anchor_alternate<R: std::io::BufRead>(
             rel_id,
             is_chart_ex,
             raw_mc_fallback: fallback,
+            hidden,
         });
     }
     match chosen {
@@ -604,7 +627,11 @@ fn parse_choice_content(bytes: &[u8]) -> ChartParseResult<AnchorContent> {
 
 /// Content of an `<xdr:graphicFrame>`.
 enum FrameContent {
-    Chart { rel_id: String, is_chart_ex: bool },
+    Chart {
+        rel_id: String,
+        is_chart_ex: bool,
+        hidden: bool,
+    },
     Twin(TwinShape),
     None,
 }
@@ -621,11 +648,13 @@ fn parse_graphic_frame<R: std::io::BufRead>(
     let mut found: Option<(String, bool)> = None;
     let mut twin = TwinShape::default();
     let mut has_spid = false;
+    let mut hidden = false;
     let mut in_xfrm = false;
 
     let handle = |e: &BytesStart<'_>,
                   twin: &mut TwinShape,
                   has_spid: &mut bool,
+                  hidden: &mut bool,
                   found: &mut Option<(String, bool)>,
                   graphic_data_uri: &Option<String>,
                   in_xfrm: bool| {
@@ -647,6 +676,7 @@ fn parse_graphic_frame<R: std::io::BufRead>(
                 if let Some(name) = attr_string(e, b"name") {
                     twin.name = Some(name);
                 }
+                *hidden = attr_bool_default_false(e, b"hidden");
             }
             b"off" if in_xfrm => {
                 twin.xfrm.x_emu = attr_i64(e, b"x").unwrap_or(0);
@@ -669,10 +699,26 @@ fn parse_graphic_frame<R: std::io::BufRead>(
                     b"xfrm" => in_xfrm = true,
                     _ => {}
                 }
-                handle(e, &mut twin, &mut has_spid, &mut found, &graphic_data_uri, in_xfrm);
+                handle(
+                    e,
+                    &mut twin,
+                    &mut has_spid,
+                    &mut hidden,
+                    &mut found,
+                    &graphic_data_uri,
+                    in_xfrm,
+                );
             }
             Ok(Event::Empty(ref e)) => {
-                handle(e, &mut twin, &mut has_spid, &mut found, &graphic_data_uri, in_xfrm);
+                handle(
+                    e,
+                    &mut twin,
+                    &mut has_spid,
+                    &mut hidden,
+                    &mut found,
+                    &graphic_data_uri,
+                    in_xfrm,
+                );
             }
             Ok(Event::End(ref e)) => {
                 if e.local_name().as_ref() == b"xfrm" {
@@ -696,6 +742,7 @@ fn parse_graphic_frame<R: std::io::BufRead>(
         Some((rel_id, is_chart_ex)) => FrameContent::Chart {
             rel_id,
             is_chart_ex,
+            hidden,
         },
         None => FrameContent::None,
     })
@@ -718,6 +765,7 @@ fn parse_pic<R: std::io::BufRead>(reader: &mut Reader<R>) -> ChartParseResult<Pi
                 if let Some(descr) = attr_string(e, b"descr") {
                     pic.descr = Some(descr);
                 }
+                pic.hidden = attr_bool_default_false(e, b"hidden");
             }
             b"blip" => {
                 if let Some(embed) = attr_string(e, b"embed") {
@@ -989,6 +1037,7 @@ fn parse_group_cnvpr(e: &BytesStart<'_>, group: &mut ParsedGroup) {
     if let Some(descr) = attr_string(e, b"descr") {
         group.descr = Some(descr);
     }
+    group.hidden = attr_bool_default_false(e, b"hidden");
 }
 
 fn parse_group_xfrm_attrs(e: &BytesStart<'_>, transform: &mut GroupTransform) {

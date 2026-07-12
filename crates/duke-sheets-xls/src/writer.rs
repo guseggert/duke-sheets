@@ -4515,6 +4515,8 @@ struct GroupShape {
     /// `ftCmo.grbit` fLocked / fPrint.
     locked: bool,
     printable: bool,
+    /// FOPT 0x03BF fHidden (entry emitted only when hidden).
+    hidden: bool,
     /// Rotation in 60,000ths of a degree (FOPT 0x0004 when non-zero).
     rotation: i32,
     /// FSP flip flags.
@@ -4546,6 +4548,8 @@ struct PictureShape {
     /// `ftCmo.grbit` fLocked / fPrint, from the wrapper's meta.
     locked: bool,
     printable: bool,
+    /// FOPT 0x03BF fHidden value bit.
+    hidden: bool,
     /// Placement copied from the wrapping drawing object or, for
     /// grouped pictures, the child transform.
     anchor: EmitAnchor,
@@ -4606,6 +4610,8 @@ struct ControlShape {
     locked: bool,
     /// `ftCmo.grbit` fPrintable, from the wrapper's `DrawingMeta`.
     printable: bool,
+    /// FOPT 0x03BF fHidden (entry emitted only when hidden).
+    hidden: bool,
     /// Compiled rgce for the cell link (empty = no link).
     link_rgce: Vec<u8>,
     /// Compiled rgce for the input range (empty = none; list and
@@ -4877,6 +4883,7 @@ impl ShapeBuilder<'_> {
             alt_text: meta.alt_text.clone(),
             locked: meta.locked,
             printable: meta.printable,
+            hidden: meta.hidden,
             rotation,
             flip_h,
             flip_v,
@@ -4915,6 +4922,7 @@ impl ShapeBuilder<'_> {
             alt_text: meta.alt_text.clone(),
             locked: meta.locked,
             printable: meta.printable,
+            hidden: meta.hidden,
             anchor,
             rotation,
             flip_h,
@@ -4980,6 +4988,7 @@ impl ShapeBuilder<'_> {
             anchor,
             locked: meta.locked,
             printable: meta.printable,
+            hidden: meta.hidden,
             link_rgce,
             input_rgce,
             radio_next_id: 0,
@@ -5309,6 +5318,7 @@ fn flatten_shape(shape: &SheetShape, out: &mut Vec<FlatShape>) -> XlsResult<()> 
                 &picture.shape_name,
                 picture.rotation,
                 picture.alt_text.as_deref(),
+                picture.hidden,
             )
             .write_to(&mut pre);
             picture.anchor.write_to(&mut pre)?;
@@ -5362,6 +5372,7 @@ fn flatten_shape(shape: &SheetShape, out: &mut Vec<FlatShape>) -> XlsResult<()> 
                 control.text_id,
                 control.shape_name.as_deref(),
                 control.alt_text.as_deref(),
+                control.hidden,
             )
             .write_to(&mut pre);
             control.anchor.write_to(&mut pre)?;
@@ -5426,6 +5437,12 @@ fn flatten_shape(shape: &SheetShape, out: &mut Vec<FlatShape>) -> XlsResult<()> 
             }
             if let Some(descr) = group.alt_text.as_deref() {
                 fopt.push(complex_string_entry(0x0381, descr));
+            }
+            if group.hidden {
+                fopt.push(FoptEntry::simple(
+                    crate::biff::escher::fopt_id::GROUP_SHAPE_BOOLEAN_PROPS,
+                    crate::biff::escher::GROUP_SHAPE_HIDDEN,
+                ));
             }
             if !fopt.is_empty() {
                 fopt.write_to(&mut sp_payload);
@@ -5898,8 +5915,11 @@ fn control_fopt(
     text_id: Option<u32>,
     shape_name: Option<&str>,
     alt_text: Option<&str>,
+    hidden: bool,
 ) -> crate::biff::escher::FoptTable {
-    use crate::biff::escher::{complex_string_entry, FoptEntry, FoptTable};
+    use crate::biff::escher::{
+        complex_string_entry, fopt_id, FoptEntry, FoptTable, GROUP_SHAPE_HIDDEN,
+    };
     use duke_sheets_core::FormControlKind;
 
     let mut t = FoptTable::new();
@@ -5980,13 +6000,20 @@ fn control_fopt(
             t.push(FoptEntry::simple(0x00BF, 0x0008_0008));
         }
     }
-    // 0x0380/0x0381 sort after every per-kind entry, so appending
-    // keeps the required ascending opid order.
+    // 0x0380/0x0381/0x03BF sort after every per-kind entry, so
+    // appending keeps the required ascending opid order.
     if let Some(name) = shape_name {
         t.push(complex_string_entry(0x0380, name));
     }
     if let Some(descr) = alt_text {
         t.push(complex_string_entry(0x0381, descr));
+    }
+    // Absent = visible (today's bytes for Excel-authored controls).
+    if hidden {
+        t.push(FoptEntry::simple(
+            fopt_id::GROUP_SHAPE_BOOLEAN_PROPS,
+            GROUP_SHAPE_HIDDEN,
+        ));
     }
     t
 }
@@ -6516,6 +6543,7 @@ mod tests {
             anchor: EmitAnchor::Sheet(duke_sheets_chart::DrawingAnchor::default()),
             locked: true,
             printable: true,
+            hidden: false,
             link_rgce: Vec::new(),
             input_rgce: Vec::new(),
             radio_next_id: 0,

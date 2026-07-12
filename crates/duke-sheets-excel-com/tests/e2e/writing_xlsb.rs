@@ -1842,3 +1842,109 @@ fn excel_preserves_xlsb_drawing_z_order_we_emit() {
     );
 }
 
+/// Drawing-object hidden flags survive Excel's XLSB re-save: a
+/// hidden image rides its `cNvPr@hidden="1"` in the shared drawing
+/// part, a hidden form control rides the VML shape's
+/// `visibility:hidden` style, and the visible siblings stay visible.
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_hidden_drawing_flags_we_emit() {
+    use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
+    use duke_sheets_core::{CheckState, DrawingObject, FormControl, FormControlKind};
+
+    let two_cell = |fc: u16, fr: u32, tc: u16, tr: u32| DrawingAnchor::TwoCell {
+        from: CellMarker {
+            col: fc,
+            col_offset_emu: 0,
+            row: fr,
+            row_offset_emu: 0,
+        },
+        to: CellMarker {
+            col: tc,
+            col_offset_emu: 0,
+            row: tr,
+            row_offset_emu: 0,
+        },
+        edit_as: None,
+    };
+    let png = |name: &str| {
+        DrawingObject::image(EmbeddedImage {
+            format: ImageFormat::Png,
+            media_path: String::new(),
+            svg_media_path: None,
+            width_emu: 300_000,
+            height_emu: 300_000,
+            rotation: None,
+            flip_h: false,
+            flip_v: false,
+            data: TEST_PNG_1X1.to_vec(),
+            svg_data: None,
+        })
+        .with_name(name)
+    };
+    let checkbox = |caption: &str| {
+        DrawingObject::form_control(FormControl::new(FormControlKind::Checkbox {
+            caption: caption.to_string(),
+            state: CheckState::Checked,
+            cell_link: None,
+            no_3d: true,
+        }))
+    };
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "anchor").unwrap();
+    ws.add_drawing(png("Shown").with_anchor(two_cell(0, 0, 2, 2)));
+    ws.add_drawing(
+        png("Ghost")
+            .with_anchor(two_cell(2, 2, 4, 4))
+            .with_hidden(true),
+    );
+    ws.add_drawing(checkbox("Visible box").with_anchor(two_cell(4, 4, 6, 6)));
+    ws.add_drawing(
+        checkbox("Cloaked box")
+            .with_anchor(two_cell(6, 6, 8, 8))
+            .with_hidden(true),
+    );
+
+    let result = roundtrip_through_excel_xlsb(&wb);
+    let sheet = result.worksheet(0).unwrap();
+
+    let images: Vec<_> = sheet.images().collect();
+    assert_eq!(images.len(), 2, "both images survive Excel re-save");
+    let image_hidden = |name: &str| {
+        images
+            .iter()
+            .find(|i| i.object.meta.name.as_deref() == Some(name))
+            .unwrap_or_else(|| panic!("image {name:?} lost in Excel re-save"))
+            .object
+            .meta
+            .hidden
+    };
+    assert!(!image_hidden("Shown"), "visible image must stay visible");
+    assert!(
+        image_hidden("Ghost"),
+        "hidden image must survive Excel re-save with hidden intact"
+    );
+
+    let controls: Vec<_> = sheet.form_controls().collect();
+    assert_eq!(controls.len(), 2, "both controls survive Excel re-save");
+    let control_hidden = |caption: &str| {
+        controls
+            .iter()
+            .find(|c| c.payload.caption() == Some(caption))
+            .unwrap_or_else(|| panic!("control {caption:?} lost in Excel re-save"))
+            .object
+            .meta
+            .hidden
+    };
+    assert!(
+        !control_hidden("Visible box"),
+        "visible control must stay visible"
+    );
+    assert!(
+        control_hidden("Cloaked box"),
+        "hidden control must survive Excel re-save with hidden intact"
+    );
+}
+

@@ -67,6 +67,9 @@ struct EscherShapeNode {
     name: Option<String>,
     /// FOPT wzDescription (0x0381).
     alt_text: Option<String>,
+    /// FOPT Group Shape Boolean Properties (0x03BF) fHidden, gated
+    /// on its use-bit (MS-ODRAW §2.3.4.44).
+    hidden: bool,
     /// Sheet anchor (top-level shapes).
     client_anchor: Option<crate::biff::escher::OfficeArtClientAnchor>,
     /// Group-space anchor (grouped shapes).
@@ -2616,6 +2619,12 @@ impl XlsReader {
                                             Some(decode_utf16le_null_terminated(bytes));
                                     }
                                 }
+                                0x03BF => {
+                                    if let FoptValue::Simple(v) = entry.value {
+                                        node.hidden =
+                                            crate::biff::escher::group_shape_props_hidden(v);
+                                    }
+                                }
                                 _ => {}
                             }
                         }
@@ -3109,6 +3118,7 @@ impl XlsReader {
         duke_sheets_core::DrawingMeta {
             name: node.name.clone(),
             alt_text: node.alt_text.clone(),
+            hidden: node.hidden,
             locked: parsed.is_none_or(|p| p.grbit & cmo_flags::LOCKED != 0),
             printable: parsed.is_none_or(|p| p.grbit & cmo_flags::PRINT != 0),
             ..duke_sheets_core::DrawingMeta::default()

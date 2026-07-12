@@ -48,6 +48,9 @@ pub struct PartObject<'a> {
     pub alt_text: Option<&'a str>,
     pub locked: bool,
     pub printable: bool,
+    /// Emits `cNvPr/@hidden="1"` on the native shape (images, charts,
+    /// groups). Control twins ignore it: their markup is structural.
+    pub hidden: bool,
     pub anchor: &'a DrawingAnchor,
     pub kind: PartKind<'a>,
 }
@@ -56,6 +59,7 @@ pub struct PartObject<'a> {
 pub struct PartChild<'a> {
     pub name: Option<&'a str>,
     pub alt_text: Option<&'a str>,
+    pub hidden: bool,
     pub transform: &'a ChildTransform,
     pub kind: PartKind<'a>,
 }
@@ -302,7 +306,7 @@ pub fn write_drawing_part(
                 let cnv_id = ctx.next_cnv_id();
                 let name = format!("Chart {}", ctx.frame_seq);
                 write_anchor_wrapper(&mut w, object, |w| {
-                    write_chart_frame(w, &rid, cnv_id, &name)
+                    write_chart_frame(w, &rid, cnv_id, &name, object.hidden)
                 })?;
             }
             PartKind::ChartEx { fallback } => {
@@ -312,7 +316,7 @@ pub fn write_drawing_part(
                 let cnv_id = ctx.next_cnv_id();
                 let name = format!("Chart {}", ctx.frame_seq);
                 write_anchor_wrapper(&mut w, object, |w| {
-                    write_chartex_frame(w, &rid, cnv_id, &name, *fallback)
+                    write_chartex_frame(w, &rid, cnv_id, &name, object.hidden, *fallback)
                 })?;
             }
             PartKind::Image(image) => {
@@ -333,6 +337,7 @@ pub fn write_drawing_part(
                         w,
                         object.name,
                         object.alt_text,
+                        object.hidden,
                         &rid,
                         cnv_id,
                         &xfrm,
@@ -357,6 +362,7 @@ pub fn write_drawing_part(
                         w,
                         object.name,
                         object.alt_text,
+                        object.hidden,
                         transform,
                         children,
                         &placement,
@@ -392,10 +398,12 @@ struct Placement {
     flip_v: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_group_shape(
     w: &mut XmlWriter,
     name: Option<&str>,
     alt_text: Option<&str>,
+    hidden: bool,
     transform: &GroupTransform,
     children: &[PartChild<'_>],
     placement: &Placement,
@@ -411,6 +419,9 @@ fn write_group_shape(
     cnv_pr.push_attribute(("name", name.unwrap_or("")));
     if let Some(descr) = alt_text {
         cnv_pr.push_attribute(("descr", descr));
+    }
+    if hidden {
+        cnv_pr.push_attribute(("hidden", "1"));
     }
     w.write_event(Event::Empty(cnv_pr))?;
     w.write_event(Event::Empty(BytesStart::new("xdr:cNvGrpSpPr")))?;
@@ -463,7 +474,7 @@ fn write_group_child(
                 flip_h: t.flip_h,
                 flip_v: t.flip_v,
             };
-            write_picture_element(w, child.name, child.alt_text, &rid, cnv_id, &xfrm)?;
+            write_picture_element(w, child.name, child.alt_text, child.hidden, &rid, cnv_id, &xfrm)?;
         }
         PartKind::Group {
             transform,
@@ -483,6 +494,7 @@ fn write_group_child(
                 w,
                 child.name,
                 child.alt_text,
+                child.hidden,
                 transform,
                 children,
                 &placement,
@@ -625,6 +637,7 @@ fn write_picture_element(
     w: &mut XmlWriter,
     name: Option<&str>,
     alt_text: Option<&str>,
+    hidden: bool,
     rid: &str,
     cnv_id: usize,
     xfrm: &PicXfrm,
@@ -639,6 +652,9 @@ fn write_picture_element(
     cnv_pr.push_attribute(("name", name.unwrap_or("")));
     if let Some(desc) = alt_text {
         cnv_pr.push_attribute(("descr", desc));
+    }
+    if hidden {
+        cnv_pr.push_attribute(("hidden", "1"));
     }
     w.write_event(Event::Empty(cnv_pr))?;
     w.write_event(Event::Start(BytesStart::new("xdr:cNvPicPr")))?;
@@ -964,15 +980,24 @@ fn write_control_twin_frame(
     Ok(())
 }
 
-fn write_chart_frame(w: &mut XmlWriter, rid: &str, cnv_id: usize, name: &str) -> WriteResult<()> {
+fn write_chart_frame(
+    w: &mut XmlWriter,
+    rid: &str,
+    cnv_id: usize,
+    name: &str,
+    hidden: bool,
+) -> WriteResult<()> {
     w.write_event(Event::Start(BytesStart::new("xdr:graphicFrame")))?;
 
     w.write_event(Event::Start(BytesStart::new("xdr:nvGraphicFramePr")))?;
     let cnv_id_s = cnv_id.to_string();
-    w.create_element("xdr:cNvPr")
-        .with_attribute(("id", cnv_id_s.as_str()))
-        .with_attribute(("name", name))
-        .write_empty()?;
+    let mut cnv_pr = BytesStart::new("xdr:cNvPr");
+    cnv_pr.push_attribute(("id", cnv_id_s.as_str()));
+    cnv_pr.push_attribute(("name", name));
+    if hidden {
+        cnv_pr.push_attribute(("hidden", "1"));
+    }
+    w.write_event(Event::Empty(cnv_pr))?;
     w.write_event(Event::Empty(BytesStart::new("xdr:cNvGraphicFramePr")))?;
     w.write_event(Event::End(BytesEnd::new("xdr:nvGraphicFramePr")))?;
 
@@ -1003,6 +1028,7 @@ fn write_chartex_frame(
     rid: &str,
     cnv_id: usize,
     name: &str,
+    hidden: bool,
     raw_mc_fallback: Option<&[u8]>,
 ) -> WriteResult<()> {
     let mut mc_tag = BytesStart::new("mc:AlternateContent");
@@ -1020,10 +1046,13 @@ fn write_chartex_frame(
 
     w.write_event(Event::Start(BytesStart::new("xdr:nvGraphicFramePr")))?;
     let cnv_id_s = cnv_id.to_string();
-    w.create_element("xdr:cNvPr")
-        .with_attribute(("id", cnv_id_s.as_str()))
-        .with_attribute(("name", name))
-        .write_empty()?;
+    let mut cnv_pr = BytesStart::new("xdr:cNvPr");
+    cnv_pr.push_attribute(("id", cnv_id_s.as_str()));
+    cnv_pr.push_attribute(("name", name));
+    if hidden {
+        cnv_pr.push_attribute(("hidden", "1"));
+    }
+    w.write_event(Event::Empty(cnv_pr))?;
     w.write_event(Event::Empty(BytesStart::new("xdr:cNvGraphicFramePr")))?;
     w.write_event(Event::End(BytesEnd::new("xdr:nvGraphicFramePr")))?;
 
@@ -1077,7 +1106,7 @@ pub fn write_chartsheet_drawing_part(raw_drawing_objects: &[Vec<u8>]) -> WriteRe
     w.write_event(Event::Start(BytesStart::new("xdr:absoluteAnchor")))?;
     write_point(&mut w, "xdr:pos", 0, 0)?;
     write_extent(&mut w, "xdr:ext", 9144000, 6858000)?;
-    write_chart_frame(&mut w, "rId1", 2, "Chart 1")?;
+    write_chart_frame(&mut w, "rId1", 2, "Chart 1", false)?;
     w.write_event(Event::Empty(BytesStart::new("xdr:clientData")))?;
     w.write_event(Event::End(BytesEnd::new("xdr:absoluteAnchor")))?;
 

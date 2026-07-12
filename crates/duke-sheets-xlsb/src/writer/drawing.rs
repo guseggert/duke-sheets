@@ -147,6 +147,7 @@ fn convert_kind<'a>(
                         |kind| PartChild {
                             name: child.meta.name.as_deref(),
                             alt_text: child.meta.alt_text.as_deref(),
+                            hidden: child.meta.hidden,
                             transform: &child.transform,
                             kind,
                         },
@@ -193,6 +194,7 @@ fn part_objects(sheet: &Worksheet) -> Vec<PartObject<'_>> {
                 alt_text: object.meta.alt_text.as_deref(),
                 locked: object.meta.locked,
                 printable: object.meta.printable,
+                hidden: object.meta.hidden,
                 anchor: &object.anchor,
                 kind,
             })

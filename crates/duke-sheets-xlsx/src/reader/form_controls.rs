@@ -290,6 +290,10 @@ pub(super) fn assemble_with_vml(
 ) -> Option<DrawingObject> {
     let caption = vml.map(|shape| shape.caption.clone()).unwrap_or_default();
     let mut object = assemble(pending, pr, caption)?;
+    // The user-facing hidden flag lives only on the VML shape's
+    // style (visibility:hidden); the drawing-part twin's cNvPr
+    // hidden="1" is structural markup.
+    object.meta.hidden = vml.is_some_and(|shape| shape.hidden);
     if pending.anchor.is_none() {
         if let Some(vml_object) = vml.and_then(|shape| shape.to_drawing_object()) {
             object.anchor = vml_object.anchor;

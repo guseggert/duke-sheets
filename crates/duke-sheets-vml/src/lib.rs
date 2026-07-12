@@ -232,12 +232,15 @@ pub fn write_control_shape(
     xml.push_str(&format!(
         " <v:shape id=\"_x0000_s{shape_id}\" type=\"#_x0000_t201\" style='position:absolute;\n"
     ));
+    // Excel writes visible control shapes with no visibility token;
+    // only hidden ones carry it.
     xml.push_str(&format!(
-        "  margin-left:{}pt;margin-top:{}pt;width:{}pt;height:{}pt;z-index:{z_index}{}'\n",
+        "  margin-left:{}pt;margin-top:{}pt;width:{}pt;height:{}pt;z-index:{z_index}{}{}'\n",
         fmt_pt(left),
         fmt_pt(top),
         fmt_pt(width.max(0)),
         fmt_pt(height.max(0)),
+        if meta.hidden { ";visibility:hidden" } else { "" },
         if wrap_tight { ";\n  mso-wrap-style:tight" } else { "" },
     ));
     match kind {
@@ -605,6 +608,8 @@ pub struct VmlControl {
     pub locked: bool,
     /// `x:PrintObject` (defaults true).
     pub print_object: bool,
+    /// Style attribute carries `visibility:hidden` (absent = shown).
+    pub hidden: bool,
     /// `x:Checked` value (0/1/2).
     pub checked: u16,
     pub fmla_link: Option<String>,
@@ -752,6 +757,7 @@ impl VmlControl {
             DrawingObject::form_control(FormControl::new(kind)).with_anchor(anchor);
         object.meta.locked = self.locked;
         object.meta.printable = self.print_object;
+        object.meta.hidden = self.hidden;
         Some(object)
     }
 }
@@ -922,6 +928,8 @@ fn parse_raw_shapes(bytes: &[u8]) -> Vec<RawShape> {
                                     let normalized: String =
                                         style.chars().filter(|c| !c.is_whitespace()).collect();
                                     shape.visible = normalized.contains("visibility:visible");
+                                    shape.control.hidden =
+                                        normalized.contains("visibility:hidden");
                                 }
                                 _ => {}
                             }
