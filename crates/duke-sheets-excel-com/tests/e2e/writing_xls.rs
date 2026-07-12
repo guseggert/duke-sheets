@@ -3745,3 +3745,83 @@ fn excel_can_read_large_xls_list_control_we_emit() {
         other => panic!("expected ListBox, got {other:?}"),
     }
 }
+
+/// The drawings-list z-order (picture, control, picture) survives
+/// Excel's XLS re-save: BIFF8 keeps every shape in one OfficeArt
+/// container whose order is z-order, so the interleave must read
+/// back exactly.
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xls_drawing_z_order_we_emit() {
+    use duke_sheets_chart::{EmbeddedImage, ImageFormat};
+    use duke_sheets_core::{
+        CheckState, DrawingKind, DrawingObject, FormControl, FormControlKind,
+    };
+
+    let two_cell = |fc: u16, fr: u32, tc: u16, tr: u32| DrawingAnchor::TwoCell {
+        from: CellMarker {
+            col: fc,
+            col_offset_emu: 0,
+            row: fr,
+            row_offset_emu: 0,
+        },
+        to: CellMarker {
+            col: tc,
+            col_offset_emu: 0,
+            row: tr,
+            row_offset_emu: 0,
+        },
+        edit_as: None,
+    };
+    let png = |name: &str| {
+        DrawingObject::image(EmbeddedImage {
+            format: ImageFormat::Png,
+            media_path: String::new(),
+            svg_media_path: None,
+            width_emu: 300_000,
+            height_emu: 300_000,
+            rotation: None,
+            flip_h: false,
+            flip_v: false,
+            data: TEST_PNG_1X1.to_vec(),
+            svg_data: None,
+        })
+        .with_name(name)
+    };
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "anchor").unwrap();
+    ws.add_drawing(png("Below").with_anchor(two_cell(0, 0, 2, 2)));
+    ws.add_drawing(
+        DrawingObject::form_control(FormControl::new(FormControlKind::Checkbox {
+            caption: "Middle".to_string(),
+            state: CheckState::Checked,
+            cell_link: None,
+            no_3d: true,
+        }))
+        .with_anchor(two_cell(1, 1, 3, 3)),
+    );
+    ws.add_drawing(png("Above").with_anchor(two_cell(2, 2, 4, 4)));
+
+    let result = roundtrip_through_excel_xls(&wb);
+    let sheet = result.worksheet(0).unwrap();
+    let tags: Vec<&str> = sheet
+        .drawings()
+        .iter()
+        .map(|object| match &object.kind {
+            DrawingKind::Image(_) => "image",
+            DrawingKind::FormControl(_) => "control",
+            other => panic!("unexpected drawing kind after Excel round-trip: {other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        tags,
+        vec!["image", "control", "image"],
+        "z-order must survive Excel XLS re-save"
+    );
+    assert_eq!(
+        sheet.form_controls().next().unwrap().payload.caption(),
+        Some("Middle")
+    );
+}

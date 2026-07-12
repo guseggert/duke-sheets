@@ -283,11 +283,11 @@ fn no_rotation_no_flip_round_trips_clean() {
 }
 
 #[test]
-fn twocell_anchor_edit_as_round_trips() {
-    // editAs=TwoCell (or None) maps to ClientAnchor flag=0
-    // (move+resize with cells). Round-trip should preserve the
-    // editAs setting as TwoCell since the reader maps flag=0 →
-    // TwoCell.
+fn twocell_anchor_edit_as_collapses_to_default() {
+    // editAs=TwoCell and editAs=None both map to ClientAnchor flag=0
+    // (move+resize with cells) — the byte layout cannot distinguish
+    // them, and they mean the same thing. The reader normalises
+    // flag=0 to None so the model default round-trips exactly.
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.add_drawing(test_image("Picture 1", 1, 2).with_anchor(DrawingAnchor::TwoCell {
@@ -309,7 +309,7 @@ fn twocell_anchor_edit_as_round_trips() {
     let parsed = write_then_read(&wb);
     let images = images_of(parsed.worksheet(0).unwrap());
     if let DrawingAnchor::TwoCell { edit_as, .. } = &images[0].object.anchor {
-        assert_eq!(*edit_as, Some(EditAs::TwoCell));
+        assert_eq!(*edit_as, None);
     } else {
         panic!("expected TwoCell");
     }

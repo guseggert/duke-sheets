@@ -33,6 +33,8 @@ pub mod ft {
     pub const END: u16 = 0x0000;
     /// FtMacro - macro linkage (skipped, never written).
     pub const MACRO: u16 = 0x0004;
+    /// FtGmo - group marker (group objects only).
+    pub const GMO: u16 = 0x0006;
     /// FtCf - picture clipboard format.
     pub const CF: u16 = 0x0007;
     /// FtPioGrbit - picture option flags.

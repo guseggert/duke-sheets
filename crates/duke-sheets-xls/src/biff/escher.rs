@@ -88,6 +88,9 @@ pub mod rec_type {
     /// Property table atom — shape properties (fill, line, text, etc).
     pub const FOPT: u16 = 0xF00B;
 
+    /// Child anchor atom inside a grouped shape's `SP_CONTAINER` —
+    /// the shape's rectangle in its group's coordinate space.
+    pub const CHILD_ANCHOR: u16 = 0xF00F;
     /// Client (Excel) anchor atom inside `SP_CONTAINER` — which cell
     /// the shape is anchored to.
     pub const CLIENT_ANCHOR: u16 = 0xF010;
@@ -659,6 +662,57 @@ impl OfficeArtClientAnchor {
     }
 }
 
+/// MS-ODRAW §2.2.39 `OfficeArtChildAnchor` — anchors a grouped shape
+/// within its group's coordinate space (the rectangle the enclosing
+/// group's `OfficeArtFSPGR` defines). 16-byte body after the header:
+/// four signed 32-bit integers (xLeft, yTop, xRight, yBottom).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct OfficeArtChildAnchor {
+    pub x_left: i32,
+    pub y_top: i32,
+    pub x_right: i32,
+    pub y_bottom: i32,
+}
+
+impl OfficeArtChildAnchor {
+    /// Serialise the full child-anchor atom (header + 16-byte body).
+    pub fn write_to(&self, out: &mut Vec<u8>) {
+        let header = OfficeArtRecordHeader::atom(0, 0, rec_type::CHILD_ANCHOR, 16);
+        header.write_to(out);
+        out.extend_from_slice(&self.x_left.to_le_bytes());
+        out.extend_from_slice(&self.y_top.to_le_bytes());
+        out.extend_from_slice(&self.x_right.to_le_bytes());
+        out.extend_from_slice(&self.y_bottom.to_le_bytes());
+    }
+
+    /// Parse a full child-anchor atom. Returns `(anchor, bytes_consumed)`.
+    pub fn read_from(bytes: &[u8]) -> XlsResult<(Self, usize)> {
+        let header = OfficeArtRecordHeader::read_from(bytes)?;
+        if header.rec_type != rec_type::CHILD_ANCHOR {
+            return Err(XlsError::InvalidFormat(format!(
+                "expected ChildAnchor (0x{:04X}), found 0x{:04X}",
+                rec_type::CHILD_ANCHOR,
+                header.rec_type
+            )));
+        }
+        if header.rec_len != 16 || bytes.len() < HEADER_LEN + 16 {
+            return Err(XlsError::InvalidFormat("ChildAnchor truncated".into()));
+        }
+        let read_i32 = |off: usize| -> i32 {
+            i32::from_le_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]])
+        };
+        Ok((
+            Self {
+                x_left: read_i32(HEADER_LEN),
+                y_top: read_i32(HEADER_LEN + 4),
+                x_right: read_i32(HEADER_LEN + 8),
+                y_bottom: read_i32(HEADER_LEN + 12),
+            },
+            HEADER_LEN + 16,
+        ))
+    }
+}
+
 /// MS-ODRAW §2.2.46 `OfficeArtIDCL` — one entry in an FDGG cluster
 /// table. An "ID cluster" reserves a block of 1024 shape IDs for a
 /// specific drawing (worksheet).
@@ -1179,18 +1233,38 @@ pub fn write_bstore_container(fbses: &[OfficeArtFbse], out: &mut Vec<u8>) {
 /// `shape_name` is the user-visible name (e.g. "Picture 1") stored
 /// in the `wzName` complex property.
 pub fn picture_fopt(blip_id: u32, shape_name: &str) -> FoptTable {
-    picture_fopt_with(blip_id, shape_name, None)
+    picture_fopt_with(blip_id, shape_name, None, None)
 }
 
-/// Picture FOPT with an optional rotation. `rotation` is in 60,000ths
-/// of a degree (the OOXML / OfficeArt unit). `None` omits the
-/// `0x0004` rotation property entirely (matching Excel's emit for
-/// pictures with no rotation).
+/// Build a complex FOPT entry carrying a UTF-16LE + trailing-null
+/// string (`wzName` 0x0380, `wzDescription` 0x0381, …). Excel sets
+/// BOTH the fBid and fComplex bits on these opids; we mirror that
+/// exactly so the bytes match.
+pub fn complex_string_entry(id: u16, value: &str) -> FoptEntry {
+    let mut bytes: Vec<u8> = value.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    bytes.extend_from_slice(&[0, 0]); // null terminator
+    FoptEntry {
+        id,
+        is_blip_id: true,
+        value: FoptValue::Complex(bytes),
+    }
+}
+
+/// Picture FOPT with an optional rotation and alt text. `rotation`
+/// is in 60,000ths of a degree (the OOXML / OfficeArt unit). `None`
+/// omits the `0x0004` rotation property entirely (matching Excel's
+/// emit for pictures with no rotation). `alt_text` fills the
+/// `wzDescription` (0x0381) complex property when set.
 ///
 /// FOPT entries must appear in ascending `id` order; the rotation
 /// property is inserted before the existing `0x007F` protection
 /// entry when present.
-pub fn picture_fopt_with(blip_id: u32, shape_name: &str, rotation: Option<i32>) -> FoptTable {
+pub fn picture_fopt_with(
+    blip_id: u32,
+    shape_name: &str,
+    rotation: Option<i32>,
+    alt_text: Option<&str>,
+) -> FoptTable {
     let mut t = FoptTable::new();
 
     // 0x0004: rotation (60,000ths of a degree). Goes first because
@@ -1213,20 +1287,12 @@ pub fn picture_fopt_with(blip_id: u32, shape_name: &str, rotation: Option<i32>) 
     // 0x033F: shape booleans (fPrint, fHidden, …).
     t.push(FoptEntry::simple(0x033F, 0x0018_0010));
 
-    // 0x0380: wzName (shape name) — complex property with UTF-16LE
-    // payload + trailing null. Excel sets BOTH the fBid and
-    // fComplex bits on this opid; we mirror that exactly so the
-    // bytes match.
-    let mut name_bytes: Vec<u8> = shape_name
-        .encode_utf16()
-        .flat_map(|u| u.to_le_bytes())
-        .collect();
-    name_bytes.extend_from_slice(&[0, 0]); // null terminator
-    t.push(FoptEntry {
-        id: 0x0380,
-        is_blip_id: true, // Excel sets fBid on the wzName entry
-        value: FoptValue::Complex(name_bytes),
-    });
+    // 0x0380: wzName (shape name).
+    t.push(complex_string_entry(0x0380, shape_name));
+    // 0x0381: wzDescription (alternative text), only when present.
+    if let Some(descr) = alt_text {
+        t.push(complex_string_entry(0x0381, descr));
+    }
 
     // 0x03BF: group/shape booleans.
     t.push(FoptEntry::simple(0x03BF, 0x0002_0000));
