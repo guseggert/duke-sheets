@@ -370,9 +370,7 @@ fn validate_kind(kind: &DrawingKind) -> Result<()> {
         DrawingKind::Group(group) => {
             for child in &group.children {
                 if child.transform.cx_emu < 0 || child.transform.cy_emu < 0 {
-                    return Err(Error::other(
-                        "group child extents cannot be negative",
-                    ));
+                    return Err(Error::other("group child extents cannot be negative"));
                 }
                 validate_kind(&child.kind)?;
             }
@@ -413,9 +411,7 @@ pub fn validate_anchor(anchor: &DrawingAnchor) -> Result<()> {
         } => {
             validate_marker(from)?;
             if *width_emu < 0 || *height_emu < 0 {
-                return Err(Error::other(
-                    "drawing anchor dimensions cannot be negative",
-                ));
+                return Err(Error::other("drawing anchor dimensions cannot be negative"));
             }
         }
         DrawingAnchor::Absolute {
@@ -548,7 +544,7 @@ mod tests {
     #[test]
     fn non_comment_objects_default_visible() {
         let object = DrawingObject::form_control(FormControl::new(FormControlKind::Button {
-            caption: "Run".to_string(),
+            caption: "Run".into(),
         }));
         assert!(!object.meta.hidden);
         assert!(object.meta.locked);
@@ -557,7 +553,7 @@ mod tests {
     #[test]
     fn validate_rejects_reversed_anchor() {
         let object = DrawingObject::form_control(FormControl::new(FormControlKind::Button {
-            caption: "b".to_string(),
+            caption: "b".into(),
         }))
         .with_anchor(DrawingAnchor::TwoCell {
             from: duke_sheets_chart::CellMarker {
@@ -598,11 +594,7 @@ mod tests {
             transform: GroupTransform::default(),
             children: vec![child],
         });
-        assert!(object
-            .validate()
-            .unwrap_err()
-            .to_string()
-            .contains("lines"));
+        assert!(object.validate().unwrap_err().to_string().contains("lines"));
     }
 
     #[test]

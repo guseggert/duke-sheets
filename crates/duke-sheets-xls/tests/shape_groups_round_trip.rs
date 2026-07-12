@@ -16,11 +16,11 @@ use duke_sheets_core::{
 use duke_sheets_xls::{XlsReader, XlsWriter};
 
 const TEST_PNG_1X1: &[u8] = &[
-    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
-    0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
-    0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0B, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x60,
-    0x00, 0x02, 0x00, 0x00, 0x05, 0x00, 0x01, 0x7A, 0x5E, 0xAB, 0x3F, 0x00, 0x00, 0x00, 0x00,
-    0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+    0x89, 0x00, 0x00, 0x00, 0x0B, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x60, 0x00, 0x02, 0x00,
+    0x00, 0x05, 0x00, 0x01, 0x7A, 0x5E, 0xAB, 0x3F, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44,
+    0xAE, 0x42, 0x60, 0x82,
 ];
 
 fn write_then_read(wb: &Workbook) -> Workbook {
@@ -98,7 +98,7 @@ fn group_transform(cx: i64, cy: i64) -> GroupTransform {
 
 fn checkbox(caption: &str) -> FormControlKind {
     FormControlKind::Checkbox {
-        caption: caption.to_string(),
+        caption: caption.into(),
         state: CheckState::Checked,
         cell_link: None,
         no_3d: false,
@@ -135,7 +135,7 @@ fn grouped_captioned_control_round_trips() {
         .kind
         .as_form_control()
         .expect("grouped control");
-    assert_eq!(control.caption(), Some("In group"));
+    assert_eq!(control.caption_text().as_deref(), Some("In group"));
     assert_eq!(
         group.children[0].meta.name.as_deref(),
         Some("Grouped check"),
@@ -198,7 +198,10 @@ fn group_locked_printable_flags_round_trip() {
     let object = &parsed.worksheet(0).unwrap().drawings()[0];
     assert!(object.kind.as_group().is_some());
     assert!(!object.meta.locked, "group fLocked survives the OBJ grbit");
-    assert!(!object.meta.printable, "group fPrint survives the OBJ grbit");
+    assert!(
+        !object.meta.printable,
+        "group fPrint survives the OBJ grbit"
+    );
 }
 
 #[test]
@@ -206,14 +209,12 @@ fn radio_chain_spans_grouped_and_top_level_radios() {
     // Radios inside a shape group join the sheet's FtRboData chains;
     // grouping is computed from resolved on-sheet rectangles, so a
     // grouped radio inside a group box chains with it.
-    let radio = |caption: &str| {
-        FormControlKind::OptionButton {
-            caption: caption.to_string(),
+    let radio = |caption: &str| FormControlKind::OptionButton {
+        caption: caption.into(),
             state: CheckState::Unchecked,
             cell_link: None,
             first_in_group: false,
             no_3d: false,
-        }
     };
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();

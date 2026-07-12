@@ -17,8 +17,10 @@
 //! `controlPr@moveWithCells/sizeWithCells` attributes).
 
 use duke_sheets_chart::{CellMarker, DrawingAnchor, EditAs};
+use duke_sheets_core::style::Underline;
 use duke_sheets_core::{
-    CheckState, DrawingMeta, DrawingObject, FormControl, FormControlKind, ListSelection,
+    CheckState, Color, ControlText, DrawingMeta, DrawingObject, FormControl, FormControlKind,
+    HorizontalAlignment, ListSelection, RichTextRun, RunFont, VerticalAlignment,
 };
 use quick_xml::events::Event;
 use quick_xml::Reader;
@@ -73,6 +75,23 @@ pub fn vml_object_type(kind: &FormControlKind) -> &'static str {
     }
 }
 
+/// Encode a model macro name for the legacy control formula carriers.
+pub fn encode_macro_formula(macro_name: &str) -> String {
+    if macro_name.starts_with('[') {
+        macro_name.to_string()
+    } else {
+        format!("[0]!{macro_name}")
+    }
+}
+
+/// Decode the current-workbook prefix used by legacy control formulas.
+pub fn decode_macro_formula(formula: &str) -> String {
+    formula
+        .strip_prefix("[0]!")
+        .unwrap_or(formula)
+        .to_string()
+}
+
 /// The 8-value `x:Anchor` tuple for a drawing anchor:
 /// `[colL, dxL_px, rowT, dyT_px, colR, dxR_px, rowB, dyB_px]`.
 /// One-cell and absolute anchors are extended to a cell footprint at
@@ -109,12 +128,10 @@ pub fn anchor_cell_markers(anchor: &DrawingAnchor) -> (CellMarker, CellMarker) {
         }
     };
     let extend = |from: &CellMarker, width_emu: i64, height_emu: i64| -> CellMarker {
-        let total_x = from.col as i128 * COL_EMU
-            + from.col_offset_emu as i128
-            + width_emu.max(0) as i128;
-        let total_y = from.row as i128 * ROW_EMU
-            + from.row_offset_emu as i128
-            + height_emu.max(0) as i128;
+        let total_x =
+            from.col as i128 * COL_EMU + from.col_offset_emu as i128 + width_emu.max(0) as i128;
+        let total_y =
+            from.row as i128 * ROW_EMU + from.row_offset_emu as i128 + height_emu.max(0) as i128;
         marker_at(total_x, total_y)
     };
     match anchor {
@@ -198,6 +215,160 @@ fn xml_escape(text: &str) -> String {
         .replace('>', "&gt;")
 }
 
+fn xml_escape_attr(text: &str) -> String {
+    xml_escape(text).replace('"', "&quot;")
+}
+
+fn horizontal_alignment_name(alignment: HorizontalAlignment) -> &'static str {
+    match alignment {
+        HorizontalAlignment::Center | HorizontalAlignment::CenterContinuous => "Center",
+        HorizontalAlignment::Right => "Right",
+        HorizontalAlignment::Justify => "Justify",
+        HorizontalAlignment::Distributed => "Distributed",
+        HorizontalAlignment::General | HorizontalAlignment::Left | HorizontalAlignment::Fill => {
+            "Left"
+        }
+    }
+}
+
+fn vertical_alignment_name(alignment: VerticalAlignment) -> &'static str {
+    match alignment {
+        VerticalAlignment::Top => "Top",
+        VerticalAlignment::Center => "Center",
+        VerticalAlignment::Bottom => "Bottom",
+        VerticalAlignment::Justify => "Justify",
+        VerticalAlignment::Distributed => "Distributed",
+    }
+}
+
+fn parse_horizontal_alignment(value: &str) -> Option<HorizontalAlignment> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "left" => Some(HorizontalAlignment::Left),
+        "center" => Some(HorizontalAlignment::Center),
+        "right" => Some(HorizontalAlignment::Right),
+        "justify" => Some(HorizontalAlignment::Justify),
+        "distributed" => Some(HorizontalAlignment::Distributed),
+        _ => None,
+    }
+}
+
+fn parse_vertical_alignment(value: &str) -> Option<VerticalAlignment> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "top" => Some(VerticalAlignment::Top),
+        "center" => Some(VerticalAlignment::Center),
+        "bottom" => Some(VerticalAlignment::Bottom),
+        "justify" => Some(VerticalAlignment::Justify),
+        "distributed" => Some(VerticalAlignment::Distributed),
+        _ => None,
+    }
+}
+
+fn normalize_vml_defaults(control: &mut VmlControl) {
+    let (horizontal, vertical, size) = match control.object_type.as_str() {
+        "Button" => (HorizontalAlignment::Center, VerticalAlignment::Center, 11.0),
+        "Checkbox" | "Radio" => (HorizontalAlignment::Left, VerticalAlignment::Center, 8.0),
+        _ => (HorizontalAlignment::Left, VerticalAlignment::Top, 8.0),
+    };
+    if control.text.horizontal_alignment == Some(horizontal) {
+        control.text.horizontal_alignment = None;
+    }
+    if control.text.vertical_alignment == Some(vertical) {
+        control.text.vertical_alignment = None;
+    }
+    for run in &mut control.text.runs {
+        let is_default = run.font.as_ref().is_some_and(|font| {
+            font.name.as_deref() == Some("Segoe UI")
+                && font.size == Some(size)
+                && font.color.is_none()
+                && font.bold.is_none()
+                && font.italic.is_none()
+                && font.underline.is_none()
+                && font.strikethrough.is_none()
+                && font.vertical_align.is_none()
+                && font.family.is_none()
+                && font.charset.is_none()
+                && font.scheme.is_none()
+        });
+        if is_default {
+            run.font = None;
+        }
+    }
+}
+
+fn default_text_alignment(kind: &FormControlKind) -> (HorizontalAlignment, VerticalAlignment) {
+    match kind {
+        FormControlKind::Button { .. } => (HorizontalAlignment::Center, VerticalAlignment::Center),
+        FormControlKind::Checkbox { .. } | FormControlKind::OptionButton { .. } => {
+            (HorizontalAlignment::Left, VerticalAlignment::Center)
+        }
+        _ => (HorizontalAlignment::Left, VerticalAlignment::Top),
+    }
+}
+
+fn write_vml_run(xml: &mut String, text: &str, font: Option<&RunFont>, default_size: u16) {
+    let name = font
+        .and_then(|font| font.name.as_deref())
+        .unwrap_or("Segoe UI");
+    let size = font
+        .and_then(|font| font.size)
+        .map(|size| (size * 20.0).round().clamp(1.0, u16::MAX as f64) as u16)
+        .unwrap_or(default_size);
+    let color = match font.and_then(|font| font.color) {
+        Some(Color::Auto) | None => "auto".to_string(),
+        Some(color) => {
+            let (r, g, b) = color.to_rgb();
+            format!("#{r:02X}{g:02X}{b:02X}")
+        }
+    };
+    xml.push_str(&format!(
+        "<font face=\"{}\" size=\"{size}\" color=\"{color}\">",
+        xml_escape_attr(name)
+    ));
+    let bold = font.and_then(|font| font.bold).unwrap_or(false);
+    let italic = font.and_then(|font| font.italic).unwrap_or(false);
+    let underline = font
+        .and_then(|font| font.underline)
+        .is_some_and(|underline| underline != Underline::None);
+    if bold {
+        xml.push_str("<b>");
+    }
+    if italic {
+        xml.push_str("<i>");
+    }
+    if underline {
+        xml.push_str("<u>");
+    }
+    xml.push_str(&xml_escape(text));
+    if underline {
+        xml.push_str("</u>");
+    }
+    if italic {
+        xml.push_str("</i>");
+    }
+    if bold {
+        xml.push_str("</b>");
+    }
+    xml.push_str("</font>");
+}
+
+fn caption_lines(text: &ControlText) -> Vec<Vec<(String, Option<RunFont>)>> {
+    let mut lines = vec![Vec::new()];
+    for run in &text.runs {
+        let parts: Vec<&str> = run.text.split('\n').collect();
+        for (index, part) in parts.iter().enumerate() {
+            let part = part.strip_suffix('\r').unwrap_or(part);
+            lines
+                .last_mut()
+                .expect("caption has a line")
+                .push((part.to_string(), run.font.clone()));
+            if index + 1 < parts.len() {
+                lines.push(Vec::new());
+            }
+        }
+    }
+    lines
+}
+
 /// Append one control `<v:shape>` to a VML part body. `shape_id` is
 /// the numeric part of `_x0000_s{id}` (must match the worksheet
 /// `control/@shapeId` in XLSX); `first_button` is the recomputed
@@ -230,8 +401,12 @@ pub fn write_control_shape(
     );
 
     xml.push_str(&format!(
-        " <v:shape id=\"_x0000_s{shape_id}\" type=\"#_x0000_t201\" style='position:absolute;\n"
+        " <v:shape id=\"_x0000_s{shape_id}\" type=\"#_x0000_t201\""
     ));
+    if let Some(alt_text) = &meta.alt_text {
+        xml.push_str(&format!(" alt=\"{}\"", xml_escape_attr(alt_text)));
+    }
+    xml.push_str(" style='position:absolute;\n");
     // Excel writes visible control shapes with no visibility token;
     // only hidden ones carry it.
     xml.push_str(&format!(
@@ -240,8 +415,16 @@ pub fn write_control_shape(
         fmt_pt(top),
         fmt_pt(width.max(0)),
         fmt_pt(height.max(0)),
-        if meta.hidden { ";visibility:hidden" } else { "" },
-        if wrap_tight { ";\n  mso-wrap-style:tight" } else { "" },
+        if meta.hidden {
+            ";visibility:hidden"
+        } else {
+            ""
+        },
+        if wrap_tight {
+            ";\n  mso-wrap-style:tight"
+        } else {
+            ""
+        },
     ));
     match kind {
         K::Button { .. } => {
@@ -292,17 +475,25 @@ pub fn write_control_shape(
 
     // Caption textbox for captioned kinds.
     if let Some(caption) = control.caption() {
-        let (align, size) = match kind {
-            K::Button { .. } => ("center", 220),
-            _ => ("left", 160),
+        let (default_horizontal, _) = default_text_alignment(kind);
+        let align =
+            horizontal_alignment_name(caption.horizontal_alignment.unwrap_or(default_horizontal))
+                .to_ascii_lowercase();
+        let size = if matches!(kind, K::Button { .. }) {
+            220
+        } else {
+            160
         };
         xml.push_str("  <v:textbox style='mso-direction-alt:auto' o:singleclick=\"f\">\n");
-        for line in caption.split('\n') {
-            let line = line.strip_suffix('\r').unwrap_or(line);
-            xml.push_str(&format!(
-                "   <div style='text-align:{align}'><font face=\"Segoe UI\" size=\"{size}\" color=\"auto\">{}</font></div>\n",
-                xml_escape(line)
-            ));
+        for line in caption_lines(caption) {
+            xml.push_str(&format!("   <div style='text-align:{align}'>"));
+            if line.is_empty() {
+                write_vml_run(xml, "", None, size);
+            }
+            for (text, font) in line {
+                write_vml_run(xml, &text, font.as_ref(), size);
+            }
+            xml.push_str("</div>\n");
         }
         xml.push_str("  </v:textbox>\n");
     }
@@ -329,6 +520,26 @@ pub fn write_control_shape(
     if !meta.printable {
         xml.push_str("   <x:PrintObject>False</x:PrintObject>\n");
     }
+    if let Some(macro_name) = &control.macro_name {
+        xml.push_str(&format!(
+            "   <x:FmlaMacro>{}</x:FmlaMacro>\n",
+            xml_escape(&encode_macro_formula(macro_name))
+        ));
+    }
+
+    if let Some(caption) = control.caption() {
+        let (default_horizontal, default_vertical) = default_text_alignment(kind);
+        let horizontal = caption.horizontal_alignment.unwrap_or(default_horizontal);
+        let vertical = caption.vertical_alignment.unwrap_or(default_vertical);
+        xml.push_str(&format!(
+            "   <x:TextHAlign>{}</x:TextHAlign>\n",
+            horizontal_alignment_name(horizontal)
+        ));
+        xml.push_str(&format!(
+            "   <x:TextVAlign>{}</x:TextVAlign>\n",
+            vertical_alignment_name(vertical)
+        ));
+    }
 
     let push_checked = |xml: &mut String, state: &CheckState| {
         let v = match state {
@@ -342,15 +553,16 @@ pub fn write_control_shape(
     };
     let push_link = |xml: &mut String, link: &Option<String>| {
         if let Some(link) = link {
-            xml.push_str(&format!("   <x:FmlaLink>{}</x:FmlaLink>\n", xml_escape(link)));
+            xml.push_str(&format!(
+                "   <x:FmlaLink>{}</x:FmlaLink>\n",
+                xml_escape(link)
+            ));
         }
     };
 
     match kind {
         K::Button { .. } => {
             xml.push_str("   <x:AutoFill>False</x:AutoFill>\n");
-            xml.push_str("   <x:TextHAlign>Center</x:TextHAlign>\n");
-            xml.push_str("   <x:TextVAlign>Center</x:TextVAlign>\n");
         }
         K::Checkbox {
             state,
@@ -360,7 +572,6 @@ pub fn write_control_shape(
         } => {
             xml.push_str("   <x:AutoFill>False</x:AutoFill>\n");
             xml.push_str("   <x:AutoLine>False</x:AutoLine>\n");
-            xml.push_str("   <x:TextVAlign>Center</x:TextVAlign>\n");
             push_checked(xml, state);
             push_link(xml, cell_link);
             if *no_3d {
@@ -375,7 +586,6 @@ pub fn write_control_shape(
         } => {
             xml.push_str("   <x:AutoFill>False</x:AutoFill>\n");
             xml.push_str("   <x:AutoLine>False</x:AutoLine>\n");
-            xml.push_str("   <x:TextVAlign>Center</x:TextVAlign>\n");
             push_checked(xml, state);
             push_link(xml, cell_link);
             if *no_3d {
@@ -597,8 +807,12 @@ pub struct VmlControl {
     pub shape_num: u32,
     /// `x:ClientData/@ObjectType`.
     pub object_type: String,
-    /// Caption text from the shape's textbox, whitespace-normalized.
-    pub caption: String,
+    /// Caption text, rich runs, and alignment from the shape's textbox.
+    pub text: ControlText,
+    /// Macro assignment from `x:FmlaMacro`.
+    pub macro_name: Option<String>,
+    /// Alternative text from the VML shape's `alt` attribute.
+    pub alt_text: Option<String>,
     /// `x:Anchor` values (col/px offsets).
     pub anchor_px: Option<[i64; 8]>,
     /// Un-negated flags (true = moves/sizes with cells).
@@ -653,7 +867,7 @@ impl VmlControl {
     /// [`FormControl`]. Returns `None` for non-control shapes
     /// (comments) and unsupported object types.
     pub fn to_drawing_object(&self) -> Option<DrawingObject> {
-        let caption = || self.caption.clone();
+        let caption = || self.text.clone();
         let state = match self.checked {
             2 => CheckState::Mixed,
             0 => CheckState::Unchecked,
@@ -725,7 +939,11 @@ impl VmlControl {
                 FormControlKind::Dropdown {
                     input_range: self.fmla_range.clone(),
                     cell_link: self.fmla_link.clone(),
-                    selected: if self.sel > 0 { Some(self.sel - 1) } else { None },
+                    selected: if self.sel > 0 {
+                        Some(self.sel - 1)
+                    } else {
+                        None
+                    },
                     lines: self.drop_lines,
                     no_3d: self.no_3d,
                 }
@@ -753,11 +971,13 @@ impl VmlControl {
             .anchor_px
             .map(|a| px_to_anchor(&a, self.move_with_cells, self.size_with_cells))
             .unwrap_or_default();
-        let mut object =
-            DrawingObject::form_control(FormControl::new(kind)).with_anchor(anchor);
+        let mut control = FormControl::new(kind);
+        control.macro_name = self.macro_name.clone();
+        let mut object = DrawingObject::form_control(control).with_anchor(anchor);
         object.meta.locked = self.locked;
         object.meta.printable = self.print_object;
         object.meta.hidden = self.hidden;
+        object.meta.alt_text = self.alt_text.clone();
         Some(object)
     }
 }
@@ -898,9 +1118,28 @@ fn parse_raw_shapes(bytes: &[u8]) -> Vec<RawShape> {
     let mut in_client_data = false;
     let mut in_textbox = false;
     let mut in_caption_div = false;
-    let mut caption_line = String::new();
-    let mut caption_lines: Vec<String> = Vec::new();
+    let mut caption_line_runs: Vec<RichTextRun> = Vec::new();
+    let mut caption_lines: Vec<Vec<RichTextRun>> = Vec::new();
+    let mut current_font: Option<RunFont> = None;
+    let mut current_font_text = String::new();
     let mut element_text: Option<(String, String)> = None; // (name, text)
+
+    let flush_font =
+        |runs: &mut Vec<RichTextRun>, font: &mut Option<RunFont>, text: &mut String| {
+            if font.is_none() && text.is_empty() {
+                return;
+            }
+            let normalized = normalize_caption(text);
+            if !normalized.is_empty() || !text.is_empty() {
+                runs.push(RichTextRun {
+                    text: normalized,
+                    font: font.take().filter(|font| !font.is_empty()),
+                });
+            } else {
+                *font = None;
+            }
+            text.clear();
+        };
 
     loop {
         match reader.read_event_into(&mut buf) {
@@ -923,19 +1162,28 @@ fn parse_raw_shapes(bytes: &[u8]) -> Vec<RawShape> {
                                     }
                                 }
                                 b"style" => {
-                                    let style =
-                                        String::from_utf8_lossy(&attr.value).to_lowercase();
+                                    let style = String::from_utf8_lossy(&attr.value).to_lowercase();
                                     let normalized: String =
                                         style.chars().filter(|c| !c.is_whitespace()).collect();
                                     shape.visible = normalized.contains("visibility:visible");
-                                    shape.control.hidden =
-                                        normalized.contains("visibility:hidden");
+                                    shape.control.hidden = normalized.contains("visibility:hidden");
+                                }
+                                b"alt" => {
+                                    shape.control.alt_text = Some(
+                                        attr.unescape_value()
+                                            .map(|value| value.into_owned())
+                                            .unwrap_or_else(|_| {
+                                                String::from_utf8_lossy(&attr.value).into_owned()
+                                            }),
+                                    );
                                 }
                                 _ => {}
                             }
                         }
-                        caption_line.clear();
+                        caption_line_runs.clear();
                         caption_lines.clear();
+                        current_font = None;
+                        current_font_text.clear();
                         in_client_data = false;
                         in_textbox = false;
                         in_caption_div = false;
@@ -944,7 +1192,65 @@ fn parse_raw_shapes(bytes: &[u8]) -> Vec<RawShape> {
                     b"textbox" => in_textbox = true,
                     b"div" if in_textbox => {
                         in_caption_div = true;
-                        caption_line.clear();
+                        caption_line_runs.clear();
+                        current_font = None;
+                        current_font_text.clear();
+                        if let Some(shape) = current.as_mut() {
+                            for attr in e.attributes().flatten() {
+                                if attr.key.local_name().as_ref() != b"style" {
+                                    continue;
+                                }
+                                let style = String::from_utf8_lossy(&attr.value);
+                                for declaration in style.split(';') {
+                                    let Some((name, value)) = declaration.split_once(':') else {
+                                        continue;
+                                    };
+                                    if name.trim().eq_ignore_ascii_case("text-align") {
+                                        if let Some(alignment) = parse_horizontal_alignment(value) {
+                                            shape.control.text.horizontal_alignment =
+                                                Some(alignment);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    b"font" if in_caption_div => {
+                        flush_font(
+                            &mut caption_line_runs,
+                            &mut current_font,
+                            &mut current_font_text,
+                        );
+                        let mut font = RunFont::default();
+                        for attr in e.attributes().flatten() {
+                            let value = attr
+                                .unescape_value()
+                                .map(|value| value.into_owned())
+                                .unwrap_or_else(|_| {
+                                    String::from_utf8_lossy(&attr.value).into_owned()
+                                });
+                            match attr.key.local_name().as_ref() {
+                                b"face" => font.name = Some(value),
+                                b"size" => {
+                                    font.size = value.parse::<f64>().ok().map(|size| size / 20.0)
+                                }
+                                b"color" if !value.eq_ignore_ascii_case("auto") => {
+                                    font.color = Color::from_hex(&value)
+                                }
+                                _ => {}
+                            }
+                        }
+                        current_font = Some(font);
+                    }
+                    b"b" if in_caption_div => {
+                        current_font.get_or_insert_with(RunFont::default).bold = Some(true);
+                    }
+                    b"i" if in_caption_div => {
+                        current_font.get_or_insert_with(RunFont::default).italic = Some(true);
+                    }
+                    b"u" if in_caption_div => {
+                        current_font.get_or_insert_with(RunFont::default).underline =
+                            Some(Underline::Single);
                     }
                     b"ClientData" => {
                         in_client_data = true;
@@ -985,7 +1291,14 @@ fn parse_raw_shapes(bytes: &[u8]) -> Vec<RawShape> {
                     .map(|c| c.into_owned())
                     .unwrap_or_else(|_| String::from_utf8_lossy(t.as_ref()).into_owned());
                 if in_textbox && in_caption_div {
-                    caption_line.push_str(&text);
+                    if current_font.is_some() {
+                        current_font_text.push_str(&text);
+                    } else {
+                        let normalized = normalize_caption(&text);
+                        if !normalized.is_empty() {
+                            caption_line_runs.push(RichTextRun::plain(normalized));
+                        }
+                    }
                 } else if let Some((_, buf_text)) = element_text.as_mut() {
                     buf_text.push_str(&text);
                 }
@@ -995,7 +1308,18 @@ fn parse_raw_shapes(bytes: &[u8]) -> Vec<RawShape> {
                 match name.as_slice() {
                     b"shape" => {
                         if let Some(mut shape) = current.take() {
-                            shape.control.caption = caption_lines.join("\n");
+                            let mut runs = Vec::new();
+                            let line_count = caption_lines.len();
+                            for (index, mut line) in
+                                std::mem::take(&mut caption_lines).into_iter().enumerate()
+                            {
+                                runs.append(&mut line);
+                                if index + 1 < line_count {
+                                    runs.push(RichTextRun::plain("\n"));
+                                }
+                            }
+                            shape.control.text.runs = runs;
+                            normalize_vml_defaults(&mut shape.control);
                             if !shape.control.object_type.is_empty() {
                                 out.push(shape);
                             }
@@ -1004,11 +1328,20 @@ fn parse_raw_shapes(bytes: &[u8]) -> Vec<RawShape> {
                     b"textbox" => in_textbox = false,
                     b"div" => {
                         if in_caption_div {
-                            caption_lines.push(normalize_caption(&caption_line));
-                            caption_line.clear();
+                            flush_font(
+                                &mut caption_line_runs,
+                                &mut current_font,
+                                &mut current_font_text,
+                            );
+                            caption_lines.push(std::mem::take(&mut caption_line_runs));
                         }
                         in_caption_div = false;
                     }
+                    b"font" if in_caption_div => flush_font(
+                        &mut caption_line_runs,
+                        &mut current_font,
+                        &mut current_font_text,
+                    ),
                     b"ClientData" => in_client_data = false,
                     _ => {
                         if let Some((elem, text)) = element_text.take() {
@@ -1020,11 +1353,9 @@ fn parse_raw_shapes(bytes: &[u8]) -> Vec<RawShape> {
                                         "Visible" => {
                                             shape.visible = blank_true(&text);
                                         }
-                                        _ => apply_client_data_text(
-                                            &mut shape.control,
-                                            &elem,
-                                            &text,
-                                        ),
+                                        _ => {
+                                            apply_client_data_text(&mut shape.control, &elem, &text)
+                                        }
                                     }
                                 }
                             }
@@ -1065,6 +1396,17 @@ fn apply_client_data_text(ctrl: &mut VmlControl, elem: &str, text: &str) {
         "Checked" => ctrl.checked = num(),
         "FmlaLink" => ctrl.fmla_link = Some(text.to_string()),
         "FmlaRange" => ctrl.fmla_range = Some(text.to_string()),
+        "FmlaMacro" => ctrl.macro_name = Some(decode_macro_formula(text)),
+        "TextHAlign" => {
+            if let Some(alignment) = parse_horizontal_alignment(text) {
+                ctrl.text.horizontal_alignment = Some(alignment);
+            }
+        }
+        "TextVAlign" => {
+            if let Some(alignment) = parse_vertical_alignment(text) {
+                ctrl.text.vertical_alignment = Some(alignment);
+            }
+        }
         "Sel" => ctrl.sel = num(),
         "SelType" => ctrl.sel_type = text.to_string(),
         "LCT" => ctrl.lct = text.to_string(),
@@ -1099,7 +1441,7 @@ mod tests {
 
     fn checkbox(cell_link: Option<&str>) -> DrawingObject {
         DrawingObject::form_control(FormControl::new(FormControlKind::Checkbox {
-            caption: "Enable audit".to_string(),
+            caption: "Enable audit".into(),
             state: CheckState::Checked,
             cell_link: cell_link.map(str::to_string),
             no_3d: true,
@@ -1153,7 +1495,7 @@ mod tests {
         let vml = &parsed[0];
         assert_eq!(vml.shape_num, 1026);
         assert_eq!(vml.object_type, "Checkbox");
-        assert_eq!(vml.caption, "Enable audit");
+        assert_eq!(vml.text.plain_text(), "Enable audit");
         assert_eq!(vml.anchor_px, Some([0, 13, 3, 0, 2, 18, 4, 4]));
         assert!(vml.move_with_cells);
         assert!(!vml.size_with_cells, "OneCell editAs negates sizing");
@@ -1198,7 +1540,11 @@ mod tests {
         let parsed = parse_vml_controls(wrap(body).as_bytes());
         assert_eq!(parsed.len(), 1);
         let vml = &parsed[0];
-        assert_eq!(vml.caption, "Enable audit", "wrapped caption normalizes");
+        assert_eq!(
+            vml.text.plain_text(),
+            "Enable audit",
+            "wrapped caption normalizes"
+        );
         assert_eq!(vml.checked, 1);
         assert!(!vml.size_with_cells);
         assert!(vml.move_with_cells);
@@ -1219,20 +1565,20 @@ mod tests {
     fn all_kinds_round_trip_through_vml() {
         let kinds: Vec<FormControlKind> = vec![
             FormControlKind::Button {
-                caption: "Run".to_string(),
+                caption: "Run".into(),
             },
             FormControlKind::OptionButton {
-                caption: "Opt".to_string(),
+                caption: "Opt".into(),
                 state: CheckState::Checked,
                 cell_link: Some("$D$3".to_string()),
                 first_in_group: true,
                 no_3d: false,
             },
             FormControlKind::Label {
-                caption: "Info <&>".to_string(),
+                caption: "Info <&>".into(),
             },
             FormControlKind::GroupBox {
-                caption: "Frame".to_string(),
+                caption: "Frame".into(),
                 no_3d: true,
             },
             FormControlKind::ListBox {
@@ -1324,14 +1670,14 @@ mod tests {
         let mut object = checkbox(None);
         if let DrawingKind::FormControl(control) = &mut object.kind {
             if let FormControlKind::Checkbox { caption, .. } = &mut control.kind {
-                *caption = "Line one\nLine two\n".to_string();
+                *caption = "Line one\nLine two\n".into();
             }
         }
         let xml = shape_xml(&object, 1025, 1, false);
         assert_eq!(xml.matches("<div ").count(), 3);
 
         let parsed = parse_vml_controls(wrap(&xml).as_bytes());
-        assert_eq!(parsed[0].caption, "Line one\nLine two\n");
+        assert_eq!(parsed[0].text.plain_text(), "Line one\nLine two\n");
     }
 
     #[test]

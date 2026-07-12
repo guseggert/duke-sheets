@@ -84,6 +84,7 @@ pub use duke_sheets_core::{
     ColumnFilter,
     CommentRef,
     ConditionalFormatRule,
+    ControlText,
     // Data validation types
     CustomFilterCondition,
     CustomFilters,

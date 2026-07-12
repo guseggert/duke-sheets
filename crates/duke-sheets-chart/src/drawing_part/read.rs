@@ -7,6 +7,10 @@ use quick_xml::events::{BytesStart, Event};
 use quick_xml::reader::Reader;
 use quick_xml::Writer;
 
+use super::{
+    TwinColor, TwinHorizontalAlignment, TwinRunFont, TwinText, TwinTextRun, TwinUnderline,
+    TwinVerticalAlignment,
+};
 use crate::error::{ChartParseError, ChartParseResult};
 use crate::{CellMarker, ChildTransform, DrawingAnchor, EditAs, GroupTransform};
 
@@ -20,6 +24,9 @@ pub struct DrawingChartRef {
     pub is_chart_ex: bool,
     /// Raw `mc:Fallback` inner XML bytes for roundtrip (chartEx only).
     pub raw_mc_fallback: Option<Vec<u8>>,
+    pub name: Option<String>,
+    pub descr: Option<String>,
+    pub title: Option<String>,
     /// The frame's `cNvPr/@hidden` (absent = false).
     pub hidden: bool,
 }
@@ -61,6 +68,7 @@ pub enum DrawingEntryKind {
 pub struct PicShape {
     pub name: String,
     pub descr: Option<String>,
+    pub title: Option<String>,
     /// `cNvPr/@hidden` (absent = false).
     pub hidden: bool,
     pub blip_rel: Option<String>,
@@ -84,6 +92,10 @@ pub struct TwinShape {
     pub shape_num: Option<u32>,
     /// `cNvPr/@name`, the control's display name.
     pub name: Option<String>,
+    pub descr: Option<String>,
+    pub title: Option<String>,
+    pub macro_name: Option<String>,
+    pub text: Option<TwinText>,
     /// Placement (meaningful for group children).
     pub xfrm: ChildTransform,
 }
@@ -93,6 +105,7 @@ pub struct TwinShape {
 pub struct ParsedGroup {
     pub name: String,
     pub descr: Option<String>,
+    pub title: Option<String>,
     /// `cNvPr/@hidden` (absent = false).
     pub hidden: bool,
     /// grpSpPr/a:xfrm with child-space mapping.
@@ -199,7 +212,7 @@ fn parse_wsdr_alternate<R: std::io::BufRead>(
 
 fn new_reader(bytes: &[u8]) -> Reader<&[u8]> {
     let mut reader = Reader::from_reader(bytes);
-    reader.config_mut().trim_text(true);
+    reader.config_mut().trim_text(false);
     reader
 }
 
@@ -246,9 +259,7 @@ fn capture_until_end<R: std::io::BufRead>(
                 }
             }
             Ok(Event::Eof) => {
-                return Err(ChartParseError::Parse(
-                    "unterminated drawing anchor".into(),
-                ))
+                return Err(ChartParseError::Parse("unterminated drawing anchor".into()))
             }
             Ok(event) => {
                 w.write_event(event.into_owned())
@@ -353,6 +364,9 @@ enum AnchorContent {
         rel_id: String,
         is_chart_ex: bool,
         raw_mc_fallback: Option<Vec<u8>>,
+        name: Option<String>,
+        descr: Option<String>,
+        title: Option<String>,
         hidden: bool,
     },
     Pic(PicShape),
@@ -470,6 +484,9 @@ fn parse_anchor(bytes: &[u8]) -> Option<DrawingEntry> {
             rel_id,
             is_chart_ex,
             raw_mc_fallback,
+            name,
+            descr,
+            title,
             hidden,
         } => DrawingEntryKind::Chart(DrawingChartRef {
             rel_id,
@@ -482,11 +499,12 @@ fn parse_anchor(bytes: &[u8]) -> Option<DrawingEntry> {
             },
             is_chart_ex,
             raw_mc_fallback,
+            name,
+            descr,
+            title,
             hidden,
         }),
-        AnchorContent::Pic(pic) if pic.blip_rel.is_some() => {
-            DrawingEntryKind::Image(Box::new(pic))
-        }
+        AnchorContent::Pic(pic) if pic.blip_rel.is_some() => DrawingEntryKind::Image(Box::new(pic)),
         AnchorContent::Twin(twin) => DrawingEntryKind::ControlTwin(twin),
         AnchorContent::Group(group) => DrawingEntryKind::Group(group),
         _ => DrawingEntryKind::Raw,
@@ -522,11 +540,17 @@ fn parse_anchor_content<R: std::io::BufRead>(
             FrameContent::Chart {
                 rel_id,
                 is_chart_ex,
+                name,
+                descr,
+                title,
                 hidden,
             } => AnchorContent::Chart {
                 rel_id,
                 is_chart_ex,
                 raw_mc_fallback: None,
+                name,
+                descr,
+                title,
                 hidden,
             },
             FrameContent::Twin(twin) => AnchorContent::Twin(twin),
@@ -540,7 +564,7 @@ fn parse_anchor_content<R: std::io::BufRead>(
                 Ok(AnchorContent::Other)
             }
         }
-        b"sp" => Ok(match parse_sp(reader)? {
+        b"sp" => Ok(match parse_sp(reader, start)? {
             Some(twin) => AnchorContent::Twin(twin),
             None => AnchorContent::Other,
         }),
@@ -590,6 +614,9 @@ fn parse_anchor_alternate<R: std::io::BufRead>(
     if let AnchorContent::Chart {
         rel_id,
         is_chart_ex,
+        name,
+        descr,
+        title,
         hidden,
         ..
     } = chosen
@@ -598,6 +625,9 @@ fn parse_anchor_alternate<R: std::io::BufRead>(
             rel_id,
             is_chart_ex,
             raw_mc_fallback: fallback,
+            name,
+            descr,
+            title,
             hidden,
         });
     }
@@ -630,6 +660,9 @@ enum FrameContent {
     Chart {
         rel_id: String,
         is_chart_ex: bool,
+        name: Option<String>,
+        descr: Option<String>,
+        title: Option<String>,
         hidden: bool,
     },
     Twin(TwinShape),
@@ -676,6 +709,8 @@ fn parse_graphic_frame<R: std::io::BufRead>(
                 if let Some(name) = attr_string(e, b"name") {
                     twin.name = Some(name);
                 }
+                twin.descr = attr_string(e, b"descr");
+                twin.title = attr_string(e, b"title");
                 *hidden = attr_bool_default_false(e, b"hidden");
             }
             b"off" if in_xfrm => {
@@ -742,6 +777,9 @@ fn parse_graphic_frame<R: std::io::BufRead>(
         Some((rel_id, is_chart_ex)) => FrameContent::Chart {
             rel_id,
             is_chart_ex,
+            name: twin.name,
+            descr: twin.descr,
+            title: twin.title,
             hidden,
         },
         None => FrameContent::None,
@@ -756,8 +794,10 @@ fn parse_pic<R: std::io::BufRead>(reader: &mut Reader<R>) -> ChartParseResult<Pi
     let mut in_sp_pr = false;
     let mut in_xfrm = false;
 
-    let handle = |e: &BytesStart<'_>, pic: &mut PicShape, in_sp_pr: bool, in_xfrm: bool| {
-        match e.local_name().as_ref() {
+    let handle = |e: &BytesStart<'_>, pic: &mut PicShape, in_sp_pr: bool, in_xfrm: bool| match e
+        .local_name()
+        .as_ref()
+    {
             b"cNvPr" => {
                 if let Some(name) = attr_string(e, b"name") {
                     pic.name = name;
@@ -765,6 +805,7 @@ fn parse_pic<R: std::io::BufRead>(reader: &mut Reader<R>) -> ChartParseResult<Pi
                 if let Some(descr) = attr_string(e, b"descr") {
                     pic.descr = Some(descr);
                 }
+            pic.title = attr_string(e, b"title");
                 pic.hidden = attr_bool_default_false(e, b"hidden");
             }
             b"blip" => {
@@ -777,8 +818,14 @@ fn parse_pic<R: std::io::BufRead>(reader: &mut Reader<R>) -> ChartParseResult<Pi
             }
             b"xfrm" if in_sp_pr => {
                 pic.rotation = attr_i64(e, b"rot").map(|v| v as i32);
-                pic.flip_h = matches!(attr_string(e, b"flipH").as_deref(), Some("1") | Some("true"));
-                pic.flip_v = matches!(attr_string(e, b"flipV").as_deref(), Some("1") | Some("true"));
+            pic.flip_h = matches!(
+                attr_string(e, b"flipH").as_deref(),
+                Some("1") | Some("true")
+            );
+            pic.flip_v = matches!(
+                attr_string(e, b"flipV").as_deref(),
+                Some("1") | Some("true")
+            );
             }
             b"off" if in_xfrm => {
                 pic.off_x = attr_i64(e, b"x").unwrap_or(0);
@@ -789,7 +836,6 @@ fn parse_pic<R: std::io::BufRead>(reader: &mut Reader<R>) -> ChartParseResult<Pi
                 pic.ext_cy = attr_i64(e, b"cy").unwrap_or(0);
             }
             _ => {}
-        }
     };
 
     loop {
@@ -823,12 +869,196 @@ fn parse_pic<R: std::io::BufRead>(reader: &mut Reader<R>) -> ChartParseResult<Pi
     }
 }
 
+fn parse_twin_text<R: std::io::BufRead>(reader: &mut Reader<R>) -> ChartParseResult<TwinText> {
+    let mut text = TwinText::default();
+    let mut buf = Vec::new();
+    let mut depth = 1u32;
+    let mut in_run = false;
+    let mut in_text = false;
+    let mut run_text = String::new();
+    let mut run_font: Option<TwinRunFont> = None;
+
+    let apply = |e: &BytesStart<'_>,
+                 text: &mut TwinText,
+                 run_font: &mut Option<TwinRunFont>,
+                 in_run: bool| {
+        match e.local_name().as_ref() {
+            b"bodyPr" => {
+                text.vertical_alignment =
+                    attr_string(e, b"anchor").and_then(|value| match value.as_str() {
+                        "t" => Some(TwinVerticalAlignment::Top),
+                        "ctr" => Some(TwinVerticalAlignment::Center),
+                        "b" => Some(TwinVerticalAlignment::Bottom),
+                        "just" => Some(TwinVerticalAlignment::Justify),
+                        "dist" => Some(TwinVerticalAlignment::Distributed),
+                        _ => None,
+                    });
+            }
+            b"pPr" => {
+                text.horizontal_alignment =
+                    attr_string(e, b"algn").and_then(|value| match value.as_str() {
+                        "l" => Some(TwinHorizontalAlignment::Left),
+                        "ctr" => Some(TwinHorizontalAlignment::Center),
+                        "r" => Some(TwinHorizontalAlignment::Right),
+                        "just" => Some(TwinHorizontalAlignment::Justify),
+                        "dist" => Some(TwinHorizontalAlignment::Distributed),
+                        _ => None,
+                    });
+            }
+            b"rPr" if in_run => {
+                let font = run_font.get_or_insert_with(TwinRunFont::default);
+                font.size = attr_i64(e, b"sz").map(|size| size as f64 / 100.0);
+                font.bold = attr_string(e, b"b")
+                    .map(|value| value == "1" || value.eq_ignore_ascii_case("true"));
+                font.italic = attr_string(e, b"i")
+                    .map(|value| value == "1" || value.eq_ignore_ascii_case("true"));
+                font.underline = attr_string(e, b"u").and_then(|value| match value.as_str() {
+                    "sng" => Some(TwinUnderline::Single),
+                    "dbl" => Some(TwinUnderline::Double),
+                    _ => None,
+                });
+                font.strikethrough = attr_string(e, b"strike").map(|value| value != "noStrike");
+                font.baseline = attr_i64(e, b"baseline").map(|value| value as i32);
+            }
+            b"latin" if in_run => {
+                run_font.get_or_insert_with(TwinRunFont::default).name =
+                    attr_string(e, b"typeface");
+            }
+            b"srgbClr" if in_run => {
+                if let Some(value) = attr_string(e, b"val") {
+                    let value = value.trim_start_matches('#');
+                    if value.len() == 6 {
+                        if let (Ok(r), Ok(g), Ok(b)) = (
+                            u8::from_str_radix(&value[0..2], 16),
+                            u8::from_str_radix(&value[2..4], 16),
+                            u8::from_str_radix(&value[4..6], 16),
+                        ) {
+                            run_font.get_or_insert_with(TwinRunFont::default).color =
+                                Some(TwinColor::Rgb { r, g, b });
+                        }
+                    }
+                }
+            }
+            b"schemeClr" if in_run => {
+                let index = attr_string(e, b"val").and_then(|value| match value.as_str() {
+                    "lt1" => Some(0),
+                    "dk1" => Some(1),
+                    "lt2" => Some(2),
+                    "dk2" => Some(3),
+                    "accent1" => Some(4),
+                    "accent2" => Some(5),
+                    "accent3" => Some(6),
+                    "accent4" => Some(7),
+                    "accent5" => Some(8),
+                    "accent6" => Some(9),
+                    _ => None,
+                });
+                if let Some(index) = index {
+                    run_font.get_or_insert_with(TwinRunFont::default).color =
+                        Some(TwinColor::Theme { index, tint: 0 });
+                }
+            }
+            b"lumMod" if in_run => {
+                if let Some(value) = attr_i64(e, b"val") {
+                    if let Some(TwinColor::Theme { index, .. }) =
+                        run_font.as_ref().and_then(|font| font.color)
+                    {
+                        let tint = ((value - 100_000) / 1_000).clamp(-100, 0) as i8;
+                        run_font.get_or_insert_with(TwinRunFont::default).color =
+                            Some(TwinColor::Theme { index, tint });
+                    }
+                }
+            }
+            b"lumOff" if in_run => {
+                if let Some(value) = attr_i64(e, b"val") {
+                    if let Some(TwinColor::Theme { index, .. }) =
+                        run_font.as_ref().and_then(|font| font.color)
+                    {
+                        let tint = (value / 1_000).clamp(0, 100) as i8;
+                        run_font.get_or_insert_with(TwinRunFont::default).color =
+                            Some(TwinColor::Theme { index, tint });
+                    }
+                }
+            }
+            _ => {}
+        }
+    };
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) => {
+                depth += 1;
+                match e.local_name().as_ref() {
+                    b"r" => {
+                        in_run = true;
+                        run_text.clear();
+                        run_font = None;
+                    }
+                    b"t" if in_run => in_text = true,
+                    b"br" if in_run => run_text.push('\n'),
+                    _ => {}
+                }
+                apply(e, &mut text, &mut run_font, in_run);
+            }
+            Ok(Event::Empty(ref e)) => {
+                if e.local_name().as_ref() == b"br" && in_run {
+                    run_text.push('\n');
+                }
+                apply(e, &mut text, &mut run_font, in_run);
+            }
+            Ok(Event::Text(ref value)) if in_text => {
+                run_text.push_str(
+                    &value
+                        .unescape()
+                        .map(|value| value.into_owned())
+                        .unwrap_or_else(|_| String::from_utf8_lossy(value.as_ref()).into_owned()),
+                );
+            }
+            Ok(Event::End(ref e)) => {
+                match e.local_name().as_ref() {
+                    b"t" => in_text = false,
+                    b"r" if in_run => {
+                        text.runs.push(TwinTextRun {
+                            text: std::mem::take(&mut run_text),
+                            font: run_font.take().filter(|font| {
+                                font.name.is_some()
+                                    || font.size.is_some()
+                                    || font.color.is_some()
+                                    || font.bold.is_some()
+                                    || font.italic.is_some()
+                                    || font.underline.is_some()
+                                    || font.strikethrough.is_some()
+                                    || font.baseline.is_some()
+                            }),
+                        });
+                        in_run = false;
+                    }
+                    _ => {}
+                }
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(ChartParseError::Xml(e)),
+            _ => {}
+        }
+        buf.clear();
+    }
+    Ok(text)
+}
+
 /// Parse `<xdr:sp>` content (start consumed). Returns a twin when an
 /// `a14:compatExt` spid is present, `None` otherwise (plain shape).
-fn parse_sp<R: std::io::BufRead>(reader: &mut Reader<R>) -> ChartParseResult<Option<TwinShape>> {
+fn parse_sp<R: std::io::BufRead>(
+    reader: &mut Reader<R>,
+    start: &BytesStart<'_>,
+) -> ChartParseResult<Option<TwinShape>> {
     let mut buf = Vec::new();
     let mut depth: u32 = 1;
     let mut twin = TwinShape::default();
+    twin.macro_name = attr_string(start, b"macro").filter(|value| !value.is_empty());
     let mut has_spid = false;
     let mut in_sp_pr = false;
     let mut in_xfrm = false;
@@ -843,13 +1073,19 @@ fn parse_sp<R: std::io::BufRead>(reader: &mut Reader<R>) -> ChartParseResult<Opt
                 if let Some(name) = attr_string(e, b"name") {
                     twin.name = Some(name);
                 }
+                twin.descr = attr_string(e, b"descr");
+                twin.title = attr_string(e, b"title");
             }
             b"xfrm" if in_sp_pr => {
                 twin.xfrm.rotation = attr_i64(e, b"rot").map(|v| v as i32).unwrap_or(0);
-                twin.xfrm.flip_h =
-                    matches!(attr_string(e, b"flipH").as_deref(), Some("1") | Some("true"));
-                twin.xfrm.flip_v =
-                    matches!(attr_string(e, b"flipV").as_deref(), Some("1") | Some("true"));
+                twin.xfrm.flip_h = matches!(
+                    attr_string(e, b"flipH").as_deref(),
+                    Some("1") | Some("true")
+                );
+                twin.xfrm.flip_v = matches!(
+                    attr_string(e, b"flipV").as_deref(),
+                    Some("1") | Some("true")
+                );
             }
             b"off" if in_xfrm => {
                 twin.xfrm.x_emu = attr_i64(e, b"x").unwrap_or(0);
@@ -877,6 +1113,10 @@ fn parse_sp<R: std::io::BufRead>(reader: &mut Reader<R>) -> ChartParseResult<Opt
                 match e.local_name().as_ref() {
                     b"spPr" => in_sp_pr = true,
                     b"xfrm" if in_sp_pr => in_xfrm = true,
+                    b"txBody" => {
+                        twin.text = Some(parse_twin_text(reader)?);
+                        depth -= 1;
+                    }
                     _ => {}
                 }
                 handle(e, &mut twin, &mut has_spid, in_sp_pr, in_xfrm);
@@ -914,8 +1154,8 @@ fn parse_group<R: std::io::BufRead>(
     let mut in_grp_sp_pr = false;
     let mut in_xfrm = false;
 
-    let handle_xfrm_child = |e: &BytesStart<'_>, transform: &mut GroupTransform| {
-        match e.local_name().as_ref() {
+    let handle_xfrm_child =
+        |e: &BytesStart<'_>, transform: &mut GroupTransform| match e.local_name().as_ref() {
             b"off" => {
                 transform.x_emu = attr_i64(e, b"x").unwrap_or(0);
                 transform.y_emu = attr_i64(e, b"y").unwrap_or(0);
@@ -933,7 +1173,6 @@ fn parse_group<R: std::io::BufRead>(
                 transform.child_cy_emu = attr_i64(e, b"cy").unwrap_or(0);
             }
             _ => {}
-        }
     };
 
     loop {
@@ -952,12 +1191,10 @@ fn parse_group<R: std::io::BufRead>(
                     }
                     b"cNvPr" if in_nv => parse_group_cnvpr(e, &mut group),
                     b"pic" if !in_nv && !in_grp_sp_pr => match parse_pic(reader)? {
-                        pic if pic.blip_rel.is_some() => {
-                            group.children.push(ParsedChild::Pic(pic))
-                        }
+                        pic if pic.blip_rel.is_some() => group.children.push(ParsedChild::Pic(pic)),
                         _ => modelable = false,
                     },
-                    b"sp" if !in_nv && !in_grp_sp_pr => match parse_sp(reader)? {
+                    b"sp" if !in_nv && !in_grp_sp_pr => match parse_sp(reader, e)? {
                         Some(twin) => group.children.push(ParsedChild::Twin(twin)),
                         None => modelable = false,
                     },
@@ -997,12 +1234,9 @@ fn parse_group<R: std::io::BufRead>(
                     }
                 }
             }
-            Ok(Event::Empty(ref e)) => {
-                match e.local_name().as_ref() {
+            Ok(Event::Empty(ref e)) => match e.local_name().as_ref() {
                     b"cNvPr" if in_nv => parse_group_cnvpr(e, &mut group),
-                    b"xfrm" if in_grp_sp_pr => {
-                        parse_group_xfrm_attrs(e, &mut group.transform)
-                    }
+                b"xfrm" if in_grp_sp_pr => parse_group_xfrm_attrs(e, &mut group.transform),
                     b"off" | b"ext" | b"chOff" | b"chExt" if in_xfrm => {
                         handle_xfrm_child(e, &mut group.transform);
                     }
@@ -1012,8 +1246,7 @@ fn parse_group<R: std::io::BufRead>(
                         modelable = false;
                     }
                     _ => {}
-                }
-            }
+            },
             Ok(Event::End(ref e)) => match e.local_name().as_ref() {
                 b"nvGrpSpPr" => in_nv = false,
                 b"grpSpPr" => in_grp_sp_pr = false,
@@ -1037,13 +1270,20 @@ fn parse_group_cnvpr(e: &BytesStart<'_>, group: &mut ParsedGroup) {
     if let Some(descr) = attr_string(e, b"descr") {
         group.descr = Some(descr);
     }
+    group.title = attr_string(e, b"title");
     group.hidden = attr_bool_default_false(e, b"hidden");
 }
 
 fn parse_group_xfrm_attrs(e: &BytesStart<'_>, transform: &mut GroupTransform) {
     transform.rotation = attr_i64(e, b"rot").map(|v| v as i32).unwrap_or(0);
-    transform.flip_h = matches!(attr_string(e, b"flipH").as_deref(), Some("1") | Some("true"));
-    transform.flip_v = matches!(attr_string(e, b"flipV").as_deref(), Some("1") | Some("true"));
+    transform.flip_h = matches!(
+        attr_string(e, b"flipH").as_deref(),
+        Some("1") | Some("true")
+    );
+    transform.flip_v = matches!(
+        attr_string(e, b"flipV").as_deref(),
+        Some("1") | Some("true")
+    );
 }
 
 /// Parse an `xdr:from`/`xdr:to` marker element (start consumed).

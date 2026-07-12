@@ -18,7 +18,6 @@ pub use crate::{
     CalculationOptions,
     CalculationStats,
     CellAddress,
-    CheckState,
     // Comments
     CellComment,
     CellError,
@@ -33,12 +32,14 @@ pub use crate::{
     Chart,
     ChartEx,
     ChartType,
+    CheckState,
     // Drawing types
     ChildTransform,
     Color,
     CommentRef,
     ConditionalFormatRule,
 
+    ControlText,
     CsvReader,
     CsvWriter,
 

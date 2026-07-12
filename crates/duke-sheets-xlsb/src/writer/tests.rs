@@ -2838,32 +2838,32 @@ mod tests {
 
         let kinds: Vec<FormControlKind> = vec![
             FormControlKind::Button {
-                caption: "Run Report".to_string(),
+                caption: "Run Report".into(),
             },
             FormControlKind::Checkbox {
-                caption: "Enable audit".to_string(),
+                caption: "Enable audit".into(),
                 state: CheckState::Checked,
                 cell_link: Some("$D$2".to_string()),
                 no_3d: true,
             },
             FormControlKind::Checkbox {
-                caption: "Tri state".to_string(),
+                caption: "Tri state".into(),
                 state: CheckState::Mixed,
                 cell_link: None,
                 no_3d: true,
             },
             FormControlKind::OptionButton {
-                caption: "Opt A".to_string(),
+                caption: "Opt A".into(),
                 state: CheckState::Checked,
                 cell_link: Some("$D$3".to_string()),
                 first_in_group: false,
                 no_3d: true,
             },
             FormControlKind::Label {
-                caption: "Status".to_string(),
+                caption: "Status".into(),
             },
             FormControlKind::GroupBox {
-                caption: "Choices".to_string(),
+                caption: "Choices".into(),
                 no_3d: true,
             },
             FormControlKind::ListBox {
@@ -2939,7 +2939,7 @@ mod tests {
         ws.set_comment_at(0, 0, CellComment::new("Author", "note"));
         ws.add_form_control(
             FormControl::new(FormControlKind::Checkbox {
-                caption: "check".to_string(),
+                caption: "check".into(),
                 state: CheckState::Checked,
                 cell_link: None,
                 no_3d: false,
@@ -2966,7 +2966,12 @@ mod tests {
         assert_eq!(ws2.comment_count(), 1, "comment survives");
         assert_eq!(ws2.form_control_count(), 1, "control survives");
         assert_eq!(
-            ws2.form_controls().next().unwrap().payload.caption(),
+            ws2.form_controls()
+                .next()
+                .unwrap()
+                .payload
+                .caption_text()
+                .as_deref(),
             Some("check")
         );
     }
@@ -3003,7 +3008,7 @@ mod tests {
         });
         ws.add_form_control(
             FormControl::new(FormControlKind::Checkbox {
-                caption: "check".to_string(),
+                caption: "check".into(),
                 state: CheckState::Checked,
                 cell_link: None,
                 no_3d: false,
@@ -3046,10 +3051,16 @@ mod tests {
         let mut payload = Vec::new();
         let mut legacy_rid = None;
         loop {
-            let Ok(record_type) = iter.read_type() else { break };
+            let Ok(record_type) = iter.read_type() else {
+                break;
+            };
             let len = iter.fill_buffer(&mut payload).unwrap();
             if record_type == crate::biff12::records::BRT_LEGACY_DRAWING {
-                legacy_rid = Some(crate::biff12::parser::wide_str(&payload[..len], 0).unwrap().0);
+                legacy_rid = Some(
+                    crate::biff12::parser::wide_str(&payload[..len], 0)
+                        .unwrap()
+                        .0,
+                );
             }
         }
         assert_eq!(legacy_rid.as_deref(), Some("rId2"));

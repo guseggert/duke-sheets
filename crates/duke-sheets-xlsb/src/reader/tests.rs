@@ -1824,7 +1824,10 @@ mod tests {
         fc.extend_from_slice(&0u32.to_le_bytes());
         fc.extend_from_slice(&0u16.to_le_bytes());
         stream.extend_from_slice(&build_record(records::BRT_BEGIN_FILTER_COLUMN, &fc));
-        stream.extend_from_slice(&build_record(records::BRT_BEGIN_FILTERS, &0u32.to_le_bytes()));
+        stream.extend_from_slice(&build_record(
+            records::BRT_BEGIN_FILTERS,
+            &0u32.to_le_bytes(),
+        ));
         // Malicious BrtFilter: cch claims 20 chars, carries one.
         let mut bad = Vec::new();
         bad.extend_from_slice(&20u32.to_le_bytes());
@@ -1908,10 +1911,15 @@ mod tests {
 
         let wb = XlsbReader::read(Cursor::new(zip)).unwrap();
         let ws = wb.worksheet(0).unwrap();
-        assert_eq!(ws.drawings().len(), 1, "twin must not duplicate: {:?}", ws.drawings());
+        assert_eq!(
+            ws.drawings().len(),
+            1,
+            "twin must not duplicate: {:?}",
+            ws.drawings()
+        );
         assert_eq!(ws.form_control_count(), 1);
         let control = ws.form_controls().next().unwrap();
-        assert_eq!(control.payload.caption(), Some("tick"));
+        assert_eq!(control.payload.caption_text().as_deref(), Some("tick"));
         assert_eq!(control.object.meta.name.as_deref(), Some("Check Box 1"));
     }
 }

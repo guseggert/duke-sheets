@@ -3,8 +3,84 @@ use std::io::{Seek, Write};
 use duke_sheets_chart::drawing_part::write::{
     self as part_write, PartChild, PartKind, PartObject, PartRel, TwinStyle,
 };
+use duke_sheets_chart::drawing_part::{
+    TwinColor, TwinHorizontalAlignment, TwinRunFont, TwinText, TwinTextRun, TwinUnderline,
+    TwinVerticalAlignment,
+};
 use duke_sheets_chart::Chart;
-use duke_sheets_core::{DrawingKind, DrawingMeta, Worksheet};
+use duke_sheets_core::{
+    Color, DrawingKind, DrawingMeta, FormControl, HorizontalAlignment, VerticalAlignment, Worksheet,
+};
+
+fn control_twin_text(control: &FormControl) -> Option<TwinText> {
+    let caption = control.caption()?;
+    let horizontal_alignment = caption
+        .horizontal_alignment
+        .map(|alignment| match alignment {
+            HorizontalAlignment::Center | HorizontalAlignment::CenterContinuous => {
+                TwinHorizontalAlignment::Center
+            }
+            HorizontalAlignment::Right => TwinHorizontalAlignment::Right,
+            HorizontalAlignment::Justify => TwinHorizontalAlignment::Justify,
+            HorizontalAlignment::Distributed => TwinHorizontalAlignment::Distributed,
+            HorizontalAlignment::General
+            | HorizontalAlignment::Left
+            | HorizontalAlignment::Fill => TwinHorizontalAlignment::Left,
+        });
+    let vertical_alignment = caption.vertical_alignment.map(|alignment| match alignment {
+        VerticalAlignment::Top => TwinVerticalAlignment::Top,
+        VerticalAlignment::Center => TwinVerticalAlignment::Center,
+        VerticalAlignment::Bottom => TwinVerticalAlignment::Bottom,
+        VerticalAlignment::Justify => TwinVerticalAlignment::Justify,
+        VerticalAlignment::Distributed => TwinVerticalAlignment::Distributed,
+    });
+    let runs = caption
+        .runs
+        .iter()
+        .map(|run| TwinTextRun {
+            text: run.text.clone(),
+            font: run.font.as_ref().map(|font| TwinRunFont {
+                name: font.name.clone(),
+                size: font.size,
+                color: font.color.and_then(|color| match color {
+                    Color::Auto => None,
+                    Color::Rgb { r, g, b } | Color::Argb { r, g, b, .. } => {
+                        Some(TwinColor::Rgb { r, g, b })
+                    }
+                    Color::Theme { index, tint } => Some(TwinColor::Theme { index, tint }),
+                    Color::Indexed(_) => {
+                        let (r, g, b) = color.to_rgb();
+                        Some(TwinColor::Rgb { r, g, b })
+                    }
+                }),
+                bold: font.bold,
+                italic: font.italic,
+                underline: font.underline.and_then(|underline| match underline {
+                    duke_sheets_core::style::Underline::None => None,
+                    duke_sheets_core::style::Underline::Single => Some(TwinUnderline::Single),
+                    duke_sheets_core::style::Underline::Double => Some(TwinUnderline::Double),
+                    duke_sheets_core::style::Underline::SingleAccounting => {
+                        Some(TwinUnderline::SingleAccounting)
+                    }
+                    duke_sheets_core::style::Underline::DoubleAccounting => {
+                        Some(TwinUnderline::DoubleAccounting)
+                    }
+                }),
+                strikethrough: font.strikethrough,
+                baseline: font.vertical_align.map(|alignment| match alignment {
+                    duke_sheets_core::style::FontVerticalAlign::Baseline => 0,
+                    duke_sheets_core::style::FontVerticalAlign::Superscript => 30_000,
+                    duke_sheets_core::style::FontVerticalAlign::Subscript => -25_000,
+                }),
+            }),
+        })
+        .collect();
+    Some(TwinText {
+        runs,
+        horizontal_alignment,
+        vertical_alignment,
+    })
+}
 
 use super::{XlsxResult, RT_CHART};
 
@@ -12,7 +88,10 @@ pub(super) use duke_sheets_chart::drawing_part::write::{DrawingPlan, PlannedRel}
 pub(super) use duke_sheets_chart::drawing_part::{image_format_extension, image_format_mime};
 
 pub(super) fn is_unsupported(chart: &Chart) -> bool {
-    matches!(chart.chart_type, duke_sheets_chart::ChartType::Unsupported(_))
+    matches!(
+        chart.chart_type,
+        duke_sheets_chart::ChartType::Unsupported(_)
+    )
 }
 
 /// Convert one drawing node into its part-emission form. Comments and
@@ -57,6 +136,13 @@ fn convert_kind<'a>(
                         |kind| PartChild {
                             name: child.meta.name.as_deref(),
                             alt_text: child.meta.alt_text.as_deref(),
+                            title: child.meta.title.as_deref(),
+                            macro_name: child
+                                .kind
+                                .as_form_control()
+                                .and_then(|control| control.macro_name.as_deref())
+                                .map(duke_sheets_vml::encode_macro_formula),
+                            control_text: child.kind.as_form_control().and_then(control_twin_text),
                             hidden: child.meta.hidden,
                             transform: &child.transform,
                             kind,
@@ -102,6 +188,13 @@ fn part_objects(sheet: &Worksheet) -> Vec<PartObject<'_>> {
             .map(|kind| PartObject {
                 name: object.meta.name.as_deref(),
                 alt_text: object.meta.alt_text.as_deref(),
+                title: object.meta.title.as_deref(),
+                macro_name: object
+                    .kind
+                    .as_form_control()
+                    .and_then(|control| control.macro_name.as_deref())
+                    .map(duke_sheets_vml::encode_macro_formula),
+                control_text: object.kind.as_form_control().and_then(control_twin_text),
                 locked: object.meta.locked,
                 printable: object.meta.printable,
                 hidden: object.meta.hidden,

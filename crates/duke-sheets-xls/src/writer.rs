@@ -256,10 +256,16 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
         &name_table,
         &addin_table,
     );
+    write_macro_name_records(&mut stream, workbook)?;
     write_print_name_records(&mut stream, workbook);
     sst.write_records(&mut stream)?;
-    let drawing_state =
-        compute_drawing_state(workbook, &externsheet_table, &name_table, &addin_table)?;
+    let drawing_state = compute_drawing_state(
+        workbook,
+        &externsheet_table,
+        &name_table,
+        &addin_table,
+        &styles,
+    )?;
     write_msodrawinggroup(&mut stream, &drawing_state);
     write_eof(&mut stream);
 
@@ -465,6 +471,25 @@ impl StyleTables {
             }
         }
 
+        for sheet in workbook.worksheets() {
+            for placed in sheet.placed_form_controls() {
+                let Some(caption) = placed.control.caption() else {
+                    continue;
+                };
+                for run in &caption.runs {
+                    if let Some(rf) = &run.font {
+                        let font = run_font_to_font_style(rf);
+                        if !font_xf_index.contains_key(&font) {
+                            let on_disk = fonts_in_order.len() as u16;
+                            let xf_idx = if on_disk < 4 { on_disk } else { on_disk + 1 };
+                            fonts_in_order.push(font.clone());
+                            font_xf_index.insert(font, xf_idx);
+                        }
+                    }
+                }
+            }
+        }
+
         StyleTables {
             fonts_in_order,
             font_xf_index,
@@ -613,10 +638,12 @@ fn write_font_record(stream: &mut Vec<u8>, font: &FontStyle) -> XlsResult<()> {
     let icv = match font.color {
         Color::Auto => COLOR_AUTO,
         Color::Indexed(i) => i as u16,
-        // BIFF8 has no first-class RGB / theme support without a
-        // PALETTE record. Fall back to auto rather than emit an
-        // out-of-range icv that the reader would reject.
-        _ => COLOR_AUTO,
+        Color::Rgb { r, g, b } | Color::Argb { r, g, b, .. } => crate::styles::DEFAULT_PALETTE
+            .iter()
+            .position(|&(pr, pg, pb)| (pr, pg, pb) == (r, g, b))
+            .map(|index| index as u16 + 8)
+            .unwrap_or(COLOR_AUTO),
+        Color::Theme { .. } => COLOR_AUTO,
     };
     body.extend_from_slice(&icv.to_le_bytes());
 
@@ -1779,6 +1806,7 @@ fn write_mergecells(stream: &mut Vec<u8>, sheet: &Worksheet) {
 #[derive(Debug, Default)]
 struct NameTable {
     by_name: HashMap<String, NameInfo>,
+    macro_by_name: HashMap<String, u16>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1799,14 +1827,16 @@ impl NameTable {
             .get(&name.to_ascii_lowercase())
             .map(|info| info.body_class)
     }
+
+    fn idx_for_macro(&self, name: &str) -> Option<u16> {
+        self.macro_by_name.get(&name.to_ascii_lowercase()).copied()
+    }
 }
 
 fn build_name_table(workbook: &Workbook) -> NameTable {
     let mut by_name = HashMap::new();
-    for (i, nr) in user_names_in_xls_emit_order(workbook)
-        .into_iter()
-        .enumerate()
-    {
+    let user_names = user_names_in_xls_emit_order(workbook);
+    for (i, nr) in user_names.iter().copied().enumerate() {
         if i >= u16::MAX as usize {
             break;
         }
@@ -1823,7 +1853,18 @@ fn build_name_table(workbook: &Workbook) -> NameTable {
             },
         );
     }
-    NameTable { by_name }
+    let mut macro_by_name = HashMap::new();
+    for (offset, name) in macro_names_in_xls_emit_order(workbook).iter().enumerate() {
+        let index = user_names.len().saturating_add(offset).saturating_add(1);
+        if index > u16::MAX as usize {
+            break;
+        }
+        macro_by_name.insert(name.to_ascii_lowercase(), index as u16);
+    }
+    NameTable {
+        by_name,
+        macro_by_name,
+    }
 }
 
 /// Emit one NAME record (MS-XLS §2.4.176, Lbl) per user-defined named
@@ -1930,6 +1971,55 @@ fn write_user_name_records(
     }
 }
 
+/// Emit procedure Lbl records referenced by control FtMacro formulas.
+/// MS-XLS 2.5.148 requires FtMacro to reference an Lbl with fProc=1.
+fn write_macro_name_records(stream: &mut Vec<u8>, workbook: &Workbook) -> XlsResult<()> {
+    for name in macro_names_in_xls_emit_order(workbook) {
+        if !is_xls_macro_procedure_name(&name) {
+            return Err(XlsError::InvalidFormat(format!(
+                "XLS control macro {name:?} must be a workbook-local procedure name"
+            )));
+        }
+        let name_units: Vec<u16> = name.encode_utf16().collect();
+        if name_units.is_empty() || name_units.len() > u8::MAX as usize {
+            continue;
+        }
+        let high_byte = name_units.iter().any(|&unit| unit > 0xFF);
+        let mut body = Vec::with_capacity(17 + name_units.len() * 2);
+        // fOB + fProc identify a VBA procedure name (MS-XLS 2.4.150).
+        body.extend_from_slice(&0x000Cu16.to_le_bytes());
+        body.push(0); // chKey
+        body.push(name_units.len() as u8);
+        body.extend_from_slice(&2u16.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes()); // workbook scope
+        body.extend_from_slice(&[0u8; 4]);
+        body.push(if high_byte { 1 } else { 0 });
+        if high_byte {
+            for unit in name_units {
+                body.extend_from_slice(&unit.to_le_bytes());
+            }
+        } else {
+            body.extend(name_units.into_iter().map(|unit| unit as u8));
+        }
+        // A procedure Lbl has no cell definition; #REF! is the
+        // conventional NameParsedFormula placeholder.
+        body.extend_from_slice(&[0x1C, 0x17]);
+        write_biff_record(stream, NAME_RECORD, &body);
+    }
+    Ok(())
+}
+
+fn is_xls_macro_procedure_name(name: &str) -> bool {
+    name.split('.').all(|part| {
+        let mut chars = part.chars();
+        chars
+            .next()
+            .is_some_and(|ch| ch == '_' || ch == '\\' || ch.is_alphabetic())
+            && chars.all(|ch| ch == '_' || ch.is_alphanumeric())
+    })
+}
+
 fn parse_name_body(refers_to: &str) -> Option<duke_sheets_formula::FormulaExpr> {
     let to_parse = if refers_to.starts_with('=') {
         refers_to.to_string()
@@ -1952,6 +2042,17 @@ fn user_names_in_xls_emit_order(
             .cmp(&b.name.to_ascii_lowercase())
             .then_with(|| name_scope_sort_key(&a.scope).cmp(&name_scope_sort_key(&b.scope)))
     });
+    names
+}
+
+fn macro_names_in_xls_emit_order(workbook: &Workbook) -> Vec<String> {
+    let mut names = workbook
+        .worksheets()
+        .flat_map(|sheet| sheet.placed_form_controls())
+        .filter_map(|placed| placed.control.macro_name.clone())
+        .collect::<Vec<_>>();
+    names.sort_by_key(|name| name.to_ascii_lowercase());
+    names.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
     names
 }
 
@@ -4603,6 +4704,10 @@ struct ControlShape {
     alt_text: Option<String>,
     /// The model control (kind, caption).
     control: duke_sheets_core::FormControl,
+    /// TXO run boundaries `(UTF-16 offset, FONT index)`.
+    txo_runs: Vec<(u16, u16)>,
+    /// FtMacro ObjectParsedFormula rgce.
+    macro_rgce: Vec<u8>,
     /// Placement copied from the wrapping drawing object or, for
     /// grouped controls, the child transform.
     anchor: EmitAnchor,
@@ -4636,6 +4741,7 @@ fn compute_drawing_state(
     externsheet: &ExternSheetTable,
     names: &NameTable,
     addins: &AddinTable,
+    styles: &StyleTables,
 ) -> XlsResult<DrawingState> {
     let mut state = DrawingState::default();
     let mut next_dgid: u32 = 1;
@@ -4670,6 +4776,7 @@ fn compute_drawing_state(
             externsheet,
             names,
             addins,
+            styles,
             blip_store: &mut state.blip_store,
             next_spid,
             next_obj_id: 1,
@@ -4708,17 +4815,14 @@ fn compute_drawing_state(
         // Round up to the next 1024-aligned base so the next drawing
         // lives in its own cluster (matching Excel's per-drawing
         // cluster allocation in MS-ODRAW §2.2.46).
-        next_spid = next_spid
-            .checked_add(1023)
-            .ok_or_else(|| {
+        next_spid = next_spid.checked_add(1023).ok_or_else(|| {
                 XlsError::InvalidFormat("XLS OfficeArt shape id space exhausted".into())
-            })?
-            / 1024
+        })? / 1024
             * 1024;
     }
-    state.spid_max = highest_spid_used.checked_add(1).ok_or_else(|| {
-        XlsError::InvalidFormat("XLS OfficeArt shape id space exhausted".into())
-    })?;
+    state.spid_max = highest_spid_used
+        .checked_add(1)
+        .ok_or_else(|| XlsError::InvalidFormat("XLS OfficeArt shape id space exhausted".into()))?;
     Ok(state)
 }
 
@@ -4758,6 +4862,7 @@ struct ShapeBuilder<'a> {
     externsheet: &'a ExternSheetTable,
     names: &'a NameTable,
     addins: &'a AddinTable,
+    styles: &'a StyleTables,
     blip_store: &'a mut Vec<BlipEntry>,
     next_spid: u32,
     next_obj_id: u32,
@@ -4810,9 +4915,7 @@ impl ShapeBuilder<'_> {
             DrawingKind::Comment { row, col, comment } => {
                 Some(self.build_comment(*row, *col, comment, !meta.hidden)?)
             }
-            DrawingKind::FormControl(control) => {
-                Some(self.build_control(meta, anchor, control)?)
-            }
+            DrawingKind::FormControl(control) => Some(self.build_control(meta, anchor, control)?),
             DrawingKind::Group(group) => Some(self.build_group(
                 meta,
                 anchor,
@@ -4971,13 +5074,36 @@ impl ShapeBuilder<'_> {
             FormControlKind::ListBox { input_range, .. }
             | FormControlKind::Dropdown { input_range, .. } => input_range
                 .as_deref()
-                .map(|f| {
-                    encode_control_ref_formula(f, self.externsheet, self.names, self.addins)
-                })
+                .map(|f| encode_control_ref_formula(f, self.externsheet, self.names, self.addins))
                 .transpose()?
                 .unwrap_or_default(),
             _ => Vec::new(),
         };
+        let mut txo_runs = Vec::new();
+        if let Some(caption) = control.caption() {
+            let mut offset = 0usize;
+            for run in &caption.runs {
+                let font_index = run
+                    .font
+                    .as_ref()
+                    .map(run_font_to_font_style)
+                    .and_then(|font| self.styles.font_xf_index.get(&font).copied())
+                    .unwrap_or(0);
+                txo_runs.push((offset.min(u16::MAX as usize) as u16, font_index));
+                offset = offset.saturating_add(run.text.encode_utf16().count());
+            }
+        }
+        let macro_rgce = control
+            .macro_name
+            .as_deref()
+            .and_then(|name| self.names.idx_for_macro(name))
+            .map(|index| {
+                let mut rgce = Vec::with_capacity(5);
+                rgce.push(0x23); // PtgName, reference class
+                rgce.extend_from_slice(&(u32::from(index)).to_le_bytes());
+                rgce
+            })
+            .unwrap_or_default();
         Ok(SheetShape::Control(ControlShape {
             spid,
             obj_id,
@@ -4985,6 +5111,8 @@ impl ShapeBuilder<'_> {
             shape_name: meta.name.clone(),
             alt_text: meta.alt_text.clone(),
             control: control.clone(),
+            txo_runs,
+            macro_rgce,
             anchor,
             locked: meta.locked,
             printable: meta.printable,
@@ -5388,7 +5516,8 @@ fn flatten_shape(shape: &SheetShape, out: &mut Vec<FlatShape>) -> XlsResult<()> 
                 write_control_txo_to_vec(
                     &mut post_txo,
                     caption,
-                    control_txo_flags(&control.control.kind),
+                    control_txo_flags(&control.control.kind, caption),
+                    &control.txo_runs,
                 )?;
             }
 
@@ -5549,12 +5678,10 @@ fn client_anchor_from_drawing_anchor(
                 "XLS drawing anchor width/height cannot be negative".into(),
             ));
         }
-        let total_x = start_col as i128 * DEFAULT_COL_EMU as i128
-            + start_off_x as i128
-            + width as i128;
-        let total_y = start_row as i128 * DEFAULT_ROW_EMU as i128
-            + start_off_y as i128
-            + height as i128;
+        let total_x =
+            start_col as i128 * DEFAULT_COL_EMU as i128 + start_off_x as i128 + width as i128;
+        let total_y =
+            start_row as i128 * DEFAULT_ROW_EMU as i128 + start_off_y as i128 + height as i128;
         if total_x < 0 || total_y < 0 {
             return Err(XlsError::InvalidFormat(
                 "XLS drawing anchor coordinates cannot be negative".into(),
@@ -5648,8 +5775,7 @@ fn client_anchor_from_drawing_anchor(
             }
             // Absolute coordinates are relative to (0, 0); position
             // the from cell at the origin with the x/y offsets.
-            let (col_l, off_l, row_t, off_t) =
-                extend_anchor(0, 0, *x_emu, 0, 0, *y_emu)?;
+            let (col_l, off_l, row_t, off_t) = extend_anchor(0, 0, *x_emu, 0, 0, *y_emu)?;
             let (col_r, off_r, row_b, off_b) =
                 extend_anchor(col_l, off_l, *width_emu, row_t, off_t, *height_emu)?;
             OfficeArtClientAnchor {
@@ -5816,14 +5942,19 @@ fn deterministic_guid(seed: u32) -> [u8; 16] {
 /// Emit a comment's `TXO` record + the two `CONTINUE` records that
 /// carry its text payload and formatting runs.
 fn write_comment_txo_to_vec(out: &mut Vec<u8>, comment: &CommentShape) -> XlsResult<()> {
-    write_txo_records(out, &comment.text, 0x0212)
+    write_txo_records(out, &comment.text, 0x0212, &[])
 }
 
 /// Emit a `TXO` record with the given flags, plus (for non-empty
 /// text) the two `CONTINUE` records carrying the text payload and a
 /// single plain formatting run. Empty text writes only the 18-byte
 /// header with `cchText = 0` and `cbRuns = 0` (MS-XLS 2.4.329).
-fn write_txo_records(out: &mut Vec<u8>, text: &str, flags: u16) -> XlsResult<()> {
+fn write_txo_records(
+    out: &mut Vec<u8>,
+    text: &str,
+    flags: u16,
+    formatting: &[(u16, u16)],
+) -> XlsResult<()> {
     let utf16: Vec<u16> = text.encode_utf16().collect();
     let cch_text = u16::try_from(utf16.len()).map_err(|_| {
         XlsError::InvalidFormat(format!(
@@ -5840,7 +5971,13 @@ fn write_txo_records(out: &mut Vec<u8>, text: &str, flags: u16) -> XlsResult<()>
     header.extend_from_slice(&0u16.to_le_bytes()); // rot
     header.extend_from_slice(&[0u8; 6]); // reserved
     header.extend_from_slice(&cch_text.to_le_bytes()); // cchText
-    let cb_runs: u16 = if utf16.is_empty() { 0 } else { 16 };
+    let run_count = if utf16.is_empty() {
+        0
+    } else {
+        formatting.len().max(1).saturating_add(1)
+    };
+    let cb_runs = u16::try_from(run_count.saturating_mul(8))
+        .map_err(|_| XlsError::InvalidFormat("XLS text box has too many formatting runs".into()))?;
     header.extend_from_slice(&cb_runs.to_le_bytes()); // cbRuns
     header.extend_from_slice(&[0u8; 2]); // ifntEmpty
     header.extend_from_slice(&[0u8; 2]); // reserved3
@@ -5872,36 +6009,67 @@ fn write_txo_records(out: &mut Vec<u8>, text: &str, flags: u16) -> XlsResult<()>
         }
     }
 
-    // Second CONTINUE: formatting runs. Two TxoRun entries (8 bytes
-    // each): (ich=0, ifnt=0, reserved=0) opens the default-font run,
-    // (ich=text_len, ifnt=0, reserved=0) closes it. This produces a
-    // single-run plain-text body.
-    let mut runs_body = Vec::with_capacity(16);
-    runs_body.extend_from_slice(&0u16.to_le_bytes()); // ich = 0
-    runs_body.extend_from_slice(&0u16.to_le_bytes()); // ifnt = 0
-    runs_body.extend_from_slice(&[0u8; 4]); // reserved
+    let default_run = [(0u16, 0u16)];
+    let formatting = if formatting.is_empty() {
+        &default_run[..]
+    } else {
+        formatting
+    };
+    let mut runs_body = Vec::with_capacity(cb_runs as usize);
+    for &(ich, ifnt) in formatting {
+        runs_body.extend_from_slice(&ich.min(cch_text).to_le_bytes());
+        runs_body.extend_from_slice(&ifnt.to_le_bytes());
+        runs_body.extend_from_slice(&[0u8; 4]);
+    }
     runs_body.extend_from_slice(&(utf16.len() as u16).to_le_bytes()); // ich = end
     runs_body.extend_from_slice(&0u16.to_le_bytes()); // ifnt = 0
     runs_body.extend_from_slice(&[0u8; 4]); // reserved
-    write_biff_record(out, CONTINUE_RECORD, &runs_body);
+    for chunk in runs_body.chunks(BIFF_MAX_RECORD_BODY) {
+        write_biff_record(out, CONTINUE_RECORD, chunk);
+    }
     Ok(())
 }
 
 /// Emit a form control's caption `TXO` (+ CONTINUEs).
-fn write_control_txo_to_vec(out: &mut Vec<u8>, caption: &str, flags: u16) -> XlsResult<()> {
-    write_txo_records(out, caption, flags)
+fn write_control_txo_to_vec(
+    out: &mut Vec<u8>,
+    caption: &duke_sheets_core::ControlText,
+    flags: u16,
+    formatting: &[(u16, u16)],
+) -> XlsResult<()> {
+    write_txo_records(out, &caption.plain_text(), flags, formatting)
 }
 
 /// TXO alignment flags per control kind, as pinned from Excel
 /// output: buttons center/center, checkbox-likes left/center,
 /// labels and group boxes left/top. All set `fLockText` (0x0200).
-fn control_txo_flags(kind: &duke_sheets_core::FormControlKind) -> u16 {
+fn control_txo_flags(
+    kind: &duke_sheets_core::FormControlKind,
+    caption: &duke_sheets_core::ControlText,
+) -> u16 {
     use duke_sheets_core::FormControlKind;
-    match kind {
-        FormControlKind::Button { .. } => 0x0224,
-        FormControlKind::Checkbox { .. } | FormControlKind::OptionButton { .. } => 0x0222,
-        _ => 0x0212,
+    let (default_horizontal, default_vertical) = match kind {
+        FormControlKind::Button { .. } => (HorizontalAlignment::Center, VerticalAlignment::Center),
+        FormControlKind::Checkbox { .. } | FormControlKind::OptionButton { .. } => {
+            (HorizontalAlignment::Left, VerticalAlignment::Center)
     }
+        _ => (HorizontalAlignment::Left, VerticalAlignment::Top),
+    };
+    let horizontal = match caption.horizontal_alignment.unwrap_or(default_horizontal) {
+        HorizontalAlignment::Center | HorizontalAlignment::CenterContinuous => 2,
+        HorizontalAlignment::Right => 3,
+        HorizontalAlignment::Justify => 4,
+        HorizontalAlignment::Distributed => 7,
+        HorizontalAlignment::General | HorizontalAlignment::Left | HorizontalAlignment::Fill => 1,
+    };
+    let vertical = match caption.vertical_alignment.unwrap_or(default_vertical) {
+        VerticalAlignment::Top => 1,
+        VerticalAlignment::Center => 2,
+        VerticalAlignment::Bottom => 3,
+        VerticalAlignment::Justify => 4,
+        VerticalAlignment::Distributed => 7,
+    };
+    0x0200 | (horizontal << 1) | (vertical << 4)
 }
 
 /// Build the per-kind `FOPT` property table for a form control. The
@@ -6069,6 +6237,16 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
         grbit,
     }
     .write_to(&mut body);
+    if control.control.macro_name.is_some() {
+        if control.macro_rgce.is_empty() {
+            return Err(XlsError::InvalidFormat(
+                "XLS control macro could not be resolved to a procedure name".into(),
+            ));
+        }
+        // MS-XLS 2.5.148: FtMacro is an ObjFmla whose single PtgName
+        // references an fProc Lbl in the Globals Substream.
+        obj::push_fmla_subrecord(&mut body, obj::ft::MACRO, &control.macro_rgce)?;
+    }
 
     let mut needs_end = true;
     let mut lbs_start = None;
@@ -6133,8 +6311,7 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
             increment,
             ..
         } => {
-            let (val, min, max, inc, _) =
-                validated_sbs_values(*value, *min, *max, *increment, 10)?;
+            let (val, min, max, inc, _) = validated_sbs_values(*value, *min, *max, *increment, 10)?;
             obj::SbsData {
                 val,
                 min,
@@ -6235,11 +6412,8 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
                 ));
             }
             let selections: Vec<u16> = selected.iter().copied().collect();
-            let item_count = validated_list_selection_count(
-                &control.input_rgce,
-                &selections,
-                true,
-            )?;
+            let item_count =
+                validated_list_selection_count(&control.input_rgce, &selections, true)?;
             lbs_start = Some(body.len());
             obj::LbsData {
                 input_rgce: control.input_rgce.clone(),
@@ -6538,7 +6712,7 @@ mod tests {
             shape_name: None,
             alt_text: None,
             control: FormControl::new(FormControlKind::Button {
-                caption: "button".to_string(),
+                caption: "button".into(),
             }),
             anchor: EmitAnchor::Sheet(duke_sheets_chart::DrawingAnchor::default()),
             locked: true,

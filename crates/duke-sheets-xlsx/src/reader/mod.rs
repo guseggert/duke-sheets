@@ -272,6 +272,7 @@ fn build_group<R: Read + Seek>(
                 let meta = DrawingMeta {
                     name: Some(pic.name.clone()),
                     alt_text: pic.descr.clone(),
+                    title: pic.title.clone(),
                     hidden: pic.hidden,
                     ..DrawingMeta::default()
                 };
@@ -295,6 +296,7 @@ fn build_group<R: Read + Seek>(
                 let meta = DrawingMeta {
                     name: Some(inner.name.clone()),
                     alt_text: inner.descr.clone(),
+                    title: inner.title.clone(),
                     hidden: inner.hidden,
                     ..DrawingMeta::default()
                 };
@@ -308,7 +310,26 @@ fn build_group<R: Read + Seek>(
             drawing::ParsedChild::Twin(twin) => {
                 // A control-twin child becomes the matched control,
                 // positioned by the twin's child transform.
-                if let Some((_, object, _)) = take_control(controls, twin.shape_num) {
+                if let Some((_, mut object, _)) = take_control(controls, twin.shape_num) {
+                    if let Some(name) = twin.name {
+                        object.meta.name = Some(name);
+                    }
+                    if twin.descr.is_some() {
+                        object.meta.alt_text = twin.descr;
+                    }
+                    object.meta.title = twin.title;
+                    if let Some(control) = object.kind.as_form_control_mut() {
+                        if let Some(text) = twin.text.as_ref() {
+                            *control.caption_mut().expect("control twin is captioned") =
+                                form_controls::control_text_from_twin(text);
+                        }
+                        if control.macro_name.is_none() {
+                            control.macro_name = twin
+                                .macro_name
+                                .as_deref()
+                                .map(duke_sheets_vml::decode_macro_formula);
+                        }
+                    }
                     children.push(GroupChild {
                         meta: object.meta,
                         transform: twin.xfrm,
@@ -366,7 +387,9 @@ fn capture_raw_rels<R: Read + Seek>(
             let path = workbook::resolve_rel_target("xl/drawings", &rel.target);
             archive_by_name(archive, &path).ok().and_then(|mut f| {
                 let mut buf = Vec::new();
-                std::io::Read::read_to_end(&mut f, &mut buf).ok().map(|_| buf)
+                std::io::Read::read_to_end(&mut f, &mut buf)
+                    .ok()
+                    .map(|_| buf)
             })
         };
         rels.push(duke_sheets_core::RawRel {
@@ -582,7 +605,8 @@ impl XlsxReader {
                     .sheet_order_mut()
                     .push(SheetSlot::Worksheet(sheet_idx));
                 let sheet_rels = read_sheet_rels(&mut archive, path)?;
-                let pending_controls = form_controls::dedupe_pending_controls(Self::read_worksheet(
+                let pending_controls =
+                    form_controls::dedupe_pending_controls(Self::read_worksheet(
                     &mut archive,
                     path,
                     workbook.worksheet_mut(sheet_idx).unwrap(),
@@ -615,7 +639,9 @@ impl XlsxReader {
                     .ok()
                     .and_then(|mut f| {
                         let mut buf = Vec::new();
-                        std::io::Read::read_to_end(&mut f, &mut buf).ok().map(|_| buf)
+                        std::io::Read::read_to_end(&mut f, &mut buf)
+                            .ok()
+                            .map(|_| buf)
                     });
                 let comments = read_comments_list(&mut archive, &comments_path)?;
                 let objects = Self::merge_sheet_drawings(
@@ -673,9 +699,7 @@ impl XlsxReader {
                                     // require a standard Chart). Parse it but don't embed.
                                     continue;
                                 }
-                                if let Some(mut c) =
-                                    chart::read_chart(&mut archive, &dr.target)?
-                                {
+                                if let Some(mut c) = chart::read_chart(&mut archive, &dr.target)? {
                                     read_chart_style_color(&mut archive, &dr.target, &mut c);
                                     let cs_idx = workbook.add_chartsheet_unchecked(
                                         duke_sheets_core::ChartSheet {
@@ -762,9 +786,7 @@ impl XlsxReader {
         let vml_controls: HashMap<u32, &duke_sheets_vml::VmlControl> = vml_shapes
             .iter()
             .filter_map(|shape| match &shape.kind {
-                duke_sheets_vml::VmlShapeKind::Control(control) => {
-                    Some((shape.shape_num, control))
-                }
+                duke_sheets_vml::VmlShapeKind::Control(control) => Some((shape.shape_num, control)),
                 _ => None,
             })
             .collect();
@@ -792,8 +814,8 @@ impl XlsxReader {
             };
             let vml = vml_controls.get(&pending.shape_id).copied();
             if let Some(object) = form_controls::assemble_with_vml(pending, &pr, vml) {
-                let anchor_defaulted = pending.anchor.is_none()
-                    && vml.and_then(|shape| shape.anchor_px).is_none();
+                let anchor_defaulted =
+                    pending.anchor.is_none() && vml.and_then(|shape| shape.anchor_px).is_none();
                 controls.push(AssembledControl {
                     shape_id: pending.shape_id,
                     object,
@@ -835,12 +857,13 @@ impl XlsxReader {
                         // byte-identically.
                         let name = pic.name.clone();
                         let descr = pic.descr.clone();
+                        let title = pic.title.clone();
                         let hidden = pic.hidden;
                         let image = resolve_pic_image(archive, &drawing_rels, pic, false);
-                        let mut object =
-                            DrawingObject::image(image).with_anchor(entry.anchor);
+                        let mut object = DrawingObject::image(image).with_anchor(entry.anchor);
                         object.meta.name = Some(name);
                         object.meta.alt_text = descr;
+                        object.meta.title = title;
                         object.meta.hidden = hidden;
                         object.meta.locked = entry.locked;
                         object.meta.printable = entry.printable;
@@ -854,8 +877,11 @@ impl XlsxReader {
                             if let Some(mut cx) = chart_ex::read_chart_ex(archive, &dr.target)? {
                                 cx.raw_mc_fallback = chart_ref.raw_mc_fallback;
                                 read_chart_style_color_for_chart_ex(archive, &dr.target, &mut cx);
-                                let mut object = DrawingObject::chart_ex(cx)
-                                    .with_anchor(chart_ref.anchor);
+                                let mut object =
+                                    DrawingObject::chart_ex(cx).with_anchor(chart_ref.anchor);
+                                object.meta.name = chart_ref.name;
+                                object.meta.alt_text = chart_ref.descr;
+                                object.meta.title = chart_ref.title;
                                 object.meta.hidden = chart_ref.hidden;
                                 object.meta.locked = entry.locked;
                                 object.meta.printable = entry.printable;
@@ -863,8 +889,10 @@ impl XlsxReader {
                             }
                         } else if let Some(mut c) = chart::read_chart(archive, &dr.target)? {
                             read_chart_style_color(archive, &dr.target, &mut c);
-                            let mut object =
-                                DrawingObject::chart(c).with_anchor(chart_ref.anchor);
+                            let mut object = DrawingObject::chart(c).with_anchor(chart_ref.anchor);
+                            object.meta.name = chart_ref.name;
+                            object.meta.alt_text = chart_ref.descr;
+                            object.meta.title = chart_ref.title;
                             object.meta.hidden = chart_ref.hidden;
                             object.meta.locked = entry.locked;
                             object.meta.printable = entry.printable;
@@ -874,12 +902,13 @@ impl XlsxReader {
                     drawing::DrawingEntryKind::Group(group) => {
                         let name = group.name.clone();
                         let descr = group.descr.clone();
+                        let title = group.title.clone();
                         let hidden = group.hidden;
-                        let built =
-                            build_group(archive, &drawing_rels, group, &mut controls);
+                        let built = build_group(archive, &drawing_rels, group, &mut controls);
                         let mut object = DrawingObject::group(built).with_anchor(entry.anchor);
                         object.meta.name = Some(name);
                         object.meta.alt_text = descr;
+                        object.meta.title = title;
                         object.meta.hidden = hidden;
                         object.meta.locked = entry.locked;
                         object.meta.printable = entry.printable;
@@ -894,12 +923,30 @@ impl XlsxReader {
                             if anchor_defaulted {
                                 object.anchor = entry.anchor;
                             }
+                            if let Some(name) = twin.name {
+                                object.meta.name = Some(name);
+                            }
+                            if twin.descr.is_some() {
+                                object.meta.alt_text = twin.descr;
+                            }
+                            object.meta.title = twin.title;
+                            if let Some(control) = object.kind.as_form_control_mut() {
+                                if let Some(text) = twin.text.as_ref() {
+                                    *control.caption_mut().expect("control twin is captioned") =
+                                        form_controls::control_text_from_twin(text);
+                                }
+                                if control.macro_name.is_none() {
+                                    control.macro_name = twin
+                                        .macro_name
+                                        .as_deref()
+                                        .map(duke_sheets_vml::decode_macro_formula);
+                                }
+                            }
                             natives.push((object, Some(shape_id)));
                         }
                     }
                     drawing::DrawingEntryKind::Raw => {
-                        let rels =
-                            capture_raw_rels(archive, &entry.bytes, &verbatim_rels);
+                        let rels = capture_raw_rels(archive, &entry.bytes, &verbatim_rels);
                         let object = DrawingObject::raw(duke_sheets_core::RawDrawing {
                             bytes: entry.bytes,
                             rels,
@@ -1121,6 +1168,17 @@ impl XlsxReader {
                                 match attr.key.local_name().as_ref() {
                                     b"locked" => pending.locked = truthy,
                                     b"print" => pending.printable = truthy,
+                                    b"altText" => {
+                                        pending.alt_text =
+                                            Some(String::from_utf8_lossy(&attr.value).into_owned())
+                                    }
+                                    b"macro" => {
+                                        pending.macro_name = Some(
+                                            duke_sheets_vml::decode_macro_formula(
+                                                &String::from_utf8_lossy(&attr.value),
+                                            ),
+                                        )
+                                    }
                                     _ => {}
                                 }
                             }

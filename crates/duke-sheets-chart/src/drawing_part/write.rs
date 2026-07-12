@@ -14,6 +14,7 @@ use quick_xml::Writer;
 
 use crate::{CellMarker, ChildTransform, DrawingAnchor, EditAs, EmbeddedImage, GroupTransform};
 
+use super::{TwinColor, TwinHorizontalAlignment, TwinText, TwinUnderline, TwinVerticalAlignment};
 use super::{RT_CHART, RT_CHART_EX, RT_IMAGE};
 
 const NS_SPREADSHEET_DRAWING: &str =
@@ -46,6 +47,9 @@ pub enum TwinStyle {
 pub struct PartObject<'a> {
     pub name: Option<&'a str>,
     pub alt_text: Option<&'a str>,
+    pub title: Option<&'a str>,
+    pub macro_name: Option<String>,
+    pub control_text: Option<TwinText>,
     pub locked: bool,
     pub printable: bool,
     /// Emits `cNvPr/@hidden="1"` on the native shape (images, charts,
@@ -59,6 +63,9 @@ pub struct PartObject<'a> {
 pub struct PartChild<'a> {
     pub name: Option<&'a str>,
     pub alt_text: Option<&'a str>,
+    pub title: Option<&'a str>,
+    pub macro_name: Option<String>,
+    pub control_text: Option<TwinText>,
     pub hidden: bool,
     pub transform: &'a ChildTransform,
     pub kind: PartKind<'a>,
@@ -70,10 +77,14 @@ pub struct PartChild<'a> {
 pub enum PartKind<'a> {
     Image(&'a EmbeddedImage),
     Chart,
-    ChartEx { fallback: Option<&'a [u8]> },
+    ChartEx {
+        fallback: Option<&'a [u8]>,
+    },
     /// A form control's placeholder twin; `name` is the resolved
     /// display name.
-    Control { name: String },
+    Control {
+        name: String,
+    },
     Group {
         transform: &'a GroupTransform,
         children: Vec<PartChild<'a>>,
@@ -304,9 +315,18 @@ pub fn write_drawing_part(
                 let rid = plan.chart_rids[ctx.chart_i].clone();
                 ctx.chart_i += 1;
                 let cnv_id = ctx.next_cnv_id();
-                let name = format!("Chart {}", ctx.frame_seq);
+                let default_name = format!("Chart {}", ctx.frame_seq);
+                let name = object.name.unwrap_or(&default_name);
                 write_anchor_wrapper(&mut w, object, |w| {
-                    write_chart_frame(w, &rid, cnv_id, &name, object.hidden)
+                    write_chart_frame(
+                        w,
+                        &rid,
+                        cnv_id,
+                        name,
+                        object.alt_text,
+                        object.title,
+                        object.hidden,
+                    )
                 })?;
             }
             PartKind::ChartEx { fallback } => {
@@ -314,9 +334,19 @@ pub fn write_drawing_part(
                 let rid = plan.chartex_rids[ctx.chartex_i].clone();
                 ctx.chartex_i += 1;
                 let cnv_id = ctx.next_cnv_id();
-                let name = format!("Chart {}", ctx.frame_seq);
+                let default_name = format!("Chart {}", ctx.frame_seq);
+                let name = object.name.unwrap_or(&default_name);
                 write_anchor_wrapper(&mut w, object, |w| {
-                    write_chartex_frame(w, &rid, cnv_id, &name, object.hidden, *fallback)
+                    write_chartex_frame(
+                        w,
+                        &rid,
+                        cnv_id,
+                        name,
+                        object.alt_text,
+                        object.title,
+                        object.hidden,
+                        *fallback,
+                    )
                 })?;
             }
             PartKind::Image(image) => {
@@ -337,6 +367,7 @@ pub fn write_drawing_part(
                         w,
                         object.name,
                         object.alt_text,
+                        object.title,
                         object.hidden,
                         &rid,
                         cnv_id,
@@ -362,6 +393,7 @@ pub fn write_drawing_part(
                         w,
                         object.name,
                         object.alt_text,
+                        object.title,
                         object.hidden,
                         transform,
                         children,
@@ -403,6 +435,7 @@ fn write_group_shape(
     w: &mut XmlWriter,
     name: Option<&str>,
     alt_text: Option<&str>,
+    title: Option<&str>,
     hidden: bool,
     transform: &GroupTransform,
     children: &[PartChild<'_>],
@@ -419,6 +452,9 @@ fn write_group_shape(
     cnv_pr.push_attribute(("name", name.unwrap_or("")));
     if let Some(descr) = alt_text {
         cnv_pr.push_attribute(("descr", descr));
+    }
+    if let Some(title) = title {
+        cnv_pr.push_attribute(("title", title));
     }
     if hidden {
         cnv_pr.push_attribute(("hidden", "1"));
@@ -474,7 +510,16 @@ fn write_group_child(
                 flip_h: t.flip_h,
                 flip_v: t.flip_v,
             };
-            write_picture_element(w, child.name, child.alt_text, child.hidden, &rid, cnv_id, &xfrm)?;
+            write_picture_element(
+                w,
+                child.name,
+                child.alt_text,
+                child.title,
+                child.hidden,
+                &rid,
+                cnv_id,
+                &xfrm,
+            )?;
         }
         PartKind::Group {
             transform,
@@ -494,6 +539,7 @@ fn write_group_child(
                 w,
                 child.name,
                 child.alt_text,
+                child.title,
                 child.hidden,
                 transform,
                 children,
@@ -507,12 +553,25 @@ fn write_group_child(
             let cnv_id = ctx.next_cnv_id();
             let twin_style = ctx.twin_style;
             write_mc_a14_choice(w, |w| match twin_style {
-                TwinStyle::CompatExtSp => {
-                    write_control_twin_sp(w, name, shape_id, cnv_id, Some(child.transform))
-                }
-                TwinStyle::CompatSpFrame => {
-                    write_control_twin_frame(w, name, shape_id, Some(child.transform))
-                }
+                TwinStyle::CompatExtSp => write_control_twin_sp(
+                    w,
+                    name,
+                    child.alt_text,
+                    child.title,
+                        child.macro_name.as_deref(),
+                    child.control_text.as_ref(),
+                    shape_id,
+                    cnv_id,
+                    Some(child.transform),
+                ),
+                TwinStyle::CompatSpFrame => write_control_twin_frame(
+                    w,
+                    name,
+                    child.alt_text,
+                    child.title,
+                    shape_id,
+                    Some(child.transform),
+                ),
             })?;
         }
         PartKind::Raw { bytes, .. } => {
@@ -637,6 +696,7 @@ fn write_picture_element(
     w: &mut XmlWriter,
     name: Option<&str>,
     alt_text: Option<&str>,
+    title: Option<&str>,
     hidden: bool,
     rid: &str,
     cnv_id: usize,
@@ -652,6 +712,9 @@ fn write_picture_element(
     cnv_pr.push_attribute(("name", name.unwrap_or("")));
     if let Some(desc) = alt_text {
         cnv_pr.push_attribute(("descr", desc));
+    }
+    if let Some(title) = title {
+        cnv_pr.push_attribute(("title", title));
     }
     if hidden {
         cnv_pr.push_attribute(("hidden", "1"));
@@ -749,18 +812,24 @@ fn write_control_twin_anchor(
         write_cell_marker(w, &to)?;
         w.write_event(Event::End(BytesEnd::new("xdr:to")))?;
         match twin_style {
-            TwinStyle::CompatExtSp => write_control_twin_sp(w, name, shape_id, cnv_id, None)?,
-            TwinStyle::CompatSpFrame => write_control_twin_frame(w, name, shape_id, None)?,
+            TwinStyle::CompatExtSp => write_control_twin_sp(
+                w,
+                name,
+                object.alt_text,
+                object.title,
+                object.macro_name.as_deref(),
+                object.control_text.as_ref(),
+                shape_id,
+                cnv_id,
+                None,
+            )?,
+            TwinStyle::CompatSpFrame => {
+                write_control_twin_frame(w, name, object.alt_text, object.title, shape_id, None)?
+            }
         }
         let mut cd = BytesStart::new("xdr:clientData");
-        cd.push_attribute((
-            "fLocksWithSheet",
-            if object.locked { "1" } else { "0" },
-        ));
-        cd.push_attribute((
-            "fPrintsWithSheet",
-            if object.printable { "1" } else { "0" },
-        ));
+        cd.push_attribute(("fLocksWithSheet", if object.locked { "1" } else { "0" }));
+        cd.push_attribute(("fPrintsWithSheet", if object.printable { "1" } else { "0" }));
         w.write_event(Event::Empty(cd))?;
         w.write_event(Event::End(BytesEnd::new("xdr:twoCellAnchor")))?;
         Ok(())
@@ -836,15 +905,171 @@ fn anchor_cell_markers(anchor: &DrawingAnchor) -> (CellMarker, CellMarker) {
 /// The twin `<xdr:sp>` element (XLSX flavor). `xfrm` is zero for
 /// anchored twins and carries the child transform for twins inside
 /// groups.
+fn write_control_text(w: &mut XmlWriter, text: &TwinText) -> WriteResult<()> {
+    w.write_event(Event::Start(BytesStart::new("xdr:txBody")))?;
+    let mut body_pr = BytesStart::new("a:bodyPr");
+    if let Some(vertical) = text.vertical_alignment {
+        let anchor = match vertical {
+            TwinVerticalAlignment::Top => "t",
+            TwinVerticalAlignment::Center => "ctr",
+            TwinVerticalAlignment::Bottom => "b",
+            TwinVerticalAlignment::Justify => "just",
+            TwinVerticalAlignment::Distributed => "dist",
+        };
+        body_pr.push_attribute(("anchor", anchor));
+    }
+    w.write_event(Event::Empty(body_pr))?;
+    w.write_event(Event::Empty(BytesStart::new("a:lstStyle")))?;
+    w.write_event(Event::Start(BytesStart::new("a:p")))?;
+    if let Some(horizontal) = text.horizontal_alignment {
+        let alignment = match horizontal {
+            TwinHorizontalAlignment::Left => "l",
+            TwinHorizontalAlignment::Center => "ctr",
+            TwinHorizontalAlignment::Right => "r",
+            TwinHorizontalAlignment::Justify => "just",
+            TwinHorizontalAlignment::Distributed => "dist",
+        };
+        let mut p_pr = BytesStart::new("a:pPr");
+        p_pr.push_attribute(("algn", alignment));
+        w.write_event(Event::Empty(p_pr))?;
+    }
+
+    for run in &text.runs {
+        w.write_event(Event::Start(BytesStart::new("a:r")))?;
+        if let Some(font) = &run.font {
+            let mut r_pr = BytesStart::new("a:rPr");
+            r_pr.push_attribute(("lang", "en-US"));
+            let size = font
+                .size
+                .map(|size| (size * 100.0).round().clamp(1.0, i32::MAX as f64) as i32)
+                .map(|size| size.to_string());
+            if let Some(size) = &size {
+                r_pr.push_attribute(("sz", size.as_str()));
+            }
+            if let Some(bold) = font.bold {
+                r_pr.push_attribute(("b", if bold { "1" } else { "0" }));
+            }
+            if let Some(italic) = font.italic {
+                r_pr.push_attribute(("i", if italic { "1" } else { "0" }));
+            }
+            if let Some(underline) = font.underline {
+                let value = match underline {
+                    TwinUnderline::Single => "sng",
+                    TwinUnderline::Double => "dbl",
+                    TwinUnderline::SingleAccounting => "sng",
+                    TwinUnderline::DoubleAccounting => "dbl",
+                };
+                r_pr.push_attribute(("u", value));
+            }
+            if let Some(strikethrough) = font.strikethrough {
+                r_pr.push_attribute((
+                    "strike",
+                    if strikethrough {
+                        "sngStrike"
+                    } else {
+                        "noStrike"
+                    },
+                ));
+            }
+            let baseline = font.baseline.map(|baseline| baseline.to_string());
+            if let Some(baseline) = &baseline {
+                r_pr.push_attribute(("baseline", baseline.as_str()));
+            }
+            w.write_event(Event::Start(r_pr))?;
+            if let Some(color) = font.color {
+                w.write_event(Event::Start(BytesStart::new("a:solidFill")))?;
+                match color {
+                    TwinColor::Rgb { r, g, b } => {
+                        let value = format!("{r:02X}{g:02X}{b:02X}");
+                        let mut color = BytesStart::new("a:srgbClr");
+                        color.push_attribute(("val", value.as_str()));
+                        w.write_event(Event::Empty(color))?;
+                    }
+                    TwinColor::Theme { index, tint } => {
+                        let scheme = match index {
+                            0 => "lt1",
+                            1 => "dk1",
+                            2 => "lt2",
+                            3 => "dk2",
+                            4 => "accent1",
+                            5 => "accent2",
+                            6 => "accent3",
+                            7 => "accent4",
+                            8 => "accent5",
+                            9 => "accent6",
+                            _ => "dk1",
+                        };
+                        let mut color = BytesStart::new("a:schemeClr");
+                        color.push_attribute(("val", scheme));
+                        if tint == 0 {
+                            w.write_event(Event::Empty(color))?;
+                        } else {
+                            w.write_event(Event::Start(color))?;
+                            let tint = i32::from(tint).clamp(-100, 100);
+                            let lum_mod = if tint > 0 {
+                                100_000 - tint * 1_000
+                            } else {
+                                100_000 + tint * 1_000
+                            };
+                            let mut lum_mod_tag = BytesStart::new("a:lumMod");
+                            let lum_mod = lum_mod.to_string();
+                            lum_mod_tag.push_attribute(("val", lum_mod.as_str()));
+                            w.write_event(Event::Empty(lum_mod_tag))?;
+                            if tint > 0 {
+                                let mut lum_off_tag = BytesStart::new("a:lumOff");
+                                let lum_off = (tint * 1_000).to_string();
+                                lum_off_tag.push_attribute(("val", lum_off.as_str()));
+                                w.write_event(Event::Empty(lum_off_tag))?;
+                            }
+                            w.write_event(Event::End(BytesEnd::new("a:schemeClr")))?;
+                        }
+                    }
+                }
+                w.write_event(Event::End(BytesEnd::new("a:solidFill")))?;
+            }
+            if let Some(name) = &font.name {
+                let mut latin = BytesStart::new("a:latin");
+                latin.push_attribute(("typeface", name.as_str()));
+                w.write_event(Event::Empty(latin))?;
+            }
+            w.write_event(Event::End(BytesEnd::new("a:rPr")))?;
+        }
+        let mut t = BytesStart::new("a:t");
+        if run.text.chars().next().is_some_and(char::is_whitespace)
+            || run
+                .text
+                .chars()
+                .next_back()
+                .is_some_and(char::is_whitespace)
+        {
+            t.push_attribute(("xml:space", "preserve"));
+        }
+        w.write_event(Event::Start(t))?;
+        w.write_event(Event::Text(BytesText::new(&run.text)))?;
+        w.write_event(Event::End(BytesEnd::new("a:t")))?;
+        w.write_event(Event::End(BytesEnd::new("a:r")))?;
+    }
+    let mut end_pr = BytesStart::new("a:endParaRPr");
+    end_pr.push_attribute(("lang", "en-US"));
+    w.write_event(Event::Empty(end_pr))?;
+    w.write_event(Event::End(BytesEnd::new("a:p")))?;
+    w.write_event(Event::End(BytesEnd::new("xdr:txBody")))?;
+    Ok(())
+}
+
 fn write_control_twin_sp(
     w: &mut XmlWriter,
     name: &str,
+    alt_text: Option<&str>,
+    title: Option<&str>,
+    macro_name: Option<&str>,
+    text: Option<&TwinText>,
     shape_id: usize,
     cnv_id: usize,
     xfrm: Option<&ChildTransform>,
 ) -> WriteResult<()> {
     let mut sp = BytesStart::new("xdr:sp");
-    sp.push_attribute(("macro", ""));
+    sp.push_attribute(("macro", macro_name.unwrap_or("")));
     sp.push_attribute(("textlink", ""));
     w.write_event(Event::Start(sp))?;
 
@@ -854,6 +1079,12 @@ fn write_control_twin_sp(
     cnv_pr.push_attribute(("id", cnv_id_s.as_str()));
     cnv_pr.push_attribute(("name", name));
     cnv_pr.push_attribute(("hidden", "1"));
+    if let Some(alt_text) = alt_text {
+        cnv_pr.push_attribute(("descr", alt_text));
+    }
+    if let Some(title) = title {
+        cnv_pr.push_attribute(("title", title));
+    }
     w.write_event(Event::Start(cnv_pr))?;
     w.write_event(Event::Start(BytesStart::new("a:extLst")))?;
     let mut ext = BytesStart::new("a:ext");
@@ -915,6 +1146,10 @@ fn write_control_twin_sp(
     )?;
     w.write_event(Event::End(BytesEnd::new("xdr:spPr")))?;
 
+    if let Some(text) = text {
+        write_control_text(w, text)?;
+    }
+
     w.write_event(Event::End(BytesEnd::new("xdr:sp")))?;
     Ok(())
 }
@@ -925,6 +1160,8 @@ fn write_control_twin_sp(
 fn write_control_twin_frame(
     w: &mut XmlWriter,
     name: &str,
+    alt_text: Option<&str>,
+    title: Option<&str>,
     shape_id: usize,
     xfrm: Option<&ChildTransform>,
 ) -> WriteResult<()> {
@@ -937,6 +1174,12 @@ fn write_control_twin_frame(
     let mut cnv_pr = BytesStart::new("xdr:cNvPr");
     cnv_pr.push_attribute(("id", cnv_id_s.as_str()));
     cnv_pr.push_attribute(("name", name));
+    if let Some(alt_text) = alt_text {
+        cnv_pr.push_attribute(("descr", alt_text));
+    }
+    if let Some(title) = title {
+        cnv_pr.push_attribute(("title", title));
+    }
     w.write_event(Event::Empty(cnv_pr))?;
     w.write_event(Event::Start(BytesStart::new("xdr:cNvGraphicFramePr")))?;
     w.write_event(Event::Empty(BytesStart::new("a:graphicFrameLocks")))?;
@@ -985,6 +1228,8 @@ fn write_chart_frame(
     rid: &str,
     cnv_id: usize,
     name: &str,
+    alt_text: Option<&str>,
+    title: Option<&str>,
     hidden: bool,
 ) -> WriteResult<()> {
     w.write_event(Event::Start(BytesStart::new("xdr:graphicFrame")))?;
@@ -994,6 +1239,12 @@ fn write_chart_frame(
     let mut cnv_pr = BytesStart::new("xdr:cNvPr");
     cnv_pr.push_attribute(("id", cnv_id_s.as_str()));
     cnv_pr.push_attribute(("name", name));
+    if let Some(alt_text) = alt_text {
+        cnv_pr.push_attribute(("descr", alt_text));
+    }
+    if let Some(title) = title {
+        cnv_pr.push_attribute(("title", title));
+    }
     if hidden {
         cnv_pr.push_attribute(("hidden", "1"));
     }
@@ -1028,6 +1279,8 @@ fn write_chartex_frame(
     rid: &str,
     cnv_id: usize,
     name: &str,
+    alt_text: Option<&str>,
+    title: Option<&str>,
     hidden: bool,
     raw_mc_fallback: Option<&[u8]>,
 ) -> WriteResult<()> {
@@ -1049,6 +1302,12 @@ fn write_chartex_frame(
     let mut cnv_pr = BytesStart::new("xdr:cNvPr");
     cnv_pr.push_attribute(("id", cnv_id_s.as_str()));
     cnv_pr.push_attribute(("name", name));
+    if let Some(alt_text) = alt_text {
+        cnv_pr.push_attribute(("descr", alt_text));
+    }
+    if let Some(title) = title {
+        cnv_pr.push_attribute(("title", title));
+    }
     if hidden {
         cnv_pr.push_attribute(("hidden", "1"));
     }
@@ -1106,7 +1365,7 @@ pub fn write_chartsheet_drawing_part(raw_drawing_objects: &[Vec<u8>]) -> WriteRe
     w.write_event(Event::Start(BytesStart::new("xdr:absoluteAnchor")))?;
     write_point(&mut w, "xdr:pos", 0, 0)?;
     write_extent(&mut w, "xdr:ext", 9144000, 6858000)?;
-    write_chart_frame(&mut w, "rId1", 2, "Chart 1", false)?;
+    write_chart_frame(&mut w, "rId1", 2, "Chart 1", None, None, false)?;
     w.write_event(Event::Empty(BytesStart::new("xdr:clientData")))?;
     w.write_event(Event::End(BytesEnd::new("xdr:absoluteAnchor")))?;
 

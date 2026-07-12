@@ -9,8 +9,7 @@ use duke_sheets_chart::drawing_part::read::{
     parse_drawing_part, DrawingEntryKind, ParsedChild, ParsedGroup, PicShape,
 };
 use duke_sheets_core::{
-    ChildTransform, DrawingKind, DrawingMeta, DrawingObject, Group, GroupChild, RawDrawing,
-    RawRel,
+    ChildTransform, DrawingKind, DrawingMeta, DrawingObject, Group, GroupChild, RawDrawing, RawRel,
 };
 use quick_xml::events::Event;
 
@@ -113,12 +112,14 @@ pub(crate) fn merge_sheet_drawings<R: Read + Seek>(
                     let pic = *pic;
                     let name = pic.name.clone();
                     let descr = pic.descr.clone();
+                    let title = pic.title.clone();
                     let hidden = pic.hidden;
                     let image =
                         resolve_pic_image(archive, &drawing_path, &drawing_rels, pic, false);
                     let mut object = DrawingObject::image(image).with_anchor(entry.anchor);
                     object.meta.name = Some(name);
                     object.meta.alt_text = descr;
+                    object.meta.title = title;
                     object.meta.hidden = hidden;
                     object.meta.locked = entry.locked;
                     object.meta.printable = entry.printable;
@@ -133,16 +134,18 @@ pub(crate) fn merge_sheet_drawings<R: Read + Seek>(
                         continue;
                     };
                     if chart_ref.is_chart_ex {
-                        if let Ok(mut cx) = duke_sheets_chart::parse::parse_chart_ex_xml(
-                            Cursor::new(&chart_bytes),
-                        ) {
+                        if let Ok(mut cx) =
+                            duke_sheets_chart::parse::parse_chart_ex_xml(Cursor::new(&chart_bytes))
+                        {
                             cx.raw_mc_fallback = chart_ref.raw_mc_fallback;
-                            let (style, color) =
-                                read_chart_style_color(archive, &chart_path);
+                            let (style, color) = read_chart_style_color(archive, &chart_path);
                             cx.raw_chart_style = style;
                             cx.raw_chart_color_style = color;
                             let mut object =
                                 DrawingObject::chart_ex(cx).with_anchor(chart_ref.anchor);
+                            object.meta.name = chart_ref.name;
+                            object.meta.alt_text = chart_ref.descr;
+                            object.meta.title = chart_ref.title;
                             object.meta.hidden = chart_ref.hidden;
                             object.meta.locked = entry.locked;
                             object.meta.printable = entry.printable;
@@ -155,6 +158,9 @@ pub(crate) fn merge_sheet_drawings<R: Read + Seek>(
                         c.raw_chart_style = style;
                         c.raw_chart_color_style = color;
                         let mut object = DrawingObject::chart(c).with_anchor(chart_ref.anchor);
+                        object.meta.name = chart_ref.name;
+                        object.meta.alt_text = chart_ref.descr;
+                        object.meta.title = chart_ref.title;
                         object.meta.hidden = chart_ref.hidden;
                         object.meta.locked = entry.locked;
                         object.meta.printable = entry.printable;
@@ -164,12 +170,14 @@ pub(crate) fn merge_sheet_drawings<R: Read + Seek>(
                 DrawingEntryKind::Group(group) => {
                     let name = group.name.clone();
                     let descr = group.descr.clone();
+                    let title = group.title.clone();
                     let hidden = group.hidden;
                     let built =
                         build_group(archive, &drawing_path, &drawing_rels, group, &mut controls);
                     let mut object = DrawingObject::group(built).with_anchor(entry.anchor);
                     object.meta.name = Some(name);
                     object.meta.alt_text = descr;
+                    object.meta.title = title;
                     object.meta.hidden = hidden;
                     object.meta.locked = entry.locked;
                     object.meta.printable = entry.printable;
@@ -184,6 +192,10 @@ pub(crate) fn merge_sheet_drawings<R: Read + Seek>(
                         if let Some(name) = twin.name {
                             object.meta.name = Some(name);
                         }
+                        if twin.descr.is_some() {
+                            object.meta.alt_text = twin.descr;
+                        }
+                        object.meta.title = twin.title;
                         if anchor_defaulted {
                             object.anchor = entry.anchor;
                         }
@@ -315,6 +327,7 @@ fn build_group<R: Read + Seek>(
                 let meta = DrawingMeta {
                     name: Some(pic.name.clone()),
                     alt_text: pic.descr.clone(),
+                    title: pic.title.clone(),
                     hidden: pic.hidden,
                     ..DrawingMeta::default()
                 };
@@ -338,6 +351,7 @@ fn build_group<R: Read + Seek>(
                 let meta = DrawingMeta {
                     name: Some(inner.name.clone()),
                     alt_text: inner.descr.clone(),
+                    title: inner.title.clone(),
                     hidden: inner.hidden,
                     ..DrawingMeta::default()
                 };
@@ -355,6 +369,10 @@ fn build_group<R: Read + Seek>(
                     if let Some(name) = twin.name {
                         object.meta.name = Some(name);
                     }
+                    if twin.descr.is_some() {
+                        object.meta.alt_text = twin.descr;
+                    }
+                    object.meta.title = twin.title;
                     children.push(GroupChild {
                         meta: object.meta,
                         transform: twin.xfrm,

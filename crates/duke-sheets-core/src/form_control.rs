@@ -45,7 +45,7 @@
 //!
 //! sheet.try_add_drawing(DrawingObject::form_control(FormControl::new(
 //!     FormControlKind::Checkbox {
-//!         caption: "Enable feature".to_string(),
+//!         caption: "Enable feature".into(),
 //!         state: CheckState::Checked,
 //!         cell_link: Some("$D$2".to_string()),
 //!         no_3d: false,
@@ -56,7 +56,56 @@
 //! ```
 
 use crate::drawing::{DrawingPath, RectEmu};
-use crate::{Error, Result};
+use crate::{
+    rich_text_to_plain, Error, HorizontalAlignment, Result, RichTextRun, VerticalAlignment,
+};
+
+/// Caption text, rich formatting, and alignment for a form control.
+///
+/// Empty captions are valid. Alignment is optional so format-specific
+/// control defaults can remain implicit.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ControlText {
+    /// Caption runs in display order.
+    pub runs: Vec<RichTextRun>,
+    /// Explicit horizontal alignment, or the control kind's default.
+    pub horizontal_alignment: Option<HorizontalAlignment>,
+    /// Explicit vertical alignment, or the control kind's default.
+    pub vertical_alignment: Option<VerticalAlignment>,
+}
+
+impl ControlText {
+    /// Create a caption containing one unformatted run.
+    pub fn plain(text: impl Into<String>) -> Self {
+        Self {
+            runs: vec![RichTextRun::plain(text)],
+            horizontal_alignment: None,
+            vertical_alignment: None,
+        }
+    }
+
+    /// Concatenate all caption runs without formatting.
+    pub fn plain_text(&self) -> String {
+        rich_text_to_plain(&self.runs)
+    }
+
+    /// Whether the concatenated caption text is empty.
+    pub fn is_empty(&self) -> bool {
+        self.runs.iter().all(|run| run.text.is_empty())
+    }
+}
+
+impl From<String> for ControlText {
+    fn from(text: String) -> Self {
+        Self::plain(text)
+    }
+}
+
+impl From<&str> for ControlText {
+    fn from(text: &str) -> Self {
+        Self::plain(text)
+    }
+}
 
 /// State of a checkbox or option button.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -86,15 +135,15 @@ pub enum ListSelection {
 /// Kind-specific properties of a form control.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FormControlKind {
-    /// Push button. Macro assignment is not modeled.
+    /// Push button.
     Button {
         /// Text shown on the button face.
-        caption: String,
+        caption: ControlText,
     },
     /// Checkbox with an optional linked cell.
     Checkbox {
         /// Text shown beside the box.
-        caption: String,
+        caption: ControlText,
         /// Checked / unchecked / mixed.
         state: CheckState,
         /// Cell receiving TRUE/FALSE (A1-style, optional sheet prefix).
@@ -105,7 +154,7 @@ pub enum FormControlKind {
     /// Option (radio) button with an optional linked cell.
     OptionButton {
         /// Text shown beside the button.
-        caption: String,
+        caption: ControlText,
         /// Checked or unchecked ([`CheckState::Mixed`] is invalid here).
         state: CheckState,
         /// Cell receiving the one-based index of the selected option
@@ -122,12 +171,12 @@ pub enum FormControlKind {
     /// Static text label.
     Label {
         /// Label text.
-        caption: String,
+        caption: ControlText,
     },
     /// Group box framing a set of option buttons.
     GroupBox {
         /// Text shown in the frame's top edge.
-        caption: String,
+        caption: ControlText,
         /// Render without 3D shading.
         no_3d: bool,
     },
@@ -194,8 +243,8 @@ pub enum FormControlKind {
 }
 
 impl FormControlKind {
-    /// The control's caption text, for kinds that have one.
-    pub fn caption(&self) -> Option<&str> {
+    /// The control's rich caption, for kinds that have one.
+    pub fn caption(&self) -> Option<&ControlText> {
         match self {
             FormControlKind::Button { caption }
             | FormControlKind::Checkbox { caption, .. }
@@ -204,6 +253,23 @@ impl FormControlKind {
             | FormControlKind::GroupBox { caption, .. } => Some(caption),
             _ => None,
         }
+    }
+
+    /// The control's mutable rich caption, for kinds that have one.
+    pub fn caption_mut(&mut self) -> Option<&mut ControlText> {
+        match self {
+            FormControlKind::Button { caption }
+            | FormControlKind::Checkbox { caption, .. }
+            | FormControlKind::OptionButton { caption, .. }
+            | FormControlKind::Label { caption }
+            | FormControlKind::GroupBox { caption, .. } => Some(caption),
+            _ => None,
+        }
+    }
+
+    /// The control's caption as plain text, for kinds that have one.
+    pub fn caption_text(&self) -> Option<String> {
+        self.caption().map(ControlText::plain_text)
     }
 
     /// The control's cell link formula, for kinds that support one.
@@ -223,7 +289,10 @@ impl FormControlKind {
     /// writers.
     pub fn validate(&self) -> Result<()> {
         let nonempty_formula = |label: &str, value: &Option<String>| -> Result<()> {
-            if value.as_ref().is_some_and(|formula| formula.trim().is_empty()) {
+            if value
+                .as_ref()
+                .is_some_and(|formula| formula.trim().is_empty())
+            {
                 return Err(Error::other(format!("{label} cannot be empty")));
             }
             Ok(())
@@ -339,17 +408,40 @@ fn validate_numeric_control(value: u16, min: u16, max: u16, increment: u16) -> R
 pub struct FormControl {
     /// Kind-specific properties.
     pub kind: FormControlKind,
+    /// Macro assigned to the control (Excel `OnAction`). The XLS
+    /// writer supports workbook-local procedure names and does not
+    /// embed a VBA project.
+    pub macro_name: Option<String>,
 }
 
 impl FormControl {
     /// Create a control of the given kind.
     pub fn new(kind: FormControlKind) -> Self {
-        Self { kind }
+        Self {
+            kind,
+            macro_name: None,
+        }
     }
 
-    /// The control's caption text, for kinds that have one.
-    pub fn caption(&self) -> Option<&str> {
+    /// Set the macro assigned to this control.
+    pub fn with_macro_name(mut self, macro_name: impl Into<String>) -> Self {
+        self.macro_name = Some(macro_name.into());
+        self
+    }
+
+    /// The control's rich caption, for kinds that have one.
+    pub fn caption(&self) -> Option<&ControlText> {
         self.kind.caption()
+    }
+
+    /// The control's mutable rich caption, for kinds that have one.
+    pub fn caption_mut(&mut self) -> Option<&mut ControlText> {
+        self.kind.caption_mut()
+    }
+
+    /// The control's caption as plain text, for kinds that have one.
+    pub fn caption_text(&self) -> Option<String> {
+        self.kind.caption_text()
     }
 
     /// The control's cell link formula, for kinds that support one.
@@ -359,6 +451,13 @@ impl FormControl {
 
     /// Validate kind-specific properties.
     pub fn validate(&self) -> Result<()> {
+        if self
+            .macro_name
+            .as_ref()
+            .is_some_and(|macro_name| macro_name.trim().is_empty())
+        {
+            return Err(Error::other("macro name cannot be empty"));
+        }
         self.kind.validate()
     }
 }
@@ -457,7 +556,7 @@ mod tests {
 
     fn radio(anchor: DrawingAnchor) -> DrawingObject {
         DrawingObject::form_control(FormControl::new(FormControlKind::OptionButton {
-            caption: String::new(),
+            caption: String::new().into(),
             state: CheckState::Unchecked,
             cell_link: None,
             first_in_group: false,
@@ -468,7 +567,7 @@ mod tests {
 
     fn group_box(caption: &str, anchor: DrawingAnchor) -> DrawingObject {
         DrawingObject::form_control(FormControl::new(FormControlKind::GroupBox {
-            caption: caption.to_string(),
+            caption: caption.into(),
             no_3d: false,
         }))
         .with_anchor(anchor)
@@ -497,22 +596,22 @@ mod tests {
     #[test]
     fn new_control_defaults() {
         let ctrl = FormControl::new(FormControlKind::Button {
-            caption: "Run".to_string(),
+            caption: "Run".into(),
         });
-        assert_eq!(ctrl.caption(), Some("Run"));
+        assert_eq!(ctrl.caption_text().as_deref(), Some("Run"));
         assert_eq!(ctrl.cell_link(), None);
     }
 
     #[test]
     fn cell_link_accessor() {
         let ctrl = FormControl::new(FormControlKind::Checkbox {
-            caption: "On".to_string(),
+            caption: "On".into(),
             state: CheckState::Checked,
             cell_link: Some("$A$1".to_string()),
             no_3d: true,
         });
         assert_eq!(ctrl.cell_link(), Some("$A$1"));
-        assert_eq!(ctrl.caption(), Some("On"));
+        assert_eq!(ctrl.caption_text().as_deref(), Some("On"));
     }
 
     #[test]
@@ -569,7 +668,7 @@ mod tests {
     #[test]
     fn validates_kind_invariants() {
         let invalid_radio = FormControl::new(FormControlKind::OptionButton {
-            caption: "radio".to_string(),
+            caption: "radio".into(),
             state: CheckState::Mixed,
             cell_link: None,
             first_in_group: false,
@@ -666,7 +765,7 @@ mod tests {
             .contains("lines"));
 
         let blank_cell_link = FormControl::new(FormControlKind::Checkbox {
-            caption: "blank".to_string(),
+            caption: "blank".into(),
             state: CheckState::Checked,
             cell_link: Some("   ".to_string()),
             no_3d: false,
@@ -738,14 +837,14 @@ mod tests {
         let first = worksheet
             .try_add_drawing(DrawingObject::form_control(FormControl::new(
                 FormControlKind::Button {
-                    caption: "one".to_string(),
+                    caption: "one".into(),
                 },
             )))
             .unwrap();
         let second = worksheet
             .try_add_drawing(DrawingObject::form_control(FormControl::new(
                 FormControlKind::Label {
-                    caption: "two".to_string(),
+                    caption: "two".into(),
                 },
             )))
             .unwrap();
@@ -754,12 +853,17 @@ mod tests {
 
         let removed = worksheet.remove_drawing(0).unwrap();
         assert_eq!(
-            removed.kind.as_form_control().unwrap().caption(),
+            removed
+                .kind
+                .as_form_control()
+                .unwrap()
+                .caption_text()
+                .as_deref(),
             Some("one")
         );
         let remaining: Vec<_> = worksheet
             .form_controls()
-            .map(|drawn| drawn.payload.caption().unwrap().to_string())
+            .map(|drawn| drawn.payload.caption_text().unwrap())
             .collect();
         assert_eq!(remaining, vec!["two"]);
         assert!(worksheet.remove_drawing(1).is_err());

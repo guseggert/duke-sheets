@@ -17,11 +17,11 @@ use duke_sheets::{
 use duke_sheets_xlsx::{XlsxReader, XlsxWriter};
 
 const PNG_1PX: &[u8] = &[
-    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
-    0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
-    0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x62, 0x00,
-    0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49,
-    0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+    0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x62, 0x00, 0x01, 0x00, 0x00,
+    0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
+    0x42, 0x60, 0x82,
 ];
 
 fn two_cell(from_col: u16, from_row: u32, to_col: u16, to_row: u32) -> DrawingAnchor {
@@ -60,7 +60,7 @@ fn png(name: &str) -> DrawingObject {
 
 fn checkbox(caption: &str, link: Option<&str>) -> FormControl {
     FormControl::new(FormControlKind::Checkbox {
-        caption: caption.to_string(),
+        caption: caption.into(),
         state: duke_sheets::CheckState::Checked,
         cell_link: link.map(str::to_string),
         no_3d: false,
@@ -128,7 +128,7 @@ fn xlsx_control_z_order_between_images_round_trips() {
     assert_eq!(images[0].object.meta.name.as_deref(), Some("Below"));
     assert_eq!(images[1].object.meta.name.as_deref(), Some("Above"));
     let control = sheet.form_controls().next().unwrap();
-    assert_eq!(control.payload.caption(), Some("Middle"));
+    assert_eq!(control.payload.caption_text().as_deref(), Some("Middle"));
     assert_eq!(
         control.payload.cell_link(),
         Some("$D$2"),
@@ -160,8 +160,11 @@ fn xlsx_comment_control_relative_order_round_trips() {
     assert_eq!(kind_tags(&read), vec!["control", "comment", "control"]);
     let sheet = read.worksheet(0).unwrap();
     let controls: Vec<_> = sheet.form_controls().collect();
-    assert_eq!(controls[0].payload.caption(), Some("First"));
-    assert_eq!(controls[1].payload.caption(), Some("Second"));
+    assert_eq!(controls[0].payload.caption_text().as_deref(), Some("First"));
+    assert_eq!(
+        controls[1].payload.caption_text().as_deref(),
+        Some("Second")
+    );
     assert_eq!(sheet.comment_at(4, 4).unwrap().text, "between the controls");
 }
 
@@ -269,7 +272,8 @@ fn xlsx_comment_anchor_round_trips() {
     let sheet = workbook.worksheet_mut(0).unwrap();
     let custom = two_cell(8, 2, 12, 9);
     sheet.add_drawing(
-        DrawingObject::comment(1, 1, CellComment::new("a", "moved popup")).with_anchor(custom.clone()),
+        DrawingObject::comment(1, 1, CellComment::new("a", "moved popup"))
+            .with_anchor(custom.clone()),
     );
 
     let read = round_trip(&workbook);
@@ -306,8 +310,8 @@ fn xlsx_raw_anchor_keeps_order_and_parsed_anchor() {
     }
     let textbox = r#"<xdr:twoCellAnchor><xdr:from><xdr:col>3</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>3</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>4</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="99" name="TextBox 9"/><xdr:cNvSpPr txBox="1"/></xdr:nvSpPr><xdr:spPr><a:xfrm><a:off x="1828800" y="571500"/><a:ext cx="609600" cy="190500"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr><xdr:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>hello</a:t></a:r></a:p></xdr:txBody></xdr:sp><xdr:clientData/></xdr:twoCellAnchor>"#;
     let insert_at = {
-        let first_end = drawing.find("</xdr:twoCellAnchor>").expect("first anchor") +
-            "</xdr:twoCellAnchor>".len();
+        let first_end = drawing.find("</xdr:twoCellAnchor>").expect("first anchor")
+            + "</xdr:twoCellAnchor>".len();
         first_end
     };
     let mut patched = drawing.clone();

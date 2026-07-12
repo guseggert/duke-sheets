@@ -59,12 +59,12 @@ fn single_control_round_trip(kind: FormControlKind) -> FormControlKind {
 #[test]
 fn button_round_trips() {
     let kind = single_control_round_trip(FormControlKind::Button {
-        caption: "Run Report".to_string(),
+        caption: "Run Report".into(),
     });
     assert_eq!(
         kind,
         FormControlKind::Button {
-            caption: "Run Report".to_string(),
+            caption: "Run Report".into(),
         }
     );
 }
@@ -72,7 +72,7 @@ fn button_round_trips() {
 #[test]
 fn checkbox_round_trips() {
     let kind = single_control_round_trip(FormControlKind::Checkbox {
-        caption: "Enable audit".to_string(),
+        caption: "Enable audit".into(),
         state: CheckState::Checked,
         cell_link: Some("$D$2".to_string()),
         no_3d: false,
@@ -80,7 +80,7 @@ fn checkbox_round_trips() {
     assert_eq!(
         kind,
         FormControlKind::Checkbox {
-            caption: "Enable audit".to_string(),
+            caption: "Enable audit".into(),
             state: CheckState::Checked,
             cell_link: Some("$D$2".to_string()),
             no_3d: false,
@@ -91,7 +91,7 @@ fn checkbox_round_trips() {
 #[test]
 fn checkbox_mixed_state_round_trips() {
     let kind = single_control_round_trip(FormControlKind::Checkbox {
-        caption: "Tri".to_string(),
+        caption: "Tri".into(),
         state: CheckState::Mixed,
         cell_link: None,
         no_3d: true,
@@ -99,7 +99,7 @@ fn checkbox_mixed_state_round_trips() {
     assert_eq!(
         kind,
         FormControlKind::Checkbox {
-            caption: "Tri".to_string(),
+            caption: "Tri".into(),
             state: CheckState::Mixed,
             cell_link: None,
             no_3d: true,
@@ -121,7 +121,7 @@ fn option_buttons_round_trip_as_group() {
     {
         ws.add_drawing(control_at(
             FormControlKind::OptionButton {
-                caption: caption.to_string(),
+                caption: caption.into(),
                 state: *state,
                 cell_link: Some("$E$1".to_string()),
                 first_in_group: false,
@@ -143,7 +143,7 @@ fn option_buttons_round_trip_as_group() {
                 first_in_group,
                 ..
             } => {
-                assert_eq!(caption, &format!("Opt {}", ["A", "B", "C"][i]));
+                assert_eq!(caption.plain_text(), format!("Opt {}", ["A", "B", "C"][i]));
                 assert_eq!(
                     *state,
                     if i == 0 {
@@ -165,12 +165,12 @@ fn option_buttons_round_trip_as_group() {
 #[test]
 fn label_round_trips() {
     let kind = single_control_round_trip(FormControlKind::Label {
-        caption: "Status".to_string(),
+        caption: "Status".into(),
     });
     assert_eq!(
         kind,
         FormControlKind::Label {
-            caption: "Status".to_string(),
+            caption: "Status".into(),
         }
     );
 }
@@ -178,13 +178,13 @@ fn label_round_trips() {
 #[test]
 fn group_box_round_trips() {
     let kind = single_control_round_trip(FormControlKind::GroupBox {
-        caption: "Choices".to_string(),
+        caption: "Choices".into(),
         no_3d: true,
     });
     assert_eq!(
         kind,
         FormControlKind::GroupBox {
-            caption: "Choices".to_string(),
+            caption: "Choices".into(),
             no_3d: true,
         }
     );
@@ -306,7 +306,7 @@ fn cross_sheet_cell_link_round_trips() {
     let ws = wb.worksheet_mut(0).unwrap();
     ws.add_drawing(control_at(
         FormControlKind::Checkbox {
-            caption: "linked".to_string(),
+            caption: "linked".into(),
             state: CheckState::Checked,
             cell_link: Some("Data!$B$2".to_string()),
             no_3d: false,
@@ -323,14 +323,14 @@ fn cross_sheet_cell_link_round_trips() {
 #[test]
 fn unicode_caption_round_trips() {
     let kind = single_control_round_trip(FormControlKind::Checkbox {
-        caption: " 自行拖车Shipper arrange ✓".to_string(),
+        caption: " 自行拖车Shipper arrange ✓".into(),
         state: CheckState::Unchecked,
         cell_link: None,
         no_3d: false,
     });
     match kind {
         FormControlKind::Checkbox { caption, .. } => {
-            assert_eq!(caption, " 自行拖车Shipper arrange ✓");
+            assert_eq!(caption.plain_text(), " 自行拖车Shipper arrange ✓");
         }
         other => panic!("expected Checkbox, got {other:?}"),
     }
@@ -342,7 +342,7 @@ fn control_anchor_round_trips() {
     let ws = wb.worksheet_mut(0).unwrap();
     ws.add_drawing(control_at(
         FormControlKind::Button {
-            caption: "here".to_string(),
+            caption: "here".into(),
         },
         anchor(2, 3, 5, 8),
     ));
@@ -366,7 +366,7 @@ fn locked_and_printable_flags_round_trip() {
     let ws = wb.worksheet_mut(0).unwrap();
     let mut object = control_at(
         FormControlKind::Checkbox {
-            caption: "flags".to_string(),
+            caption: "flags".into(),
             state: CheckState::Unchecked,
             cell_link: None,
             no_3d: false,
@@ -388,11 +388,11 @@ fn controls_coexist_with_comments_and_pictures() {
     // Ordering test: pictures, comments, and controls share the
     // per-sheet drawing; OBJ↔shape pairing must stay positional.
     const TEST_PNG_1X1: &[u8] = &[
-        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
-        0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
-        0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0B, 0x49, 0x44, 0x41, 0x54, 0x78,
-        0x9C, 0x63, 0x60, 0x00, 0x02, 0x00, 0x00, 0x05, 0x00, 0x01, 0x7A, 0x5E, 0xAB, 0x3F,
-        0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
+        0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0B, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x60,
+        0x00, 0x02, 0x00, 0x00, 0x05, 0x00, 0x01, 0x7A, 0x5E, 0xAB, 0x3F, 0x00, 0x00, 0x00, 0x00,
+        0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
     ];
 
     let mut wb = Workbook::new();
@@ -417,7 +417,7 @@ fn controls_coexist_with_comments_and_pictures() {
     ws.set_comment_at(0, 0, duke_sheets_core::CellComment::new("Author", "note"));
     ws.add_drawing(control_at(
         FormControlKind::Checkbox {
-            caption: "check".to_string(),
+            caption: "check".into(),
             state: CheckState::Checked,
             cell_link: None,
             no_3d: false,
@@ -426,7 +426,7 @@ fn controls_coexist_with_comments_and_pictures() {
     ));
     ws.add_drawing(control_at(
         FormControlKind::Button {
-            caption: "go".to_string(),
+            caption: "go".into(),
         },
         anchor(1, 5, 3, 7),
     ));
@@ -437,8 +437,8 @@ fn controls_coexist_with_comments_and_pictures() {
     assert_eq!(ws2.comment_count(), 1, "comment survives");
     let controls = controls_of(ws2);
     assert_eq!(controls.len(), 2, "controls survive");
-    assert_eq!(controls[0].payload.caption(), Some("check"));
-    assert_eq!(controls[1].payload.caption(), Some("go"));
+    assert_eq!(controls[0].payload.caption_text().as_deref(), Some("check"));
+    assert_eq!(controls[1].payload.caption_text().as_deref(), Some("go"));
     match &controls[0].payload.kind {
         FormControlKind::Checkbox { state, .. } => assert_eq!(*state, CheckState::Checked),
         other => panic!("expected Checkbox, got {other:?}"),
@@ -449,20 +449,16 @@ fn controls_coexist_with_comments_and_pictures() {
 fn controls_on_multiple_sheets_round_trip() {
     let mut wb = Workbook::new();
     wb.add_worksheet_with_name("Second").expect("sheet 2");
-    wb.worksheet_mut(0)
-        .unwrap()
-        .add_drawing(control_at(
+    wb.worksheet_mut(0).unwrap().add_drawing(control_at(
             FormControlKind::Checkbox {
-                caption: "one".to_string(),
+            caption: "one".into(),
                 state: CheckState::Checked,
                 cell_link: None,
                 no_3d: false,
             },
             anchor(0, 0, 2, 2),
         ));
-    wb.worksheet_mut(1)
-        .unwrap()
-        .add_drawing(control_at(
+    wb.worksheet_mut(1).unwrap().add_drawing(control_at(
             FormControlKind::Spinner {
                 value: 5,
                 min: 0,
@@ -477,7 +473,10 @@ fn controls_on_multiple_sheets_round_trip() {
     assert_eq!(parsed.worksheet(0).unwrap().form_control_count(), 1);
     assert_eq!(parsed.worksheet(1).unwrap().form_control_count(), 1);
     assert_eq!(
-        controls_of(parsed.worksheet(0).unwrap())[0].payload.caption(),
+        controls_of(parsed.worksheet(0).unwrap())[0]
+            .payload
+            .caption_text()
+            .as_deref(),
         Some("one")
     );
     match &controls_of(parsed.worksheet(1).unwrap())[0].payload.kind {
@@ -499,14 +498,14 @@ fn radio_groups_workbook() -> Workbook {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     let radio = |caption: &str, state: CheckState| FormControlKind::OptionButton {
-        caption: caption.to_string(),
+        caption: caption.into(),
         state,
         cell_link: None,
         first_in_group: false,
         no_3d: false,
     };
     let group_box = |caption: &str| FormControlKind::GroupBox {
-        caption: caption.to_string(),
+        caption: caption.into(),
         no_3d: false,
     };
     // Box A spans cols 0-2, Box B cols 4-6; radios sit inside them,
@@ -544,25 +543,25 @@ fn radio_groups_follow_enclosing_group_boxes() {
     let controls = controls_of(parsed.worksheet(0).unwrap());
     assert_eq!(controls.len(), 7);
 
-    let firsts: Vec<(Option<&str>, bool)> = controls
+    let firsts: Vec<(String, bool)> = controls
         .iter()
         .filter_map(|c| match &c.payload.kind {
             FormControlKind::OptionButton {
                 caption,
                 first_in_group,
                 ..
-            } => Some((Some(caption.as_str()), *first_in_group)),
+            } => Some((caption.plain_text(), *first_in_group)),
             _ => None,
         })
         .collect();
     assert_eq!(
         firsts,
         vec![
-            (Some("A1"), true),
-            (Some("B1"), true),
-            (Some("A2"), false),
-            (Some("B2"), false),
-            (Some("Loose"), true),
+            ("A1".to_string(), true),
+            ("B1".to_string(), true),
+            ("A2".to_string(), false),
+            ("B2".to_string(), false),
+            ("Loose".to_string(), true),
         ],
         "each group's first radio carries fFirstBtn"
     );
@@ -579,8 +578,7 @@ fn radio_chains_link_within_groups_only() {
     let bytes = XlsWriter::write_to_bytes(&radio_groups_workbook()).expect("serialize");
     let cfb = CompoundFile::open(Cursor::new(&bytes)).expect("cfb");
     let stream = cfb.read_stream("/Workbook").expect("workbook stream");
-    let records =
-        biff::read_all_records(&mut Cursor::new(stream)).expect("records");
+    let records = biff::read_all_records(&mut Cursor::new(stream)).expect("records");
 
     let mut chains = std::collections::HashMap::new();
     for rec in &records {
@@ -607,7 +605,7 @@ fn empty_caption_round_trips() {
     // Empty captions take the cchText=0 TXO path (header only, no
     // CONTINUE records).
     let kind = single_control_round_trip(FormControlKind::Checkbox {
-        caption: String::new(),
+        caption: String::new().into(),
         state: CheckState::Checked,
         cell_link: None,
         no_3d: false,
@@ -615,7 +613,7 @@ fn empty_caption_round_trips() {
     assert_eq!(
         kind,
         FormControlKind::Checkbox {
-            caption: String::new(),
+            caption: String::new().into(),
             state: CheckState::Checked,
             cell_link: None,
             no_3d: false,
@@ -627,11 +625,11 @@ fn empty_caption_round_trips() {
 fn oversized_caption_round_trips_via_multiple_continue_records() {
     let long: String = "xy".repeat(3000); // 6000 chars
     let kind = single_control_round_trip(FormControlKind::Label {
-        caption: long.clone(),
+        caption: long.clone().into(),
     });
     match kind {
         FormControlKind::Label { caption } => {
-            assert_eq!(caption, long);
+            assert_eq!(caption.plain_text(), long);
         }
         other => panic!("expected Label, got {other:?}"),
     }
@@ -640,12 +638,10 @@ fn oversized_caption_round_trips_via_multiple_continue_records() {
 #[test]
 fn caption_over_u16_character_limit_returns_a_clean_error() {
     let mut wb = Workbook::new();
-    wb.worksheet_mut(0)
-        .unwrap()
-        .add_drawing(control_at(
+    wb.worksheet_mut(0).unwrap().add_drawing(control_at(
             FormControlKind::Label {
                 // Each supplementary scalar is two UTF-16 units.
-                caption: "😀".repeat(32_768),
+            caption: "😀".repeat(32_768).into(),
             },
             anchor(0, 0, 2, 2),
         ));
@@ -714,11 +710,9 @@ fn uncompilable_cell_link_returns_a_clean_error() {
     // an ObjectParsedFormula; the writer drops it rather than emit an
     // out-of-spec record.
     let mut wb = Workbook::new();
-    wb.worksheet_mut(0)
-        .unwrap()
-        .add_drawing(control_at(
+    wb.worksheet_mut(0).unwrap().add_drawing(control_at(
             FormControlKind::Checkbox {
-                caption: "bad link".to_string(),
+            caption: "bad link".into(),
                 state: CheckState::Checked,
                 cell_link: Some("SUM(A1:A3)".to_string()),
                 no_3d: false,
@@ -778,9 +772,7 @@ fn large_multi_select_list_uses_continue_records() {
 #[test]
 fn full_column_list_range_returns_a_clean_error() {
     let mut wb = Workbook::new();
-    wb.worksheet_mut(0)
-        .unwrap()
-        .add_drawing(control_at(
+    wb.worksheet_mut(0).unwrap().add_drawing(control_at(
             FormControlKind::ListBox {
                 input_range: Some("$H$1:$H$65536".to_string()),
                 cell_link: None,
@@ -799,9 +791,7 @@ fn full_column_list_range_returns_a_clean_error() {
 fn list_selection_outside_input_range_returns_a_clean_error() {
     // Zero-based index 4 is the first out-of-range value for 4 items.
     let mut wb = Workbook::new();
-    wb.worksheet_mut(0)
-        .unwrap()
-        .add_drawing(control_at(
+    wb.worksheet_mut(0).unwrap().add_drawing(control_at(
             FormControlKind::ListBox {
                 input_range: Some("$H$1:$H$4".to_string()),
                 cell_link: None,
@@ -819,11 +809,9 @@ fn list_selection_outside_input_range_returns_a_clean_error() {
 #[test]
 fn control_anchor_outside_biff8_grid_returns_a_clean_error() {
     let mut wb = Workbook::new();
-    wb.worksheet_mut(0)
-        .unwrap()
-        .add_drawing(control_at(
+    wb.worksheet_mut(0).unwrap().add_drawing(control_at(
             FormControlKind::Button {
-                caption: "outside".to_string(),
+            caption: "outside".into(),
             },
             anchor(256, 0, 257, 1),
         ));
@@ -834,11 +822,9 @@ fn control_anchor_outside_biff8_grid_returns_a_clean_error() {
 #[test]
 fn reversed_control_anchor_returns_a_clean_error() {
     let mut wb = Workbook::new();
-    wb.worksheet_mut(0)
-        .unwrap()
-        .add_drawing(control_at(
+    wb.worksheet_mut(0).unwrap().add_drawing(control_at(
             FormControlKind::Button {
-                caption: "reversed".to_string(),
+            caption: "reversed".into(),
             },
             anchor(4, 4, 2, 2),
         ));
@@ -849,11 +835,9 @@ fn reversed_control_anchor_returns_a_clean_error() {
 #[test]
 fn out_of_grid_control_formula_returns_a_clean_error() {
     let mut wb = Workbook::new();
-    wb.worksheet_mut(0)
-        .unwrap()
-        .add_drawing(control_at(
+    wb.worksheet_mut(0).unwrap().add_drawing(control_at(
             FormControlKind::Checkbox {
-                caption: "link".to_string(),
+            caption: "link".into(),
                 state: CheckState::Checked,
                 cell_link: Some("$IW$1".to_string()),
                 no_3d: false,
@@ -867,9 +851,7 @@ fn out_of_grid_control_formula_returns_a_clean_error() {
 #[test]
 fn invalid_scrollbar_tuple_returns_a_clean_error() {
     let mut wb = Workbook::new();
-    wb.worksheet_mut(0)
-        .unwrap()
-        .add_drawing(control_at(
+    wb.worksheet_mut(0).unwrap().add_drawing(control_at(
             FormControlKind::Scrollbar {
                 value: 50,
                 min: 100,
@@ -888,11 +870,9 @@ fn invalid_scrollbar_tuple_returns_a_clean_error() {
 #[test]
 fn mixed_option_button_returns_a_clean_error() {
     let mut wb = Workbook::new();
-    wb.worksheet_mut(0)
-        .unwrap()
-        .add_drawing(control_at(
+    wb.worksheet_mut(0).unwrap().add_drawing(control_at(
             FormControlKind::OptionButton {
-                caption: "mixed".to_string(),
+            caption: "mixed".into(),
                 state: CheckState::Mixed,
                 cell_link: None,
                 first_in_group: true,
@@ -923,26 +903,26 @@ fn lo_can_open_xls_with_form_controls_we_emit() {
     ws.set_cell_value("A1", 42.0).expect("A1");
     let kinds: Vec<FormControlKind> = vec![
         FormControlKind::Button {
-            caption: "Run".to_string(),
+            caption: "Run".into(),
         },
         FormControlKind::Checkbox {
-            caption: "Check".to_string(),
+            caption: "Check".into(),
             state: CheckState::Checked,
             cell_link: Some("$D$2".to_string()),
             no_3d: false,
         },
         FormControlKind::OptionButton {
-            caption: "Opt".to_string(),
+            caption: "Opt".into(),
             state: CheckState::Checked,
             cell_link: None,
             first_in_group: true,
             no_3d: false,
         },
         FormControlKind::Label {
-            caption: "Info".to_string(),
+            caption: "Info".into(),
         },
         FormControlKind::GroupBox {
-            caption: "Frame".to_string(),
+            caption: "Frame".into(),
             no_3d: true,
         },
         FormControlKind::ListBox {

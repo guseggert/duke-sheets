@@ -2283,7 +2283,8 @@ fn excel_preserves_external_udf_xls_we_emit() {
     ws.set_cell_value("A1", 7.0).unwrap();
     ws.set_cell_formula("B1", r#"=[1]!TBLink("acct",A1)"#)
         .unwrap();
-    ws.set_formula_result(0, 1, CellValue::Number(42.0)).unwrap();
+    ws.set_formula_result(0, 1, CellValue::Number(42.0))
+        .unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     let ws = result.worksheet(0).unwrap();
@@ -2372,7 +2373,11 @@ fn excel_byte_parity_for_all_xls_atp_functions_we_emit() {
         rejected.len(),
         rejected
     );
-    assert_eq!(accepted.len(), formulas.len(), "all ATP formulas should be authored");
+    assert_eq!(
+        accepted.len(),
+        formulas.len(),
+        "all ATP formulas should be authored"
+    );
 
     // Formula token streams: PtgNameX(nameindex) + R-class args + PtgFuncVar.
     let mut ours = xls_formula_ptg_streams_for_compare(&our_bytes);
@@ -2466,39 +2471,39 @@ fn excel_can_read_form_controls_we_emit() {
     }
     let kinds: Vec<FormControlKind> = vec![
         FormControlKind::Button {
-            caption: "Run Report".to_string(),
+            caption: "Run Report".into(),
         },
         FormControlKind::Checkbox {
-            caption: "Enable audit".to_string(),
+            caption: "Enable audit".into(),
             state: CheckState::Checked,
             cell_link: Some("$D$2".to_string()),
             no_3d: true,
         },
         FormControlKind::Checkbox {
-            caption: "Tri state".to_string(),
+            caption: "Tri state".into(),
             state: CheckState::Mixed,
             cell_link: None,
             no_3d: true,
         },
         FormControlKind::OptionButton {
-            caption: "Opt A".to_string(),
+            caption: "Opt A".into(),
             state: CheckState::Checked,
             cell_link: Some("$D$3".to_string()),
             first_in_group: true,
             no_3d: true,
         },
         FormControlKind::OptionButton {
-            caption: "Opt B".to_string(),
+            caption: "Opt B".into(),
             state: CheckState::Unchecked,
             cell_link: None,
             first_in_group: false,
             no_3d: true,
         },
         FormControlKind::Label {
-            caption: "Status label".to_string(),
+            caption: "Status label".into(),
         },
         FormControlKind::GroupBox {
-            caption: "Choices".to_string(),
+            caption: "Choices".into(),
             no_3d: true,
         },
         FormControlKind::ListBox {
@@ -2562,7 +2567,7 @@ fn excel_can_read_form_controls_we_emit() {
     );
 
     match &controls[0].payload.kind {
-        FormControlKind::Button { caption } => assert_eq!(caption, "Run Report"),
+        FormControlKind::Button { caption } => assert_eq!(caption.plain_text(), "Run Report"),
         other => panic!("control 0: expected Button, got {other:?}"),
     }
     match &controls[1].payload.kind {
@@ -2572,7 +2577,7 @@ fn excel_can_read_form_controls_we_emit() {
             cell_link,
             ..
         } => {
-            assert_eq!(caption, "Enable audit");
+            assert_eq!(caption.plain_text(), "Enable audit");
             assert_eq!(*state, CheckState::Checked);
             assert_eq!(cell_link.as_deref(), Some("$D$2"));
         }
@@ -2580,7 +2585,7 @@ fn excel_can_read_form_controls_we_emit() {
     }
     match &controls[2].payload.kind {
         FormControlKind::Checkbox { caption, state, .. } => {
-            assert_eq!(caption, "Tri state");
+            assert_eq!(caption.plain_text(), "Tri state");
             assert_eq!(*state, CheckState::Mixed, "mixed state must survive");
         }
         other => panic!("control 2: expected Checkbox, got {other:?}"),
@@ -2593,7 +2598,7 @@ fn excel_can_read_form_controls_we_emit() {
             first_in_group,
             ..
         } => {
-            assert_eq!(caption, "Opt A");
+            assert_eq!(caption.plain_text(), "Opt A");
             assert_eq!(*state, CheckState::Checked);
             assert_eq!(cell_link.as_deref(), Some("$D$3"));
             assert!(*first_in_group, "first radio keeps fFirstBtn");
@@ -2602,17 +2607,19 @@ fn excel_can_read_form_controls_we_emit() {
     }
     match &controls[4].payload.kind {
         FormControlKind::OptionButton { caption, state, .. } => {
-            assert_eq!(caption, "Opt B");
+            assert_eq!(caption.plain_text(), "Opt B");
             assert_eq!(*state, CheckState::Unchecked);
         }
         other => panic!("control 4: expected OptionButton, got {other:?}"),
     }
     match &controls[5].payload.kind {
-        FormControlKind::Label { caption } => assert_eq!(caption, "Status label"),
+        FormControlKind::Label { caption } => assert_eq!(caption.plain_text(), "Status label"),
         other => panic!("control 5: expected Label, got {other:?}"),
     }
     match &controls[6].payload.kind {
-        FormControlKind::GroupBox { caption, .. } => assert_eq!(caption, "Choices"),
+        FormControlKind::GroupBox { caption, .. } => {
+            assert_eq!(caption.plain_text(), "Choices")
+        }
         other => panic!("control 6: expected GroupBox, got {other:?}"),
     }
     match &controls[7].payload.kind {
@@ -2704,6 +2711,82 @@ fn excel_can_read_form_controls_we_emit() {
     }
 }
 
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xls_control_visual_metadata_we_emit() {
+    use duke_sheets_core::style::{HorizontalAlignment, Underline, VerticalAlignment};
+    use duke_sheets_core::{CheckState, ControlText, DrawingObject, FormControl, FormControlKind};
+
+    let text = ControlText {
+        runs: vec![
+            RichTextRun::with_font(
+                "Red ",
+                RunFont {
+                    name: Some("Segoe UI".into()),
+                    size: Some(9.0),
+                    color: Some(Color::rgb(255, 0, 0)),
+                    bold: Some(true),
+                    ..RunFont::default()
+                },
+            ),
+            RichTextRun::with_font(
+                "Blue",
+                RunFont {
+                    name: Some("Arial".into()),
+                    size: Some(12.0),
+                    color: Some(Color::rgb(0, 0, 255)),
+                    italic: Some(true),
+                    underline: Some(Underline::Single),
+                    ..RunFont::default()
+                },
+            ),
+        ],
+        horizontal_alignment: Some(HorizontalAlignment::Right),
+        vertical_alignment: Some(VerticalAlignment::Bottom),
+    };
+    let control = FormControl::new(FormControlKind::Checkbox {
+        caption: text,
+        state: CheckState::Checked,
+        cell_link: None,
+        no_3d: false,
+    })
+    .with_macro_name("RunProbe");
+    let mut object = DrawingObject::form_control(control).with_anchor(control_anchor(1, 1, 4, 3));
+    object.meta.name = Some("Visual Probe".into());
+    object.meta.alt_text = Some("Visual probe alternative".into());
+    object.meta.title = Some("Not carried by XLS".into());
+    let mut workbook = Workbook::new();
+    workbook.worksheet_mut(0).unwrap().add_drawing(object);
+
+    let result = roundtrip_through_excel_xls(&workbook);
+    let drawn = result.worksheet(0).unwrap().form_controls().next().unwrap();
+    assert_eq!(drawn.object.meta.name.as_deref(), Some("Visual Probe"));
+    assert_eq!(
+        drawn.object.meta.alt_text.as_deref(),
+        Some("Visual probe alternative")
+    );
+    assert_eq!(drawn.payload.caption_text().as_deref(), Some("Red Blue"));
+    assert_eq!(drawn.payload.macro_name.as_deref(), Some("RunProbe"));
+    let caption = drawn.payload.caption().unwrap();
+    assert_eq!(
+        caption.horizontal_alignment,
+        Some(HorizontalAlignment::Right)
+    );
+    assert_eq!(caption.vertical_alignment, Some(VerticalAlignment::Bottom));
+    assert_eq!(caption.runs.len(), 2);
+    let red = caption.runs[0].font.as_ref().unwrap();
+    assert_eq!(red.name.as_deref(), Some("Segoe UI"));
+    assert_eq!(red.size, Some(9.0));
+    assert_eq!(red.color, Some(Color::rgb(255, 0, 0)));
+    assert_eq!(red.bold, Some(true));
+    let blue = caption.runs[1].font.as_ref().unwrap();
+    assert_eq!(blue.name.as_deref(), Some("Arial"));
+    assert_eq!(blue.size, Some(12.0));
+    assert_eq!(blue.color, Some(Color::rgb(0, 0, 255)));
+    assert_eq!(blue.italic, Some(true));
+    assert_eq!(blue.underline, Some(Underline::Single));
+}
+
 /// Excel's own interpretation of persisted selections pins the
 /// zero-based model ↔ one-based file conversion. A symmetric
 /// writer/reader offset bug survives a model round-trip, but not
@@ -2753,7 +2836,10 @@ fn excel_interprets_xls_list_selections_one_based() {
         .open_workbook(&fixture.vm_path)
         .expect("Excel should open our XLS without error");
     let name = opened.name().expect("workbook name");
-    assert!(!name.contains("Repaired"), "Excel repaired the file: {name}");
+    assert!(
+        !name.contains("Repaired"),
+        "Excel repaired the file: {name}"
+    );
 
     // `Shapes.Item` is a method in Excel's type library, so it is
     // unreachable through chain steps (GetProperty binding); invoke
@@ -2782,16 +2868,22 @@ fn excel_interprets_xls_list_selections_one_based() {
             vec![ChainStep::Property("ControlFormat".into())],
             "ListIndex",
         ) {
-            Ok(Some(ResponseData::Value { value })) => {
-                value.as_f64().expect("numeric ListIndex")
-            }
+            Ok(Some(ResponseData::Value { value })) => value.as_f64().expect("numeric ListIndex"),
             other => panic!("expected ListIndex value, got {other:?}"),
         };
         excel.release(shape_handle).expect("release shape");
         index
     };
-    assert_eq!(list_index(1), 3.0, "list box: model index 2 is Excel item 3");
-    assert_eq!(list_index(2), 2.0, "dropdown: model index 1 is Excel item 2");
+    assert_eq!(
+        list_index(1),
+        3.0,
+        "list box: model index 2 is Excel item 3"
+    );
+    assert_eq!(
+        list_index(2),
+        2.0,
+        "dropdown: model index 1 is Excel item 2"
+    );
 
     excel.release(shapes_handle).expect("release shapes");
     opened.close().expect("close workbook");
@@ -3137,7 +3229,10 @@ fn excel_authored_xls_form_control_linked_cell_semantics() {
     define_excel_name(&excel, workbook.handle(), "LinkedTarget", "=Controls!$B$1");
     let named_checkbox = add_control(1, 150, 210);
     set_control(named_checkbox, "LinkedCell", json!("LinkedTarget"));
-    assert_eq!(get_control(named_checkbox, "LinkedCell"), json!("LinkedTarget"));
+    assert_eq!(
+        get_control(named_checkbox, "LinkedCell"),
+        json!("LinkedTarget")
+    );
     set_control(named_checkbox, "Value", json!(1));
     assert_eq!(
         workbook.get_cell_value("B1").unwrap(),
@@ -3511,7 +3606,7 @@ fn excel_preserves_unselected_radio_group_over_stale_link() {
     for (caption, row) in [("First", 1), ("Second", 3)] {
         ws.add_form_control(
             FormControl::new(FormControlKind::OptionButton {
-                caption: caption.to_string(),
+                caption: caption.into(),
                 state: CheckState::Unchecked,
                 cell_link: Some("$D$1".to_string()),
                 first_in_group: false,
@@ -3557,14 +3652,14 @@ fn excel_can_read_radio_groups_we_emit() {
     ws.set_cell_value("A1", 42.0).expect("A1");
 
     let radio = |caption: &str, state: CheckState| FormControlKind::OptionButton {
-        caption: caption.to_string(),
+        caption: caption.into(),
         state,
         cell_link: None,
         first_in_group: false,
         no_3d: true,
     };
     let group_box = |caption: &str| FormControlKind::GroupBox {
-        caption: caption.to_string(),
+        caption: caption.into(),
         no_3d: true,
     };
     ws.add_form_control(
@@ -3609,7 +3704,7 @@ fn excel_can_read_radio_groups_we_emit() {
                 state,
                 first_in_group,
                 ..
-            } => Some((caption.clone(), *state, *first_in_group)),
+            } => Some((caption.plain_text(), *state, *first_in_group)),
             _ => None,
         })
         .collect();
@@ -3634,11 +3729,11 @@ fn excel_can_read_mixed_control_comment_picture_we_emit() {
     use duke_sheets_core::{CheckState, FormControl, FormControlKind};
 
     const TEST_PNG_1X1: &[u8] = &[
-        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
-        0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
-        0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0B, 0x49, 0x44, 0x41, 0x54, 0x78,
-        0x9C, 0x63, 0x60, 0x00, 0x02, 0x00, 0x00, 0x05, 0x00, 0x01, 0x7A, 0x5E, 0xAB, 0x3F,
-        0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
+        0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0B, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x60,
+        0x00, 0x02, 0x00, 0x00, 0x05, 0x00, 0x01, 0x7A, 0x5E, 0xAB, 0x3F, 0x00, 0x00, 0x00, 0x00,
+        0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
     ];
 
     let mut wb = Workbook::new();
@@ -3660,14 +3755,10 @@ fn excel_can_read_mixed_control_comment_picture_we_emit() {
         },
         control_anchor(6, 1, 8, 4),
     );
-    ws.set_comment_at(
-        0,
-        0,
-        duke_sheets_core::CellComment::new("Author", "a note"),
-    );
+    ws.set_comment_at(0, 0, duke_sheets_core::CellComment::new("Author", "a note"));
     ws.add_form_control(
         FormControl::new(FormControlKind::Checkbox {
-            caption: "mixed sheet".to_string(),
+            caption: "mixed sheet".into(),
             state: CheckState::Checked,
             cell_link: Some("$D$2".to_string()),
             no_3d: true,
@@ -3688,7 +3779,7 @@ fn excel_can_read_mixed_control_comment_picture_we_emit() {
             cell_link,
             ..
         } => {
-            assert_eq!(caption, "mixed sheet");
+            assert_eq!(caption.plain_text(), "mixed sheet");
             assert_eq!(*state, CheckState::Checked);
             assert_eq!(cell_link.as_deref(), Some("$D$2"));
         }
@@ -3754,9 +3845,7 @@ fn excel_can_read_large_xls_list_control_we_emit() {
 #[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_preserves_xls_drawing_z_order_we_emit() {
     use duke_sheets_chart::{EmbeddedImage, ImageFormat};
-    use duke_sheets_core::{
-        CheckState, DrawingKind, DrawingObject, FormControl, FormControlKind,
-    };
+    use duke_sheets_core::{CheckState, DrawingKind, DrawingObject, FormControl, FormControlKind};
 
     let two_cell = |fc: u16, fr: u32, tc: u16, tr: u32| DrawingAnchor::TwoCell {
         from: CellMarker {
@@ -3795,7 +3884,7 @@ fn excel_preserves_xls_drawing_z_order_we_emit() {
     ws.add_drawing(png("Below").with_anchor(two_cell(0, 0, 2, 2)));
     ws.add_drawing(
         DrawingObject::form_control(FormControl::new(FormControlKind::Checkbox {
-            caption: "Middle".to_string(),
+            caption: "Middle".into(),
             state: CheckState::Checked,
             cell_link: None,
             no_3d: true,
@@ -3821,7 +3910,13 @@ fn excel_preserves_xls_drawing_z_order_we_emit() {
         "z-order must survive Excel XLS re-save"
     );
     assert_eq!(
-        sheet.form_controls().next().unwrap().payload.caption(),
+        sheet
+            .form_controls()
+            .next()
+            .unwrap()
+            .payload
+            .caption_text()
+            .as_deref(),
         Some("Middle")
     );
 }
@@ -3868,7 +3963,7 @@ fn excel_preserves_hidden_drawing_flags_we_emit() {
     };
     let checkbox = |caption: &str| {
         DrawingObject::form_control(FormControl::new(FormControlKind::Checkbox {
-            caption: caption.to_string(),
+            caption: caption.into(),
             state: CheckState::Checked,
             cell_link: None,
             no_3d: true,
@@ -3916,7 +4011,7 @@ fn excel_preserves_hidden_drawing_flags_we_emit() {
     let control_hidden = |caption: &str| {
         controls
             .iter()
-            .find(|c| c.payload.caption() == Some(caption))
+            .find(|c| c.payload.caption_text().as_deref() == Some(caption))
             .unwrap_or_else(|| panic!("control {caption:?} lost in Excel re-save"))
             .object
             .meta

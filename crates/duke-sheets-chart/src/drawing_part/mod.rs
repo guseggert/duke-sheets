@@ -14,6 +14,65 @@ pub mod read;
 #[cfg(feature = "write")]
 pub mod write;
 
+/// DrawingML text carried by an XLSX legacy-control twin.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct TwinText {
+    pub runs: Vec<TwinTextRun>,
+    pub horizontal_alignment: Option<TwinHorizontalAlignment>,
+    pub vertical_alignment: Option<TwinVerticalAlignment>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TwinTextRun {
+    pub text: String,
+    pub font: Option<TwinRunFont>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct TwinRunFont {
+    pub name: Option<String>,
+    pub size: Option<f64>,
+    pub color: Option<TwinColor>,
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    pub underline: Option<TwinUnderline>,
+    pub strikethrough: Option<bool>,
+    /// DrawingML baseline percentage in thousandths of a percent.
+    pub baseline: Option<i32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TwinColor {
+    Rgb { r: u8, g: u8, b: u8 },
+    Theme { index: u8, tint: i8 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TwinUnderline {
+    Single,
+    Double,
+    SingleAccounting,
+    DoubleAccounting,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TwinHorizontalAlignment {
+    Left,
+    Center,
+    Right,
+    Justify,
+    Distributed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TwinVerticalAlignment {
+    Top,
+    Center,
+    Bottom,
+    Justify,
+    Distributed,
+}
+
 /// OOXML relationship type for chart parts.
 pub const RT_CHART: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart";

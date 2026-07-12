@@ -6262,39 +6262,39 @@ fn control_anchor_2c(from_col: u16, from_row: u32, to_col: u16, to_row: u32) -> 
 fn all_form_control_kinds() -> Vec<FormControlKind> {
     vec![
         FormControlKind::Button {
-            caption: "Run Report".to_string(),
+            caption: "Run Report".into(),
         },
         FormControlKind::Checkbox {
-            caption: "Enable audit".to_string(),
+            caption: "Enable audit".into(),
             state: CheckState::Checked,
             cell_link: Some("$D$2".to_string()),
             no_3d: true,
         },
         FormControlKind::Checkbox {
-            caption: "Tri state".to_string(),
+            caption: "Tri state".into(),
             state: CheckState::Mixed,
             cell_link: None,
             no_3d: true,
         },
         FormControlKind::OptionButton {
-            caption: "Opt A".to_string(),
+            caption: "Opt A".into(),
             state: CheckState::Checked,
             cell_link: Some("$D$3".to_string()),
             first_in_group: false,
             no_3d: true,
         },
         FormControlKind::OptionButton {
-            caption: "Opt B".to_string(),
+            caption: "Opt B".into(),
             state: CheckState::Unchecked,
             cell_link: None,
             first_in_group: false,
             no_3d: true,
         },
         FormControlKind::Label {
-            caption: "Status label".to_string(),
+            caption: "Status label".into(),
         },
         FormControlKind::GroupBox {
-            caption: "Choices".to_string(),
+            caption: "Choices".into(),
             no_3d: true,
         },
         FormControlKind::ListBox {
@@ -6389,7 +6389,7 @@ fn xlsx_form_controls_emit_expected_parts() {
         .unwrap();
     ws.add_form_control(
         FormControl::new(FormControlKind::Checkbox {
-            caption: "check".to_string(),
+            caption: "check".into(),
             state: CheckState::Checked,
             cell_link: Some("$D$2".to_string()),
             no_3d: false,
@@ -6444,14 +6444,20 @@ fn xlsx_form_controls_emit_expected_parts() {
 
     let vml = read_part(&mut zip, "xl/drawings/vmlDrawing1.vml");
     assert!(vml.contains("ObjectType=\"Note\""), "comment shape present");
-    assert!(vml.contains("ObjectType=\"Checkbox\""), "control shape present");
+    assert!(
+        vml.contains("ObjectType=\"Checkbox\""),
+        "control shape present"
+    );
     assert!(vml.contains("_x0000_t201"), "control shapetype declared");
 
     let sheet = read_part(&mut zip, "xl/worksheets/sheet1.xml");
     assert!(sheet.contains("<legacyDrawing r:id=\"rId1\"/>"));
     assert!(sheet.contains("<controls>"));
     // Comment occupies shape 1025; the control is 1026.
-    assert!(sheet.contains("shapeId=\"1026\""), "control shapeId offset by comment");
+    assert!(
+        sheet.contains("shapeId=\"1026\""),
+        "control shapeId offset by comment"
+    );
 
     let content_types = read_part(&mut zip, "[Content_Types].xml");
     assert!(content_types.contains("/xl/ctrlProps/ctrlProp1.xml"));
@@ -6486,7 +6492,7 @@ fn xlsx_control_named_and_flagged_round_trips() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     let mut object = DrawingObject::form_control(FormControl::new(FormControlKind::Button {
-        caption: "Do <it> & more".to_string(),
+        caption: "Do <it> & more".into(),
     }))
     .with_anchor(control_anchor_2c(2, 2, 4, 4))
     .with_name("My Button");
@@ -6501,5 +6507,8 @@ fn xlsx_control_named_and_flagged_round_trips() {
     assert_eq!(controls[0].object.meta.name.as_deref(), Some("My Button"));
     assert!(!controls[0].object.meta.locked);
     assert!(!controls[0].object.meta.printable);
-    assert_eq!(controls[0].payload.caption(), Some("Do <it> & more"));
+    assert_eq!(
+        controls[0].payload.caption_text().as_deref(),
+        Some("Do <it> & more")
+    );
 }

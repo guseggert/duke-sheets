@@ -8,10 +8,10 @@ use std::io::{Seek, Write};
 use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
+use duke_sheets_chart::drawing_part::image_format_extension;
 use duke_sheets_chart::drawing_part::write::{
     self as part_write, PartChild, PartKind, PartObject, PartRel, TwinStyle,
 };
-use duke_sheets_chart::drawing_part::image_format_extension;
 use duke_sheets_core::{DrawingKind, DrawingMeta, RawRel, Worksheet};
 
 use crate::error::XlsbResult;
@@ -26,7 +26,10 @@ const RT_CHART_COLOR_STYLE: &str =
     "http://schemas.microsoft.com/office/2011/relationships/chartColorStyle";
 
 pub(crate) fn is_unsupported(chart: &duke_sheets_chart::Chart) -> bool {
-    matches!(chart.chart_type, duke_sheets_chart::ChartType::Unsupported(_))
+    matches!(
+        chart.chart_type,
+        duke_sheets_chart::ChartType::Unsupported(_)
+    )
 }
 
 /// Whether a worksheet needs a drawing part: any drawing object with
@@ -147,6 +150,9 @@ fn convert_kind<'a>(
                         |kind| PartChild {
                             name: child.meta.name.as_deref(),
                             alt_text: child.meta.alt_text.as_deref(),
+                            title: child.meta.title.as_deref(),
+                            macro_name: None,
+                            control_text: None,
                             hidden: child.meta.hidden,
                             transform: &child.transform,
                             kind,
@@ -192,6 +198,9 @@ fn part_objects(sheet: &Worksheet) -> Vec<PartObject<'_>> {
             .map(|kind| PartObject {
                 name: object.meta.name.as_deref(),
                 alt_text: object.meta.alt_text.as_deref(),
+                title: object.meta.title.as_deref(),
+                macro_name: None,
+                control_text: None,
                 locked: object.meta.locked,
                 printable: object.meta.printable,
                 hidden: object.meta.hidden,
@@ -248,11 +257,17 @@ pub(crate) fn write_drawing_parts<W: Write + Seek>(
     let image_parts: Vec<(usize, &'static str)> = image_payloads
         .iter()
         .enumerate()
-        .map(|(j, img)| (numbering.image_start + j, image_format_extension(img.format)))
+        .map(|(j, img)| {
+            (
+                numbering.image_start + j,
+                image_format_extension(img.format),
+            )
+        })
         .collect();
 
     let objects = part_objects(ws);
-    let plan = part_write::plan_drawing_rels(&objects, &chart_globals, &chartex_globals, &image_parts);
+    let plan =
+        part_write::plan_drawing_rels(&objects, &chart_globals, &chartex_globals, &image_parts);
     let shape_base = (sheet_index + 1) * 1024 + 1 + ws.comment_count();
     let drawing_bytes =
         part_write::write_drawing_part(&objects, &plan, TwinStyle::CompatSpFrame, shape_base)?;

@@ -35,26 +35,26 @@ fn lo_can_open_xlsx_with_form_controls_we_emit() {
     ws.set_cell_value("A1", 42.0).expect("A1");
     let kinds: Vec<FormControlKind> = vec![
         FormControlKind::Button {
-            caption: "Run".to_string(),
+            caption: "Run".into(),
         },
         FormControlKind::Checkbox {
-            caption: "Check".to_string(),
+            caption: "Check".into(),
             state: CheckState::Checked,
             cell_link: Some("$D$2".to_string()),
             no_3d: false,
         },
         FormControlKind::OptionButton {
-            caption: "Opt".to_string(),
+            caption: "Opt".into(),
             state: CheckState::Checked,
             cell_link: None,
             first_in_group: true,
             no_3d: false,
         },
         FormControlKind::Label {
-            caption: "Info".to_string(),
+            caption: "Info".into(),
         },
         FormControlKind::GroupBox {
-            caption: "Frame".to_string(),
+            caption: "Frame".into(),
             no_3d: true,
         },
         FormControlKind::ListBox {

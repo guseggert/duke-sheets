@@ -12,7 +12,8 @@
 use std::io::{Seek, Write};
 
 use duke_sheets_core::{
-    CheckState, DrawingMeta, FormControl, FormControlKind, ListSelection, Worksheet,
+    CheckState, DrawingMeta, FormControl, FormControlKind, HorizontalAlignment, ListSelection,
+    VerticalAlignment, Worksheet,
 };
 use duke_sheets_vml::anchor_cell_markers;
 
@@ -43,6 +44,28 @@ fn escape_attr(text: &str) -> String {
         .replace('"', "&quot;")
 }
 
+fn horizontal_alignment_value(alignment: HorizontalAlignment) -> &'static str {
+    match alignment {
+        HorizontalAlignment::Center | HorizontalAlignment::CenterContinuous => "center",
+        HorizontalAlignment::Right => "right",
+        HorizontalAlignment::Justify => "justify",
+        HorizontalAlignment::Distributed => "distributed",
+        HorizontalAlignment::General | HorizontalAlignment::Left | HorizontalAlignment::Fill => {
+            "left"
+        }
+    }
+}
+
+fn vertical_alignment_value(alignment: VerticalAlignment) -> &'static str {
+    match alignment {
+        VerticalAlignment::Top => "top",
+        VerticalAlignment::Center => "center",
+        VerticalAlignment::Bottom => "bottom",
+        VerticalAlignment::Justify => "justify",
+        VerticalAlignment::Distributed => "distributed",
+    }
+}
+
 /// Write one `xl/ctrlProps/ctrlProp{num}.xml` part.
 pub(super) fn write_ctrl_prop_part<W: Write + Seek>(
     zip: &mut zip::ZipWriter<W>,
@@ -52,16 +75,13 @@ pub(super) fn write_ctrl_prop_part<W: Write + Seek>(
 ) -> XlsxResult<()> {
     let path = format!("xl/ctrlProps/ctrlProp{num}.xml");
     let options = zip::write::SimpleFileOptions::default();
-    zip.start_file(path, options)
-        .map_err(XlsxError::from)?;
+    zip.start_file(path, options).map_err(XlsxError::from)?;
 
     let mut attrs: Vec<(&str, String)> = Vec::new();
-    let push_checked = |attrs: &mut Vec<(&str, String)>, state: &CheckState| {
-        match state {
+    let push_checked = |attrs: &mut Vec<(&str, String)>, state: &CheckState| match state {
             CheckState::Unchecked => {}
             CheckState::Checked => attrs.push(("checked", "Checked".to_string())),
             CheckState::Mixed => attrs.push(("checked", "Mixed".to_string())),
-        }
     };
     let push_link = |attrs: &mut Vec<(&str, String)>, link: &Option<String>| {
         if let Some(link) = link {
@@ -216,6 +236,26 @@ pub(super) fn write_ctrl_prop_part<W: Write + Seek>(
             attrs.push(("val", value.to_string()));
         }
     }
+    if let Some(caption) = control.caption() {
+        if let Some(alignment) = caption.horizontal_alignment {
+            attrs.push((
+                "textHAlign",
+                horizontal_alignment_value(alignment).to_string(),
+            ));
+        }
+        if let Some(alignment) = caption.vertical_alignment {
+            attrs.push((
+                "textVAlign",
+                vertical_alignment_value(alignment).to_string(),
+            ));
+        }
+    }
+    if let Some(macro_name) = &control.macro_name {
+        attrs.push((
+            "macro",
+            duke_sheets_vml::encode_macro_formula(macro_name),
+        ));
+    }
 
     let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n");
     xml.push_str(&format!(
@@ -258,6 +298,15 @@ pub(super) fn controls_block(entries: &[ControlEntry<'_>]) -> String {
         if !entry.meta.printable {
             xml.push_str(" print=\"0\"");
         }
+        if let Some(macro_name) = &control.macro_name {
+            xml.push_str(&format!(
+                " macro=\"{}\"",
+                escape_attr(&duke_sheets_vml::encode_macro_formula(macro_name))
+            ));
+        }
+        if let Some(alt_text) = &entry.meta.alt_text {
+            xml.push_str(&format!(" altText=\"{}\"", escape_attr(alt_text)));
+        }
         // Per-kind auto flags, mirroring Excel's emit.
         match &control.kind {
             FormControlKind::Button { .. }
@@ -281,7 +330,10 @@ pub(super) fn controls_block(entries: &[ControlEntry<'_>]) -> String {
         // false; EMU offsets.
         let (move_wc, size_wc) = match &entry.anchor {
             duke_sheets_chart::DrawingAnchor::TwoCell { edit_as, .. } => {
-                match edit_as.clone().unwrap_or(duke_sheets_chart::EditAs::TwoCell) {
+                match edit_as
+                    .clone()
+                    .unwrap_or(duke_sheets_chart::EditAs::TwoCell)
+                {
                     duke_sheets_chart::EditAs::TwoCell => (true, true),
                     duke_sheets_chart::EditAs::OneCell => (true, false),
                     duke_sheets_chart::EditAs::Absolute => (false, false),

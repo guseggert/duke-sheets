@@ -65,26 +65,26 @@ impl<'a> Arbitrary<'a> for FuzzFormControl {
 
         let kind = match u.int_in_range(0..=8u8)? {
             0 => FormControlKind::Button {
-                caption: caption(u)?,
+                caption: caption(u)?.into(),
             },
             1 => FormControlKind::Checkbox {
-                caption: caption(u)?,
+                caption: caption(u)?.into(),
                 state: state(u)?,
                 cell_link: cell_link(u)?,
                 no_3d: u.arbitrary()?,
             },
             2 => FormControlKind::OptionButton {
-                caption: caption(u)?,
+                caption: caption(u)?.into(),
                 state: state(u)?,
                 cell_link: cell_link(u)?,
                 first_in_group: u.arbitrary()?,
                 no_3d: u.arbitrary()?,
             },
             3 => FormControlKind::Label {
-                caption: caption(u)?,
+                caption: caption(u)?.into(),
             },
             4 => FormControlKind::GroupBox {
-                caption: caption(u)?,
+                caption: caption(u)?.into(),
                 no_3d: u.arbitrary()?,
             },
             5 => {

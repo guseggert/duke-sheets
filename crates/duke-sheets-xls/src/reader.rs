@@ -642,7 +642,7 @@ impl XlsReader {
 
         // Comment support: OBJ → TXO → NOTE correlation
         let mut last_obj_id: Option<u16> = None;
-        let mut obj_texts: std::collections::HashMap<u16, String> =
+        let mut obj_texts: std::collections::HashMap<u16, duke_sheets_core::ControlText> =
             std::collections::HashMap::new();
         // NOTE records, resolved against comment shapes after the loop.
         let mut notes: Vec<NoteData> = Vec::new();
@@ -839,7 +839,9 @@ impl XlsReader {
                 }
                 records::TXO => {
                     if let Some(oid) = last_obj_id.take() {
-                        if let Some(text) = Self::parse_txo_text(&rec.data, &rec.continue_offsets) {
+                        if let Some(text) =
+                            Self::parse_txo_text(&rec.data, &rec.continue_offsets, style_ctx)
+                        {
                             obj_texts.insert(oid, text);
                         }
                     }
@@ -2533,8 +2535,7 @@ impl XlsReader {
                     // shape (the leaf SP carrying the FSPGR). The
                     // patriarch SPGR falls through to the flatten arm
                     // because its own SP was dropped above.
-                    if !members.is_empty() && !members[0].is_group && members[0].fspgr.is_some()
-                    {
+                    if !members.is_empty() && !members[0].is_group && members[0].fspgr.is_some() {
                         let mut own = members.remove(0);
                         own.is_group = true;
                         own.children = members;
@@ -2558,8 +2559,7 @@ impl XlsReader {
     fn parse_sp_container_node(sp_body: &[u8]) -> Option<EscherShapeNode> {
         use crate::biff::escher::{
             fsp_flags, rec_type as er, FoptTable, FoptValue, OfficeArtChildAnchor,
-            OfficeArtClientAnchor, OfficeArtFsp, OfficeArtFspgr, OfficeArtRecordHeader,
-            HEADER_LEN,
+            OfficeArtClientAnchor, OfficeArtFsp, OfficeArtFspgr, OfficeArtRecordHeader, HEADER_LEN,
         };
 
         let mut node = EscherShapeNode::default();
@@ -2609,14 +2609,12 @@ impl XlsReader {
                                 }
                                 0x0380 => {
                                     if let FoptValue::Complex(bytes) = &entry.value {
-                                        node.name =
-                                            Some(decode_utf16le_null_terminated(bytes));
+                                        node.name = Some(decode_utf16le_null_terminated(bytes));
                                     }
                                 }
                                 0x0381 => {
                                     if let FoptValue::Complex(bytes) = &entry.value {
-                                        node.alt_text =
-                                            Some(decode_utf16le_null_terminated(bytes));
+                                        node.alt_text = Some(decode_utf16le_null_terminated(bytes));
                                     }
                                 }
                                 0x03BF => {
@@ -2653,9 +2651,7 @@ impl XlsReader {
     fn client_data_count(nodes: &[EscherShapeNode]) -> usize {
         nodes
             .iter()
-            .map(|node| {
-                usize::from(node.has_client_data) + Self::client_data_count(&node.children)
-            })
+            .map(|node| usize::from(node.has_client_data) + Self::client_data_count(&node.children))
             .sum()
     }
 
@@ -2774,7 +2770,7 @@ impl XlsReader {
     fn build_sheet_drawings(
         escher_bytes: &[u8],
         obj_bodies: &[Vec<u8>],
-        obj_texts: &std::collections::HashMap<u16, String>,
+        obj_texts: &std::collections::HashMap<u16, duke_sheets_core::ControlText>,
         notes: &[NoteData],
         blip_store: &[BlipData],
         formula_ctx: &FormulaContext,
@@ -2839,8 +2835,7 @@ impl XlsReader {
                 let Ok(parsed) = obj::parse_obj(body) else {
                     continue;
                 };
-                if let Some(control) =
-                    Self::control_from_obj(&parsed, None, obj_texts, formula_ctx)
+                if let Some(control) = Self::control_from_obj(&parsed, None, obj_texts, formula_ctx)
                 {
                     let mut object = duke_sheets_core::DrawingObject::form_control(control);
                     object.meta.locked = parsed.grbit & obj::cmo_flags::LOCKED != 0;
@@ -2862,11 +2857,18 @@ impl XlsReader {
 
     fn add_note_comment(
         note: &NoteData,
-        obj_texts: &std::collections::HashMap<u16, String>,
+        obj_texts: &std::collections::HashMap<u16, duke_sheets_core::ControlText>,
         ws: &mut duke_sheets_core::Worksheet,
     ) {
-        let text = obj_texts.get(&note.obj_id).cloned().unwrap_or_default();
-        ws.set_comment_at(note.row, note.col, CellComment::new(note.author.clone(), text));
+        let text = obj_texts
+            .get(&note.obj_id)
+            .map(duke_sheets_core::ControlText::plain_text)
+            .unwrap_or_default();
+        ws.set_comment_at(
+            note.row,
+            note.col,
+            CellComment::new(note.author.clone(), text),
+        );
         ws.set_comment_visible(note.row, note.col, note.visible);
     }
 
@@ -2881,7 +2883,7 @@ impl XlsReader {
         node: &EscherShapeNode,
         obj_bodies: &[Vec<u8>],
         next_obj: &mut usize,
-        obj_texts: &std::collections::HashMap<u16, String>,
+        obj_texts: &std::collections::HashMap<u16, duke_sheets_core::ControlText>,
         notes: &[NoteData],
         note_used: &mut [bool],
         blip_store: &[BlipData],
@@ -2926,7 +2928,10 @@ impl XlsReader {
                 .enumerate()
                 .find(|(i, note)| !note_used[*i] && note.obj_id == parsed.id)?;
             note_used[index] = true;
-            let text = obj_texts.get(&note.obj_id).cloned().unwrap_or_default();
+            let text = obj_texts
+                .get(&note.obj_id)
+                .map(duke_sheets_core::ControlText::plain_text)
+                .unwrap_or_default();
             let mut object = duke_sheets_core::DrawingObject::comment(
                 note.row,
                 note.col,
@@ -2946,8 +2951,7 @@ impl XlsReader {
             .as_ref()
             .map(Self::client_anchor_to_drawing_anchor)
             .unwrap_or_default();
-        let mut object =
-            duke_sheets_core::DrawingObject::form_control(control).with_anchor(anchor);
+        let mut object = duke_sheets_core::DrawingObject::form_control(control).with_anchor(anchor);
         object.meta = Self::node_meta(node, Some(&parsed));
         Some(object)
     }
@@ -2968,7 +2972,7 @@ impl XlsReader {
         node: &EscherShapeNode,
         obj_bodies: &[Vec<u8>],
         next_obj: &mut usize,
-        obj_texts: &std::collections::HashMap<u16, String>,
+        obj_texts: &std::collections::HashMap<u16, duke_sheets_core::ControlText>,
         notes: &[NoteData],
         note_used: &mut [bool],
         blip_store: &[BlipData],
@@ -3067,7 +3071,10 @@ impl XlsReader {
                     .find(|(i, note)| !note_used[*i] && note.obj_id == parsed.id)
                 {
                     note_used[index] = true;
-                    let text = obj_texts.get(&note.obj_id).cloned().unwrap_or_default();
+                    let text = obj_texts
+                        .get(&note.obj_id)
+                        .map(duke_sheets_core::ControlText::plain_text)
+                        .unwrap_or_default();
                     let mut object = duke_sheets_core::DrawingObject::comment(
                         note.row,
                         note.col,
@@ -3218,7 +3225,7 @@ impl XlsReader {
     fn control_from_obj(
         parsed: &crate::biff::obj::ParsedObj,
         paired_shape_type: Option<u16>,
-        obj_texts: &std::collections::HashMap<u16, String>,
+        obj_texts: &std::collections::HashMap<u16, duke_sheets_core::ControlText>,
         formula_ctx: &FormulaContext,
     ) -> Option<duke_sheets_core::FormControl> {
         use crate::biff::escher::shape_type;
@@ -3279,7 +3286,30 @@ impl XlsReader {
             }
         };
 
-        let caption = || obj_texts.get(&parsed.id).cloned().unwrap_or_default();
+        let caption = || {
+            let mut caption = obj_texts.get(&parsed.id).cloned().unwrap_or_default();
+            let (default_horizontal, default_vertical) = match parsed.ot {
+                ot::BUTTON => (
+                    duke_sheets_core::HorizontalAlignment::Center,
+                    duke_sheets_core::VerticalAlignment::Center,
+                ),
+                ot::CHECKBOX | ot::OPTION_BUTTON => (
+                    duke_sheets_core::HorizontalAlignment::Left,
+                    duke_sheets_core::VerticalAlignment::Center,
+                ),
+                _ => (
+                    duke_sheets_core::HorizontalAlignment::Left,
+                    duke_sheets_core::VerticalAlignment::Top,
+                ),
+            };
+            if caption.horizontal_alignment == Some(default_horizontal) {
+                caption.horizontal_alignment = None;
+            }
+            if caption.vertical_alignment == Some(default_vertical) {
+                caption.vertical_alignment = None;
+            }
+            caption
+        };
         let state = match parsed.checked {
             Some(2) => CheckState::Mixed,
             Some(v) if v != 0 => CheckState::Checked,
@@ -3380,7 +3410,13 @@ impl XlsReader {
             _ => unreachable!(),
         };
 
-        Some(FormControl::new(kind))
+        let mut control = FormControl::new(kind);
+        control.macro_name = parsed.macro_rgce.as_ref().and_then(|rgce| {
+            let name = crate::biff::formula::decompile(rgce, formula_ctx);
+            let name = name.strip_prefix('=').unwrap_or(&name).trim();
+            (!name.is_empty()).then(|| name.to_string())
+        });
+        Some(control)
     }
 
     // ── Drawing record parsers ───────────────────────────────────────────
@@ -3514,19 +3550,44 @@ impl XlsReader {
         Some(u16::from_le_bytes([data[6], data[7]]))
     }
 
-    /// Extract text from a TXO record (with merged CONTINUE data).
+    /// Extract text, formatting runs, and alignment from a TXO record.
     ///
     /// TXO header (18 bytes): options(2) + rotation(2) + reserved(6) +
     /// text_len(2) + format_run_size(2) + reserved(4).
     /// First CONTINUE: grbit(1) + text_data.
-    /// Second CONTINUE: formatting runs (ignored).
-    fn parse_txo_text(data: &[u8], continue_offsets: &[usize]) -> Option<String> {
+    /// Second CONTINUE: formatting runs (`ich`, `ifnt`, reserved).
+    fn parse_txo_text(
+        data: &[u8],
+        continue_offsets: &[usize],
+        style_ctx: &StyleContext,
+    ) -> Option<duke_sheets_core::ControlText> {
         if data.len() < 18 {
             return None;
         }
+        let flags = u16::from_le_bytes([data[0], data[1]]);
+        let horizontal_alignment = match (flags >> 1) & 0x7 {
+            1 => Some(duke_sheets_core::HorizontalAlignment::Left),
+            2 => Some(duke_sheets_core::HorizontalAlignment::Center),
+            3 => Some(duke_sheets_core::HorizontalAlignment::Right),
+            4 => Some(duke_sheets_core::HorizontalAlignment::Justify),
+            7 => Some(duke_sheets_core::HorizontalAlignment::Distributed),
+            _ => None,
+        };
+        let vertical_alignment = match (flags >> 4) & 0x7 {
+            1 => Some(duke_sheets_core::VerticalAlignment::Top),
+            2 => Some(duke_sheets_core::VerticalAlignment::Center),
+            3 => Some(duke_sheets_core::VerticalAlignment::Bottom),
+            4 => Some(duke_sheets_core::VerticalAlignment::Justify),
+            7 => Some(duke_sheets_core::VerticalAlignment::Distributed),
+            _ => None,
+        };
         let text_len = u16::from_le_bytes([data[10], data[11]]) as usize;
         if text_len == 0 {
-            return Some(String::new());
+            return Some(duke_sheets_core::ControlText {
+                runs: Vec::new(),
+                horizontal_alignment,
+                vertical_alignment,
+            });
         }
 
         // Text starts in the first CONTINUE block. Every subsequent
@@ -3584,7 +3645,62 @@ impl XlsReader {
                 chars.extend(encoded.iter().take(remaining).map(|&byte| byte as u16));
             }
         }
-        (!chars.is_empty()).then(|| String::from_utf16_lossy(&chars))
+        if chars.is_empty() {
+            return None;
+        }
+
+        let run_bytes = data.get(text_end..text_end.saturating_add(cb_runs))?;
+        let formatting = run_bytes
+            .chunks_exact(8)
+            .map(|run| {
+                (
+                    u16::from_le_bytes([run[0], run[1]]) as usize,
+                    u16::from_le_bytes([run[2], run[3]]),
+                )
+            })
+            .collect::<Vec<_>>();
+        let plain_default =
+            formatting.len() == 2 && formatting[0] == (0, 0) && formatting[1] == (text_len, 0);
+        let runs = if formatting.is_empty() || plain_default {
+            vec![RichTextRun::plain(String::from_utf16_lossy(&chars))]
+        } else {
+            let boundaries = formatting
+                .iter()
+                .copied()
+                .filter(|(start, _)| *start < text_len)
+                .collect::<Vec<_>>();
+            let mut runs = Vec::new();
+            if boundaries.first().is_some_and(|(start, _)| *start > 0) {
+                runs.push(RichTextRun::plain(String::from_utf16_lossy(
+                    &chars[..boundaries[0].0.min(chars.len())],
+                )));
+            }
+            for (index, &(start, font_index)) in boundaries.iter().enumerate() {
+                let end = boundaries
+                    .get(index + 1)
+                    .map(|(next, _)| *next)
+                    .unwrap_or(text_len)
+                    .min(chars.len());
+                let start = start.min(end);
+                if start == end {
+                    continue;
+                }
+                runs.push(RichTextRun {
+                    text: String::from_utf16_lossy(&chars[start..end]),
+                    font: style_ctx.resolve_run_font(font_index),
+                });
+            }
+            if runs.is_empty() {
+                vec![RichTextRun::plain(String::from_utf16_lossy(&chars))]
+            } else {
+                runs
+            }
+        };
+        Some(duke_sheets_core::ControlText {
+            runs,
+            horizontal_alignment,
+            vertical_alignment,
+        })
     }
 
     /// Parse a NOTE record's fields. The comment itself is created
@@ -4576,8 +4692,12 @@ mod tests {
         let continue_start = data.len();
         data.extend_from_slice(&text_data);
 
-        let text = XlsReader::parse_txo_text(&data, &[continue_start]);
-        assert_eq!(text, Some("Hello".to_string()));
+        let styles = StyleContext::new();
+        let text = XlsReader::parse_txo_text(&data, &[continue_start], &styles);
+        assert_eq!(
+            text.map(|text| text.plain_text()),
+            Some("Hello".to_string())
+        );
     }
 
     #[test]
@@ -4595,8 +4715,9 @@ mod tests {
         let continue_start = data.len();
         data.extend_from_slice(&text_data);
 
-        let text = XlsReader::parse_txo_text(&data, &[continue_start]);
-        assert_eq!(text, Some("ABC".to_string()));
+        let styles = StyleContext::new();
+        let text = XlsReader::parse_txo_text(&data, &[continue_start], &styles);
+        assert_eq!(text.map(|text| text.plain_text()), Some("ABC".to_string()));
     }
 
     #[test]
@@ -4614,8 +4735,12 @@ mod tests {
         let runs = data.len();
         data.extend_from_slice(&[0u8; 16]);
 
-        let text = XlsReader::parse_txo_text(&data, &[first, second, runs]);
-        assert_eq!(text, Some("ABCDE".to_string()));
+        let styles = StyleContext::new();
+        let text = XlsReader::parse_txo_text(&data, &[first, second, runs], &styles);
+        assert_eq!(
+            text.map(|text| text.plain_text()),
+            Some("ABCDE".to_string())
+        );
     }
 
     #[test]
@@ -4805,15 +4930,10 @@ mod tests {
         use crate::biff::escher::{rec_type, OfficeArtRecordHeader};
 
         let mut nested = Vec::new();
-        OfficeArtRecordHeader::container(rec_type::DG_CONTAINER, 0, 0)
-            .write_to(&mut nested);
+        OfficeArtRecordHeader::container(rec_type::DG_CONTAINER, 0, 0).write_to(&mut nested);
         for _ in 0..20_000 {
             let mut outer = Vec::with_capacity(nested.len() + 8);
-            OfficeArtRecordHeader::container(
-                rec_type::DG_CONTAINER,
-                0,
-                nested.len() as u32,
-            )
+            OfficeArtRecordHeader::container(rec_type::DG_CONTAINER, 0, nested.len() as u32)
             .write_to(&mut outer);
             outer.extend_from_slice(&nested);
             nested = outer;
@@ -4840,8 +4960,7 @@ mod tests {
     #[test]
     fn escher_shape_pairing_skips_deleted_and_clientless_shapes() {
         use crate::biff::escher::{
-            fsp_flags, rec_type, shape_type, write_client_data, OfficeArtFsp,
-            OfficeArtRecordHeader,
+            fsp_flags, rec_type, shape_type, write_client_data, OfficeArtFsp, OfficeArtRecordHeader,
         };
 
         let shape = |spid: u32, flags: u32, has_client_data: bool| {

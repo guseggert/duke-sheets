@@ -203,7 +203,8 @@ fn excel_preserves_external_udf_xlsb_we_emit() {
     ws.set_cell_value("A1", 7.0).unwrap();
     ws.set_cell_formula("B1", r#"=[1]!TBLink("acct",A1)"#)
         .unwrap();
-    ws.set_formula_result(0, 1, CellValue::Number(42.0)).unwrap();
+    ws.set_formula_result(0, 1, CellValue::Number(42.0))
+        .unwrap();
 
     let result = roundtrip_through_excel_xlsb(&wb);
     let ws = result.worksheet(0).unwrap();
@@ -288,7 +289,11 @@ fn excel_byte_parity_for_all_xlsb_atp_functions_we_emit() {
         rejected.len(),
         rejected
     );
-    assert_eq!(accepted.len(), formulas.len(), "all ATP formulas should be authored");
+    assert_eq!(
+        accepted.len(),
+        formulas.len(),
+        "all ATP formulas should be authored"
+    );
     assert_eq!(
         ours.len(),
         accepted.len(),
@@ -1545,26 +1550,26 @@ fn excel_can_read_xlsb_form_controls_we_emit() {
 
     let kinds: Vec<FormControlKind> = vec![
         FormControlKind::Button {
-            caption: "Run Report".to_string(),
+            caption: "Run Report".into(),
         },
         FormControlKind::Checkbox {
-            caption: "Enable audit".to_string(),
+            caption: "Enable audit".into(),
             state: CheckState::Checked,
             cell_link: Some("$D$2".to_string()),
             no_3d: true,
         },
         FormControlKind::OptionButton {
-            caption: "Opt A".to_string(),
+            caption: "Opt A".into(),
             state: CheckState::Checked,
             cell_link: None,
             first_in_group: false,
             no_3d: true,
         },
         FormControlKind::Label {
-            caption: "Status".to_string(),
+            caption: "Status".into(),
         },
         FormControlKind::GroupBox {
-            caption: "Choices".to_string(),
+            caption: "Choices".into(),
             no_3d: true,
         },
         FormControlKind::ListBox {
@@ -1623,6 +1628,101 @@ fn excel_can_read_xlsb_form_controls_we_emit() {
             "control {i} kind mismatch after Excel"
         );
     }
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xlsb_control_visual_metadata_we_emit() {
+    use duke_sheets_chart::{CellMarker, DrawingAnchor};
+    use duke_sheets_core::style::{HorizontalAlignment, Underline, VerticalAlignment};
+    use duke_sheets_core::{CheckState, ControlText, DrawingObject, FormControl, FormControlKind};
+
+    let text = ControlText {
+        runs: vec![
+            RichTextRun::with_font(
+                "Red ",
+                RunFont {
+                    name: Some("Segoe UI".into()),
+                    size: Some(9.0),
+                    color: Some(Color::rgb(255, 0, 0)),
+                    bold: Some(true),
+                    ..RunFont::default()
+                },
+            ),
+            RichTextRun::with_font(
+                "Blue",
+                RunFont {
+                    name: Some("Arial".into()),
+                    size: Some(12.0),
+                    color: Some(Color::rgb(0, 0, 255)),
+                    italic: Some(true),
+                    underline: Some(Underline::Single),
+                    ..RunFont::default()
+                },
+            ),
+        ],
+        horizontal_alignment: Some(HorizontalAlignment::Right),
+        vertical_alignment: Some(VerticalAlignment::Bottom),
+    };
+    let control = FormControl::new(FormControlKind::Checkbox {
+        caption: text,
+        state: CheckState::Checked,
+        cell_link: None,
+        no_3d: false,
+    })
+    .with_macro_name("RunProbe");
+    let mut object = DrawingObject::form_control(control).with_anchor(DrawingAnchor::TwoCell {
+        from: CellMarker {
+            col: 1,
+            col_offset_emu: 0,
+            row: 1,
+            row_offset_emu: 0,
+        },
+        to: CellMarker {
+            col: 4,
+            col_offset_emu: 0,
+            row: 3,
+            row_offset_emu: 0,
+        },
+        edit_as: None,
+    });
+    object.meta.name = Some("Visual Probe".into());
+    object.meta.alt_text = Some("Visual probe alternative".into());
+    object.meta.title = Some("Visual probe title".into());
+    let mut workbook = Workbook::new();
+    workbook.worksheet_mut(0).unwrap().add_drawing(object);
+
+    let result = roundtrip_through_excel_xlsb(&workbook);
+    let drawn = result.worksheet(0).unwrap().form_controls().next().unwrap();
+    assert_eq!(drawn.object.meta.name.as_deref(), Some("Visual Probe"));
+    assert_eq!(
+        drawn.object.meta.alt_text.as_deref(),
+        Some("Visual probe alternative")
+    );
+    assert_eq!(
+        drawn.object.meta.title.as_deref(),
+        Some("Visual probe title")
+    );
+    assert_eq!(drawn.payload.caption_text().as_deref(), Some("Red Blue"));
+    assert_eq!(drawn.payload.macro_name.as_deref(), Some("RunProbe"));
+    let caption = drawn.payload.caption().unwrap();
+    assert_eq!(
+        caption.horizontal_alignment,
+        Some(HorizontalAlignment::Right)
+    );
+    assert_eq!(caption.vertical_alignment, Some(VerticalAlignment::Bottom));
+    assert_eq!(caption.runs.len(), 2);
+    let red = caption.runs[0].font.as_ref().unwrap();
+    assert_eq!(red.name.as_deref(), Some("Segoe UI"));
+    assert_eq!(red.size, Some(9.0));
+    assert_eq!(red.color, Some(Color::rgb(255, 0, 0)));
+    assert_eq!(red.bold, Some(true));
+    let blue = caption.runs[1].font.as_ref().unwrap();
+    assert_eq!(blue.name.as_deref(), Some("Arial"));
+    assert_eq!(blue.size, Some(12.0));
+    assert_eq!(blue.color, Some(Color::rgb(0, 0, 255)));
+    assert_eq!(blue.italic, Some(true));
+    assert_eq!(blue.underline, Some(Underline::Single));
 }
 
 const TEST_PNG_1X1: &[u8] = &[
@@ -1767,9 +1867,7 @@ fn excel_can_read_xlsb_chart_we_emit() {
 #[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_preserves_xlsb_drawing_z_order_we_emit() {
     use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
-    use duke_sheets_core::{
-        CheckState, DrawingKind, DrawingObject, FormControl, FormControlKind,
-    };
+    use duke_sheets_core::{CheckState, DrawingKind, DrawingObject, FormControl, FormControlKind};
 
     let two_cell = |fc: u16, fr: u32, tc: u16, tr: u32| DrawingAnchor::TwoCell {
         from: CellMarker {
@@ -1808,7 +1906,7 @@ fn excel_preserves_xlsb_drawing_z_order_we_emit() {
     ws.add_drawing(png("Below").with_anchor(two_cell(0, 0, 2, 2)));
     ws.add_drawing(
         DrawingObject::form_control(FormControl::new(FormControlKind::Checkbox {
-            caption: "Middle".to_string(),
+            caption: "Middle".into(),
             state: CheckState::Checked,
             cell_link: None,
             no_3d: true,
@@ -1837,7 +1935,13 @@ fn excel_preserves_xlsb_drawing_z_order_we_emit() {
     assert_eq!(images[0].object.meta.name.as_deref(), Some("Below"));
     assert_eq!(images[1].object.meta.name.as_deref(), Some("Above"));
     assert_eq!(
-        sheet.form_controls().next().unwrap().payload.caption(),
+        sheet
+            .form_controls()
+            .next()
+            .unwrap()
+            .payload
+            .caption_text()
+            .as_deref(),
         Some("Middle")
     );
 }
@@ -1884,7 +1988,7 @@ fn excel_preserves_hidden_drawing_flags_we_emit() {
     };
     let checkbox = |caption: &str| {
         DrawingObject::form_control(FormControl::new(FormControlKind::Checkbox {
-            caption: caption.to_string(),
+            caption: caption.into(),
             state: CheckState::Checked,
             cell_link: None,
             no_3d: true,
@@ -1932,7 +2036,7 @@ fn excel_preserves_hidden_drawing_flags_we_emit() {
     let control_hidden = |caption: &str| {
         controls
             .iter()
-            .find(|c| c.payload.caption() == Some(caption))
+            .find(|c| c.payload.caption_text().as_deref() == Some(caption))
             .unwrap_or_else(|| panic!("control {caption:?} lost in Excel re-save"))
             .object
             .meta
@@ -1947,4 +2051,3 @@ fn excel_preserves_hidden_drawing_flags_we_emit() {
         "hidden control must survive Excel re-save with hidden intact"
     );
 }
-

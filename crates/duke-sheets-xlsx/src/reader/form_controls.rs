@@ -5,7 +5,8 @@
 
 use duke_sheets_chart::{CellMarker, DrawingAnchor, EditAs};
 use duke_sheets_core::{
-    CheckState, DrawingObject, FormControl, FormControlKind, ListSelection,
+    CheckState, Color, ControlText, DrawingObject, FormControl, FormControlKind,
+    HorizontalAlignment, ListSelection, RichTextRun, RunFont, VerticalAlignment,
 };
 use quick_xml::events::Event;
 use quick_xml::Reader;
@@ -27,6 +28,10 @@ pub(super) struct PendingControl {
     pub locked: bool,
     /// `controlPr/@print` (default true).
     pub printable: bool,
+    /// `controlPr/@altText`.
+    pub alt_text: Option<String>,
+    /// `controlPr/@macro`.
+    pub macro_name: Option<String>,
 }
 
 impl PendingControl {
@@ -43,9 +48,7 @@ impl PendingControl {
 /// expanded rather than self-closing form. Keep the first entry for
 /// each ctrlProp relationship so serialization style cannot duplicate
 /// model controls.
-pub(super) fn dedupe_pending_controls(
-    controls: Vec<PendingControl>,
-) -> Vec<PendingControl> {
+pub(super) fn dedupe_pending_controls(controls: Vec<PendingControl>) -> Vec<PendingControl> {
     let mut seen = HashSet::new();
     controls
         .into_iter()
@@ -99,6 +102,31 @@ pub(super) struct CtrlProp {
     pub horiz: bool,
     pub first_button: bool,
     pub no_3d: bool,
+    pub text_h_align: Option<HorizontalAlignment>,
+    pub text_v_align: Option<VerticalAlignment>,
+    pub macro_name: Option<String>,
+}
+
+fn parse_horizontal_alignment(value: &str) -> Option<HorizontalAlignment> {
+    match value {
+        "left" => Some(HorizontalAlignment::Left),
+        "center" => Some(HorizontalAlignment::Center),
+        "right" => Some(HorizontalAlignment::Right),
+        "justify" => Some(HorizontalAlignment::Justify),
+        "distributed" => Some(HorizontalAlignment::Distributed),
+        _ => None,
+    }
+}
+
+fn parse_vertical_alignment(value: &str) -> Option<VerticalAlignment> {
+    match value {
+        "top" => Some(VerticalAlignment::Top),
+        "center" => Some(VerticalAlignment::Center),
+        "bottom" => Some(VerticalAlignment::Bottom),
+        "justify" => Some(VerticalAlignment::Justify),
+        "distributed" => Some(VerticalAlignment::Distributed),
+        _ => None,
+    }
 }
 
 /// Parse a `xl/ctrlProps/ctrlPropN.xml` part. Returns `None` when
@@ -166,6 +194,11 @@ pub(super) fn parse_ctrl_prop(bytes: &[u8]) -> Option<CtrlProp> {
                         b"horiz" => pr.horiz = truthy,
                         b"firstButton" => pr.first_button = truthy,
                         b"noThreeD" | b"noThreeD2" => pr.no_3d = pr.no_3d || truthy,
+                        b"textHAlign" => pr.text_h_align = parse_horizontal_alignment(&value),
+                        b"textVAlign" => pr.text_v_align = parse_vertical_alignment(&value),
+                        b"macro" => {
+                            pr.macro_name = Some(duke_sheets_vml::decode_macro_formula(&value))
+                        }
                         _ => {}
                     }
                 }
@@ -183,8 +216,14 @@ pub(super) fn parse_ctrl_prop(bytes: &[u8]) -> Option<CtrlProp> {
 pub(super) fn assemble(
     pending: &PendingControl,
     pr: &CtrlProp,
-    caption: String,
+    mut caption: ControlText,
 ) -> Option<DrawingObject> {
+    if pr.text_h_align.is_some() {
+        caption.horizontal_alignment = pr.text_h_align;
+    }
+    if pr.text_v_align.is_some() {
+        caption.vertical_alignment = pr.text_v_align;
+    }
     let state = match pr.checked {
         2 => CheckState::Mixed,
         0 => CheckState::Unchecked,
@@ -275,9 +314,12 @@ pub(super) fn assemble(
         _ => return None,
     };
 
-    let mut object = DrawingObject::form_control(FormControl::new(kind))
+    let mut control = FormControl::new(kind);
+    control.macro_name = pr.macro_name.clone().or_else(|| pending.macro_name.clone());
+    let mut object = DrawingObject::form_control(control)
         .with_anchor(pending.anchor.clone().unwrap_or_default());
     object.meta.name = pending.name.clone();
+    object.meta.alt_text = pending.alt_text.clone();
     object.meta.locked = pending.locked;
     object.meta.printable = pending.printable;
     Some(object)
@@ -288,8 +330,16 @@ pub(super) fn assemble_with_vml(
     pr: &CtrlProp,
     vml: Option<&duke_sheets_vml::VmlControl>,
 ) -> Option<DrawingObject> {
-    let caption = vml.map(|shape| shape.caption.clone()).unwrap_or_default();
+    let caption = vml.map(|shape| shape.text.clone()).unwrap_or_default();
     let mut object = assemble(pending, pr, caption)?;
+    if let Some(control) = object.kind.as_form_control_mut() {
+        if control.macro_name.is_none() {
+            control.macro_name = vml.and_then(|shape| shape.macro_name.clone());
+        }
+    }
+    if object.meta.alt_text.is_none() {
+        object.meta.alt_text = vml.and_then(|shape| shape.alt_text.clone());
+    }
     // The user-facing hidden flag lives only on the VML shape's
     // style (visibility:hidden); the drawing-part twin's cNvPr
     // hidden="1" is structural markup.
@@ -300,6 +350,67 @@ pub(super) fn assemble_with_vml(
         }
     }
     Some(object)
+}
+
+pub(super) fn control_text_from_twin(
+    text: &duke_sheets_chart::drawing_part::TwinText,
+) -> ControlText {
+    use duke_sheets_chart::drawing_part::{
+        TwinColor, TwinHorizontalAlignment, TwinUnderline, TwinVerticalAlignment,
+    };
+    use duke_sheets_core::style::{FontVerticalAlign, Underline};
+
+    let runs = text
+        .runs
+        .iter()
+        .map(|run| RichTextRun {
+            text: run.text.clone(),
+            font: run.font.as_ref().map(|font| RunFont {
+                name: font.name.clone(),
+                size: font.size,
+                color: font.color.map(|color| match color {
+                    TwinColor::Rgb { r, g, b } => Color::rgb(r, g, b),
+                    TwinColor::Theme { index, tint } => Color::theme(index, tint),
+                }),
+                bold: font.bold,
+                italic: font.italic,
+                underline: font.underline.map(|underline| match underline {
+                    TwinUnderline::Single => Underline::Single,
+                    TwinUnderline::Double => Underline::Double,
+                    TwinUnderline::SingleAccounting => Underline::SingleAccounting,
+                    TwinUnderline::DoubleAccounting => Underline::DoubleAccounting,
+                }),
+                strikethrough: font.strikethrough,
+                vertical_align: font.baseline.map(|baseline| {
+                    if baseline > 0 {
+                        FontVerticalAlign::Superscript
+                    } else if baseline < 0 {
+                        FontVerticalAlign::Subscript
+                    } else {
+                        FontVerticalAlign::Baseline
+                    }
+                }),
+                ..RunFont::default()
+            }),
+        })
+        .collect();
+    ControlText {
+        runs,
+        horizontal_alignment: text.horizontal_alignment.map(|alignment| match alignment {
+            TwinHorizontalAlignment::Left => HorizontalAlignment::Left,
+            TwinHorizontalAlignment::Center => HorizontalAlignment::Center,
+            TwinHorizontalAlignment::Right => HorizontalAlignment::Right,
+            TwinHorizontalAlignment::Justify => HorizontalAlignment::Justify,
+            TwinHorizontalAlignment::Distributed => HorizontalAlignment::Distributed,
+        }),
+        vertical_alignment: text.vertical_alignment.map(|alignment| match alignment {
+            TwinVerticalAlignment::Top => VerticalAlignment::Top,
+            TwinVerticalAlignment::Center => VerticalAlignment::Center,
+            TwinVerticalAlignment::Bottom => VerticalAlignment::Bottom,
+            TwinVerticalAlignment::Justify => VerticalAlignment::Justify,
+            TwinVerticalAlignment::Distributed => VerticalAlignment::Distributed,
+        }),
+    }
 }
 
 #[cfg(test)]
@@ -328,7 +439,7 @@ mod tests {
         assert_eq!(pr.fmla_range.as_deref(), Some("$H$1:$H$4"));
 
         // The one-based sel attribute becomes a zero-based model index.
-        let object = assemble(&PendingControl::new(), &pr, String::new()).expect("assemble");
+        let object = assemble(&PendingControl::new(), &pr, String::new().into()).expect("assemble");
         let control = object.kind.as_form_control().expect("form control");
         match &control.kind {
             FormControlKind::Dropdown { selected, .. } => assert_eq!(*selected, Some(1)),
@@ -341,7 +452,7 @@ mod tests {
         let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <formControlPr xmlns="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" objectType="Scroll" dx="22" fmlaLink="$D$6" inc="2" max="95" min="5" page="10" val="40"/>"#;
         let pr = parse_ctrl_prop(xml).expect("parse");
-        let object = assemble(&PendingControl::new(), &pr, String::new()).expect("assemble");
+        let object = assemble(&PendingControl::new(), &pr, String::new().into()).expect("assemble");
         let control = object.kind.as_form_control().expect("form control");
         match &control.kind {
             FormControlKind::Scrollbar {
@@ -352,10 +463,7 @@ mod tests {
                 page,
                 ..
             } => {
-                assert_eq!(
-                    (*value, *min, *max, *increment, *page),
-                    (40, 5, 95, 2, 10)
-                );
+                assert_eq!((*value, *min, *max, *increment, *page), (40, 5, 95, 2, 10));
             }
             other => panic!("expected Scrollbar, got {other:?}"),
         }
