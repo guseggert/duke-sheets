@@ -7,11 +7,17 @@ pub mod error;
 #[cfg(feature = "parse")]
 pub mod parse;
 
+#[cfg(any(feature = "parse", feature = "write"))]
+pub mod drawing_part;
+#[cfg(feature = "write")]
+pub mod write;
+
 mod axis;
 mod chart;
 pub mod chart_ex;
 mod config;
 mod data_labels;
+mod drawing;
 mod error_bars;
 mod formatting;
 mod legend;
@@ -27,6 +33,7 @@ pub use chart::{
     DrawingAnchor, EditAs, EmbeddedImage, ImageFormat, OfPieType, SplitType, Surface, UpDownBars,
 };
 pub use config::{ChartDataTable, DisplayBlanksAs, Layout, ManualLayout, View3D};
+pub use drawing::{ChildTransform, GroupTransform};
 pub use data_labels::{DataLabel, DataLabelPosition, DataLabels, DataPoint};
 pub use error_bars::{ErrorBarDirection, ErrorBarType, ErrorBars, ErrorValueType};
 pub use formatting::{ChartColor, ChartLine, ChartShapeProperties, NumberFormat, PictureOptions};

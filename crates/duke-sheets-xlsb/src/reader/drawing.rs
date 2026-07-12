@@ -1,113 +1,212 @@
+//! Assemble a worksheet's drawing objects from the drawing part XML
+//! (shared codec), the legacy VML part (control state), and the
+//! chart parts.
+
 use std::collections::HashMap;
-use std::io::{BufReader, Cursor, Read, Seek};
+use std::io::{Cursor, Read, Seek};
 
+use duke_sheets_chart::drawing_part::read::{
+    parse_drawing_part, DrawingEntryKind, ParsedChild, ParsedGroup, PicShape,
+};
+use duke_sheets_core::{
+    ChildTransform, DrawingKind, DrawingMeta, DrawingObject, Group, GroupChild, RawDrawing,
+    RawRel,
+};
 use quick_xml::events::Event;
-use quick_xml::reader::Reader;
 
-use duke_sheets_chart::{Chart, ChartEx};
-
-use crate::drawing_bundle::DrawingBundle;
 use crate::error::XlsbResult;
 
 use super::SheetRel;
 
-pub(crate) struct DrawingResult {
-    pub bundle: DrawingBundle,
-    pub charts: Vec<Chart>,
-    pub charts_ex: Vec<ChartEx>,
+/// A VML control shape waiting to be matched to its drawing-part
+/// twin. XLSB has no ctrlProps part or worksheet controls block:
+/// state comes from the VML ClientData alone, the twin carries the
+/// name and z-position.
+struct AssembledControl {
+    shape_id: u32,
+    object: DrawingObject,
+    /// True when the VML shape carried no x:Anchor, so a matched
+    /// twin's anchor is the fallback.
+    anchor_defaulted: bool,
+    consumed: bool,
 }
 
-pub(crate) fn read_drawing_charts<R: Read + Seek>(
+/// Consume the first unconsumed control matching a twin's shape id.
+fn take_control(
+    controls: &mut [AssembledControl],
+    shape_num: Option<u32>,
+) -> Option<(u32, DrawingObject, bool)> {
+    let num = shape_num?;
+    let control = controls
+        .iter_mut()
+        .find(|control| !control.consumed && control.shape_id == num)?;
+    control.consumed = true;
+    Some((
+        control.shape_id,
+        control.object.clone(),
+        control.anchor_defaulted,
+    ))
+}
+
+/// Assemble the sheet's native drawing list: drawing-part entries in
+/// document order (control twins replaced by their matched VML
+/// controls), then unmatched controls in VML order. Each object is
+/// paired with its legacy shape id when it wraps a control, for
+/// comment splicing.
+pub(crate) fn merge_sheet_drawings<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     sheet_path: &str,
     sheet_rels: &HashMap<String, SheetRel>,
-) -> XlsbResult<Option<DrawingResult>> {
-    let drawing_rel = sheet_rels
-        .values()
-        .find(|r| r.rel_type.ends_with("/drawing"));
-    let drawing_rel = match drawing_rel {
-        Some(r) => r,
-        None => return Ok(None),
-    };
+    vml_shapes: &[duke_sheets_vml::VmlShape],
+) -> XlsbResult<Vec<(DrawingObject, Option<u32>)>> {
+    let mut controls: Vec<AssembledControl> = Vec::new();
+    for shape in vml_shapes {
+        let duke_sheets_vml::VmlShapeKind::Control(control) = &shape.kind else {
+            continue;
+        };
+        if let Some(object) = control.to_drawing_object() {
+            controls.push(AssembledControl {
+                shape_id: shape.shape_num,
+                object,
+                anchor_defaulted: control.anchor_px.is_none(),
+                consumed: false,
+            });
+        }
+    }
 
-    let drawing_path = super::resolve_rel_path(sheet_path, &drawing_rel.target);
-    let drawing_bytes = match read_zip_entry(archive, &drawing_path) {
-        Some(b) => b,
-        None => return Ok(None),
-    };
+    let mut natives: Vec<(DrawingObject, Option<u32>)> = Vec::new();
+    let mut drawing_targets: Vec<(String, String)> = sheet_rels
+        .iter()
+        .filter(|(_, r)| r.rel_type.ends_with("/drawing"))
+        .map(|(id, r)| (id.clone(), r.target.clone()))
+        .collect();
+    // Numeric-aware sort so rId2 precedes rId10.
+    drawing_targets.sort_by_key(|(id, _)| {
+        (
+            id.strip_prefix("rId")
+                .and_then(|n| n.parse::<u64>().ok())
+                .unwrap_or(u64::MAX),
+            id.clone(),
+        )
+    });
 
-    let mut bundle = DrawingBundle::new();
-    bundle.push(drawing_path.clone(), drawing_bytes);
+    for (_, target) in &drawing_targets {
+        let drawing_path = super::resolve_rel_path(sheet_path, target);
+        let Some(bytes) = read_zip_entry(archive, &drawing_path) else {
+            continue;
+        };
+        let entries = match parse_drawing_part(&bytes) {
+            Ok(entries) => entries,
+            Err(e) => {
+                log::warn!("failed to parse drawing part {drawing_path}: {e}");
+                continue;
+            }
+        };
+        if entries.is_empty() {
+            continue;
+        }
+        let drawing_rels = super::read_sheet_rels(archive, &drawing_path)?;
 
-    let mut charts = Vec::new();
-    let mut charts_ex = Vec::new();
-
-    let drawing_rels_path = rels_path_for(&drawing_path);
-    if let Some(rels_bytes) = read_zip_entry(archive, &drawing_rels_path) {
-        let targets = parse_rels_targets(&rels_bytes);
-        bundle.push(drawing_rels_path, rels_bytes);
-
-        for (target, rel_type) in &targets {
-            let part_path = super::resolve_rel_path(&drawing_path, target);
-
-            let is_chart = rel_type.ends_with("/chart");
-            let is_chart_ex = rel_type.ends_with("/chartEx");
-
-            if is_chart || is_chart_ex {
-                if let Some(chart_bytes) = read_zip_entry(archive, &part_path) {
-                    bundle.push(part_path.clone(), chart_bytes.clone());
-
-                    if is_chart_ex {
-                        if let Ok(cx) =
-                            duke_sheets_chart::parse::parse_chart_ex_xml(Cursor::new(&chart_bytes))
-                        {
-                            charts_ex.push(cx);
+        for entry in entries {
+            match entry.kind {
+                DrawingEntryKind::Image(pic) => {
+                    let pic = *pic;
+                    let name = pic.name.clone();
+                    let descr = pic.descr.clone();
+                    let image =
+                        resolve_pic_image(archive, &drawing_path, &drawing_rels, pic, false);
+                    let mut object = DrawingObject::image(image).with_anchor(entry.anchor);
+                    object.meta.name = Some(name);
+                    object.meta.alt_text = descr;
+                    object.meta.locked = entry.locked;
+                    object.meta.printable = entry.printable;
+                    natives.push((object, None));
+                }
+                DrawingEntryKind::Chart(chart_ref) => {
+                    let Some(rel) = drawing_rels.get(&chart_ref.rel_id) else {
+                        continue;
+                    };
+                    let chart_path = super::resolve_rel_path(&drawing_path, &rel.target);
+                    let Some(chart_bytes) = read_zip_entry(archive, &chart_path) else {
+                        continue;
+                    };
+                    if chart_ref.is_chart_ex {
+                        if let Ok(mut cx) = duke_sheets_chart::parse::parse_chart_ex_xml(
+                            Cursor::new(&chart_bytes),
+                        ) {
+                            cx.raw_mc_fallback = chart_ref.raw_mc_fallback;
+                            let (style, color) =
+                                read_chart_style_color(archive, &chart_path);
+                            cx.raw_chart_style = style;
+                            cx.raw_chart_color_style = color;
+                            let mut object =
+                                DrawingObject::chart_ex(cx).with_anchor(chart_ref.anchor);
+                            object.meta.locked = entry.locked;
+                            object.meta.printable = entry.printable;
+                            natives.push((object, None));
                         }
-                    } else if let Ok(c) =
+                    } else if let Ok(mut c) =
                         duke_sheets_chart::parse::parse_chart_xml(Cursor::new(&chart_bytes))
                     {
-                        charts.push(c);
-                    }
-
-                    let part_rels_path = rels_path_for(&part_path);
-                    if let Some(part_rels_bytes) = read_zip_entry(archive, &part_rels_path) {
-                        let sub_targets = parse_rels_targets(&part_rels_bytes);
-                        bundle.push(part_rels_path, part_rels_bytes);
-
-                        for (sub_target, _) in &sub_targets {
-                            let sub_path = super::resolve_rel_path(&part_path, sub_target);
-                            if let Some(sub_bytes) = read_zip_entry(archive, &sub_path) {
-                                bundle.push(sub_path, sub_bytes);
-                            }
-                        }
+                        let (style, color) = read_chart_style_color(archive, &chart_path);
+                        c.raw_chart_style = style;
+                        c.raw_chart_color_style = color;
+                        let mut object = DrawingObject::chart(c).with_anchor(chart_ref.anchor);
+                        object.meta.locked = entry.locked;
+                        object.meta.printable = entry.printable;
+                        natives.push((object, None));
                     }
                 }
-            } else if let Some(part_bytes) = read_zip_entry(archive, &part_path) {
-                bundle.push(part_path.clone(), part_bytes);
-
-                let part_rels_path = rels_path_for(&part_path);
-                if let Some(part_rels_bytes) = read_zip_entry(archive, &part_rels_path) {
-                    let sub_targets = parse_rels_targets(&part_rels_bytes);
-                    bundle.push(part_rels_path, part_rels_bytes);
-
-                    for (sub_target, _) in &sub_targets {
-                        let sub_path = super::resolve_rel_path(&part_path, sub_target);
-                        if let Some(sub_bytes) = read_zip_entry(archive, &sub_path) {
-                            bundle.push(sub_path, sub_bytes);
+                DrawingEntryKind::Group(group) => {
+                    let name = group.name.clone();
+                    let descr = group.descr.clone();
+                    let built =
+                        build_group(archive, &drawing_path, &drawing_rels, group, &mut controls);
+                    let mut object = DrawingObject::group(built).with_anchor(entry.anchor);
+                    object.meta.name = Some(name);
+                    object.meta.alt_text = descr;
+                    object.meta.locked = entry.locked;
+                    object.meta.printable = entry.printable;
+                    natives.push((object, None));
+                }
+                DrawingEntryKind::ControlTwin(twin) => {
+                    // The twin is a placeholder for the matched VML
+                    // control; unmatched twins are dropped.
+                    if let Some((shape_id, mut object, anchor_defaulted)) =
+                        take_control(&mut controls, twin.shape_num)
+                    {
+                        if let Some(name) = twin.name {
+                            object.meta.name = Some(name);
                         }
+                        if anchor_defaulted {
+                            object.anchor = entry.anchor;
+                        }
+                        natives.push((object, Some(shape_id)));
                     }
+                }
+                DrawingEntryKind::Raw => {
+                    let rels =
+                        capture_raw_rels(archive, &drawing_path, &entry.bytes, &drawing_rels);
+                    let object = DrawingObject::raw(RawDrawing {
+                        bytes: entry.bytes,
+                        rels,
+                    })
+                    .with_anchor(entry.anchor);
+                    natives.push((object, None));
                 }
             }
         }
     }
 
-    collect_media_entries(archive, &mut bundle);
+    // Unmatched controls (no twin; legacy files) append after all
+    // native entries, in VML order.
+    for control in controls {
+        if !control.consumed {
+            natives.push((control.object, Some(control.shape_id)));
+        }
+    }
 
-    Ok(Some(DrawingResult {
-        bundle,
-        charts,
-        charts_ex,
-    }))
+    Ok(natives)
 }
 
 fn read_zip_entry<R: Read + Seek>(archive: &mut zip::ZipArchive<R>, path: &str) -> Option<Vec<u8>> {
@@ -117,69 +216,202 @@ fn read_zip_entry<R: Read + Seek>(archive: &mut zip::ZipArchive<R>, path: &str) 
     Some(bytes)
 }
 
-fn rels_path_for(path: &str) -> String {
-    let (dir, name) = path.rsplit_once('/').unwrap_or(("", path));
-    if dir.is_empty() {
-        format!("_rels/{}.rels", name)
-    } else {
-        format!("{}/_rels/{}.rels", dir, name)
+/// Capture the chartStyle / chartColorStyle parts referenced by a
+/// chart part's rels, for round-trip.
+fn read_chart_style_color<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    chart_path: &str,
+) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
+    let Ok(chart_rels) = super::read_sheet_rels(archive, chart_path) else {
+        return (None, None);
+    };
+    let mut style = None;
+    let mut color = None;
+    for rel in chart_rels.values() {
+        let path = super::resolve_rel_path(chart_path, &rel.target);
+        if rel.rel_type.ends_with("/chartStyle") {
+            style = read_zip_entry(archive, &path);
+        } else if rel.rel_type.ends_with("/chartColorStyle") {
+            color = read_zip_entry(archive, &path);
+        }
+    }
+    (style, color)
+}
+
+/// Build an `EmbeddedImage` from a parsed pic, resolving the blip
+/// relationship to media bytes. For group children (`in_group`) the
+/// child transform carries rotation/flips, so the payload keeps none.
+fn resolve_pic_image<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    drawing_path: &str,
+    drawing_rels: &HashMap<String, SheetRel>,
+    pic: PicShape,
+    in_group: bool,
+) -> duke_sheets_chart::EmbeddedImage {
+    let mut image = duke_sheets_chart::EmbeddedImage {
+        format: duke_sheets_chart::ImageFormat::Png, // placeholder, resolved from media path
+        media_path: pic.blip_rel.unwrap_or_default(),
+        svg_media_path: pic.svg_rel,
+        width_emu: pic.ext_cx,
+        height_emu: pic.ext_cy,
+        rotation: if in_group { None } else { pic.rotation },
+        flip_h: !in_group && pic.flip_h,
+        flip_v: !in_group && pic.flip_v,
+        data: Vec::new(),
+        svg_data: None,
+    };
+    if let Some(rel) = drawing_rels.get(&image.media_path) {
+        let path = super::resolve_rel_path(drawing_path, &rel.target);
+        let ext = path.rsplit('.').next().unwrap_or("");
+        if let Some(fmt) = duke_sheets_chart::ImageFormat::from_extension(ext) {
+            image.format = fmt;
+        }
+        image.media_path = path.clone();
+        if let Some(bytes) = read_zip_entry(archive, &path) {
+            image.data = bytes;
+        }
+    }
+    if let Some(svg_rel_id) = &image.svg_media_path {
+        if let Some(rel) = drawing_rels.get(svg_rel_id.as_str()) {
+            let path = super::resolve_rel_path(drawing_path, &rel.target);
+            image.svg_media_path = Some(path.clone());
+            if let Some(bytes) = read_zip_entry(archive, &path) {
+                image.svg_data = Some(bytes);
+            }
+        }
+    }
+    image
+}
+
+/// Convert a parsed group into the model, resolving child images and
+/// matching control-twin children to their controls (placed in the
+/// group with the twin's child transform).
+fn build_group<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    drawing_path: &str,
+    drawing_rels: &HashMap<String, SheetRel>,
+    group: ParsedGroup,
+    controls: &mut [AssembledControl],
+) -> Group {
+    let mut children = Vec::new();
+    for child in group.children {
+        match child {
+            ParsedChild::Pic(pic) => {
+                let transform = ChildTransform {
+                    x_emu: pic.off_x,
+                    y_emu: pic.off_y,
+                    cx_emu: pic.ext_cx,
+                    cy_emu: pic.ext_cy,
+                    rotation: pic.rotation.unwrap_or(0),
+                    flip_h: pic.flip_h,
+                    flip_v: pic.flip_v,
+                };
+                let meta = DrawingMeta {
+                    name: Some(pic.name.clone()),
+                    alt_text: pic.descr.clone(),
+                    ..DrawingMeta::default()
+                };
+                let image = resolve_pic_image(archive, drawing_path, drawing_rels, pic, true);
+                children.push(GroupChild {
+                    meta,
+                    transform,
+                    kind: DrawingKind::Image(image),
+                });
+            }
+            ParsedChild::Group(inner) => {
+                let transform = ChildTransform {
+                    x_emu: inner.transform.x_emu,
+                    y_emu: inner.transform.y_emu,
+                    cx_emu: inner.transform.cx_emu,
+                    cy_emu: inner.transform.cy_emu,
+                    rotation: inner.transform.rotation,
+                    flip_h: inner.transform.flip_h,
+                    flip_v: inner.transform.flip_v,
+                };
+                let meta = DrawingMeta {
+                    name: Some(inner.name.clone()),
+                    alt_text: inner.descr.clone(),
+                    ..DrawingMeta::default()
+                };
+                let built = build_group(archive, drawing_path, drawing_rels, inner, controls);
+                children.push(GroupChild {
+                    meta,
+                    transform,
+                    kind: DrawingKind::Group(Box::new(built)),
+                });
+            }
+            ParsedChild::Twin(twin) => {
+                // A control-twin child becomes the matched control,
+                // positioned by the twin's child transform.
+                if let Some((_, mut object, _)) = take_control(controls, twin.shape_num) {
+                    if let Some(name) = twin.name {
+                        object.meta.name = Some(name);
+                    }
+                    children.push(GroupChild {
+                        meta: object.meta,
+                        transform: twin.xfrm,
+                        kind: object.kind,
+                    });
+                }
+            }
+        }
+    }
+    Group {
+        transform: group.transform,
+        children,
     }
 }
 
-fn parse_rels_targets(rels_xml: &[u8]) -> Vec<(String, String)> {
-    let mut reader = Reader::from_reader(BufReader::new(rels_xml));
-    reader.config_mut().trim_text(true);
+/// Scan a raw anchor's bytes for relationship references (r:id,
+/// r:embed, r:link) and capture each referenced relationship with its
+/// original id/target plus the target part bytes when internal.
+fn capture_raw_rels<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    drawing_path: &str,
+    bytes: &[u8],
+    drawing_rels: &HashMap<String, SheetRel>,
+) -> Vec<RawRel> {
+    let mut ids: Vec<String> = Vec::new();
+    let mut reader = quick_xml::Reader::from_reader(bytes);
     let mut buf = Vec::new();
-    let mut targets = Vec::new();
-
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Empty(ref e)) | Ok(Event::Start(ref e))
-                if e.name().as_ref() == b"Relationship" =>
-            {
-                let mut target = String::new();
-                let mut rel_type = String::new();
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
                 for attr in e.attributes().flatten() {
-                    match attr.key.as_ref() {
-                        b"Target" => target = String::from_utf8_lossy(&attr.value).into_owned(),
-                        b"Type" => rel_type = String::from_utf8_lossy(&attr.value).into_owned(),
-                        _ => {}
+                    if matches!(attr.key.as_ref(), b"r:id" | b"r:embed" | b"r:link") {
+                        if let Ok(value) = attr.unescape_value() {
+                            let value = value.to_string();
+                            if !ids.contains(&value) {
+                                ids.push(value);
+                            }
+                        }
                     }
                 }
-                if !target.is_empty() {
-                    targets.push((target, rel_type));
-                }
             }
-            Ok(Event::Eof) => break,
-            Err(_) => break,
+            Ok(Event::Eof) | Err(_) => break,
             _ => {}
         }
         buf.clear();
     }
-    targets
-}
 
-fn collect_media_entries<R: Read + Seek>(
-    archive: &mut zip::ZipArchive<R>,
-    bundle: &mut DrawingBundle,
-) {
-    let existing: std::collections::HashSet<String> =
-        bundle.entries.iter().map(|(p, _)| p.clone()).collect();
-
-    let media_paths: Vec<String> = (0..archive.len())
-        .filter_map(|i| {
-            let name = archive.by_index(i).ok()?.name().to_string();
-            if name.starts_with("xl/media/") && !existing.contains(&name) {
-                Some(name)
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    for path in media_paths {
-        if let Some(bytes) = read_zip_entry(archive, &path) {
-            bundle.push(path, bytes);
-        }
+    let mut rels = Vec::new();
+    for id in ids {
+        let Some(rel) = drawing_rels.get(&id) else {
+            continue;
+        };
+        let part = if rel.external {
+            None
+        } else {
+            let path = super::resolve_rel_path(drawing_path, &rel.target);
+            read_zip_entry(archive, &path)
+        };
+        rels.push(RawRel {
+            id,
+            rel_type: rel.rel_type.clone(),
+            target: rel.target.clone(),
+            external: rel.external,
+            part,
+        });
     }
+    rels
 }

@@ -130,14 +130,33 @@ pub const BRT_BEGIN_DVAL: u16 = 0x023D;
 pub const BRT_END_DVAL: u16 = 0x023E;
 pub const BRT_DVAL: u16 = 0x0040;
 
-pub const BRT_BEGIN_COMMENT_AUTHORS: u16 = 0x0278;
-pub const BRT_END_COMMENT_AUTHORS: u16 = 0x0279;
-pub const BRT_COMMENT_AUTHOR: u16 = 0x027A;
-pub const BRT_BEGIN_COMMENT_LIST: u16 = 0x027B;
-pub const BRT_END_COMMENT_LIST: u16 = 0x027C;
-pub const BRT_BEGIN_COMMENT: u16 = 0x027D;
-pub const BRT_END_COMMENT: u16 = 0x027E;
-pub const BRT_COMMENT_TEXT: u16 = 0x027F;
+// Comments part records per MS-XLSB 2.4.33 (pinned against
+// Excel-authored xl/comments1.bin).
+pub const BRT_BEGIN_COMMENTS: u16 = 0x0274;
+pub const BRT_END_COMMENTS: u16 = 0x0275;
+pub const BRT_BEGIN_COMMENT_AUTHORS: u16 = 0x0276;
+pub const BRT_END_COMMENT_AUTHORS: u16 = 0x0277;
+pub const BRT_COMMENT_AUTHOR: u16 = 0x0278;
+pub const BRT_BEGIN_COMMENT_LIST: u16 = 0x0279;
+pub const BRT_END_COMMENT_LIST: u16 = 0x027A;
+pub const BRT_BEGIN_COMMENT: u16 = 0x027B;
+pub const BRT_END_COMMENT: u16 = 0x027C;
+pub const BRT_COMMENT_TEXT: u16 = 0x027D;
+
+// Off-spec 0x0278-based ids our writer used to emit (Excel refuses
+// them); the reader still accepts them for back-compat. The legacy
+// BrtBeginComment body was 12 bytes (iauthor + row + col) instead of
+// the spec's 36.
+pub const BRT_LEGACY_BEGIN_COMMENT_AUTHORS: u16 = 0x0278;
+pub const BRT_LEGACY_COMMENT_AUTHOR: u16 = 0x027A;
+pub const BRT_LEGACY_END_COMMENT_LIST: u16 = 0x027C;
+pub const BRT_LEGACY_BEGIN_COMMENT: u16 = 0x027D;
+pub const BRT_LEGACY_END_COMMENT: u16 = 0x027E;
+pub const BRT_LEGACY_COMMENT_TEXT: u16 = 0x027F;
+
+// Future-record wrapper (skipped transparently around comments).
+pub const BRT_AC_BEGIN: u16 = 0x0025;
+pub const BRT_AC_END: u16 = 0x0026;
 
 // MS-XLSB §2.2.1: BrtDrawing = 550, BrtLegacyDrawing = 551
 // (552 is BrtLegacyDrawingHF, the header/footer variant).

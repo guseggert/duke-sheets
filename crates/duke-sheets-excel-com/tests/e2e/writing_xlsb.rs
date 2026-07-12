@@ -1624,3 +1624,221 @@ fn excel_can_read_xlsb_form_controls_we_emit() {
         );
     }
 }
+
+const TEST_PNG_1X1: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+    0x89, 0x00, 0x00, 0x00, 0x0B, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x60, 0x00, 0x02, 0x00,
+    0x00, 0x05, 0x00, 0x01, 0x7A, 0x5E, 0xAB, 0x3F, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44,
+    0xAE, 0x42, 0x60, 0x82,
+];
+
+/// A cell comment survives the Excel XLSB round-trip: the comments
+/// part must use the MS-XLSB record ids (the old 0x0278-based emit
+/// made Excel refuse the file outright).
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_read_xlsb_comment_we_emit() {
+    use duke_sheets_core::CellComment;
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("B2", "has note").unwrap();
+    ws.set_comment_at(1, 1, CellComment::new("Reviewer", "Check this figure"));
+
+    let result = roundtrip_through_excel_xlsb(&wb);
+    let sheet = result.worksheet(0).unwrap();
+    let comment = sheet.comment_at(1, 1).expect("comment survives at B2");
+    assert!(
+        comment.text.contains("Check this figure"),
+        "comment text lost: {:?}",
+        comment.text
+    );
+    assert!(
+        comment.author.contains("Reviewer"),
+        "comment author lost: {:?}",
+        comment.author
+    );
+    assert!(sheet.comment_at(0, 0).is_none(), "comment cell moved");
+}
+
+/// A PNG picture survives the Excel XLSB round-trip with its bytes
+/// verbatim (Excel re-packages media parts without re-encoding).
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_read_xlsb_png_image_we_emit() {
+    use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "anchor").unwrap();
+    ws.add_image(
+        EmbeddedImage {
+            format: ImageFormat::Png,
+            media_path: String::new(),
+            svg_media_path: None,
+            width_emu: 1_000_000,
+            height_emu: 2_000_000,
+            rotation: None,
+            flip_h: false,
+            flip_v: false,
+            data: TEST_PNG_1X1.to_vec(),
+            svg_data: None,
+        },
+        DrawingAnchor::TwoCell {
+            from: CellMarker {
+                col: 1,
+                col_offset_emu: 0,
+                row: 2,
+                row_offset_emu: 0,
+            },
+            to: CellMarker {
+                col: 5,
+                col_offset_emu: 0,
+                row: 10,
+                row_offset_emu: 0,
+            },
+            edit_as: None,
+        },
+    );
+
+    let result = roundtrip_through_excel_xlsb(&wb);
+    let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
+    assert_eq!(images.len(), 1, "image must survive Excel re-save");
+    let img = &images[0];
+    assert_eq!(img.payload.format, ImageFormat::Png);
+    assert_eq!(
+        img.payload.data, TEST_PNG_1X1,
+        "PNG bytes must round-trip through Excel verbatim"
+    );
+}
+
+/// A model-authored chart survives the Excel XLSB round-trip (the
+/// old writer never emitted model charts at all, leaving a dangling
+/// BrtDrawing pointer).
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_read_xlsb_chart_we_emit() {
+    use duke_sheets_chart::{
+        CellMarker, Chart, ChartType, DataReference, DataSeries, DrawingAnchor,
+    };
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    for (i, v) in [3.0, 1.0, 4.0, 1.0, 5.0].iter().enumerate() {
+        ws.set_cell_value_at(i as u32, 0, *v).unwrap();
+    }
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    chart.title = Some("Sales".to_string());
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    ws.add_chart(
+        chart,
+        DrawingAnchor::TwoCell {
+            from: CellMarker {
+                col: 2,
+                col_offset_emu: 0,
+                row: 2,
+                row_offset_emu: 0,
+            },
+            to: CellMarker {
+                col: 10,
+                col_offset_emu: 0,
+                row: 17,
+                row_offset_emu: 0,
+            },
+            edit_as: None,
+        },
+    );
+
+    let result = roundtrip_through_excel_xlsb(&wb);
+    let sheet = result.worksheet(0).unwrap();
+    assert_eq!(sheet.chart_count(), 1, "chart must survive Excel re-save");
+    let chart = sheet.charts().next().unwrap().payload;
+    assert_eq!(chart.chart_type, ChartType::ColumnClustered);
+    assert_eq!(chart.title.as_deref(), Some("Sales"));
+    assert_eq!(chart.series.len(), 1);
+}
+
+/// The drawing-list z-order (image below a form control below an
+/// image) survives Excel's XLSB re-save: the control's position among
+/// native shapes rides its com14:compatSp placeholder twin, which
+/// Excel keeps in the drawing part's document order.
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xlsb_drawing_z_order_we_emit() {
+    use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
+    use duke_sheets_core::{
+        CheckState, DrawingKind, DrawingObject, FormControl, FormControlKind,
+    };
+
+    let two_cell = |fc: u16, fr: u32, tc: u16, tr: u32| DrawingAnchor::TwoCell {
+        from: CellMarker {
+            col: fc,
+            col_offset_emu: 0,
+            row: fr,
+            row_offset_emu: 0,
+        },
+        to: CellMarker {
+            col: tc,
+            col_offset_emu: 0,
+            row: tr,
+            row_offset_emu: 0,
+        },
+        edit_as: None,
+    };
+    let png = |name: &str| {
+        DrawingObject::image(EmbeddedImage {
+            format: ImageFormat::Png,
+            media_path: String::new(),
+            svg_media_path: None,
+            width_emu: 300_000,
+            height_emu: 300_000,
+            rotation: None,
+            flip_h: false,
+            flip_v: false,
+            data: TEST_PNG_1X1.to_vec(),
+            svg_data: None,
+        })
+        .with_name(name)
+    };
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "anchor").unwrap();
+    ws.add_drawing(png("Below").with_anchor(two_cell(0, 0, 2, 2)));
+    ws.add_drawing(
+        DrawingObject::form_control(FormControl::new(FormControlKind::Checkbox {
+            caption: "Middle".to_string(),
+            state: CheckState::Checked,
+            cell_link: None,
+            no_3d: true,
+        }))
+        .with_anchor(two_cell(1, 1, 3, 3)),
+    );
+    ws.add_drawing(png("Above").with_anchor(two_cell(2, 2, 4, 4)));
+
+    let result = roundtrip_through_excel_xlsb(&wb);
+    let sheet = result.worksheet(0).unwrap();
+    let tags: Vec<&str> = sheet
+        .drawings()
+        .iter()
+        .map(|object| match &object.kind {
+            DrawingKind::Image(_) => "image",
+            DrawingKind::FormControl(_) => "control",
+            other => panic!("unexpected drawing kind after Excel round-trip: {other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        tags,
+        vec!["image", "control", "image"],
+        "z-order must survive Excel XLSB re-save"
+    );
+    let images: Vec<_> = sheet.images().collect();
+    assert_eq!(images[0].object.meta.name.as_deref(), Some("Below"));
+    assert_eq!(images[1].object.meta.name.as_deref(), Some("Above"));
+    assert_eq!(
+        sheet.form_controls().next().unwrap().payload.caption(),
+        Some("Middle")
+    );
+}
+

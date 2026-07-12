@@ -34,22 +34,7 @@ pub(super) fn ctrl_prop_object_type(kind: &FormControlKind) -> &'static str {
     }
 }
 
-/// Excel-style default shape name ("Check Box 3"). `seq` is the
-/// 1-based per-sheet drawing object number.
-pub(super) fn default_control_name(kind: &FormControlKind, seq: usize) -> String {
-    let base = match kind {
-        FormControlKind::Button { .. } => "Button",
-        FormControlKind::Checkbox { .. } => "Check Box",
-        FormControlKind::OptionButton { .. } => "Option Button",
-        FormControlKind::Label { .. } => "Label",
-        FormControlKind::GroupBox { .. } => "Group Box",
-        FormControlKind::ListBox { .. } => "List Box",
-        FormControlKind::Dropdown { .. } => "Drop Down",
-        FormControlKind::Scrollbar { .. } => "Scroll Bar",
-        FormControlKind::Spinner { .. } => "Spinner",
-    };
-    format!("{base} {seq}")
-}
+pub(super) use duke_sheets_vml::default_control_name;
 
 fn escape_attr(text: &str) -> String {
     text.replace('&', "&amp;")

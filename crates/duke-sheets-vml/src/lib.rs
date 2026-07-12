@@ -41,6 +41,23 @@ pub const CONTROL_SHAPETYPE: &str = concat!(
     " </v:shapetype>\n",
 );
 
+/// Excel-style default shape name ("Check Box 3"). `seq` is the
+/// 1-based per-sheet drawing object number.
+pub fn default_control_name(kind: &FormControlKind, seq: usize) -> String {
+    let base = match kind {
+        FormControlKind::Button { .. } => "Button",
+        FormControlKind::Checkbox { .. } => "Check Box",
+        FormControlKind::OptionButton { .. } => "Option Button",
+        FormControlKind::Label { .. } => "Label",
+        FormControlKind::GroupBox { .. } => "Group Box",
+        FormControlKind::ListBox { .. } => "List Box",
+        FormControlKind::Dropdown { .. } => "Drop Down",
+        FormControlKind::Scrollbar { .. } => "Scroll Bar",
+        FormControlKind::Spinner { .. } => "Spinner",
+    };
+    format!("{base} {seq}")
+}
+
 /// The VML `x:ClientData/@ObjectType` name for a control kind.
 pub fn vml_object_type(kind: &FormControlKind) -> &'static str {
     match kind {
@@ -121,10 +138,11 @@ pub fn anchor_cell_markers(anchor: &DrawingAnchor) -> (CellMarker, CellMarker) {
 }
 
 /// Rebuild a two-cell drawing anchor from an `x:Anchor` px tuple and
-/// the (already un-negated) move/size flags.
+/// the (already un-negated) move/size flags. Move+size (Excel's
+/// default) maps to `edit_as: None`, its canonical model form.
 pub fn px_to_anchor(a: &[i64; 8], move_with_cells: bool, size_with_cells: bool) -> DrawingAnchor {
     let edit_as = match (move_with_cells, size_with_cells) {
-        (true, true) => Some(EditAs::TwoCell),
+        (true, true) => None,
         (true, false) => Some(EditAs::OneCell),
         _ => Some(EditAs::Absolute),
     };
@@ -476,6 +494,96 @@ pub fn write_control_shape(
     }
     xml.push_str("  </x:ClientData>\n");
     xml.push_str(" </v:shape>\n");
+}
+
+/// Splice comments into an assembled native drawing list by the
+/// legacy VML shape order: a comment goes immediately after the
+/// nearest control shape preceding its Note in the VML sequence;
+/// comments before any control go before the first control's object;
+/// comments with no usable VML position (or on control-less sheets)
+/// append at the end. `natives` pairs each object with its VML shape
+/// number when it is (or wraps) a legacy control.
+pub fn splice_comments(
+    natives: Vec<(DrawingObject, Option<u32>)>,
+    comments: Vec<(u32, u16, duke_sheets_core::comment::CellComment)>,
+    vml_shapes: &[VmlShape],
+) -> Vec<DrawingObject> {
+    use std::collections::{HashMap, HashSet};
+
+    let native_ctrl_ids: HashSet<u32> = natives.iter().filter_map(|(_, id)| *id).collect();
+
+    // Comments part content, deduped by cell (first wins).
+    let mut remaining: Vec<Option<(u32, u16, duke_sheets_core::comment::CellComment)>> = {
+        let mut seen = HashSet::new();
+        comments
+            .into_iter()
+            .filter(|(row, col, _)| seen.insert((*row, *col)))
+            .map(Some)
+            .collect()
+    };
+    let mut take_comment =
+        |row: u32, col: u16| -> Option<(u32, u16, duke_sheets_core::comment::CellComment)> {
+            remaining
+                .iter_mut()
+                .find(|slot| matches!(slot, Some((r, c, _)) if (*r, *c) == (row, col)))
+                .and_then(Option::take)
+        };
+
+    let mut before_first: Vec<DrawingObject> = Vec::new();
+    let mut after_ctrl: HashMap<u32, Vec<DrawingObject>> = HashMap::new();
+    let mut last_ctrl: Option<u32> = None;
+    for shape in vml_shapes {
+        match &shape.kind {
+            VmlShapeKind::Control(_) => {
+                if native_ctrl_ids.contains(&shape.shape_num) {
+                    last_ctrl = Some(shape.shape_num);
+                }
+            }
+            VmlShapeKind::Note(note) => {
+                let Some((row, col, comment)) = take_comment(note.row, note.col) else {
+                    continue;
+                };
+                let mut object = DrawingObject::comment(row, col, comment);
+                if let Some(a) = note.anchor_px {
+                    let mut anchor = px_to_anchor(&a, true, true);
+                    if let DrawingAnchor::TwoCell { edit_as, .. } = &mut anchor {
+                        // Comments carry no editAs semantics.
+                        *edit_as = None;
+                    }
+                    object.anchor = anchor;
+                }
+                object.meta.hidden = !note.visible;
+                match last_ctrl {
+                    Some(id) => after_ctrl.entry(id).or_default().push(object),
+                    None => before_first.push(object),
+                }
+            }
+        }
+    }
+    // Comments without a VML note keep default placement, at the end.
+    let mut at_end: Vec<DrawingObject> = remaining
+        .into_iter()
+        .flatten()
+        .map(|(row, col, comment)| DrawingObject::comment(row, col, comment))
+        .collect();
+
+    let first_ctrl_pos = natives.iter().position(|(_, id)| id.is_some());
+    let mut result = Vec::new();
+    for (i, (object, ctrl_id)) in natives.into_iter().enumerate() {
+        if Some(i) == first_ctrl_pos {
+            result.append(&mut before_first);
+        }
+        result.push(object);
+        if let Some(id) = ctrl_id {
+            if let Some(mut list) = after_ctrl.remove(&id) {
+                result.append(&mut list);
+            }
+        }
+    }
+    // No control objects: "before first" degrades to append-at-end.
+    result.append(&mut before_first);
+    result.append(&mut at_end);
+    result
 }
 
 /// One `<v:shape>`'s control-relevant contents, parsed from a VML

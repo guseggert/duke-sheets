@@ -1636,3 +1636,50 @@ fn excel_can_read_xlsx_form_controls_we_emit() {
         );
     }
 }
+
+/// A cell comment survives Excel's XLSX re-save: text, author, cell,
+/// and popup visibility (visible notes ride the VML shape's
+/// `visibility:visible` style, hidden ones the default).
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_read_xlsx_comment_we_emit() {
+    use duke_sheets_core::{CellComment, DrawingObject};
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("B2", "reviewed").unwrap();
+    ws.set_comment_at(1, 1, CellComment::new("Reviewer", "Check this figure"));
+    ws.add_drawing(
+        DrawingObject::comment(3, 3, CellComment::new("Reviewer", "Always shown"))
+            .with_hidden(false),
+    );
+
+    let result = roundtrip_through_excel(&wb);
+    let sheet = result.worksheet(0).unwrap();
+
+    let hidden = sheet.comment_at(1, 1).expect("comment survives at B2");
+    assert!(
+        hidden.text.contains("Check this figure"),
+        "comment text lost: {:?}",
+        hidden.text
+    );
+    assert!(
+        hidden.author.contains("Reviewer"),
+        "comment author lost: {:?}",
+        hidden.author
+    );
+    assert!(sheet.comment_at(0, 0).is_none(), "comment cell moved");
+
+    let visibility: Vec<(u32, u16, bool)> = sheet
+        .comments_drawn()
+        .map(|cr| (cr.row, cr.col, cr.object.meta.hidden))
+        .collect();
+    assert!(
+        visibility.contains(&(1, 1, true)),
+        "B2 note must stay hover-only: {visibility:?}"
+    );
+    assert!(
+        visibility.contains(&(3, 3, false)),
+        "D4 note must stay visible: {visibility:?}"
+    );
+}

@@ -26,6 +26,7 @@
 //! [`crate::Worksheet`] as views over the list.
 
 use duke_sheets_chart::{Chart, ChartEx, DrawingAnchor, EmbeddedImage};
+pub use duke_sheets_chart::{ChildTransform, GroupTransform};
 
 use crate::comment::CellComment;
 use crate::form_control::FormControl;
@@ -207,38 +208,6 @@ pub struct Group {
     pub children: Vec<GroupChild>,
 }
 
-/// Transform of a shape group (DrawingML `a:xfrm` with `chOff`/`chExt`).
-///
-/// `x/y/cx/cy` place the group in its parent's coordinate space (for
-/// a top-level group this duplicates the anchor's extent in absolute
-/// EMU; both are preserved on round-trip). `child_*` define the
-/// coordinate space the children are expressed in.
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct GroupTransform {
-    /// Group offset in parent space (EMU).
-    pub x_emu: i64,
-    /// Group offset in parent space (EMU).
-    pub y_emu: i64,
-    /// Group extent in parent space (EMU).
-    pub cx_emu: i64,
-    /// Group extent in parent space (EMU).
-    pub cy_emu: i64,
-    /// Child-space origin (EMU).
-    pub child_x_emu: i64,
-    /// Child-space origin (EMU).
-    pub child_y_emu: i64,
-    /// Child-space extent (EMU).
-    pub child_cx_emu: i64,
-    /// Child-space extent (EMU).
-    pub child_cy_emu: i64,
-    /// Rotation in 60,000ths of a degree, clockwise.
-    pub rotation: i32,
-    /// Horizontal flip.
-    pub flip_h: bool,
-    /// Vertical flip.
-    pub flip_v: bool,
-}
-
 /// A shape inside a group, positioned in the group's child space.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GroupChild {
@@ -248,25 +217,6 @@ pub struct GroupChild {
     pub transform: ChildTransform,
     /// Kind-specific payload. Nested groups are allowed.
     pub kind: DrawingKind,
-}
-
-/// Placement of a group child in its group's child coordinate space.
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct ChildTransform {
-    /// Offset in child space (EMU).
-    pub x_emu: i64,
-    /// Offset in child space (EMU).
-    pub y_emu: i64,
-    /// Extent in child space (EMU).
-    pub cx_emu: i64,
-    /// Extent in child space (EMU).
-    pub cy_emu: i64,
-    /// Rotation in 60,000ths of a degree, clockwise.
-    pub rotation: i32,
-    /// Horizontal flip.
-    pub flip_h: bool,
-    /// Vertical flip.
-    pub flip_v: bool,
 }
 
 /// Path to a drawing node: the first element indexes the worksheet's

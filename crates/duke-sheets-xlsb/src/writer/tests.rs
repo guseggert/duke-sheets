@@ -1351,24 +1351,10 @@ mod tests {
 
     #[test]
     fn drawing_round_trip() {
-        use crate::drawing_bundle::DrawingBundle;
-
-        let drawing_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing">
-  <xdr:twoCellAnchor>
-    <xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
-    <xdr:to><xdr:col>5</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>10</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
-    <xdr:sp><xdr:txBody><a:p xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:r><a:t>Hello</a:t></a:r></a:p></xdr:txBody></xdr:sp>
-    <xdr:clientData/>
-  </xdr:twoCellAnchor>
-</xdr:wsDr>"#;
-
-        let mut bundle = DrawingBundle::new();
-        bundle.push("xl/drawings/drawing1.xml".into(), drawing_xml.to_vec());
-        let encoded = bundle.encode();
+        let anchor_xml = br#"<xdr:twoCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>5</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>10</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:sp><xdr:txBody><a:p xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:r><a:t>Hello</a:t></a:r></a:p></xdr:txBody></xdr:sp><xdr:clientData/></xdr:twoCellAnchor>"#;
 
         let mut wb = Workbook::new();
-        add_raw_drawing(wb.worksheet_mut(0).unwrap(), encoded);
+        add_raw_drawing(wb.worksheet_mut(0).unwrap(), anchor_xml.to_vec());
 
         let mut buf = Vec::new();
         XlsbWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -1413,38 +1399,29 @@ mod tests {
         let wb2 = XlsbReader::read(Cursor::new(&buf)).unwrap();
         let ws2 = wb2.worksheet(0).unwrap();
         let raw2 = raw_drawing_bytes(ws2);
-        assert_eq!(raw2.len(), 1);
+        assert_eq!(raw2.len(), 1, "unmodeled anchor read back as raw");
+        let text = std::str::from_utf8(raw2[0]).unwrap();
+        assert!(text.contains("Hello"), "anchor content preserved: {text}");
 
-        let bundle2 = DrawingBundle::decode(raw2[0]).unwrap();
-        let (_, round_tripped) = bundle2
-            .entries
-            .iter()
-            .find(|(p, _)| p.contains("/drawings/drawing"))
-            .unwrap();
-        assert_eq!(round_tripped, &drawing_xml.to_vec());
+        // The raw anchor survives a second write unchanged.
+        let wb3 = round_trip(&wb2);
+        let ws3 = wb3.worksheet(0).unwrap();
+        assert_eq!(raw_drawing_bytes(ws3), raw_drawing_bytes(ws2));
     }
 
     #[test]
     fn drawing_with_chart_round_trip() {
-        use crate::drawing_bundle::DrawingBundle;
-
-        let drawing_xml = b"<xdr:wsDr xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\"><xdr:twoCellAnchor/></xdr:wsDr>";
-        let chart_xml = b"<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"><c:chart/></c:chartSpace>";
-        let drawing_rels = br#"<?xml version="1.0" encoding="UTF-8"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/>
-</Relationships>"#;
-
-        let mut bundle = DrawingBundle::new();
-        bundle.push("xl/drawings/drawing1.xml".into(), drawing_xml.to_vec());
-        bundle.push(
-            "xl/drawings/_rels/drawing1.xml.rels".into(),
-            drawing_rels.to_vec(),
-        );
-        bundle.push("xl/charts/chart1.xml".into(), chart_xml.to_vec());
+        use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries, DrawingAnchor};
 
         let mut wb = Workbook::new();
-        add_raw_drawing(wb.worksheet_mut(0).unwrap(), bundle.encode());
+        let ws = wb.worksheet_mut(0).unwrap();
+        for (i, v) in [3.0, 1.0, 4.0].iter().enumerate() {
+            ws.set_cell_value_at(i as u32, 0, *v).unwrap();
+        }
+        let mut chart = Chart::new(ChartType::ColumnClustered);
+        chart.title = Some("Chart Title".to_string());
+        chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$3")));
+        ws.add_chart(chart, DrawingAnchor::default());
 
         let mut buf = Vec::new();
         XlsbWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -1468,19 +1445,11 @@ mod tests {
 
         let wb2 = XlsbReader::read(Cursor::new(&buf)).unwrap();
         let ws2 = wb2.worksheet(0).unwrap();
-        let raw2 = raw_drawing_bytes(ws2);
-        assert_eq!(raw2.len(), 1);
-        let bundle2 = DrawingBundle::decode(raw2[0]).unwrap();
-        assert!(bundle2
-            .entries
-            .iter()
-            .any(|(p, _)| p == "xl/charts/chart1.xml"));
-        let (_, chart_bytes) = bundle2
-            .entries
-            .iter()
-            .find(|(p, _)| p == "xl/charts/chart1.xml")
-            .unwrap();
-        assert_eq!(chart_bytes, &chart_xml.to_vec());
+        assert_eq!(ws2.chart_count(), 1);
+        let chart2 = ws2.charts().next().unwrap().payload;
+        assert_eq!(chart2.chart_type, ChartType::ColumnClustered);
+        assert_eq!(chart2.title.as_deref(), Some("Chart Title"));
+        assert_eq!(chart2.series.len(), 1);
     }
 
     #[test]
