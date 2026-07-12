@@ -1,3 +1,4 @@
+#[cfg(test)]
 use std::collections::HashMap;
 use std::io::{BufReader, Read, Seek};
 
@@ -9,17 +10,17 @@ use crate::error::{XlsxError, XlsxResult};
 use duke_sheets_core::comment::CellComment;
 use duke_sheets_core::CellAddress;
 
-pub(crate) fn read_worksheet_comments<R: Read + Seek>(
+/// Parse a comments part into `(row, col, comment)` tuples in
+/// document order. Placement (anchor, visibility, z-position) is
+/// resolved by the caller against the legacy VML part.
+pub(crate) fn read_comments_list<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     comments_path: &str,
-    vml_path: Option<&str>,
-    worksheet: &mut duke_sheets_core::Worksheet,
-) -> XlsxResult<()> {
-    let visible_map = read_comment_visibility_map(archive, vml_path)?;
-
+) -> XlsxResult<Vec<(u32, u16, CellComment)>> {
+    let mut comments = Vec::new();
     let file = match archive_by_name(archive, comments_path) {
         Ok(f) => f,
-        Err(_) => return Ok(()),
+        Err(_) => return Ok(comments),
     };
 
     let reader = BufReader::new(file);
@@ -74,14 +75,8 @@ pub(crate) fn read_worksheet_comments<R: Read + Seek>(
                                     .and_then(|id| authors.get(id))
                                     .cloned()
                                     .unwrap_or_default();
-
-                                let visible = visible_map
-                                    .get(&(addr.row, addr.col))
-                                    .copied()
-                                    .unwrap_or(false);
                                 let comment = CellComment::new(author, current_text.trim());
-                                worksheet.set_comment_at(addr.row, addr.col, comment);
-                                worksheet.set_comment_visible(addr.row, addr.col, visible);
+                                comments.push((addr.row, addr.col, comment));
                             }
                             Err(e) => log::warn!("Skipping comment at '{}': {}", cell_ref, e),
                         }
@@ -119,9 +114,10 @@ pub(crate) fn read_worksheet_comments<R: Read + Seek>(
         buf.clear();
     }
 
-    Ok(())
+    Ok(comments)
 }
 
+#[cfg(test)]
 pub(crate) fn read_comment_visibility_map<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     vml_path: Option<&str>,

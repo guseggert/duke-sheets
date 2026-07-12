@@ -294,7 +294,7 @@ pub(super) fn controls_block(entries: &[ControlEntry<'_>]) -> String {
 
         // CT_ObjectAnchor: moveWithCells / sizeWithCells default
         // false; EMU offsets.
-        let (move_wc, size_wc) = match entry.anchor {
+        let (move_wc, size_wc) = match &entry.anchor {
             duke_sheets_chart::DrawingAnchor::TwoCell { edit_as, .. } => {
                 match edit_as.clone().unwrap_or(duke_sheets_chart::EditAs::TwoCell) {
                     duke_sheets_chart::EditAs::TwoCell => (true, true),
@@ -313,7 +313,7 @@ pub(super) fn controls_block(entries: &[ControlEntry<'_>]) -> String {
             xml.push_str(" sizeWithCells=\"1\"");
         }
         xml.push('>');
-        let (from, to) = anchor_cell_markers(entry.anchor);
+        let (from, to) = anchor_cell_markers(&entry.anchor);
         for (tag, marker) in [("from", &from), ("to", &to)] {
             xml.push_str(&format!(
                 "<{tag}><xdr:col>{}</xdr:col><xdr:colOff>{}</xdr:colOff><xdr:row>{}</xdr:row><xdr:rowOff>{}</xdr:rowOff></{tag}>",
@@ -334,33 +334,69 @@ pub(super) fn controls_block(entries: &[ControlEntry<'_>]) -> String {
 }
 
 /// One control's identifiers for the worksheet block. `meta` and
-/// `anchor` come from the control's wrapping drawing object.
+/// `anchor` come from the control's wrapping drawing object (or, for
+/// controls nested in groups, its resolved placement).
 pub(super) struct ControlEntry<'a> {
     pub control: &'a FormControl,
     pub meta: &'a DrawingMeta,
-    pub anchor: &'a duke_sheets_chart::DrawingAnchor,
+    pub anchor: duke_sheets_chart::DrawingAnchor,
     pub shape_id: usize,
     pub rid: String,
     pub name: String,
 }
 
-/// Per-control radio-group-head flags, aligned with the sheet's
-/// top-level [`Worksheet::form_controls`] order, derived from the
-/// spatial grouping in [`duke_sheets_core::radio_groups`].
+/// One control in the sheet's emission sequence: every form control
+/// in the drawing tree, in [`Worksheet::placed_form_controls`]
+/// (depth-first) order. This order drives shape ids, ctrlProp part
+/// numbering, `<controls>` entries, drawing twins, and VML shapes.
+pub(super) struct SheetControl<'a> {
+    pub payload: &'a FormControl,
+    pub meta: &'a DrawingMeta,
+    /// Top-level controls keep their wrapper anchor; group children
+    /// get an absolute anchor from their resolved on-sheet rectangle.
+    pub anchor: duke_sheets_chart::DrawingAnchor,
+}
+
+/// The sheet's control sequence in placed (depth-first) order.
+pub(super) fn sheet_controls(sheet: &Worksheet) -> Vec<SheetControl<'_>> {
+    sheet
+        .placed_form_controls()
+        .into_iter()
+        .map(|placed| {
+            let meta = sheet
+                .drawing_at_path(&placed.path)
+                .map(|node| node.meta)
+                .expect("placed control path is valid");
+            let anchor = if let [index] = placed.path.as_slice() {
+                sheet.drawings()[*index].anchor.clone()
+            } else {
+                let (x1, y1, x2, y2) = placed.rect_emu;
+                let clamp = |v: i128| v.clamp(0, i64::MAX as i128) as i64;
+                duke_sheets_chart::DrawingAnchor::Absolute {
+                    x_emu: clamp(x1),
+                    y_emu: clamp(y1),
+                    width_emu: clamp((x2 - x1).max(0)),
+                    height_emu: clamp((y2 - y1).max(0)),
+                }
+            };
+            SheetControl {
+                payload: placed.control,
+                meta,
+                anchor,
+            }
+        })
+        .collect()
+}
+
+/// Per-control radio-group-head flags, aligned with the placed
+/// (depth-first) control order, derived from the spatial grouping in
+/// [`duke_sheets_core::radio_groups`].
 pub(super) fn radio_head_flags(sheet: &Worksheet) -> Vec<bool> {
     let placed = sheet.placed_form_controls();
-    // Map drawing-list index -> position in form_controls() order for
-    // top-level controls (group children are not emitted here).
-    let top_positions: Vec<usize> = sheet.form_controls().map(|drawn| drawn.index).collect();
-    let mut flags = vec![false; top_positions.len()];
+    let mut flags = vec![false; placed.len()];
     for group in duke_sheets_core::radio_groups(&placed) {
         if let Some(&head) = group.first() {
-            let path = &placed[head].path;
-            if let [drawing_idx] = path.as_slice() {
-                if let Some(j) = top_positions.iter().position(|idx| idx == drawing_idx) {
-                    flags[j] = true;
-                }
-            }
+            flags[head] = true;
         }
     }
     flags

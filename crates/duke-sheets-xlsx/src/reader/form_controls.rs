@@ -54,7 +54,8 @@ pub(super) fn dedupe_pending_controls(
 }
 
 /// Build the anchor from parsed `<from>`/`<to>` marker values plus
-/// the CT_ObjectAnchor move/size attributes.
+/// the CT_ObjectAnchor move/size attributes. Move+size (Excel's
+/// default) maps to `edit_as: None`, its canonical model form.
 pub(super) fn anchor_from_markers(
     from: [i64; 4],
     to: [i64; 4],
@@ -62,7 +63,7 @@ pub(super) fn anchor_from_markers(
     size_with_cells: bool,
 ) -> DrawingAnchor {
     let edit_as = match (move_with_cells, size_with_cells) {
-        (true, true) => Some(EditAs::TwoCell),
+        (true, true) => None,
         (true, false) => Some(EditAs::OneCell),
         _ => Some(EditAs::Absolute),
     };

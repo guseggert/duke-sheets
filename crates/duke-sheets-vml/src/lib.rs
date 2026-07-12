@@ -161,11 +161,17 @@ fn negated_move_size(anchor: &DrawingAnchor) -> (bool, bool) {
     }
 }
 
-fn fmt_pt(px: i64) -> String {
+/// A pixel length as a pt string for VML style attributes (96 dpi ->
+/// 72 dpi, trailing zeros trimmed).
+pub fn px_to_pt_string(px: i64) -> String {
     let pt = px as f64 * 0.75;
     let s = format!("{pt:.2}");
     let s = s.trim_end_matches('0').trim_end_matches('.');
     s.to_string()
+}
+
+fn fmt_pt(px: i64) -> String {
+    px_to_pt_string(px)
 }
 
 fn xml_escape(text: &str) -> String {
@@ -642,6 +648,39 @@ impl VmlControl {
     }
 }
 
+/// One `<v:shape>` from a VML part, in document order. Legacy Note
+/// (comment) shapes and control shapes share this sequence, which
+/// carries their relative z-order.
+#[derive(Debug, Clone)]
+pub struct VmlShape {
+    /// Numeric shape id (the `N` of `_x0000_sN`).
+    pub shape_num: u32,
+    /// Kind-specific payload.
+    pub kind: VmlShapeKind,
+}
+
+/// Payload of a [`VmlShape`].
+#[derive(Debug, Clone)]
+pub enum VmlShapeKind {
+    /// A form-control (or other non-Note) shape.
+    Control(VmlControl),
+    /// A cell-comment Note shape.
+    Note(VmlNote),
+}
+
+/// A comment Note shape's placement data.
+#[derive(Debug, Clone)]
+pub struct VmlNote {
+    /// Anchored cell row (`x:Row`).
+    pub row: u32,
+    /// Anchored cell column (`x:Column`).
+    pub col: u16,
+    /// `x:Anchor` values (col/px offsets).
+    pub anchor_px: Option<[i64; 8]>,
+    /// Popup visibility (style `visibility:visible` or `x:Visible`).
+    pub visible: bool,
+}
+
 /// `x:*` boolean element semantics (ST_TrueFalseBlank): present with
 /// empty/`t`/`true`/`1` text means true; `f`/`false`/`0` means false.
 fn blank_true(text: &str) -> bool {
@@ -693,6 +732,47 @@ fn normalize_caption(text: &str) -> String {
 /// inside textboxes) terminate the walk but shapes completed before
 /// the error are returned.
 pub fn parse_vml_controls(bytes: &[u8]) -> Vec<VmlControl> {
+    parse_raw_shapes(bytes)
+        .into_iter()
+        .map(|shape| shape.control)
+        .collect()
+}
+
+/// Parse the full ordered shape sequence out of a VML drawing part:
+/// control shapes and comment Note shapes, in document order.
+///
+/// Same permissiveness as [`parse_vml_controls`]. Note shapes lacking
+/// `x:Row`/`x:Column` are dropped (they cannot be joined to a cell).
+pub fn parse_vml_shapes(bytes: &[u8]) -> Vec<VmlShape> {
+    parse_raw_shapes(bytes)
+        .into_iter()
+        .filter_map(|shape| {
+            let shape_num = shape.control.shape_num;
+            let kind = if shape.control.object_type == "Note" {
+                let (row, col) = (shape.row?, shape.col?);
+                VmlShapeKind::Note(VmlNote {
+                    row,
+                    col,
+                    anchor_px: shape.control.anchor_px,
+                    visible: shape.visible,
+                })
+            } else {
+                VmlShapeKind::Control(shape.control)
+            };
+            Some(VmlShape { shape_num, kind })
+        })
+        .collect()
+}
+
+/// A parsed `<v:shape>` before Note/control classification.
+struct RawShape {
+    control: VmlControl,
+    row: Option<u32>,
+    col: Option<u16>,
+    visible: bool,
+}
+
+fn parse_raw_shapes(bytes: &[u8]) -> Vec<RawShape> {
     let mut reader = Reader::from_reader(bytes);
     reader.config_mut().trim_text(false);
     reader.config_mut().check_end_names = false;
@@ -700,7 +780,7 @@ pub fn parse_vml_controls(bytes: &[u8]) -> Vec<VmlControl> {
     let mut out = Vec::new();
     let mut buf = Vec::new();
 
-    let mut current: Option<VmlControl> = None;
+    let mut current: Option<RawShape> = None;
     let mut in_client_data = false;
     let mut in_textbox = false;
     let mut in_caption_div = false;
@@ -714,13 +794,28 @@ pub fn parse_vml_controls(bytes: &[u8]) -> Vec<VmlControl> {
                 let name = e.local_name().as_ref().to_vec();
                 match name.as_slice() {
                     b"shape" => {
-                        let mut ctrl = VmlControl::new();
+                        let mut shape = RawShape {
+                            control: VmlControl::new(),
+                            row: None,
+                            col: None,
+                            visible: false,
+                        };
                         for attr in e.attributes().flatten() {
-                            if attr.key.as_ref() == b"id" {
-                                let id = String::from_utf8_lossy(&attr.value);
-                                if let Some(num) = id.rsplit(['s', 'S']).next() {
-                                    ctrl.shape_num = num.parse().unwrap_or(0);
+                            match attr.key.as_ref() {
+                                b"id" => {
+                                    let id = String::from_utf8_lossy(&attr.value);
+                                    if let Some(num) = id.rsplit(['s', 'S']).next() {
+                                        shape.control.shape_num = num.parse().unwrap_or(0);
+                                    }
                                 }
+                                b"style" => {
+                                    let style =
+                                        String::from_utf8_lossy(&attr.value).to_lowercase();
+                                    let normalized: String =
+                                        style.chars().filter(|c| !c.is_whitespace()).collect();
+                                    shape.visible = normalized.contains("visibility:visible");
+                                }
+                                _ => {}
                             }
                         }
                         caption_line.clear();
@@ -728,7 +823,7 @@ pub fn parse_vml_controls(bytes: &[u8]) -> Vec<VmlControl> {
                         in_client_data = false;
                         in_textbox = false;
                         in_caption_div = false;
-                        current = Some(ctrl);
+                        current = Some(shape);
                     }
                     b"textbox" => in_textbox = true,
                     b"div" if in_textbox => {
@@ -737,10 +832,10 @@ pub fn parse_vml_controls(bytes: &[u8]) -> Vec<VmlControl> {
                     }
                     b"ClientData" => {
                         in_client_data = true;
-                        if let Some(ctrl) = current.as_mut() {
+                        if let Some(shape) = current.as_mut() {
                             for attr in e.attributes().flatten() {
                                 if attr.key.as_ref() == b"ObjectType" {
-                                    ctrl.object_type =
+                                    shape.control.object_type =
                                         String::from_utf8_lossy(&attr.value).into_owned();
                                 }
                             }
@@ -755,13 +850,14 @@ pub fn parse_vml_controls(bytes: &[u8]) -> Vec<VmlControl> {
                 // Empty elements never receive an End event; commit
                 // presence-only ClientData flags immediately.
                 if in_client_data {
-                    if let Some(ctrl) = current.as_mut() {
+                    if let Some(shape) = current.as_mut() {
                         match name.as_slice() {
-                            b"MoveWithCells" => ctrl.move_with_cells = false,
-                            b"SizeWithCells" => ctrl.size_with_cells = false,
-                            b"NoThreeD" | b"NoThreeD2" => ctrl.no_3d = true,
-                            b"FirstButton" => ctrl.first_button = true,
-                            b"Horiz" => ctrl.horiz = true,
+                            b"MoveWithCells" => shape.control.move_with_cells = false,
+                            b"SizeWithCells" => shape.control.size_with_cells = false,
+                            b"NoThreeD" | b"NoThreeD2" => shape.control.no_3d = true,
+                            b"FirstButton" => shape.control.first_button = true,
+                            b"Horiz" => shape.control.horiz = true,
+                            b"Visible" => shape.visible = true,
                             _ => {}
                         }
                     }
@@ -782,10 +878,10 @@ pub fn parse_vml_controls(bytes: &[u8]) -> Vec<VmlControl> {
                 let name = e.local_name().as_ref().to_vec();
                 match name.as_slice() {
                     b"shape" => {
-                        if let Some(mut ctrl) = current.take() {
-                            ctrl.caption = caption_lines.join("\n");
-                            if !ctrl.object_type.is_empty() {
-                                out.push(ctrl);
+                        if let Some(mut shape) = current.take() {
+                            shape.control.caption = caption_lines.join("\n");
+                            if !shape.control.object_type.is_empty() {
+                                out.push(shape);
                             }
                         }
                     }
@@ -801,8 +897,19 @@ pub fn parse_vml_controls(bytes: &[u8]) -> Vec<VmlControl> {
                     _ => {
                         if let Some((elem, text)) = element_text.take() {
                             if elem.as_bytes() == name.as_slice() {
-                                if let Some(ctrl) = current.as_mut() {
-                                    apply_client_data_text(ctrl, &elem, &text);
+                                if let Some(shape) = current.as_mut() {
+                                    match elem.as_str() {
+                                        "Row" => shape.row = text.trim().parse().ok(),
+                                        "Column" => shape.col = text.trim().parse().ok(),
+                                        "Visible" => {
+                                            shape.visible = blank_true(&text);
+                                        }
+                                        _ => apply_client_data_text(
+                                            &mut shape.control,
+                                            &elem,
+                                            &text,
+                                        ),
+                                    }
                                 }
                             }
                         }
@@ -1146,6 +1253,46 @@ mod tests {
         assert!(!parsed.is_empty(), "first shape must survive");
         assert_eq!(parsed[0].shape_num, 1025);
         assert_eq!(parsed[0].checked, 1);
+    }
+
+    #[test]
+    fn parse_vml_shapes_keeps_note_and_control_order() {
+        let body = r##" <v:shape id="_x0000_s1026" type="#_x0000_t201">
+  <x:ClientData ObjectType="Checkbox">
+   <x:Anchor>0, 0, 0, 0, 1, 0, 1, 0</x:Anchor>
+   <x:Checked>1</x:Checked>
+  </x:ClientData>
+ </v:shape>
+ <v:shape id="_x0000_s1025" type="#_x0000_t202" style='position:absolute;visibility:visible'>
+  <x:ClientData ObjectType="Note">
+   <x:Anchor>3, 15, 1, 10, 5, 15, 5, 4</x:Anchor>
+   <x:Row>2</x:Row>
+   <x:Column>2</x:Column>
+  </x:ClientData>
+ </v:shape>
+ <v:shape id="_x0000_s1027" type="#_x0000_t201">
+  <x:ClientData ObjectType="Checkbox">
+   <x:Anchor>0, 0, 4, 0, 1, 0, 5, 0</x:Anchor>
+  </x:ClientData>
+ </v:shape>
+"##;
+        let shapes = parse_vml_shapes(wrap(body).as_bytes());
+        assert_eq!(shapes.len(), 3);
+        assert_eq!(shapes[0].shape_num, 1026);
+        assert!(matches!(shapes[0].kind, VmlShapeKind::Control(_)));
+        match &shapes[1].kind {
+            VmlShapeKind::Note(note) => {
+                assert_eq!((note.row, note.col), (2, 2));
+                assert_eq!(note.anchor_px, Some([3, 15, 1, 10, 5, 15, 5, 4]));
+                assert!(note.visible);
+            }
+            other => panic!("expected note, got {other:?}"),
+        }
+        assert_eq!(shapes[2].shape_num, 1027);
+
+        // The control-only view stays unchanged (Notes included, as
+        // before, filtered downstream by to_drawing_object).
+        assert_eq!(parse_vml_controls(wrap(body).as_bytes()).len(), 3);
     }
 
     #[test]

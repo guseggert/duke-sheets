@@ -411,17 +411,78 @@ pub(super) fn write_color_element(w: &mut XmlWriter, tag: &str, color: &Color) -
     Ok(())
 }
 
-/// Raw drawing fragments (preserved anchor XML) of a worksheet, in
-/// z-order.
-pub(super) fn sheet_raw_drawings(sheet: &duke_sheets_core::Worksheet) -> Vec<&[u8]> {
-    sheet
-        .drawings()
-        .iter()
-        .filter_map(|object| match &object.kind {
-            duke_sheets_core::DrawingKind::Raw(raw) => Some(raw.bytes.as_slice()),
-            _ => None,
-        })
-        .collect()
+/// Whether a worksheet needs a drawing part: any drawing object with
+/// a native-part presence. Comments live only in the legacy VML part;
+/// unsupported charts are skipped by the writer.
+pub(super) fn sheet_has_drawing_content(sheet: &duke_sheets_core::Worksheet) -> bool {
+    sheet.drawings().iter().any(|object| match &object.kind {
+        duke_sheets_core::DrawingKind::Comment { .. } => false,
+        duke_sheets_core::DrawingKind::Chart(chart) => !drawing::is_unsupported(chart),
+        _ => true,
+    })
+}
+
+/// Every image payload the drawing part will reference, depth-first
+/// in drawing-list order (group children included). Feeds media part
+/// numbering and content types; must match the emission walk.
+pub(super) fn sheet_image_payloads(
+    sheet: &duke_sheets_core::Worksheet,
+) -> Vec<&duke_sheets_chart::EmbeddedImage> {
+    fn walk<'a>(
+        kind: &'a duke_sheets_core::DrawingKind,
+        out: &mut Vec<&'a duke_sheets_chart::EmbeddedImage>,
+    ) {
+        match kind {
+            duke_sheets_core::DrawingKind::Image(image) => out.push(image),
+            duke_sheets_core::DrawingKind::Group(group) => {
+                for child in &group.children {
+                    walk(&child.kind, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for object in sheet.drawings() {
+        walk(&object.kind, &mut out);
+    }
+    out
+}
+
+/// Raw relationships preserved on a worksheet's raw drawing entries,
+/// in list order, deduplicated by relationship id.
+pub(super) fn sheet_raw_rels(
+    sheet: &duke_sheets_core::Worksheet,
+) -> Vec<&duke_sheets_core::RawRel> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for object in sheet.drawings() {
+        if let duke_sheets_core::DrawingKind::Raw(raw) = &object.kind {
+            for rel in &raw.rels {
+                if seen.insert(rel.id.as_str()) {
+                    out.push(rel);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Resolve a relationship target against a base directory (e.g.
+/// "xl/drawings"): `../media/image5.png` -> `xl/media/image5.png`.
+pub(super) fn resolve_rel_target(base_dir: &str, target: &str) -> String {
+    if let Some(stripped) = target.strip_prefix('/') {
+        return stripped.to_string();
+    }
+    let mut parts: Vec<&str> = base_dir.split('/').collect();
+    for part in target.split('/') {
+        if part == ".." {
+            parts.pop();
+        } else if part != "." && !part.is_empty() {
+            parts.push(part);
+        }
+    }
+    parts.join("/")
 }
 
 pub(super) fn write_xml_part<W: Write + Seek>(
@@ -644,12 +705,19 @@ impl XlsxWriter {
             .map(|(i, _)| i)
             .collect();
 
+        // Per-sheet placed control counts (every form control in the
+        // drawing tree, groups included).
+        let control_counts: Vec<usize> = workbook
+            .worksheets()
+            .map(|sheet| sheet.placed_form_controls().len())
+            .collect();
+
         // Sheets needing a legacy VML drawing part (comment shapes
         // and/or form control shapes).
         let sheets_with_vml: Vec<usize> = workbook
             .worksheets()
             .enumerate()
-            .filter(|(_, sheet)| sheet.comment_count() > 0 || sheet.form_control_count() > 0)
+            .filter(|(i, sheet)| sheet.comment_count() > 0 || control_counts[*i] > 0)
             .map(|(i, _)| i)
             .collect();
 
@@ -658,10 +726,10 @@ impl XlsxWriter {
         // the workbook in sheet order.
         let mut ctrl_prop_numbering: Vec<(usize, usize)> = Vec::new();
         let mut global_ctrl_prop_num = 1usize;
-        for (i, sheet) in workbook.worksheets().enumerate() {
-            if sheet.form_control_count() > 0 {
+        for (i, _sheet) in workbook.worksheets().enumerate() {
+            if control_counts[i] > 0 {
                 ctrl_prop_numbering.push((i, global_ctrl_prop_num));
-                global_ctrl_prop_num += sheet.form_control_count();
+                global_ctrl_prop_num += control_counts[i];
             }
         }
         let total_ctrl_props = global_ctrl_prop_num - 1;
@@ -677,6 +745,31 @@ impl XlsxWriter {
             }
         }
 
+        // Raw drawing entries can carry preserved media parts
+        // (xl/media/imageN.ext). Reserve their numbers so generated
+        // media filenames never collide, and collect their content
+        // types and part bytes.
+        let mut raw_media_parts: Vec<(String, usize)> = Vec::new(); // (path, sheet_idx)
+        let mut max_claimed_image_num = 0usize;
+        for (i, sheet) in workbook.worksheets().enumerate() {
+            for rel in sheet_raw_rels(sheet) {
+                if rel.external || rel.part.is_none() {
+                    continue;
+                }
+                let path = resolve_rel_target("xl/drawings", &rel.target);
+                if let Some(rest) = path.strip_prefix("xl/media/image") {
+                    if let Some((num, _ext)) = rest.split_once('.') {
+                        if let Ok(num) = num.parse::<usize>() {
+                            max_claimed_image_num = max_claimed_image_num.max(num);
+                        }
+                    }
+                }
+                if !raw_media_parts.iter().any(|(p, _)| p == &path) {
+                    raw_media_parts.push((path, i));
+                }
+            }
+        }
+
         // Build chart/drawing numbering:
         // chart_numbering: (sheet_idx, chart_in_sheet_idx, global_chart_num)
         // chart_ex_numbering: (sheet_idx, chartex_in_sheet_idx, global_chartex_num)
@@ -685,23 +778,16 @@ impl XlsxWriter {
         let mut global_chart_num = 1usize;
         let mut chart_ex_numbering: Vec<(usize, usize, usize)> = Vec::new();
         let mut global_chart_ex_num = 1usize;
-        // (sheet_idx, image_idx_in_sheet, global_image_num). The
-        // global counter feeds `xl/media/image{N}.<ext>` filenames.
+        // (sheet_idx, image_idx_in_sheet, global_image_num). Image
+        // indices cover group children too, depth-first in list
+        // order. The global counter feeds `xl/media/image{N}.<ext>`
+        // filenames, starting above any raw-preserved image number.
         let mut image_numbering: Vec<(usize, usize, usize)> = Vec::new();
-        let mut global_image_num = 1usize;
+        let mut global_image_num = max_claimed_image_num + 1;
         let mut drawing_numbering: Vec<(usize, usize)> = Vec::new();
         let mut global_drawing_num = 1usize;
         for (i, sheet) in workbook.worksheets().enumerate() {
-            let has_supported = sheet.charts().any(|c| {
-                !matches!(
-                    c.payload.chart_type,
-                    duke_sheets_chart::ChartType::Unsupported(_)
-                )
-            });
-            let has_charts_ex = sheet.chart_ex_count() > 0;
-            let has_raw_objects = !sheet_raw_drawings(sheet).is_empty();
-            let has_images = sheet.image_count() > 0;
-            if has_supported || has_charts_ex || has_raw_objects || has_images {
+            if sheet_has_drawing_content(sheet) {
                 drawing_numbering.push((i, global_drawing_num));
                 global_drawing_num += 1;
                 for (j, c) in sheet.charts().enumerate() {
@@ -717,7 +803,7 @@ impl XlsxWriter {
                     chart_ex_numbering.push((i, j, global_chart_ex_num));
                     global_chart_ex_num += 1;
                 }
-                for j in 0..sheet.image_count() {
+                for j in 0..sheet_image_payloads(sheet).len() {
                     image_numbering.push((i, j, global_image_num));
                     global_image_num += 1;
                 }
@@ -755,7 +841,7 @@ impl XlsxWriter {
             &drawing_numbering,
             &chart_numbering,
             &chart_ex_numbering,
-            &image_numbering,
+            &raw_media_parts,
             global_chart_num - 1, // total standard charts (for style/color numbering)
             &cs_drawing_numbering,
             &cs_chart_numbering,
@@ -785,6 +871,10 @@ impl XlsxWriter {
         if needs_metadata {
             Self::write_metadata_xml(&mut zip)?;
         }
+
+        // Media part paths already written (generated + raw
+        // preserved), to avoid duplicate archive entries.
+        let mut written_media: HashSet<String> = HashSet::new();
 
         // Write worksheets and their relationships
         for (i, sheet) in workbook.worksheets().enumerate() {
@@ -821,15 +911,16 @@ impl XlsxWriter {
                 Self::write_worksheet_rels(&mut zip, i, &rels)?;
             }
 
-            if sheet.comment_count() > 0 || sheet.form_control_count() > 0 {
+            let sheet_controls = form_controls::sheet_controls(sheet);
+            if sheet.comment_count() > 0 || !sheet_controls.is_empty() {
                 comments::write_vml_drawing(&mut zip, workbook, i)?;
             }
             if sheet.comment_count() > 0 {
                 comments::write_comments(&mut zip, workbook, i)?;
             }
-            if sheet.form_control_count() > 0 {
+            if !sheet_controls.is_empty() {
                 let heads = radio_head_flags(sheet);
-                for (j, control) in sheet.form_controls().enumerate() {
+                for (j, control) in sheet_controls.iter().enumerate() {
                     form_controls::write_ctrl_prop_part(
                         &mut zip,
                         ctrl_prop_start + j,
@@ -848,17 +939,11 @@ impl XlsxWriter {
             if let Some(dn) = drawing_num {
                 let sheet_charts: Vec<_> = sheet.charts().collect();
                 let sheet_charts_ex: Vec<_> = sheet.charts_ex().collect();
-                let sheet_images: Vec<_> = sheet.images().collect();
                 let sheet_chart_globals: Vec<(usize, usize)> = chart_numbering
                     .iter()
                     .filter(|(si, _, _)| *si == i)
                     .map(|(_, ji, gn)| (*ji, *gn))
                     .collect();
-                let chart_refs: Vec<&duke_sheets_core::Drawn<'_, duke_sheets_chart::Chart>> =
-                    sheet_chart_globals
-                        .iter()
-                        .map(|&(ji, _)| &sheet_charts[ji])
-                        .collect();
                 let chart_global_nums: Vec<usize> =
                     sheet_chart_globals.iter().map(|&(_, gn)| gn).collect();
                 let sheet_chartex_globals: Vec<(usize, usize)> = chart_ex_numbering
@@ -866,58 +951,50 @@ impl XlsxWriter {
                     .filter(|(si, _, _)| *si == i)
                     .map(|(_, ji, gn)| (*ji, *gn))
                     .collect();
-                let chartex_refs: Vec<&duke_sheets_core::Drawn<'_, duke_sheets_chart::ChartEx>> =
-                    sheet_chartex_globals
-                        .iter()
-                        .map(|&(ji, _)| &sheet_charts_ex[ji])
-                        .collect();
                 let chartex_global_nums: Vec<usize> =
                     sheet_chartex_globals.iter().map(|&(_, gn)| gn).collect();
-                // Collect images for this sheet with their global
-                // image-part numbers (image1.<ext>, image2.<ext>, ...).
-                let sheet_image_globals: Vec<(usize, usize)> = image_numbering
+                // Image payloads (group children included) with their
+                // global part numbers (image1.<ext>, image2.<ext>, ...).
+                let image_payloads = sheet_image_payloads(sheet);
+                let image_globals: Vec<usize> = image_numbering
                     .iter()
                     .filter(|(si, _, _)| *si == i)
-                    .map(|(_, ji, gn)| (*ji, *gn))
+                    .map(|(_, _, gn)| *gn)
                     .collect();
-                let drawing_images: Vec<drawing::DrawingImage> = sheet_image_globals
+                let image_parts: Vec<(usize, &'static str)> = image_payloads
                     .iter()
-                    .map(|&(ji, gn)| drawing::DrawingImage {
-                        image: &sheet_images[ji],
-                        global_num: gn,
-                    })
-                    .collect();
-                let image_rels: Vec<(usize, &'static str)> = drawing_images
-                    .iter()
-                    .map(|di| {
-                        (
-                            di.global_num,
-                            drawing::image_format_extension(di.image.payload.format),
-                        )
-                    })
+                    .zip(&image_globals)
+                    .map(|(img, &gn)| (gn, drawing::image_format_extension(img.format)))
                     .collect();
 
-                drawing::write_drawing(
-                    &mut zip,
-                    &chart_refs,
-                    &chartex_refs,
-                    &drawing_images,
-                    &sheet_raw_drawings(sheet),
-                    dn,
-                )?;
-                drawing::write_drawing_rels(
-                    &mut zip,
-                    dn,
+                let plan = drawing::plan_drawing_rels(
+                    sheet,
                     &chart_global_nums,
                     &chartex_global_nums,
-                    &image_rels,
-                )?;
+                    &image_parts,
+                );
+                drawing::write_drawing(&mut zip, sheet, i, &plan, dn)?;
+                drawing::write_drawing_rels(&mut zip, dn, &plan.rels)?;
 
                 // Write image binary parts (xl/media/imageN.<ext>).
-                for (ji, gn) in &sheet_image_globals {
-                    let img = sheet_images[*ji].payload;
-                    let ext = drawing::image_format_extension(img.format);
-                    drawing::write_media_part(&mut zip, *gn, ext, &img.data)?;
+                for (img, &(gn, ext)) in image_payloads.iter().zip(&image_parts) {
+                    drawing::write_media_part(&mut zip, gn, ext, &img.data)?;
+                    written_media.insert(format!("xl/media/image{gn}.{ext}"));
+                }
+                // Write raw-preserved parts at their original paths.
+                for rel in sheet_raw_rels(sheet) {
+                    let Some(part) = rel.part.as_deref() else {
+                        continue;
+                    };
+                    if rel.external {
+                        continue;
+                    }
+                    let path = resolve_rel_target("xl/drawings", &rel.target);
+                    if !written_media.insert(path.clone()) {
+                        continue;
+                    }
+                    zip.start_file(&path, zip::write::SimpleFileOptions::default())?;
+                    zip.write_all(part)?;
                 }
                 for &(ji, gn) in &sheet_chart_globals {
                     chart::write_chart_part(&mut zip, sheet_charts[ji].payload, gn)?;
@@ -957,7 +1034,7 @@ impl XlsxWriter {
                     &cs.raw_drawing_objects,
                     dn,
                 )?;
-                drawing::write_drawing_rels(&mut zip, dn, &[cn], &[], &[])?;
+                drawing::write_chartsheet_drawing_rels(&mut zip, dn, Some(cn))?;
                 chart::write_chart_part(&mut zip, &cs.chart, cn)?;
                 Self::write_chart_style_color_parts(&mut zip, &cs.chart, cn)?;
             } else if let Some(dn) = cs_dn {
@@ -969,7 +1046,7 @@ impl XlsxWriter {
                     &cs.raw_drawing_objects,
                     dn,
                 )?;
-                drawing::write_drawing_rels(&mut zip, dn, &[], &[], &[])?;
+                drawing::write_chartsheet_drawing_rels(&mut zip, dn, None)?;
             }
         }
         zip.finish()?;
@@ -988,7 +1065,7 @@ impl XlsxWriter {
         drawing_numbering: &[(usize, usize)],
         chart_numbering: &[(usize, usize, usize)],
         chart_ex_numbering: &[(usize, usize, usize)],
-        image_numbering: &[(usize, usize, usize)],
+        raw_media_parts: &[(String, usize)],
         total_standard_charts: usize,
         cs_drawing_numbering: &[(usize, usize)],
         cs_chart_numbering: &[(usize, usize)],
@@ -1017,30 +1094,33 @@ impl XlsxWriter {
                     .write_empty()?;
             }
 
-            // One Default per unique image extension. Maps file
-            // extension to the IANA MIME type Excel expects in
-            // [Content_Types].xml for embedded image parts.
-            let mut seen_image_exts = std::collections::BTreeSet::new();
-            for &(sheet_idx, image_idx, _) in image_numbering {
-                let sheet = workbook.worksheets().nth(sheet_idx).unwrap();
-                let img = sheet.images().nth(image_idx).unwrap().payload;
-                let ext = drawing::image_format_extension(img.format);
-                if !seen_image_exts.insert(ext) {
+            // One Default per unique media extension: generated image
+            // parts (group children included) plus media preserved
+            // from raw drawing entries. Extensions with fixed OPC
+            // defaults (rels/xml/vml) are never re-declared.
+            let mut media_exts: BTreeMap<String, &'static str> = BTreeMap::new();
+            for sheet in workbook.worksheets() {
+                for img in sheet_image_payloads(sheet) {
+                    media_exts.insert(
+                        drawing::image_format_extension(img.format).to_string(),
+                        drawing::image_format_mime(img.format),
+                    );
+                }
+            }
+            for (path, _) in raw_media_parts {
+                let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+                if ext.is_empty() || matches!(ext.as_str(), "rels" | "xml" | "vml") {
                     continue;
                 }
-                let mime = match img.format {
-                    duke_sheets_chart::ImageFormat::Png => "image/png",
-                    duke_sheets_chart::ImageFormat::Jpeg => "image/jpeg",
-                    duke_sheets_chart::ImageFormat::Gif => "image/gif",
-                    duke_sheets_chart::ImageFormat::Bmp => "image/bmp",
-                    duke_sheets_chart::ImageFormat::Tiff => "image/tiff",
-                    duke_sheets_chart::ImageFormat::Emf => "image/x-emf",
-                    duke_sheets_chart::ImageFormat::Wmf => "image/x-wmf",
-                    duke_sheets_chart::ImageFormat::Svg => "image/svg+xml",
-                };
+                let mime = duke_sheets_chart::ImageFormat::from_extension(&ext)
+                    .map(drawing::image_format_mime)
+                    .unwrap_or("application/octet-stream");
+                media_exts.entry(ext).or_insert(mime);
+            }
+            for (ext, mime) in &media_exts {
                 w.create_element("Default")
-                    .with_attribute(("Extension", ext))
-                    .with_attribute(("ContentType", mime))
+                    .with_attribute(("Extension", ext.as_str()))
+                    .with_attribute(("ContentType", *mime))
                     .write_empty()?;
             }
             w.create_element("Override")
@@ -1828,7 +1908,8 @@ impl XlsxWriter {
                 .worksheet(index)
                 .ok_or_else(|| XlsxError::InvalidFormat("Sheet not found".into()))?;
 
-            let needs_vml = sheet.comment_count() > 0 || sheet.form_control_count() > 0;
+            let sheet_controls = form_controls::sheet_controls(sheet);
+            let needs_vml = sheet.comment_count() > 0 || !sheet_controls.is_empty();
             if needs_vml {
                 let vml_target = format!("../drawings/vmlDrawing{}.vml", index + 1);
                 rels.push(WorksheetRelationship {
@@ -1848,10 +1929,10 @@ impl XlsxWriter {
                 });
             }
 
-            // One ctrlProp rel per form control, recording the rel id
-            // for the worksheet <controls> block.
+            // One ctrlProp rel per form control (placed order),
+            // recording the rel id for the worksheet <controls> block.
             let mut ctrl_prop_rids: Vec<String> = Vec::new();
-            for j in 0..sheet.form_control_count() {
+            for j in 0..sheet_controls.len() {
                 let rid = format!("rId{}", rels.len() + 1);
                 rels.push(WorksheetRelationship {
                     id: rid.clone(),
@@ -1879,7 +1960,7 @@ impl XlsxWriter {
             let mut tag = BytesStart::new("worksheet");
             tag.push_attribute(("xmlns", NS_SPREADSHEET));
             tag.push_attribute(("xmlns:r", NS_DOC_RELS));
-            if sheet.form_control_count() > 0 {
+            if !sheet_controls.is_empty() {
                 // The <controls> block's anchors use the xdr prefix
                 // and its mc:Choice requires the x14 namespace.
                 tag.push_attribute((
@@ -1944,21 +2025,22 @@ impl XlsxWriter {
             }
 
             // Form controls (CT_Worksheet places controls after
-            // legacyDrawing and before tableParts).
-            if sheet.form_control_count() > 0 {
+            // legacyDrawing and before tableParts). Placed order,
+            // matching the ctrlProp parts, drawing twins, and VML.
+            if !sheet_controls.is_empty() {
                 let shape_base = (index + 1) * 1024 + 1 + sheet.comment_count();
-                let entries: Vec<form_controls::ControlEntry<'_>> = sheet
-                    .form_controls()
+                let entries: Vec<form_controls::ControlEntry<'_>> = sheet_controls
+                    .iter()
                     .enumerate()
-                    .map(|(j, drawn)| form_controls::ControlEntry {
-                        control: drawn.payload,
-                        meta: &drawn.object.meta,
-                        anchor: &drawn.object.anchor,
+                    .map(|(j, control)| form_controls::ControlEntry {
+                        control: control.payload,
+                        meta: control.meta,
+                        anchor: control.anchor.clone(),
                         shape_id: shape_base + j,
                         rid: ctrl_prop_rids[j].clone(),
-                        name: drawn.object.meta.name.clone().unwrap_or_else(|| {
+                        name: control.meta.name.clone().unwrap_or_else(|| {
                             form_controls::default_control_name(
-                                &drawn.payload.kind,
+                                &control.payload.kind,
                                 sheet.comment_count() + j + 1,
                             )
                         }),
