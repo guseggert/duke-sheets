@@ -984,9 +984,13 @@ pub(crate) fn anchor_rect_emu_with_metrics(
 /// Map a child-space rectangle into the parent-space frame `outer`
 /// through a group's child coordinate mapping.
 ///
-/// Group rotation and flips are ignored, like the default-metric
-/// approximation in [`crate::form_control::radio_groups`]: containment
-/// inside rotated or flipped groups uses the unrotated frame.
+/// The group's flips mirror and its rotation turns the child about
+/// the outer frame's center (flips first, then rotation, matching
+/// DrawingML transform order); the result is the axis-aligned
+/// bounding rect of the transformed child frame. A child's own
+/// rotation keeps its unrotated frame, like top-level rotated shapes;
+/// nested group rotation applies through recursion via the inner
+/// group's transform.
 pub(crate) fn map_child_rect(
     outer: RectEmu,
     transform: &GroupTransform,
@@ -1002,7 +1006,45 @@ pub(crate) fn map_child_rect(
     let y1 = i128::from(child.y_emu);
     let x2 = x1 + i128::from(child.cx_emu).max(0);
     let y2 = y1 + i128::from(child.cy_emu).max(0);
-    (map_x(x1), map_y(y1), map_x(x2), map_y(y2))
+    let scaled = (map_x(x1), map_y(y1), map_x(x2), map_y(y2));
+    if transform.rotation == 0 && !transform.flip_h && !transform.flip_v {
+        return scaled;
+    }
+
+    // Flip, then rotate, each corner about the outer frame center;
+    // rot is in 60,000ths of a degree, clockwise in y-down coords.
+    let center_x = (ox1 + ox2) as f64 / 2.0;
+    let center_y = (oy1 + oy2) as f64 / 2.0;
+    let radians = f64::from(transform.rotation) / 60_000.0 * std::f64::consts::PI / 180.0;
+    let (sin, cos) = radians.sin_cos();
+    let (sx1, sy1, sx2, sy2) = scaled;
+    let corners = [(sx1, sy1), (sx2, sy1), (sx1, sy2), (sx2, sy2)];
+    let mut min_x = f64::INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    for (x, y) in corners {
+        let mut dx = x as f64 - center_x;
+        let mut dy = y as f64 - center_y;
+        if transform.flip_h {
+            dx = -dx;
+        }
+        if transform.flip_v {
+            dy = -dy;
+        }
+        let rx = center_x + dx * cos - dy * sin;
+        let ry = center_y + dx * sin + dy * cos;
+        min_x = min_x.min(rx);
+        min_y = min_y.min(ry);
+        max_x = max_x.max(rx);
+        max_y = max_y.max(ry);
+    }
+    (
+        min_x.round() as i128,
+        min_y.round() as i128,
+        max_x.round() as i128,
+        max_y.round() as i128,
+    )
 }
 
 /// Excel's default comment popup placement for a cell: one column to
@@ -1132,6 +1174,81 @@ mod tests {
         assert_eq!(
             map_child_rect(outer, &transform, &child),
             (2000, 3000, 3000, 4000)
+        );
+    }
+
+    #[test]
+    fn map_child_rect_rotates_about_the_outer_frame_center() {
+        let outer: RectEmu = (0, 0, 1000, 1000);
+        let child = ChildTransform {
+            x_emu: 0,
+            y_emu: 0,
+            cx_emu: 50,
+            cy_emu: 50,
+            ..ChildTransform::default()
+        };
+        let base = GroupTransform {
+            child_x_emu: 0,
+            child_y_emu: 0,
+            child_cx_emu: 100,
+            child_cy_emu: 100,
+            ..GroupTransform::default()
+        };
+
+        // 90 degrees clockwise: the top-left quadrant lands top-right.
+        let quarter = GroupTransform {
+            rotation: 5_400_000,
+            ..base.clone()
+        };
+        assert_eq!(map_child_rect(outer, &quarter, &child), (500, 0, 1000, 500));
+
+        // 180 degrees: the top-left quadrant lands bottom-right.
+        let half = GroupTransform {
+            rotation: 10_800_000,
+            ..base
+        };
+        assert_eq!(
+            map_child_rect(outer, &half, &child),
+            (500, 500, 1000, 1000)
+        );
+    }
+
+    #[test]
+    fn map_child_rect_applies_group_flips_about_the_outer_frame_center() {
+        let outer: RectEmu = (0, 0, 1000, 2000);
+        let child = ChildTransform {
+            x_emu: 0,
+            y_emu: 0,
+            cx_emu: 50,
+            cy_emu: 100,
+            ..ChildTransform::default()
+        };
+        let base = GroupTransform {
+            child_x_emu: 0,
+            child_y_emu: 0,
+            child_cx_emu: 100,
+            child_cy_emu: 200,
+            ..GroupTransform::default()
+        };
+
+        let flipped_h = GroupTransform {
+            flip_h: true,
+            ..base.clone()
+        };
+        assert_eq!(
+            map_child_rect(outer, &flipped_h, &child),
+            (500, 0, 1000, 1000),
+            "flipH mirrors across the vertical center line"
+        );
+
+        let flipped_v = GroupTransform {
+            flip_v: true,
+            ..base
+        };
+        assert_eq!(
+            map_child_rect(outer, &flipped_v, &child),
+            (0, 1000, 500, 2000),
+            "flipV mirrors across the horizontal center line"
         );
     }
 }
