@@ -83,9 +83,9 @@ class TestPopulatedFeatureReads:
         if ext == "xlsb":
             pytest.skip("XLSB image reading not supported yet")
         assert sheet.image_count == 1
-        img = sheet.images[0]
-        assert img.name == "FixturePic"
-        assert img.format.lower() == "png"
-        data = bytes(img.data)
+        drawing = sheet.images[0]
+        assert drawing.name == "FixturePic"
+        assert drawing.image.format.lower() == "png"
+        data = sheet.drawing_image_data(drawing.drawing_path)
         assert len(data) > 0
         assert data[:2] == b"\x89P"

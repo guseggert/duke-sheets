@@ -1219,10 +1219,16 @@ pub struct JsComment {
 
 impl From<&core::CellComment> for JsComment {
     fn from(c: &core::CellComment) -> Self {
+        Self::from_with_visibility(c, false)
+    }
+}
+
+impl JsComment {
+    pub(crate) fn from_with_visibility(c: &core::CellComment, visible: bool) -> Self {
         JsComment {
             author: c.author.clone(),
             text: c.text.clone(),
-            visible: c.visible,
+            visible,
         }
     }
 }
@@ -2250,6 +2256,7 @@ impl TryFrom<JsDrawingAnchor> for duke_sheets_chart::DrawingAnchor {
 }
 
 #[napi(string_enum = "lowercase")]
+#[derive(Clone, Copy)]
 pub enum JsCheckState {
     Unchecked,
     Checked,
@@ -2261,180 +2268,6 @@ pub enum JsListSelection {
     Single,
     Multi,
     Extend,
-}
-
-/// Kind-specific form-control data. `kind` is the TypeScript
-/// discriminator. List box and dropdown `selected` item indexes are
-/// zero-based; a linked cell still receives Excel's one-based value.
-/// `firstInGroup` is read-side information: writers recompute radio
-/// grouping from group-box containment and mark each group's first
-/// radio, so input values are ignored.
-#[napi(discriminant = "kind", discriminant_case = "camelCase")]
-pub enum JsFormControlKind {
-    Button { caption: String },
-    Checkbox {
-        caption: String,
-        state: JsCheckState,
-        cell_link: Option<String>,
-        no_3d: bool,
-    },
-    OptionButton {
-        caption: String,
-        state: JsCheckState,
-        cell_link: Option<String>,
-        first_in_group: Option<bool>,
-        no_3d: bool,
-    },
-    Label { caption: String },
-    GroupBox { caption: String, no_3d: bool },
-    ListBox {
-        input_range: Option<String>,
-        cell_link: Option<String>,
-        selection: JsListSelection,
-        selected: Vec<u32>,
-        no_3d: bool,
-    },
-    Dropdown {
-        input_range: Option<String>,
-        cell_link: Option<String>,
-        selected: Option<u32>,
-        lines: u32,
-        no_3d: bool,
-    },
-    Scrollbar {
-        value: u32,
-        min: u32,
-        max: u32,
-        increment: u32,
-        page: u32,
-        horizontal: bool,
-        cell_link: Option<String>,
-    },
-    Spinner {
-        value: u32,
-        min: u32,
-        max: u32,
-        increment: u32,
-        cell_link: Option<String>,
-    },
-}
-
-#[napi(object)]
-pub struct JsFormControl {
-    pub name: Option<String>,
-    pub anchor: JsDrawingAnchor,
-    pub kind: JsFormControlKind,
-    pub locked: bool,
-    pub printable: bool,
-}
-
-#[napi(object)]
-pub struct JsFormControlInput {
-    pub name: Option<String>,
-    pub anchor: JsDrawingAnchor,
-    pub kind: JsFormControlKind,
-    pub locked: Option<bool>,
-    pub printable: Option<bool>,
-}
-
-impl From<&core::FormControl> for JsFormControl {
-    fn from(control: &core::FormControl) -> Self {
-        Self {
-            name: control.name.clone(),
-            anchor: JsDrawingAnchor::from(&control.anchor),
-            kind: JsFormControlKind::from(&control.kind),
-            locked: control.locked,
-            printable: control.printable,
-        }
-    }
-}
-
-impl From<&core::FormControlKind> for JsFormControlKind {
-    fn from(kind: &core::FormControlKind) -> Self {
-        use core::FormControlKind as K;
-        let state = |state: core::CheckState| match state {
-            core::CheckState::Unchecked => JsCheckState::Unchecked,
-            core::CheckState::Checked => JsCheckState::Checked,
-            core::CheckState::Mixed => JsCheckState::Mixed,
-        };
-        match kind {
-            K::Button { caption } => Self::Button { caption: caption.clone() },
-            K::Checkbox { caption, state: value, cell_link, no_3d } => Self::Checkbox {
-                caption: caption.clone(), state: state(*value), cell_link: cell_link.clone(), no_3d: *no_3d,
-            },
-            K::OptionButton { caption, state: value, cell_link, first_in_group, no_3d } => Self::OptionButton {
-                caption: caption.clone(), state: state(*value), cell_link: cell_link.clone(), first_in_group: Some(*first_in_group), no_3d: *no_3d,
-            },
-            K::Label { caption } => Self::Label { caption: caption.clone() },
-            K::GroupBox { caption, no_3d } => Self::GroupBox { caption: caption.clone(), no_3d: *no_3d },
-            K::ListBox { input_range, cell_link, selection, selected, no_3d } => Self::ListBox {
-                input_range: input_range.clone(), cell_link: cell_link.clone(), selection: match selection { core::ListSelection::Single => JsListSelection::Single, core::ListSelection::Multi => JsListSelection::Multi, core::ListSelection::Extend => JsListSelection::Extend }, selected: selected.iter().map(|&v| v as u32).collect(), no_3d: *no_3d,
-            },
-            K::Dropdown { input_range, cell_link, selected, lines, no_3d } => Self::Dropdown {
-                input_range: input_range.clone(), cell_link: cell_link.clone(), selected: selected.map(|v| v as u32), lines: *lines as u32, no_3d: *no_3d,
-            },
-            K::Scrollbar { value, min, max, increment, page, horizontal, cell_link } => Self::Scrollbar {
-                value: *value as u32, min: *min as u32, max: *max as u32, increment: *increment as u32, page: *page as u32, horizontal: *horizontal, cell_link: cell_link.clone(),
-            },
-            K::Spinner { value, min, max, increment, cell_link } => Self::Spinner {
-                value: *value as u32, min: *min as u32, max: *max as u32, increment: *increment as u32, cell_link: cell_link.clone(),
-            },
-        }
-    }
-}
-
-impl TryFrom<JsFormControlInput> for core::FormControl {
-    type Error = NapiError;
-
-    fn try_from(input: JsFormControlInput) -> NapiResult<Self> {
-        let mut control = core::FormControl::with_anchor(
-            core_kind_from_js(input.kind)?,
-            input.anchor.try_into()?,
-        );
-        control.name = input.name;
-        control.locked = input.locked.unwrap_or(true);
-        control.printable = input.printable.unwrap_or(true);
-        control
-            .validate()
-            .map_err(|err| NapiError::from_reason(err.to_string()))?;
-        Ok(control)
-    }
-}
-
-fn core_kind_from_js(kind: JsFormControlKind) -> NapiResult<core::FormControlKind> {
-    use core::FormControlKind as K;
-    let u16_value = |label: &str, value: u32| {
-        u16::try_from(value)
-            .map_err(|_| NapiError::from_reason(format!("{label} {value} exceeds 65535")))
-    };
-    let state = |value: JsCheckState| match value {
-        JsCheckState::Unchecked => core::CheckState::Unchecked,
-        JsCheckState::Checked => core::CheckState::Checked,
-        JsCheckState::Mixed => core::CheckState::Mixed,
-    };
-    Ok(match kind {
-        JsFormControlKind::Button { caption } => K::Button { caption },
-        JsFormControlKind::Checkbox { caption, state: value, cell_link, no_3d } => K::Checkbox {
-            caption, state: state(value), cell_link, no_3d,
-        },
-        JsFormControlKind::OptionButton { caption, state: value, cell_link, no_3d, .. } => K::OptionButton {
-            caption, state: state(value), cell_link, first_in_group: false, no_3d,
-        },
-        JsFormControlKind::Label { caption } => K::Label { caption },
-        JsFormControlKind::GroupBox { caption, no_3d } => K::GroupBox { caption, no_3d },
-        JsFormControlKind::ListBox { input_range, cell_link, selection, selected, no_3d } => K::ListBox {
-            input_range, cell_link, selection: match selection { JsListSelection::Single => core::ListSelection::Single, JsListSelection::Multi => core::ListSelection::Multi, JsListSelection::Extend => core::ListSelection::Extend }, selected: selected.into_iter().map(|v| u16_value("selected index", v)).collect::<NapiResult<Vec<_>>>()?, no_3d,
-        },
-        JsFormControlKind::Dropdown { input_range, cell_link, selected, lines, no_3d } => K::Dropdown {
-            input_range, cell_link, selected: selected.map(|v| u16_value("selected index", v)).transpose()?, lines: u16_value("lines", lines)?, no_3d,
-        },
-        JsFormControlKind::Scrollbar { value, min, max, increment, page, horizontal, cell_link } => K::Scrollbar {
-            value: u16_value("value", value)?, min: u16_value("min", min)?, max: u16_value("max", max)?, increment: u16_value("increment", increment)?, page: u16_value("page", page)?, horizontal, cell_link,
-        },
-        JsFormControlKind::Spinner { value, min, max, increment, cell_link } => K::Spinner {
-            value: u16_value("value", value)?, min: u16_value("min", min)?, max: u16_value("max", max)?, increment: u16_value("increment", increment)?, cell_link,
-        },
-    })
 }
 
 /// Reference to chart data.
@@ -2904,7 +2737,6 @@ pub struct JsChart {
     pub category_axis: Option<JsAxis>,
     pub value_axis: Option<JsAxis>,
     pub legend: Option<JsLegend>,
-    pub anchor: JsDrawingAnchor,
     pub data_labels: Option<JsDataLabels>,
     pub view_3d: Option<JsView3D>,
     pub data_table: Option<JsChartDataTable>,
@@ -2946,7 +2778,6 @@ impl From<&duke_sheets_chart::Chart> for JsChart {
             category_axis: c.category_axis.as_ref().map(JsAxis::from),
             value_axis: c.value_axis.as_ref().map(JsAxis::from),
             legend: c.legend.as_ref().map(JsLegend::from),
-            anchor: JsDrawingAnchor::from(&c.anchor),
             data_labels: c.data_labels.as_ref().map(JsDataLabels::from),
             view_3d: c.view_3d.as_ref().map(JsView3D::from),
             data_table: c.data_table.as_ref().map(JsChartDataTable::from),
@@ -3747,7 +3578,6 @@ pub struct JsChartEx {
     pub data: Vec<JsChartExData>,
     pub plot_area: JsChartExPlotArea,
     pub legend: Option<JsChartExLegend>,
-    pub anchor: JsDrawingAnchor,
     pub shape_properties: Option<JsChartShapeProperties>,
     pub format_overrides: Vec<JsChartExFormatOverride>,
     pub print_settings: Option<JsChartExPrintSettings>,
@@ -3772,7 +3602,6 @@ impl From<&duke_sheets_chart::ChartEx> for JsChartEx {
             data: c.data.iter().map(JsChartExData::from).collect(),
             plot_area: JsChartExPlotArea::from(&c.plot_area),
             legend: c.legend.as_ref().map(JsChartExLegend::from),
-            anchor: JsDrawingAnchor::from(&c.anchor),
             shape_properties: c
                 .shape_properties
                 .as_ref()
@@ -3785,45 +3614,6 @@ impl From<&duke_sheets_chart::ChartEx> for JsChartEx {
             print_settings: c.print_settings.as_ref().map(JsChartExPrintSettings::from),
             external_data_rel_id: c.external_data.as_ref().map(|e| e.rel_id.clone()),
             external_data_auto_update: c.external_data.as_ref().and_then(|e| e.auto_update),
-        }
-    }
-}
-
-#[napi(object)]
-pub struct JsEmbeddedImage {
-    pub id: u32,
-    pub name: String,
-    pub description: Option<String>,
-    pub anchor: JsDrawingAnchor,
-    pub format: String,
-    pub media_path: String,
-    pub svg_media_path: Option<String>,
-    pub width_emu: i64,
-    pub height_emu: i64,
-    pub rotation: Option<i32>,
-    pub flip_h: bool,
-    pub flip_v: bool,
-    pub data: napi::bindgen_prelude::Buffer,
-    pub svg_data: Option<napi::bindgen_prelude::Buffer>,
-}
-
-impl From<&duke_sheets_chart::EmbeddedImage> for JsEmbeddedImage {
-    fn from(img: &duke_sheets_chart::EmbeddedImage) -> Self {
-        JsEmbeddedImage {
-            id: img.id,
-            name: img.name.clone(),
-            description: img.description.clone(),
-            anchor: JsDrawingAnchor::from(&img.anchor),
-            format: img.format.as_str().to_string(),
-            media_path: img.media_path.clone(),
-            svg_media_path: img.svg_media_path.clone(),
-            width_emu: img.width_emu,
-            height_emu: img.height_emu,
-            rotation: img.rotation,
-            flip_h: img.flip_h,
-            flip_v: img.flip_v,
-            data: img.data().to_vec().into(),
-            svg_data: img.svg_data().map(|b| b.to_vec().into()),
         }
     }
 }

@@ -7,7 +7,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::cell::{CellAddress, CellError, CellValue};
 use crate::drawing::DrawingPath;
 use crate::error::{Error, Result};
-use crate::form_control::{radio_groups, CheckState, FormControlKind, ListSelection};
+use crate::form_control::{
+    radio_groups, CheckState, FormControlInteractionResult, FormControlKind, ListSelection,
+};
 use crate::named_range::{NameScope, NamedRange, NamedRangeCollection};
 use crate::protection::WorkbookProtection;
 use crate::worksheet::{SheetVisibility, Worksheet};
@@ -148,6 +150,25 @@ impl Workbook {
     /// Iterate over all worksheets mutably
     pub fn worksheets_mut(&mut self) -> impl Iterator<Item = &mut Worksheet> {
         self.worksheets.iter_mut()
+    }
+
+    /// Apply an interactive checkbox/option-button state change and
+    /// immediately synchronize all affected linked cells.
+    pub fn set_form_control_check_state(
+        &mut self,
+        sheet_index: usize,
+        path: &[usize],
+        state: CheckState,
+    ) -> Result<FormControlInteractionResult> {
+        let sheet = self.worksheets.get_mut(sheet_index).ok_or_else(|| {
+            Error::other(format!("worksheet index {sheet_index} out of bounds"))
+        })?;
+        let controls_changed = sheet.set_form_control_check_state(path, state)?;
+        let linked_cells_changed = self.sync_form_control_links();
+        Ok(FormControlInteractionResult {
+            controls_changed,
+            linked_cells_changed,
+        })
     }
 
     /// Synchronize form-control state into each control's linked cell.

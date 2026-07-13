@@ -484,6 +484,15 @@ pub struct PlacedControl<'a> {
     pub control: &'a FormControl,
 }
 
+/// Result of applying an interactive form-control state change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FormControlInteractionResult {
+    /// Controls whose state changed, including radio-group siblings.
+    pub controls_changed: usize,
+    /// Distinct linked cells updated from the resulting control state.
+    pub linked_cells_changed: usize,
+}
+
 /// Partition a sheet's option buttons into radio groups, mirroring
 /// Excel's grouping semantics: each radio belongs to the innermost
 /// group box whose rectangle contains the radio's center point, and

@@ -18,7 +18,7 @@ use crate::drawing::{
     DrawingNodeRef, DrawingObject, DrawingPath, Drawn, Shape,
 };
 use crate::error::{Error, Result};
-use crate::form_control::{FormControl, PlacedControl};
+use crate::form_control::{radio_groups, CheckState, FormControl, FormControlKind, PlacedControl};
 use crate::hyperlink::Hyperlink;
 use crate::locale::Locale;
 use crate::protection::{hash_legacy_protection_password, ProtectedRange};
@@ -1750,6 +1750,81 @@ impl Worksheet {
             DrawingKind::FormControl(control) => Some(control),
             _ => None,
         }
+    }
+
+    /// Apply a checkbox or option-button state change with Excel UI
+    /// semantics. Checking an option button unchecks every sibling in
+    /// its spatial radio group; unchecking one affects only that button.
+    ///
+    /// This changes control state only. Use
+    /// [`crate::Workbook::set_form_control_check_state`] when linked
+    /// cells should update immediately as part of the interaction.
+    pub fn set_form_control_check_state(
+        &mut self,
+        path: &[usize],
+        new_state: CheckState,
+    ) -> Result<usize> {
+        let placed = self.placed_form_controls();
+        let target = placed
+            .iter()
+            .position(|placed| placed.path == path)
+            .ok_or_else(|| Error::other(format!("no form control at drawing path {path:?}")))?;
+
+        let is_checkbox = matches!(placed[target].control.kind, FormControlKind::Checkbox { .. });
+        let is_option = matches!(
+            placed[target].control.kind,
+            FormControlKind::OptionButton { .. }
+        );
+        if !is_checkbox && !is_option {
+            return Err(Error::other(
+                "check state is only valid for checkboxes and option buttons",
+            ));
+        }
+        if is_option && new_state == CheckState::Mixed {
+            return Err(Error::other("option buttons cannot use the mixed state"));
+        }
+
+        let updates: Vec<(DrawingPath, CheckState)> = if is_option
+            && new_state == CheckState::Checked
+        {
+            let group = radio_groups(&placed)
+                .into_iter()
+                .find(|group| group.contains(&target))
+                .ok_or_else(|| Error::other("option button has no radio group"))?;
+            group
+                .into_iter()
+                .map(|index| {
+                    (
+                        placed[index].path.clone(),
+                        if index == target {
+                            CheckState::Checked
+                        } else {
+                            CheckState::Unchecked
+                        },
+                    )
+                })
+                .collect()
+        } else {
+            vec![(path.to_vec(), new_state)]
+        };
+        drop(placed);
+
+        let mut changed = 0;
+        for (path, state) in updates {
+            let control = self
+                .form_control_at_path_mut(&path)
+                .ok_or_else(|| Error::other("form control disappeared during state update"))?;
+            let current = match &mut control.kind {
+                FormControlKind::Checkbox { state, .. }
+                | FormControlKind::OptionButton { state, .. } => state,
+                _ => continue,
+            };
+            if *current != state {
+                *current = state;
+                changed += 1;
+            }
+        }
+        Ok(changed)
     }
 
     /// Set the standalone auto-filter for this worksheet.

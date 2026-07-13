@@ -64,6 +64,7 @@ pub use crate::{
     FontStyle,
     // Form control types
     FormControl,
+    FormControlInteractionResult,
     FormControlKind,
     Group,
     GroupChild,

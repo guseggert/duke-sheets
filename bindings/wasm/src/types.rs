@@ -1164,12 +1164,12 @@ pub struct WasmComment {
     pub visible: bool,
 }
 
-impl From<&core::CellComment> for WasmComment {
-    fn from(c: &core::CellComment) -> Self {
+impl WasmComment {
+    pub fn from_comment(comment: &core::CellComment, visible: bool) -> Self {
         Self {
-            author: c.author.clone(),
-            text: c.text.clone(),
-            visible: c.visible,
+            author: comment.author.clone(),
+            text: comment.text.clone(),
+            visible,
         }
     }
 }
@@ -2065,172 +2065,6 @@ pub struct WasmMergeSpan {
     pub col_span: u32,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct WasmDrawingAnchor {
-    pub from_col: u16,
-    pub from_row: u32,
-    pub from_col_offset: i64,
-    pub from_row_offset: i64,
-    pub to_col: u16,
-    pub to_row: u32,
-    pub to_col_offset: i64,
-    pub to_row_offset: i64,
-    pub edit_as: String,
-}
-
-impl From<&duke_sheets_chart::DrawingAnchor> for WasmDrawingAnchor {
-    fn from(a: &duke_sheets_chart::DrawingAnchor) -> Self {
-        match a {
-            duke_sheets_chart::DrawingAnchor::TwoCell { from, to, edit_as } => Self {
-                from_col: from.col,
-                from_row: from.row,
-                from_col_offset: from.col_offset_emu,
-                from_row_offset: from.row_offset_emu,
-                to_col: to.col,
-                to_row: to.row,
-                to_col_offset: to.col_offset_emu,
-                to_row_offset: to.row_offset_emu,
-                edit_as: match edit_as.clone().unwrap_or(duke_sheets_chart::EditAs::TwoCell) {
-                    duke_sheets_chart::EditAs::TwoCell => "twoCell",
-                    duke_sheets_chart::EditAs::OneCell => "oneCell",
-                    duke_sheets_chart::EditAs::Absolute => "absolute",
-                }
-                .to_string(),
-            },
-            _ => Self::from(&a.to_two_cell()),
-        }
-    }
-}
-
-impl TryFrom<WasmDrawingAnchor> for duke_sheets_chart::DrawingAnchor {
-    type Error = String;
-
-    fn try_from(anchor: WasmDrawingAnchor) -> Result<Self, Self::Error> {
-        use duke_sheets_chart::{CellMarker, DrawingAnchor, EditAs};
-        let edit_as = match anchor.edit_as.as_str() {
-            "twoCell" => EditAs::TwoCell,
-            "oneCell" => EditAs::OneCell,
-            "absolute" => EditAs::Absolute,
-            other => return Err(format!("invalid editAs {other:?}")),
-        };
-        Ok(DrawingAnchor::TwoCell {
-            from: CellMarker { col: anchor.from_col, col_offset_emu: anchor.from_col_offset, row: anchor.from_row, row_offset_emu: anchor.from_row_offset },
-            to: CellMarker { col: anchor.to_col, col_offset_emu: anchor.to_col_offset, row: anchor.to_row, row_offset_emu: anchor.to_row_offset },
-            edit_as: Some(edit_as),
-        })
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone, Copy)]
-#[serde(rename_all = "lowercase")]
-pub enum WasmCheckState {
-    Unchecked,
-    Checked,
-    Mixed,
-}
-
-#[derive(Serialize, Deserialize, Clone, Copy)]
-#[serde(rename_all = "lowercase")]
-pub enum WasmListSelection {
-    Single,
-    Multi,
-    Extend,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(
-    tag = "kind",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
-pub enum WasmFormControlKind {
-    Button { caption: String },
-    Checkbox { caption: String, state: WasmCheckState, cell_link: Option<String>, #[serde(rename = "no3D")] no_3d: bool },
-    OptionButton { caption: String, state: WasmCheckState, cell_link: Option<String>, #[serde(default)] first_in_group: bool, #[serde(rename = "no3D")] no_3d: bool },
-    Label { caption: String },
-    GroupBox { caption: String, #[serde(rename = "no3D")] no_3d: bool },
-    ListBox { input_range: Option<String>, cell_link: Option<String>, selection: WasmListSelection, selected: Vec<u16>, #[serde(rename = "no3D")] no_3d: bool },
-    Dropdown { input_range: Option<String>, cell_link: Option<String>, selected: Option<u16>, lines: u16, #[serde(rename = "no3D")] no_3d: bool },
-    Scrollbar { value: u16, min: u16, max: u16, increment: u16, page: u16, horizontal: bool, cell_link: Option<String> },
-    Spinner { value: u16, min: u16, max: u16, increment: u16, cell_link: Option<String> },
-}
-
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct WasmFormControl {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    pub anchor: WasmDrawingAnchor,
-    pub kind: WasmFormControlKind,
-    pub locked: bool,
-    pub printable: bool,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct WasmFormControlInput {
-    pub name: Option<String>,
-    pub anchor: WasmDrawingAnchor,
-    pub kind: WasmFormControlKind,
-    pub locked: Option<bool>,
-    pub printable: Option<bool>,
-}
-
-impl From<&core::FormControl> for WasmFormControl {
-    fn from(control: &core::FormControl) -> Self {
-        Self { name: control.name.clone(), anchor: WasmDrawingAnchor::from(&control.anchor), kind: WasmFormControlKind::from(&control.kind), locked: control.locked, printable: control.printable }
-    }
-}
-
-impl From<&core::FormControlKind> for WasmFormControlKind {
-    fn from(kind: &core::FormControlKind) -> Self {
-        use core::FormControlKind as K;
-        let state = |s| match s { core::CheckState::Unchecked => WasmCheckState::Unchecked, core::CheckState::Checked => WasmCheckState::Checked, core::CheckState::Mixed => WasmCheckState::Mixed };
-        match kind {
-            K::Button { caption } => Self::Button { caption: caption.clone() },
-            K::Checkbox { caption, state: s, cell_link, no_3d } => Self::Checkbox { caption: caption.clone(), state: state(*s), cell_link: cell_link.clone(), no_3d: *no_3d },
-            K::OptionButton { caption, state: s, cell_link, first_in_group, no_3d } => Self::OptionButton { caption: caption.clone(), state: state(*s), cell_link: cell_link.clone(), first_in_group: *first_in_group, no_3d: *no_3d },
-            K::Label { caption } => Self::Label { caption: caption.clone() },
-            K::GroupBox { caption, no_3d } => Self::GroupBox { caption: caption.clone(), no_3d: *no_3d },
-            K::ListBox { input_range, cell_link, selection, selected, no_3d } => Self::ListBox { input_range: input_range.clone(), cell_link: cell_link.clone(), selection: match selection { core::ListSelection::Single => WasmListSelection::Single, core::ListSelection::Multi => WasmListSelection::Multi, core::ListSelection::Extend => WasmListSelection::Extend }, selected: selected.clone(), no_3d: *no_3d },
-            K::Dropdown { input_range, cell_link, selected, lines, no_3d } => Self::Dropdown { input_range: input_range.clone(), cell_link: cell_link.clone(), selected: *selected, lines: *lines, no_3d: *no_3d },
-            K::Scrollbar { value, min, max, increment, page, horizontal, cell_link } => Self::Scrollbar { value: *value, min: *min, max: *max, increment: *increment, page: *page, horizontal: *horizontal, cell_link: cell_link.clone() },
-            K::Spinner { value, min, max, increment, cell_link } => Self::Spinner { value: *value, min: *min, max: *max, increment: *increment, cell_link: cell_link.clone() },
-        }
-    }
-}
-
-impl TryFrom<WasmFormControlInput> for core::FormControl {
-    type Error = String;
-
-    fn try_from(input: WasmFormControlInput) -> Result<Self, Self::Error> {
-        let mut control = core::FormControl::with_anchor(core_kind_from_wasm(input.kind), input.anchor.try_into()?);
-        control.name = input.name;
-        control.locked = input.locked.unwrap_or(true);
-        control.printable = input.printable.unwrap_or(true);
-        control.validate().map_err(|err| err.to_string())?;
-        Ok(control)
-    }
-}
-
-fn core_kind_from_wasm(kind: WasmFormControlKind) -> core::FormControlKind {
-    use core::FormControlKind as K;
-    let state = |s| match s { WasmCheckState::Unchecked => core::CheckState::Unchecked, WasmCheckState::Checked => core::CheckState::Checked, WasmCheckState::Mixed => core::CheckState::Mixed };
-    match kind {
-        WasmFormControlKind::Button { caption } => K::Button { caption },
-        WasmFormControlKind::Checkbox { caption, state: s, cell_link, no_3d } => K::Checkbox { caption, state: state(s), cell_link, no_3d },
-        WasmFormControlKind::OptionButton { caption, state: s, cell_link, no_3d, .. } => K::OptionButton { caption, state: state(s), cell_link, first_in_group: false, no_3d },
-        WasmFormControlKind::Label { caption } => K::Label { caption },
-        WasmFormControlKind::GroupBox { caption, no_3d } => K::GroupBox { caption, no_3d },
-        WasmFormControlKind::ListBox { input_range, cell_link, selection, selected, no_3d } => K::ListBox { input_range, cell_link, selection: match selection { WasmListSelection::Single => core::ListSelection::Single, WasmListSelection::Multi => core::ListSelection::Multi, WasmListSelection::Extend => core::ListSelection::Extend }, selected, no_3d },
-        WasmFormControlKind::Dropdown { input_range, cell_link, selected, lines, no_3d } => K::Dropdown { input_range, cell_link, selected, lines, no_3d },
-        WasmFormControlKind::Scrollbar { value, min, max, increment, page, horizontal, cell_link } => K::Scrollbar { value, min, max, increment, page, horizontal, cell_link },
-        WasmFormControlKind::Spinner { value, min, max, increment, cell_link } => K::Spinner { value, min, max, increment, cell_link },
-    }
-}
-
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct WasmDataReference {
@@ -2804,7 +2638,6 @@ pub struct WasmChart {
     pub category_axis: Option<WasmAxis>,
     pub value_axis: Option<WasmAxis>,
     pub legend: Option<WasmLegend>,
-    pub anchor: WasmDrawingAnchor,
     pub data_labels: Option<WasmDataLabels>,
     pub view_3d: Option<WasmView3D>,
     pub data_table: Option<WasmChartDataTable>,
@@ -2846,7 +2679,6 @@ impl From<&duke_sheets_chart::Chart> for WasmChart {
             category_axis: c.category_axis.as_ref().map(WasmAxis::from),
             value_axis: c.value_axis.as_ref().map(WasmAxis::from),
             legend: c.legend.as_ref().map(WasmLegend::from),
-            anchor: WasmDrawingAnchor::from(&c.anchor),
             data_labels: c.data_labels.as_ref().map(WasmDataLabels::from),
             view_3d: c.view_3d.as_ref().map(WasmView3D::from),
             data_table: c.data_table.as_ref().map(WasmChartDataTable::from),
@@ -3695,7 +3527,6 @@ pub struct WasmChartEx {
     pub data: Vec<WasmChartExData>,
     pub plot_area: WasmChartExPlotArea,
     pub legend: Option<WasmChartExLegend>,
-    pub anchor: WasmDrawingAnchor,
     pub shape_properties: Option<WasmChartShapeProperties>,
     pub format_overrides: Vec<WasmChartExFormatOverride>,
     pub print_settings: Option<WasmChartExPrintSettings>,
@@ -3720,7 +3551,6 @@ impl From<&duke_sheets_chart::ChartEx> for WasmChartEx {
             data: c.data.iter().map(WasmChartExData::from).collect(),
             plot_area: WasmChartExPlotArea::from(&c.plot_area),
             legend: c.legend.as_ref().map(WasmChartExLegend::from),
-            anchor: WasmDrawingAnchor::from(&c.anchor),
             shape_properties: c
                 .shape_properties
                 .as_ref()
@@ -3736,50 +3566,6 @@ impl From<&duke_sheets_chart::ChartEx> for WasmChartEx {
                 .map(WasmChartExPrintSettings::from),
             external_data_rel_id: c.external_data.as_ref().map(|e| e.rel_id.clone()),
             external_data_auto_update: c.external_data.as_ref().and_then(|e| e.auto_update),
-        }
-    }
-}
-
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct WasmEmbeddedImage {
-    pub id: u32,
-    pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    pub anchor: WasmDrawingAnchor,
-    pub format: String,
-    pub media_path: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub svg_media_path: Option<String>,
-    pub width_emu: i64,
-    pub height_emu: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rotation: Option<i32>,
-    pub flip_h: bool,
-    pub flip_v: bool,
-    pub data: Vec<u8>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub svg_data: Option<Vec<u8>>,
-}
-
-impl From<&duke_sheets_chart::EmbeddedImage> for WasmEmbeddedImage {
-    fn from(img: &duke_sheets_chart::EmbeddedImage) -> Self {
-        WasmEmbeddedImage {
-            id: img.id,
-            name: img.name.clone(),
-            description: img.description.clone(),
-            anchor: WasmDrawingAnchor::from(&img.anchor),
-            format: img.format.as_str().to_string(),
-            media_path: img.media_path.clone(),
-            svg_media_path: img.svg_media_path.clone(),
-            width_emu: img.width_emu,
-            height_emu: img.height_emu,
-            rotation: img.rotation,
-            flip_h: img.flip_h,
-            flip_v: img.flip_v,
-            data: img.data().to_vec(),
-            svg_data: img.svg_data().map(|b| b.to_vec()),
         }
     }
 }

@@ -6,9 +6,8 @@ import * as path from "node:path";
 import * as os from "node:os";
 import * as fs from "node:fs";
 
-// Populated-feature reads: comments, autofilters, data validations, and
-// embedded images are read-only in the binding, so fixtures carrying
-// them are generated at test time by the Rust fixture generator
+// Populated fixtures for comments, autofilters, data validations, and
+// embedded images are generated at test time by the Rust fixture generator
 // (binary fixtures are never committed).
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
@@ -84,11 +83,13 @@ for (const ext of ["xlsx", "xls", "xlsb"]) {
         expect(sheet.imageCount).toBe(1);
         const img = sheet.images[0];
         expect(img.name).toBe("FixturePic");
-        expect(img.format.toLowerCase()).toBe("png");
-        expect(img.data.length).toBeGreaterThan(0);
+        expect(img.image.format.toLowerCase()).toBe("png");
+        expect("data" in img.image).toBe(false);
+        const data = sheet.drawingImageData(img.drawingPath);
+        expect(data.length).toBeGreaterThan(0);
         // PNG magic survives the container round-trip.
-        expect(img.data[0]).toBe(0x89);
-        expect(img.data[1]).toBe(0x50);
+        expect(data[0]).toBe(0x89);
+        expect(data[1]).toBe(0x50);
       });
     }
   });

@@ -16,6 +16,8 @@ use duke_sheets_core::{CellError, CellValue as CoreCellValue};
 
 mod types;
 pub use types::*;
+mod drawings;
+pub use drawings::*;
 mod workbook_read;
 mod worksheet_read;
 pub use worksheet_read::PyRowIterator;
@@ -619,47 +621,6 @@ impl PyWorksheet {
         }
     }
 
-    /// Append a form control and return its zero-based index.
-    fn add_form_control(&self, control: PyRef<'_, PyFormControl>) -> PyResult<usize> {
-        let mut wb = self.workbook.write().map_err(to_py_err)?;
-        let ws = wb
-            .worksheet_mut(self.sheet_index)
-            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
-        ws.try_add_form_control(control.inner.clone())
-            .map_err(|e| PyValueError::new_err(e.to_string()))
-    }
-
-    /// Replace a form control by zero-based index.
-    fn set_form_control(&self, index: usize, control: PyRef<'_, PyFormControl>) -> PyResult<()> {
-        let mut wb = self.workbook.write().map_err(to_py_err)?;
-        let ws = wb
-            .worksheet_mut(self.sheet_index)
-            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
-        if index >= ws.form_control_count() {
-            return Err(PyIndexError::new_err(format!(
-                "form control index {index} out of bounds (count: {})",
-                ws.form_control_count()
-            )));
-        }
-        ws.set_form_control(index, control.inner.clone())
-            .map_err(|e| PyValueError::new_err(e.to_string()))
-    }
-
-    /// Remove a form control by zero-based index.
-    fn remove_form_control(&self, index: usize) -> PyResult<()> {
-        let mut wb = self.workbook.write().map_err(to_py_err)?;
-        let ws = wb
-            .worksheet_mut(self.sheet_index)
-            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
-        if index >= ws.form_control_count() {
-            return Err(PyIndexError::new_err(format!(
-                "form control index {index} out of bounds (count: {})",
-                ws.form_control_count()
-            )));
-        }
-        ws.remove_form_control(index).map(|_| ()).map_err(to_py_err)
-    }
-
     fn __repr__(&self) -> PyResult<String> {
         let name = self.name()?;
         Ok(format!("Worksheet({:?})", name))
@@ -1110,6 +1071,19 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyMergeSpan>()?;
     m.add_class::<PyChart>()?;
     m.add_class::<PyDrawingAnchor>()?;
+    m.add_class::<PyChildTransform>()?;
+    m.add_class::<PyGroupTransform>()?;
+    m.add_class::<PyDrawingMeta>()?;
+    m.add_class::<PyDrawingText>()?;
+    m.add_class::<PyShapeFill>()?;
+    m.add_class::<PyShapeLine>()?;
+    m.add_class::<PyShape>()?;
+    m.add_class::<PyDrawingComment>()?;
+    m.add_class::<PyDrawingGroup>()?;
+    m.add_class::<PyRawDrawingRelationship>()?;
+    m.add_class::<PyRawDrawing>()?;
+    m.add_class::<PyDrawing>()?;
+    m.add_class::<PyFormControlInteractionResult>()?;
     m.add_class::<PyFormControl>()?;
     m.add_class::<PyDataSeries>()?;
     m.add_class::<PyDataReference>()?;

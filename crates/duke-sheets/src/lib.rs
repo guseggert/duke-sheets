@@ -104,6 +104,7 @@ pub use duke_sheets_core::{
     FilterOperator,
     FontStyle,
     FormControl,
+    FormControlInteractionResult,
     FormControlKind,
     // Sheet-level types
     FreezePanes,

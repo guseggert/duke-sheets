@@ -70,8 +70,8 @@ pub use drawing::{
 };
 pub use error::{Error, Result};
 pub use form_control::{
-    radio_groups, CheckState, ControlText, FormControl, FormControlKind, ListSelection,
-    PlacedControl,
+    radio_groups, CheckState, ControlText, FormControl, FormControlInteractionResult,
+    FormControlKind, ListSelection, PlacedControl,
 };
 pub use hyperlink::Hyperlink;
 pub use locale::Locale;
