@@ -98,9 +98,10 @@ def split_markdown_row(line: str) -> list[str]:
     return [cell.strip() for cell in line.strip().strip("|").split("|")]
 
 
-def parse_features(text: str) -> list[FeatureRow]:
+def parse_features(text: str) -> tuple[list[FeatureRow], list[str]]:
     lines = text.splitlines()
     rows: list[FeatureRow] = []
+    structure_errors: list[str] = []
     section = ""
     index = 0
     while index < len(lines):
@@ -133,13 +134,34 @@ def parse_features(text: str) -> list[FeatureRow]:
         )
         while index < len(lines) and lines[index].startswith("|"):
             cells = split_markdown_row(lines[index])
+            feature = cells[0] if cells else f"table at line {table_start + 1}"
+            # Convention: exactly one unheaded trailing cell carries
+            # Notes. Fewer cells silently drop claims; more than one
+            # extra means a mangled row.
+            if len(cells) < len(headers):
+                structure_errors.append(
+                    f"line {index + 1} [{feature}]: row has {len(cells)} cells "
+                    f"but the table header has {len(headers)} columns"
+                )
+            elif len(cells) > len(headers) + 1:
+                structure_errors.append(
+                    f"line {index + 1} [{feature}]: row has {len(cells) - len(headers)} "
+                    "unheaded trailing cells (at most one Notes overflow is allowed)"
+                )
             named = {header: cells[i] if i < len(cells) else "" for i, header in enumerate(headers)}
             extras = cells[len(headers) :]
             notes = named.get(headers[notes_index], "") if notes_index is not None else ""
             if extras:
                 notes = " | ".join(part for part in [notes, *extras] if part)
             tests = cells[test_index] if test_index is not None and test_index < len(cells) else ""
-            feature = cells[0] if cells else f"table at line {table_start + 1}"
+            for fmt in FORMATS:
+                cell = named.get(fmt, "")
+                statuses = STATUS_RE.findall(cell)
+                directions = [direction for direction, _ in statuses]
+                if len(directions) != len(set(directions)):
+                    structure_errors.append(
+                        f"line {index + 1} [{feature}] {fmt}: duplicate direction in cell {cell!r}"
+                    )
             rows.append(
                 FeatureRow(
                     section=section,
@@ -151,7 +173,7 @@ def parse_features(text: str) -> list[FeatureRow]:
                 )
             )
             index += 1
-    return rows
+    return rows, structure_errors
 
 
 def function_body(lines: list[str], start: int) -> str:
@@ -243,13 +265,12 @@ def body_directions(test: TestFunction, fmt: str) -> set[str]:
         directions.add("W")
     if re.search(r"\bWorkbook::(?:open|open_with|from_bytes)\s*\(", body):
         directions.add("R")
-    if re.search(r"\bround_trip\s*\(", body):
+    # Round-trip helper calls (round_trip, round_trip_xlsx, ...) are
+    # body evidence; test names alone grant nothing.
+    if re.search(rf"\bround_?trip(?:_{fmt.lower()})?\s*\(", body):
         directions.update(("R", "W"))
     if re.search(r"\b(?:write_xlsb_bytes|sheet1_records|first_dval_header_and_formula1)\s*\(", body):
         directions.add("W")
-    name = test.name.lower()
-    if any(token in name for token in ("round_trip", "roundtrip", "survives", "preserves")):
-        directions.update(("R", "W"))
     return directions
 
 
@@ -270,7 +291,12 @@ def classify_test(test: TestFunction) -> None:
         if re.search(writer, test.body):
             test.parity_format = fmt
             directions = {"W"}
-            if re.search(r"\b(?:let\s+)?result\b", test.body) or re.search(
+            # The roundtrip helpers re-read Excel's output with our
+            # reader; a bare Excel writer call alone is write-only.
+            if re.search(
+                r"roundtrip_through_excel(?:_xlsb?|_xls)?(?:_bytes)?\s*\(",
+                test.body,
+            ) or re.search(
                 {"XLSX": r"XlsxReader", "XLSB": r"XlsbReader", "XLS": r"XlsReader"}[fmt],
                 test.body,
             ):
@@ -497,7 +523,7 @@ def change_summary(
 ) -> list[str]:
     if baseline_text is None:
         return []
-    baseline_rows = parse_features(baseline_text)
+    baseline_rows, _ = parse_features(baseline_text)
     baseline_by_key = {row.key: row for row in baseline_rows}
     current_by_key = {row.key: row for row in current_rows}
     before = status_counts(baseline_rows)
@@ -573,9 +599,10 @@ def main() -> int:
     if not FEATURES.is_file():
         print(f"ERROR: {FEATURES} does not exist", file=sys.stderr)
         return 2
-    rows = parse_features(FEATURES.read_text(encoding="utf-8"))
+    rows, structure_errors = parse_features(FEATURES.read_text(encoding="utf-8"))
     tests = inventory_tests()
     errors, totals = validate(rows, tests)
+    errors = structure_errors + errors
     print_totals(totals)
     for line in change_summary(rows, git_head_features(), tests):
         print(line)
