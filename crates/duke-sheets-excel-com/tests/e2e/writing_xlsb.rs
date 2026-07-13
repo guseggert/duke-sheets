@@ -914,6 +914,215 @@ fn excel_can_read_conditional_formats_we_emit() {
 
 #[test]
 #[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xlsb_advanced_conditional_formats_we_emit() {
+    use duke_sheets_core::conditional_format::{CfValueType, IconSetStyle};
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    for row in 0..5 {
+        ws.set_cell_value_at(row, 0, (row + 1) as f64 * 10.0)
+            .unwrap();
+        ws.set_cell_value_at(row, 1, (row + 1) as f64 * 20.0)
+            .unwrap();
+        ws.set_cell_value_at(row, 2, (row + 1) as f64 * 30.0)
+            .unwrap();
+    }
+    let mut scale = ConditionalFormatRule::color_scale_3(
+        Color::rgb(255, 0, 0),
+        Color::rgb(255, 255, 0),
+        Color::rgb(0, 255, 0),
+    );
+    scale.ranges = vec![range("A1", "A5")];
+    ws.add_conditional_format(scale);
+    let mut bar = ConditionalFormatRule::data_bar(Color::rgb(99, 142, 198));
+    bar.ranges = vec![range("B1", "B5")];
+    ws.add_conditional_format(bar);
+    let mut icons = ConditionalFormatRule::icon_set(IconSetStyle::Arrows3);
+    icons.ranges = vec![range("C1", "C5")];
+    ws.add_conditional_format(icons);
+
+    let result = roundtrip_through_excel_xlsb(&wb);
+    let rules = result.worksheet(0).unwrap().conditional_formats();
+    assert_eq!(rules.len(), 3, "advanced CF rules lost");
+    let scale = rules
+        .iter()
+        .find_map(|rule| match &rule.rule_type {
+            CfRuleType::ColorScale { colors } => Some(colors),
+            _ => None,
+        })
+        .expect("3-color scale lost");
+    assert_eq!(scale.len(), 3);
+    assert_eq!(scale[0].value_type, CfValueType::Min);
+    assert_eq!(scale[1].value_type, CfValueType::Percentile);
+    assert_eq!(scale[1].value.as_deref(), Some("50"));
+    assert_eq!(scale[2].value_type, CfValueType::Max);
+    assert_eq!(scale[0].color, Color::rgb(255, 0, 0));
+    assert_eq!(scale[1].color, Color::rgb(255, 255, 0));
+    assert_eq!(scale[2].color, Color::rgb(0, 255, 0));
+
+    let data_bar = rules
+        .iter()
+        .find_map(|rule| match &rule.rule_type {
+            CfRuleType::DataBar {
+                min_value,
+                max_value,
+                color,
+                show_value,
+                ..
+            } => Some((min_value, max_value, color, show_value)),
+            _ => None,
+        })
+        .expect("data bar lost");
+    assert_eq!(data_bar.0.value_type, CfValueType::Min);
+    assert_eq!(data_bar.1.value_type, CfValueType::Max);
+    assert_eq!(*data_bar.2, Color::rgb(99, 142, 198));
+    assert!(*data_bar.3);
+
+    let icon_set = rules
+        .iter()
+        .find_map(|rule| match &rule.rule_type {
+            CfRuleType::IconSet {
+                icon_style,
+                values,
+                reverse,
+                show_value,
+            } => Some((icon_style, values, reverse, show_value)),
+            _ => None,
+        })
+        .expect("3 Arrows icon set lost");
+    assert_eq!(*icon_set.0, IconSetStyle::Arrows3);
+    assert_eq!(icon_set.1.len(), 3);
+    assert!(icon_set
+        .1
+        .iter()
+        .all(|value| value.value_type == CfValueType::Percent));
+    assert_eq!(
+        icon_set
+            .1
+            .iter()
+            .map(|value| value.value.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some("0"), Some("33"), Some("67")]
+    );
+    assert!(!icon_set.2);
+    assert!(*icon_set.3);
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xlsb_validation_messages_we_emit() {
+    use duke_sheets_core::validation::ValidationErrorStyle;
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    for (row, value) in ["Red", "Green", "Blue"].iter().enumerate() {
+        ws.set_cell_value_at(row as u32, 5, *value).unwrap();
+    }
+    let validation = DataValidation::list("=$F$1:$F$3")
+        .with_range(range("D1", "D3"))
+        .with_input_message("Pick", "Choose a listed color")
+        .with_error_message("Invalid", "Use the dropdown")
+        .with_error_style(ValidationErrorStyle::Warning);
+    ws.add_data_validation(validation);
+
+    let result = roundtrip_through_excel_xlsb(&wb);
+    let sheet = result.worksheet(0).unwrap();
+    let validation = sheet
+        .data_validations()
+        .iter()
+        .find(|validation| {
+            validation
+                .ranges
+                .iter()
+                .any(|cell_range| cell_range.start == CellAddress::parse("D1").unwrap())
+        })
+        .expect("range-list validation lost");
+    match &validation.validation_type {
+        ValidationType::List { source } => assert!(source.contains("$F$1:$F$3")),
+        other => panic!("expected range list, got {other:?}"),
+    }
+    assert_eq!(validation.input_title.as_deref(), Some("Pick"));
+    assert_eq!(
+        validation.input_message.as_deref(),
+        Some("Choose a listed color")
+    );
+    assert_eq!(validation.error_title.as_deref(), Some("Invalid"));
+    assert_eq!(
+        validation.error_message.as_deref(),
+        Some("Use the dropdown")
+    );
+    assert_eq!(validation.error_style, ValidationErrorStyle::Warning);
+    assert!(validation.show_input_message);
+    assert!(validation.show_error_alert);
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xlsb_split_panes_we_emit() {
+    use duke_sheets_core::worksheet::SplitPanes;
+
+    let mut wb = Workbook::new();
+    wb.worksheet_mut(0)
+        .unwrap()
+        .set_split_panes(Some(SplitPanes {
+            x_split: 1500.0,
+            y_split: 3000.0,
+            top_left: Some((4, 3)),
+            active_pane: Some("bottomRight".into()),
+        }));
+
+    let result = roundtrip_through_excel_xlsb(&wb);
+    let split = result
+        .worksheet(0)
+        .unwrap()
+        .split_panes()
+        .expect("split pane lost");
+    assert!((split.x_split - 1500.0).abs() < 1.0);
+    assert!((split.y_split - 3000.0).abs() < 1.0);
+    assert_eq!(split.top_left, Some((4, 3)));
+    assert_eq!(split.active_pane.as_deref(), Some("bottomRight"));
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xlsb_sheet_permission_flags_we_emit() {
+    let mut wb = Workbook::new();
+    wb.worksheet_mut(0)
+        .unwrap()
+        .set_protection(Some(SheetProtection {
+            protected: true,
+            password_hash: Some(0xCAFE),
+            select_locked_cells: true,
+            select_unlocked_cells: true,
+            format_cells: true,
+            format_columns: true,
+            sort: true,
+            auto_filter: true,
+            ..Default::default()
+        }));
+
+    let result = roundtrip_through_excel_xlsb(&wb);
+    let protection = result
+        .worksheet(0)
+        .unwrap()
+        .protection()
+        .expect("sheet protection lost");
+    assert!(protection.protected);
+    assert_eq!(protection.password_hash, Some(0xCAFE));
+    assert!(protection.select_locked_cells);
+    assert!(protection.select_unlocked_cells);
+    assert!(protection.format_cells);
+    assert!(protection.format_columns);
+    assert!(protection.sort);
+    assert!(protection.auto_filter);
+    assert!(!protection.format_rows);
+    assert!(!protection.insert_rows);
+    assert!(!protection.delete_columns);
+    assert!(!protection.pivot_tables);
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_rich_text_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
@@ -1437,10 +1646,10 @@ fn excel_can_read_table_we_emit() {
         ],
         style_info: Some(TableStyleInfo {
             name: Some("TableStyleMedium2".to_string()),
-            show_first_column: false,
-            show_last_column: false,
+            show_first_column: true,
+            show_last_column: true,
             show_row_stripes: true,
-            show_column_stripes: false,
+            show_column_stripes: true,
         }),
         header_row_count: 1,
         totals_row_count: 0,
@@ -1486,6 +1695,18 @@ fn excel_can_read_table_we_emit() {
     assert!(
         style.show_row_stripes,
         "show_row_stripes flag lost after round-trip"
+    );
+    assert!(
+        style.show_column_stripes,
+        "show_column_stripes flag lost after round-trip"
+    );
+    assert!(
+        style.show_first_column,
+        "show_first_column flag lost after round-trip"
+    );
+    assert!(
+        style.show_last_column,
+        "show_last_column flag lost after round-trip"
     );
     assert_eq!(
         tables[0].header_row_count, 1,

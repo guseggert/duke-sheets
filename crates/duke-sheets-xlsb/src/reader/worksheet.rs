@@ -494,35 +494,51 @@ pub(crate) fn read_worksheet<R: Read>(
             }
 
             records::BRT_BEGIN_DATA_BAR => {
-                if let Some(base) = cf_pending.take() {
-                    let mut pos = 0;
-                    if let Some(rule_type) = parse_cf_data_bar(&buf[..len], &mut pos) {
-                        ws.add_conditional_format(base.into_rule(rule_type));
-                    }
+                if let Some(show_value) = parse_cf_data_bar_begin(&buf[..len]) {
+                    cf_visual = Some(CfVisualAccum::DataBar {
+                        cfvos: Vec::new(),
+                        color: None,
+                        show_value,
+                    });
                 }
             }
 
             records::BRT_BEGIN_ICON_SET => {
-                if let Some(base) = cf_pending.take() {
-                    let mut pos = 0;
-                    if let Some(rule_type) = parse_cf_icon_set(&buf[..len], &mut pos) {
-                        ws.add_conditional_format(base.into_rule(rule_type));
-                    }
+                if let Some((icon_style, reverse, show_value)) =
+                    parse_cf_icon_set_begin(&buf[..len])
+                {
+                    cf_visual = Some(CfVisualAccum::IconSet {
+                        icon_style,
+                        cfvos: Vec::new(),
+                        reverse,
+                        show_value,
+                    });
                 }
             }
 
             records::BRT_CFVO => {
-                if let Some(CfVisualAccum::ColorScale { ref mut cfvos, .. }) = cf_visual {
-                    if let Some(cfvo) = parse_brt_cfvo(&buf[..len]) {
-                        cfvos.push(cfvo);
+                if let Some(cfvo) = parse_brt_cfvo(&buf[..len]) {
+                    match cf_visual {
+                        Some(CfVisualAccum::ColorScale { ref mut cfvos, .. })
+                        | Some(CfVisualAccum::DataBar { ref mut cfvos, .. })
+                        | Some(CfVisualAccum::IconSet { ref mut cfvos, .. }) => {
+                            cfvos.push(cfvo);
+                        }
+                        None => {}
                     }
                 }
             }
 
             records::BRT_CF_COLOR => {
-                if let Some(CfVisualAccum::ColorScale { ref mut colors, .. }) = cf_visual {
-                    let mut cpos = 0;
-                    colors.push(read_cf_brt_color(&buf[..len], &mut cpos));
+                let mut cpos = 0;
+                let color = read_cf_brt_color(&buf[..len], &mut cpos);
+                match cf_visual {
+                    Some(CfVisualAccum::ColorScale { ref mut colors, .. }) => colors.push(color),
+                    Some(CfVisualAccum::DataBar {
+                        color: ref mut bar_color,
+                        ..
+                    }) => *bar_color = Some(color),
+                    _ => {}
                 }
             }
 
@@ -543,6 +559,51 @@ pub(crate) fn read_worksheet<R: Read>(
                     ws.add_conditional_format(
                         base.into_rule(CfRuleType::ColorScale { colors: cv }),
                     );
+                }
+            }
+
+            records::BRT_END_DATA_BAR => {
+                if let (
+                    Some(base),
+                    Some(CfVisualAccum::DataBar {
+                        cfvos,
+                        color: Some(color),
+                        show_value,
+                    }),
+                ) = (cf_pending.take(), cf_visual.take())
+                {
+                    if cfvos.len() >= 2 {
+                        ws.add_conditional_format(base.into_rule(CfRuleType::DataBar {
+                            min_value: cf_value_from_pair(cfvos[0]),
+                            max_value: cf_value_from_pair(cfvos[1]),
+                            color,
+                            show_value,
+                            gradient: true,
+                            border_color: None,
+                            negative_color: None,
+                        }));
+                    }
+                }
+            }
+
+            records::BRT_END_ICON_SET => {
+                if let (
+                    Some(base),
+                    Some(CfVisualAccum::IconSet {
+                        icon_style,
+                        cfvos,
+                        reverse,
+                        show_value,
+                    }),
+                ) = (cf_pending.take(), cf_visual.take())
+                {
+                    let values = cfvos.into_iter().map(cf_value_from_pair).collect();
+                    ws.add_conditional_format(base.into_rule(CfRuleType::IconSet {
+                        icon_style,
+                        values,
+                        reverse,
+                        show_value,
+                    }));
                 }
             }
 
@@ -1492,6 +1553,17 @@ enum CfVisualAccum {
         cfvos: Vec<(CfValueType, f64)>,
         colors: Vec<Color>,
     },
+    DataBar {
+        cfvos: Vec<(CfValueType, f64)>,
+        color: Option<Color>,
+        show_value: bool,
+    },
+    IconSet {
+        icon_style: IconSetStyle,
+        cfvos: Vec<(CfValueType, f64)>,
+        reverse: bool,
+        show_value: bool,
+    },
 }
 
 impl CfPendingBase {
@@ -1582,7 +1654,7 @@ fn parse_cf_rule_base(
     };
 
     match i_type {
-        3 | 4 | 5 => Some(base),
+        3 | 4 | 6 => Some(base),
         _ => {
             let rule_type = match i_type {
                 1 => CfRuleType::CellIs {
@@ -1593,7 +1665,7 @@ fn parse_cf_rule_base(
                 2 => CfRuleType::Expression {
                     formula: formula1.unwrap_or_default(),
                 },
-                6 => CfRuleType::Top10 {
+                5 => CfRuleType::Top10 {
                     rank: i_param,
                     percent,
                     bottom,
@@ -1707,12 +1779,12 @@ fn time_period_from_param(v: u32) -> TimePeriod {
 
 fn cfvo_type_from_u32(v: u32) -> CfValueType {
     match v {
+        1 => CfValueType::Num,
         2 => CfValueType::Min,
         3 => CfValueType::Max,
-        4 => CfValueType::Num,
-        5 => CfValueType::Percent,
-        6 => CfValueType::Formula,
-        7 => CfValueType::Percentile,
+        4 => CfValueType::Percent,
+        5 => CfValueType::Percentile,
+        7 => CfValueType::Formula,
         _ => CfValueType::Num,
     }
 }
@@ -1723,7 +1795,7 @@ fn parse_brt_cfvo(data: &[u8]) -> Option<(CfValueType, f64)> {
     }
     let cfvo_type = parser::read_u32(data, 0);
     let vt = cfvo_type_from_u32(cfvo_type);
-    let num_value = parser::read_f64(data, 12);
+    let num_value = parser::read_f64(data, 4);
     Some((vt, num_value))
 }
 
@@ -1731,7 +1803,7 @@ fn read_cf_brt_color(data: &[u8], pos: &mut usize) -> Color {
     if *pos + 8 > data.len() {
         return Color::Auto;
     }
-    let color_type = data[*pos];
+    let color_type = data[*pos] >> 1;
     let index = data[*pos + 1];
     let tint_raw = i16::from_le_bytes([data[*pos + 2], data[*pos + 3]]);
     let r = data[*pos + 4];
@@ -1742,7 +1814,7 @@ fn read_cf_brt_color(data: &[u8], pos: &mut usize) -> Color {
     match color_type {
         0 => Color::Auto,
         1 => Color::Indexed(index),
-        2 | 5 => {
+        2 => {
             if a == 0xFF {
                 Color::Rgb { r, g, b }
             } else {
@@ -1764,51 +1836,8 @@ fn read_cf_brt_color(data: &[u8], pos: &mut usize) -> Color {
     }
 }
 
-fn parse_cf_data_bar(data: &[u8], pos: &mut usize) -> Option<CfRuleType> {
-    if *pos + 12 > data.len() {
-        return None;
-    }
-    let min_type = cfvo_type_from_u32(parser::read_u32(data, *pos));
-    *pos += 4;
-    let min_val = f64::from_le_bytes(data[*pos..*pos + 8].try_into().ok()?);
-    *pos += 8;
-
-    if *pos + 12 > data.len() {
-        return None;
-    }
-    let max_type = cfvo_type_from_u32(parser::read_u32(data, *pos));
-    *pos += 4;
-    let max_val = f64::from_le_bytes(data[*pos..*pos + 8].try_into().ok()?);
-    *pos += 8;
-
-    let bar_color = read_cf_brt_color(data, pos);
-
-    let show_value = if *pos < data.len() {
-        let flags = data[*pos];
-        *pos += 1;
-        (flags & 0x01) != 0
-    } else {
-        true
-    };
-
-    let min_value_str = match min_type {
-        CfValueType::Min | CfValueType::Max => None,
-        _ => Some(format_cfvo_value(min_val)),
-    };
-    let max_value_str = match max_type {
-        CfValueType::Min | CfValueType::Max => None,
-        _ => Some(format_cfvo_value(max_val)),
-    };
-
-    Some(CfRuleType::DataBar {
-        min_value: CfValue::new(min_type, min_value_str),
-        max_value: CfValue::new(max_type, max_value_str),
-        color: bar_color,
-        show_value,
-        gradient: true,
-        border_color: None,
-        negative_color: None,
-    })
+fn parse_cf_data_bar_begin(data: &[u8]) -> Option<bool> {
+    (data.len() >= 3).then(|| data[2] != 0)
 }
 
 fn icon_set_from_u32(v: u32) -> IconSetStyle {
@@ -1837,50 +1866,21 @@ fn icon_set_from_u32(v: u32) -> IconSetStyle {
     }
 }
 
-fn parse_cf_icon_set(data: &[u8], pos: &mut usize) -> Option<CfRuleType> {
-    if *pos + 4 > data.len() {
+fn parse_cf_icon_set_begin(data: &[u8]) -> Option<(IconSetStyle, bool, bool)> {
+    if data.len() < 6 {
         return None;
     }
-    let icon_set_idx = parser::read_u32(data, *pos);
-    *pos += 4;
-    let icon_style = icon_set_from_u32(icon_set_idx);
+    let icon_style = icon_set_from_u32(parser::read_u32(data, 0));
+    let flags = parser::read_u16(data, 4);
+    Some((icon_style, flags & (1 << 2) != 0, flags & (1 << 1) == 0))
+}
 
-    if *pos + 1 > data.len() {
-        return None;
-    }
-    let count = data[*pos] as usize;
-    *pos += 1;
-
-    let mut values = Vec::with_capacity(count);
-    for _ in 0..count {
-        if *pos + 12 > data.len() {
-            return None;
-        }
-        let vt = cfvo_type_from_u32(parser::read_u32(data, *pos));
-        *pos += 4;
-        let val = f64::from_le_bytes(data[*pos..*pos + 8].try_into().ok()?);
-        *pos += 8;
-        let value_str = match vt {
-            CfValueType::Min | CfValueType::Max => None,
-            _ => Some(format_cfvo_value(val)),
-        };
-        values.push(CfValue::new(vt, value_str));
-    }
-
-    let (reverse, show_value) = if *pos < data.len() {
-        let flags = data[*pos];
-        *pos += 1;
-        ((flags & 0x01) != 0, (flags & 0x02) != 0)
-    } else {
-        (false, true)
+fn cf_value_from_pair((value_type, value): (CfValueType, f64)) -> CfValue {
+    let value = match value_type {
+        CfValueType::Min | CfValueType::Max => None,
+        _ => Some(format_cfvo_value(value)),
     };
-
-    Some(CfRuleType::IconSet {
-        icon_style,
-        values,
-        reverse,
-        show_value,
-    })
+    CfValue::new(value_type, value)
 }
 
 fn format_cfvo_value(val: f64) -> String {

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Seek, Write};
 
 use zip::write::SimpleFileOptions;
@@ -1353,42 +1353,45 @@ fn write_conditional_formats<W: Write>(
         return Ok(());
     }
 
-    let mut cond_fmt_payload = Vec::new();
-    let ccf = rules.len() as u32;
-    cond_fmt_payload.extend_from_slice(&ccf.to_le_bytes());
-    cond_fmt_payload.extend_from_slice(&0u32.to_le_bytes()); // fPivot
-    let mut all_ranges: Vec<&duke_sheets_core::CellRange> = Vec::new();
-    for rule in rules {
-        for range in &rule.ranges {
-            if !all_ranges.iter().any(|r| {
-                r.start.row == range.start.row
-                    && r.end.row == range.end.row
-                    && r.start.col == range.start.col
-                    && r.end.col == range.end.col
-            }) {
-                all_ranges.push(range);
+    let mut used_priorities = BTreeSet::new();
+    let priorities: Vec<u32> = rules
+        .iter()
+        .map(|rule| {
+            let requested = rule.priority.max(1);
+            if used_priorities.insert(requested) {
+                requested
+            } else {
+                let priority = (1..)
+                    .find(|value| !used_priorities.contains(value))
+                    .unwrap();
+                used_priorities.insert(priority);
+                priority
             }
-        }
-    }
-    cond_fmt_payload.extend_from_slice(&(all_ranges.len() as u32).to_le_bytes());
-    for range in &all_ranges {
-        cond_fmt_payload.extend_from_slice(&range.start.row.to_le_bytes());
-        cond_fmt_payload.extend_from_slice(&range.end.row.to_le_bytes());
-        cond_fmt_payload.extend_from_slice(&(range.start.col as u32).to_le_bytes());
-        cond_fmt_payload.extend_from_slice(&(range.end.col as u32).to_le_bytes());
-    }
-    rw.write_record(records::BRT_BEGIN_COND_FMT, &cond_fmt_payload)?;
+        })
+        .collect();
 
     for (rule_idx, rule) in rules.iter().enumerate() {
+        let mut cond_fmt_payload = Vec::new();
+        cond_fmt_payload.extend_from_slice(&1u32.to_le_bytes()); // ccf
+        cond_fmt_payload.extend_from_slice(&0u32.to_le_bytes()); // fPivot
+        cond_fmt_payload.extend_from_slice(&(rule.ranges.len() as u32).to_le_bytes());
+        for range in &rule.ranges {
+            cond_fmt_payload.extend_from_slice(&range.start.row.to_le_bytes());
+            cond_fmt_payload.extend_from_slice(&range.end.row.to_le_bytes());
+            cond_fmt_payload.extend_from_slice(&(range.start.col as u32).to_le_bytes());
+            cond_fmt_payload.extend_from_slice(&(range.end.col as u32).to_le_bytes());
+        }
+        rw.write_record(records::BRT_BEGIN_COND_FMT, &cond_fmt_payload)?;
+
         let (i_type, i_template, i_param, flags_extra): (u32, u32, u32, u16) = match &rule.rule_type
         {
             CfRuleType::CellIs { operator, .. } => {
                 (1, 0, cf_op_code(operator), 0) // CF_TEMPLATE_EXPR
             }
             CfRuleType::Expression { .. } => (2, 2, 0, 0), // CF_TEMPLATE_FMLA
-            CfRuleType::ColorScale { .. } => (3, 3, 0, 0), // CF_TEMPLATE_GRADIENT
-            CfRuleType::DataBar { .. } => (4, 5, 0, 0),    // CF_TEMPLATE_DATABAR
-            CfRuleType::IconSet { .. } => (5, 6, 0, 0),    // CF_TEMPLATE_MULTISTATE
+            CfRuleType::ColorScale { .. } => (3, 2, 0, 0), // CF_TEMPLATE_GRADIENT
+            CfRuleType::DataBar { .. } => (4, 3, 0, 0),    // CF_TEMPLATE_DATABAR
+            CfRuleType::IconSet { .. } => (6, 4, 0, 0),    // CF_TEMPLATE_MULTISTATE
             CfRuleType::Top10 {
                 rank,
                 percent,
@@ -1401,7 +1404,7 @@ fn write_conditional_formats<W: Write>(
                 if *percent {
                     f |= 0x10; // fPercent = bit4
                 }
-                (6, 7, *rank, f) // CF_TEMPLATE_FILTER
+                (5, 5, *rank, f) // CF_TEMPLATE_FILTER
             }
             CfRuleType::UniqueValues => (7, 11, 0, 0), // CF_TEMPLATE_UNIQUEVALUES
             CfRuleType::DuplicateValues => (8, 12, 0, 0), // CF_TEMPLATE_DUPLICATEVALUES
@@ -1432,7 +1435,7 @@ fn write_conditional_formats<W: Write>(
                 .or(rule.dxf_id)
                 .unwrap_or(0xFFFFFFFF),
         };
-        let priority = rule.priority as u32;
+        let priority = priorities[rule_idx];
 
         let mut flags: u16 = flags_extra;
         if rule.stop_if_true {
@@ -1489,7 +1492,7 @@ fn write_conditional_formats<W: Write>(
             CfRuleType::ColorScale { colors } => {
                 rw.write_record(records::BRT_BEGIN_COLOR_SCALE, &[])?;
                 for cv in colors {
-                    write_cfvo_record(rw, cv.value_type, cfvo_value_to_f64(&cv.value))?;
+                    write_cfvo_record(rw, cv.value_type, cfvo_value_to_f64(&cv.value), false)?;
                 }
                 for cv in colors {
                     write_cf_color_record(rw, &cv.color)?;
@@ -1503,15 +1506,21 @@ fn write_conditional_formats<W: Write>(
                 show_value,
                 ..
             } => {
-                let mut db_payload = Vec::new();
-                write_cf_data_bar_payload(
-                    &mut db_payload,
-                    min_value,
-                    max_value,
-                    color,
-                    *show_value,
-                );
+                let db_payload = [10, 90, u8::from(*show_value)];
                 rw.write_record(records::BRT_BEGIN_DATA_BAR, &db_payload)?;
+                write_cfvo_record(
+                    rw,
+                    min_value.value_type,
+                    cfvo_value_to_f64(&min_value.value),
+                    false,
+                )?;
+                write_cfvo_record(
+                    rw,
+                    max_value.value_type,
+                    cfvo_value_to_f64(&max_value.value),
+                    false,
+                )?;
+                write_cf_color_record(rw, color)?;
                 rw.write_record(records::BRT_END_DATA_BAR, &[])?;
             }
             CfRuleType::IconSet {
@@ -1520,24 +1529,30 @@ fn write_conditional_formats<W: Write>(
                 reverse,
                 show_value,
             } => {
-                let mut is_payload = Vec::new();
-                write_cf_icon_set_payload(
-                    &mut is_payload,
-                    *icon_style,
-                    values,
-                    *reverse,
-                    *show_value,
-                );
+                let mut is_payload = Vec::with_capacity(6);
+                is_payload.extend_from_slice(&icon_set_to_u32(*icon_style).to_le_bytes());
+                let mut flags = 0u16;
+                if !show_value {
+                    flags |= 1 << 1;
+                }
+                if *reverse {
+                    flags |= 1 << 2;
+                }
+                is_payload.extend_from_slice(&flags.to_le_bytes());
                 rw.write_record(records::BRT_BEGIN_ICON_SET, &is_payload)?;
+                for value in values {
+                    write_cfvo_record(rw, value.value_type, cfvo_value_to_f64(&value.value), true)?;
+                }
                 rw.write_record(records::BRT_END_ICON_SET, &[])?;
             }
             _ => {}
         }
 
         rw.write_record(records::BRT_END_CF_RULE, &[])?;
+        rw.write_record(records::BRT_END_COND_FMT, &[])?;
     }
 
-    rw.write_record(records::BRT_END_COND_FMT, &[])
+    Ok(())
 }
 
 fn compile_cf_formula(
@@ -1652,10 +1667,10 @@ fn cfvo_type_to_u32(vt: CfValueType) -> u32 {
     match vt {
         CfValueType::Min | CfValueType::AutoMin => 2,
         CfValueType::Max | CfValueType::AutoMax => 3,
-        CfValueType::Num => 4,
-        CfValueType::Percent => 5,
-        CfValueType::Formula => 6,
-        CfValueType::Percentile => 7,
+        CfValueType::Num => 1,
+        CfValueType::Percent => 4,
+        CfValueType::Percentile => 5,
+        CfValueType::Formula => 7,
     }
 }
 
@@ -1686,7 +1701,7 @@ fn encode_cf_color(color: &Color) -> [u8; 8] {
             buf[7] = *a;
         }
         Color::Theme { index, tint } => {
-            buf[0] = 3;
+            buf[0] = 3 << 1;
             buf[1] = *index;
             let tint_i16 = if *tint == 0 {
                 0i16
@@ -1696,12 +1711,11 @@ fn encode_cf_color(color: &Color) -> [u8; 8] {
             buf[2..4].copy_from_slice(&tint_i16.to_le_bytes());
         }
         Color::Indexed(idx) => {
-            buf[0] = 1;
+            buf[0] = 1 << 1;
             buf[1] = *idx;
         }
         Color::Auto => {
-            buf[0] = 1;
-            buf[1] = 64;
+            buf[0] = 0;
         }
     }
     buf
@@ -1711,33 +1725,22 @@ fn write_cfvo_record<W: Write>(
     rw: &mut RecordWriter<W>,
     vt: CfValueType,
     value: f64,
+    icon_set: bool,
 ) -> std::io::Result<()> {
+    // BrtCFVO layout follows [MS-XLSB] 2.4.334.
     let mut payload = [0u8; 24];
     payload[0..4].copy_from_slice(&cfvo_type_to_u32(vt).to_le_bytes());
-    // cce=0, cb=0 (no formula)
-    payload[12..20].copy_from_slice(&value.to_le_bytes());
-    // pad=0
+    payload[4..12].copy_from_slice(&value.to_le_bytes());
+    if icon_set {
+        payload[12..16].copy_from_slice(&1u32.to_le_bytes()); // fSaveGTE
+        payload[16..20].copy_from_slice(&1u32.to_le_bytes()); // fGTE
+    }
+    // cbFmla=0; formula omitted
     rw.write_record(records::BRT_CFVO, &payload)
 }
 
 fn write_cf_color_record<W: Write>(rw: &mut RecordWriter<W>, color: &Color) -> std::io::Result<()> {
     rw.write_record(records::BRT_CF_COLOR, &encode_cf_color(color))
-}
-
-fn write_cf_data_bar_payload(
-    payload: &mut Vec<u8>,
-    min_value: &duke_sheets_core::conditional_format::CfValue,
-    max_value: &duke_sheets_core::conditional_format::CfValue,
-    color: &Color,
-    show_value: bool,
-) {
-    payload.extend_from_slice(&cfvo_type_to_u32(min_value.value_type).to_le_bytes());
-    payload.extend_from_slice(&cfvo_value_to_f64(&min_value.value).to_le_bytes());
-    payload.extend_from_slice(&cfvo_type_to_u32(max_value.value_type).to_le_bytes());
-    payload.extend_from_slice(&cfvo_value_to_f64(&max_value.value).to_le_bytes());
-    payload.extend_from_slice(&encode_cf_color(color));
-    let flags: u8 = if show_value { 0x01 } else { 0x00 };
-    payload.push(flags);
 }
 
 fn icon_set_to_u32(style: IconSetStyle) -> u32 {
@@ -1763,29 +1766,6 @@ fn icon_set_to_u32(style: IconSetStyle) -> u32 {
         IconSetStyle::Triangles3 => 18,
         IconSetStyle::Boxes5 => 19,
     }
-}
-
-fn write_cf_icon_set_payload(
-    payload: &mut Vec<u8>,
-    icon_style: IconSetStyle,
-    values: &[duke_sheets_core::conditional_format::CfValue],
-    reverse: bool,
-    show_value: bool,
-) {
-    payload.extend_from_slice(&icon_set_to_u32(icon_style).to_le_bytes());
-    payload.push(values.len() as u8);
-    for v in values {
-        payload.extend_from_slice(&cfvo_type_to_u32(v.value_type).to_le_bytes());
-        payload.extend_from_slice(&cfvo_value_to_f64(&v.value).to_le_bytes());
-    }
-    let mut flags: u8 = 0;
-    if reverse {
-        flags |= 0x01;
-    }
-    if show_value {
-        flags |= 0x02;
-    }
-    payload.push(flags);
 }
 
 fn error_code(e: &CellError) -> u8 {

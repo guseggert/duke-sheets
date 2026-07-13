@@ -2019,6 +2019,124 @@ mod tests {
     }
 
     #[test]
+    fn advanced_cf_records_match_biff12_layout() {
+        use crate::biff12::{records, RecordIter};
+        use duke_sheets_core::conditional_format::{ConditionalFormatRule, IconSetStyle};
+        use std::io::Read;
+
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        let mut scale = ConditionalFormatRule::color_scale_3(
+            Color::rgb(255, 0, 0),
+            Color::rgb(255, 255, 0),
+            Color::rgb(0, 255, 0),
+        );
+        scale.ranges = vec![CellRange::parse("A1:A5").unwrap()];
+        ws.add_conditional_format(scale);
+        let mut bar = ConditionalFormatRule::data_bar(Color::rgb(99, 142, 198));
+        bar.ranges = vec![CellRange::parse("B1:B5").unwrap()];
+        ws.add_conditional_format(bar);
+        let mut icons = ConditionalFormatRule::icon_set(IconSetStyle::Arrows3);
+        icons.ranges = vec![CellRange::parse("C1:C5").unwrap()];
+        ws.add_conditional_format(icons);
+
+        let mut xlsb = Vec::new();
+        XlsbWriter::write(&wb, Cursor::new(&mut xlsb)).unwrap();
+        let mut zip = zip::ZipArchive::new(Cursor::new(xlsb)).unwrap();
+        let mut sheet = Vec::new();
+        zip.by_name("xl/worksheets/sheet1.bin")
+            .unwrap()
+            .read_to_end(&mut sheet)
+            .unwrap();
+        let mut iter = RecordIter::new(Cursor::new(sheet));
+        let mut buf = Vec::new();
+        let mut cf_records = Vec::new();
+        while let Ok((record_type, len)) = iter.next_record(&mut buf) {
+            if matches!(record_type, 461..=471 | 564) {
+                cf_records.push((record_type, buf[..len].to_vec()));
+            }
+        }
+
+        // Pinned against Excel output and [MS-XLSB] 2.4.23, 2.4.43, 2.4.91, 2.4.334, and 2.4.337.
+        let types: Vec<u16> = cf_records.iter().map(|record| record.0).collect();
+        assert_eq!(
+            types,
+            vec![
+                461, 463, 469, 471, 471, 471, 564, 564, 564, 470, 464, 462, 461, 463, 467, 471,
+                471, 564, 468, 464, 462, 461, 463, 465, 471, 471, 471, 466, 464, 462,
+            ]
+        );
+
+        let begin_formats: Vec<&Vec<u8>> = cf_records
+            .iter()
+            .filter(|record| record.0 == records::BRT_BEGIN_COND_FMT)
+            .map(|record| &record.1)
+            .collect();
+        assert_eq!(begin_formats.len(), 3);
+        assert!(begin_formats
+            .iter()
+            .all(|payload| &payload[..4] == 1u32.to_le_bytes()));
+        assert_eq!(
+            u32::from_le_bytes(begin_formats[0][20..24].try_into().unwrap()),
+            0
+        );
+        assert_eq!(
+            u32::from_le_bytes(begin_formats[1][20..24].try_into().unwrap()),
+            1
+        );
+        assert_eq!(
+            u32::from_le_bytes(begin_formats[2][20..24].try_into().unwrap()),
+            2
+        );
+
+        let rules: Vec<&Vec<u8>> = cf_records
+            .iter()
+            .filter(|record| record.0 == records::BRT_BEGIN_CF_RULE)
+            .map(|record| &record.1)
+            .collect();
+        assert_eq!((read_u32(rules[0], 0), read_u32(rules[0], 4)), (3, 2));
+        assert_eq!((read_u32(rules[1], 0), read_u32(rules[1], 4)), (4, 3));
+        assert_eq!((read_u32(rules[2], 0), read_u32(rules[2], 4)), (6, 4));
+        assert_eq!(
+            rules
+                .iter()
+                .map(|rule| read_u32(rule, 12))
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+
+        let data_bar = cf_records
+            .iter()
+            .find(|record| record.0 == records::BRT_BEGIN_DATA_BAR)
+            .unwrap();
+        assert_eq!(data_bar.1, [10, 90, 1]);
+        let icon_set = cf_records
+            .iter()
+            .find(|record| record.0 == records::BRT_BEGIN_ICON_SET)
+            .unwrap();
+        assert_eq!(icon_set.1, [0, 0, 0, 0, 0, 0]);
+
+        let cfvos: Vec<&Vec<u8>> = cf_records
+            .iter()
+            .filter(|record| record.0 == records::BRT_CFVO)
+            .map(|record| &record.1)
+            .collect();
+        assert!(cfvos.iter().all(|payload| payload.len() == 24));
+        assert_eq!(
+            f64::from_le_bytes(cfvos[1][4..12].try_into().unwrap()),
+            50.0
+        );
+        for payload in &cfvos[5..8] {
+            assert_eq!(read_u32(payload, 12), 1);
+            assert_eq!(read_u32(payload, 16), 1);
+        }
+    }
+
+    fn read_u32(data: &[u8], offset: usize) -> u32 {
+        u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap())
+    }
+
+    #[test]
     fn cf_with_dxf_style_roundtrip() {
         use duke_sheets_core::conditional_format::{CfOperator, CfRuleType, ConditionalFormatRule};
         use duke_sheets_core::CellRange;
