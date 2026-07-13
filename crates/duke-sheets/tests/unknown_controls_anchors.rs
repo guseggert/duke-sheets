@@ -411,6 +411,59 @@ fn hidden_rows_and_columns_have_zero_drawing_extent() {
     assert_eq!(sheet.row_position_emu(2), default_row);
 }
 
+/// Positions strictly inside the first visible row/column after a
+/// hidden run must resolve to that visible cell, not collapse to the
+/// zero-extent run head (which would truncate extents and emit
+/// reversed anchors).
+#[test]
+fn anchors_flatten_into_the_first_visible_cell_after_a_hidden_run() {
+    let mut sheet = Worksheet::new("Hidden");
+    for row in 5..=8 {
+        sheet.set_row_hidden(row, true);
+    }
+    for col in 2..=3 {
+        sheet.set_column_hidden(col, true);
+    }
+    // Rows 5-8 are hidden, so rows 5..=9 share a start position.
+    assert_eq!(sheet.row_position_emu(9), sheet.row_position_emu(5));
+
+    let anchor = DrawingAnchor::OneCell {
+        from: CellMarker {
+            col: 4,
+            col_offset_emu: 40_000,
+            row: 9,
+            row_offset_emu: 40_000,
+        },
+        width_emu: 100_000,
+        height_emu: 100_000,
+    };
+    let DrawingAnchor::TwoCell { from, to, .. } = anchor.to_two_cell_with_metrics(&sheet) else {
+        panic!("to_two_cell always returns TwoCell");
+    };
+    assert_eq!((from.col, from.col_offset_emu), (4, 40_000));
+    assert_eq!((from.row, from.row_offset_emu), (9, 40_000));
+    assert_eq!(
+        (to.row, to.row_offset_emu),
+        (9, 140_000),
+        "extent ends inside the visible row, not at the hidden run head"
+    );
+    assert_eq!((to.col, to.col_offset_emu), (4, 140_000));
+
+    // Exactly at the shared boundary, the run head still wins so the
+    // resolution stays stable for degenerate metrics.
+    let boundary = DrawingAnchor::Absolute {
+        x_emu: sheet.column_position_emu(2) as i64,
+        y_emu: sheet.row_position_emu(5) as i64,
+        width_emu: 1_000,
+        height_emu: 1_000,
+    };
+    let DrawingAnchor::TwoCell { from, .. } = boundary.to_two_cell_with_metrics(&sheet) else {
+        panic!("to_two_cell always returns TwoCell");
+    };
+    assert_eq!((from.col, from.col_offset_emu), (2, 0));
+    assert_eq!((from.row, from.row_offset_emu), (5, 0));
+}
+
 fn radio(caption: &str, anchor: DrawingAnchor) -> DrawingObject {
     DrawingObject::form_control(FormControl::new(FormControlKind::OptionButton {
         caption: caption.into(),

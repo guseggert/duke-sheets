@@ -121,20 +121,25 @@ fn column_at_emu(x: i128, metrics: &(impl DrawingMetrics + ?Sized)) -> (u16, i64
         }
     }
     let mut col = low.saturating_sub(1).min(u32::from(u16::MAX)) as u16;
-    // Among zero-width columns sharing this position (degenerate
-    // metrics), resolve to the first of the run.
     let start = metrics.column_position_emu(col);
-    let mut first = 0u32;
-    let mut last = u32::from(col);
-    while first < last {
-        let mid = first + (last - first) / 2;
-        if metrics.column_position_emu(mid as u16) == start {
-            last = mid;
-        } else {
-            first = mid + 1;
+    // Exactly on a boundary shared by zero-width columns (hidden or
+    // degenerate metrics), resolve to the first of the run for a
+    // stable canonical answer. Positions strictly inside the found
+    // column must keep it: walking back would collapse them onto a
+    // zero-width run head, truncating extents.
+    if x == start {
+        let mut first = 0u32;
+        let mut last = u32::from(col);
+        while first < last {
+            let mid = first + (last - first) / 2;
+            if metrics.column_position_emu(mid as u16) == start {
+                last = mid;
+            } else {
+                first = mid + 1;
+            }
         }
+        col = first as u16;
     }
-    col = first as u16;
     let width = i128::from(metrics.column_width_emu(col).max(0));
     let max_offset = width.saturating_sub(1).max(0);
     let offset = (x - start).clamp(0, max_offset).min(i128::from(i64::MAX)) as i64;
@@ -158,20 +163,25 @@ fn row_at_emu(y: i128, metrics: &(impl DrawingMetrics + ?Sized)) -> (u32, i64) {
         }
     }
     let mut row = low.saturating_sub(1).min(u64::from(u32::MAX)) as u32;
-    // Among zero-height rows sharing this position (degenerate
-    // metrics), resolve to the first of the run.
     let start = metrics.row_position_emu(row);
-    let mut first = 0u64;
-    let mut last = u64::from(row);
-    while first < last {
-        let mid = first + (last - first) / 2;
-        if metrics.row_position_emu(mid as u32) == start {
-            last = mid;
-        } else {
-            first = mid + 1;
+    // Exactly on a boundary shared by zero-height rows (hidden or
+    // degenerate metrics), resolve to the first of the run for a
+    // stable canonical answer. Positions strictly inside the found
+    // row must keep it: walking back would collapse them onto a
+    // zero-height run head, truncating extents.
+    if y == start {
+        let mut first = 0u64;
+        let mut last = u64::from(row);
+        while first < last {
+            let mid = first + (last - first) / 2;
+            if metrics.row_position_emu(mid as u32) == start {
+                last = mid;
+            } else {
+                first = mid + 1;
+            }
         }
+        row = first as u32;
     }
-    row = first as u32;
     let height = i128::from(metrics.row_height_emu(row).max(0));
     let max_offset = height.saturating_sub(1).max(0);
     let offset = (y - start).clamp(0, max_offset).min(i128::from(i64::MAX)) as i64;
