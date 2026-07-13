@@ -487,7 +487,8 @@ pub struct PlacedControl<'a> {
 /// Result of applying an interactive form-control state change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct FormControlInteractionResult {
-    /// Controls whose state changed, including radio-group siblings.
+    /// Controls whose state changed, including radio-group siblings
+    /// and controls reconciled from a shared linked cell.
     pub controls_changed: usize,
     /// Distinct linked cells updated from the resulting control state.
     pub linked_cells_changed: usize,

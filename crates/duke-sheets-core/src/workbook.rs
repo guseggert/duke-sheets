@@ -155,7 +155,10 @@ impl Workbook {
     /// Apply an interactive checkbox/option-button state change and
     /// immediately synchronize the linked cells of the affected
     /// controls only (the target, plus its radio-group siblings for
-    /// option buttons). Other controls' linked cells are left alone,
+    /// option buttons). Checkboxes and radio groups elsewhere that
+    /// link to the same cell(s) are then driven from the new cell
+    /// value, as in Excel, where every control sharing a linked cell
+    /// follows it. Unrelated controls' linked cells are left alone,
     /// matching Excel, which never rewrites unrelated links on
     /// interaction; use [`Self::sync_form_control_links`] for a full
     /// projection.
@@ -169,10 +172,12 @@ impl Workbook {
             Error::other(format!("worksheet index {sheet_index} out of bounds"))
         })?;
         let (controls_changed, affected) = sheet.set_form_control_check_state(path, state)?;
-        let linked_cells_changed =
+        let (linked_cells_changed, touched_cells) =
             self.sync_form_control_links_scoped(false, Some((sheet_index, &affected)));
+        let reconciled =
+            self.reconcile_shared_link_controls(&touched_cells, sheet_index, &affected);
         Ok(FormControlInteractionResult {
-            controls_changed,
+            controls_changed: controls_changed + reconciled,
             linked_cells_changed,
         })
     }
@@ -208,17 +213,22 @@ impl Workbook {
 
     fn sync_form_control_links_impl(&mut self, skip_formula_cells: bool) -> usize {
         self.sync_form_control_links_scoped(skip_formula_cells, None)
+            .0
     }
 
     /// `scope` restricts which controls project into their linked
     /// cells: `(sheet index, participating drawing paths)`. Radio
     /// group values are still computed from the whole sheet so a
     /// scoped member sees its group's true selection.
+    ///
+    /// Returns the number of cells whose value changed plus every
+    /// projected `(sheet, row, col)` target, including targets whose
+    /// value already agreed.
     fn sync_form_control_links_scoped(
         &mut self,
         skip_formula_cells: bool,
         scope: Option<(usize, &[crate::DrawingPath])>,
-    ) -> usize {
+    ) -> (usize, Vec<(usize, u32, u16)>) {
         let mut updates: BTreeMap<(usize, u32, u16), CellValue> = BTreeMap::new();
 
         for source_sheet in 0..self.worksheets.len() {
@@ -336,6 +346,7 @@ impl Workbook {
             }
         }
 
+        let touched: Vec<(usize, u32, u16)> = updates.keys().copied().collect();
         let mut updated = 0;
         for ((sheet, row, col), value) in updates {
             // Excel only writes the linked cell when the control state
@@ -350,7 +361,102 @@ impl Workbook {
                 updated += 1;
             }
         }
-        updated
+        (updated, touched)
+    }
+
+    /// Drive checkboxes and radio groups whose links resolve to one of
+    /// `cells` from the cell's current value, skipping the interaction's
+    /// own controls (`exclude` on `exclude_sheet`). Without this, a
+    /// control sharing the target's linked cell keeps its stale state
+    /// and the save-time full sync projects that state back over the
+    /// user's change (last control in worksheet order wins).
+    ///
+    /// Returns the number of controls whose state changed.
+    fn reconcile_shared_link_controls(
+        &mut self,
+        cells: &[(usize, u32, u16)],
+        exclude_sheet: usize,
+        exclude: &[DrawingPath],
+    ) -> usize {
+        if cells.is_empty() {
+            return 0;
+        }
+        let mut planned: Vec<(usize, DrawingPath, CheckState)> = Vec::new();
+        for source_sheet in 0..self.worksheets.len() {
+            let controls = self.worksheets[source_sheet].placed_form_controls();
+            let excluded =
+                |path: &DrawingPath| source_sheet == exclude_sheet && exclude.contains(path);
+            let shared_cell_value = |link: Option<&str>| -> Option<CellValue> {
+                let (sheet, address) = self.resolve_control_link(source_sheet, link?)?;
+                cells
+                    .contains(&(sheet, address.row, address.col))
+                    .then(|| self.worksheets[sheet].get_value_at(address.row, address.col))
+            };
+
+            for group in radio_groups(&controls) {
+                if group.iter().any(|&index| excluded(&controls[index].path)) {
+                    continue;
+                }
+                let Some(value) = group
+                    .iter()
+                    .find_map(|&index| shared_cell_value(controls[index].control.cell_link()))
+                else {
+                    continue;
+                };
+                let Some(selected) = shared_link_radio_index(&value, group.len()) else {
+                    continue;
+                };
+                for (position, &index) in group.iter().enumerate() {
+                    let state = if position + 1 == selected {
+                        CheckState::Checked
+                    } else {
+                        CheckState::Unchecked
+                    };
+                    planned.push((source_sheet, controls[index].path.clone(), state));
+                }
+            }
+
+            for placed in &controls {
+                if !matches!(placed.control.kind, FormControlKind::Checkbox { .. })
+                    || excluded(&placed.path)
+                {
+                    continue;
+                }
+                let Some(value) = shared_cell_value(placed.control.cell_link()) else {
+                    continue;
+                };
+                // The same truthiness Excel applies when a cell drives a
+                // checkbox; Empty means an unchecked fresh link.
+                let state = match value {
+                    CellValue::Boolean(true) => CheckState::Checked,
+                    CellValue::Boolean(false) | CellValue::Empty => CheckState::Unchecked,
+                    CellValue::Number(n) if n == 0.0 => CheckState::Unchecked,
+                    CellValue::Number(_) | CellValue::String(_) | CellValue::RichText(_) => {
+                        CheckState::Checked
+                    }
+                    CellValue::Error(CellError::Na) => CheckState::Mixed,
+                    _ => continue,
+                };
+                planned.push((source_sheet, placed.path.clone(), state));
+            }
+        }
+
+        let mut changed = 0;
+        for (sheet, path, state) in planned {
+            let Some(control) = self.worksheets[sheet].form_control_at_path_mut(&path) else {
+                continue;
+            };
+            match &mut control.kind {
+                FormControlKind::Checkbox { state: current, .. }
+                | FormControlKind::OptionButton { state: current, .. } => {
+                    if std::mem::replace(current, state) != state {
+                        changed += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+        changed
     }
 
     /// Drive form-control state from linked cells that hold formulas,
@@ -1040,6 +1146,24 @@ impl Workbook {
     }
 }
 
+/// One-based radio selection driven by a shared linked cell: numbers
+/// and booleans coerce like Excel (truncate; `<= 0` or blank means no
+/// selection; past-the-end clamps to the last member). `None` leaves
+/// the group unchanged.
+fn shared_link_radio_index(value: &CellValue, count: usize) -> Option<usize> {
+    let number = match value {
+        CellValue::Number(n) => *n,
+        CellValue::Boolean(b) => f64::from(*b as u8),
+        CellValue::Empty => 0.0,
+        _ => return None,
+    };
+    let index = number.trunc();
+    if index <= 0.0 {
+        return Some(0);
+    }
+    Some((index as usize).min(count))
+}
+
 /// Row count of a list control's input range, when it parses as a
 /// same-workbook range (optionally sheet-qualified).
 fn input_range_rows(input_range: &Option<String>) -> Option<u16> {
@@ -1125,6 +1249,10 @@ pub struct ChartSheet {
     /// Raw XML fragments for non-chart drawing anchors, preserved for roundtrip.
     #[doc(hidden)]
     pub raw_drawing_objects: Vec<Vec<u8>>,
+    /// Relationships referenced by `raw_drawing_objects`, captured so
+    /// rewrites keep them resolvable.
+    #[doc(hidden)]
+    pub raw_drawing_rels: Vec<crate::drawing::RawRel>,
 }
 
 #[cfg(test)]
@@ -1298,6 +1426,7 @@ mod tests {
             chart: Chart::new(ChartType::Pie),
             visibility: SheetVisibility::Visible,
             raw_drawing_objects: Vec::new(),
+            raw_drawing_rels: Vec::new(),
         };
         wb.add_chartsheet(cs).unwrap();
         assert_eq!(wb.sheet_order().len(), 2);
