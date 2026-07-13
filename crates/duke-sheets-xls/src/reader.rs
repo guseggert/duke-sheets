@@ -2686,8 +2686,12 @@ impl XlsReader {
                                 }
                                 0x01FF => {
                                     if let FoptValue::Simple(v) = entry.value {
+                                        // MS-ODRAW 2.3.8.44: fLine
+                                        // (0x8) displays the outline;
+                                        // the line is absent when it
+                                        // is explicitly cleared.
                                         if v & 0x0008_0000 != 0 {
-                                            node.line_no_fill = Some(v & 0x0000_0008 != 0);
+                                            node.line_no_fill = Some(v & 0x0000_0008 == 0);
                                         }
                                     }
                                 }

@@ -5828,12 +5828,14 @@ fn basic_shape_fopt(shape: &BasicShape) -> crate::biff::escher::FoptTable {
             drawing_dash_to_officeart(dash),
         ));
     }
+    // MS-ODRAW 2.3.8.44: fLine (0x00000008) displays the outline;
+    // fUsefLine is 0x00080000.
     table.push(FoptEntry::simple(
         fopt_id::LINE_BOOLEAN_PROPS,
         if shape.shape.line.no_fill {
-            0x0008_0008
-        } else {
             0x0008_0000
+        } else {
+            0x0008_0008
         },
     ));
     if let Some(name) = shape.shape_name.as_deref() {
@@ -6992,6 +6994,49 @@ mod tests {
     use super::*;
     use duke_sheets_core::{FormControl, FormControlKind};
     use duke_sheets_formula::FormulaExpr;
+
+    /// MS-ODRAW 2.3.8.44: fLine (0x00000008) displays the outline and
+    /// fUsefLine is 0x00080000, so a default shape (outlined) must set
+    /// both bits and a no-outline shape only the use flag. Reader and
+    /// writer agreeing on inverted bytes renders every outline wrong
+    /// in Excel while all round-trips stay green.
+    #[test]
+    fn shape_fopt_line_flag_shows_outline_unless_no_fill() {
+        use crate::biff::escher::{fopt_id, FoptValue};
+        let line_props = |no_fill: bool| -> u32 {
+            let mut shape = duke_sheets_core::Shape::default();
+            shape.line.no_fill = no_fill;
+            let basic = BasicShape {
+                spid: 1025,
+                obj_id: 1,
+                text_id: None,
+                shape_type: 1,
+                shape_name: None,
+                alt_text: None,
+                shape,
+                txo_runs: Vec::new(),
+                anchor: EmitAnchor::Sheet(duke_sheets_chart::DrawingAnchor::default()),
+                locked: true,
+                printable: true,
+                hidden: false,
+                rotation: 0,
+                flip_h: false,
+                flip_v: false,
+            };
+            let table = basic_shape_fopt(&basic);
+            let props = table
+                .entries()
+                .find(|entry| entry.id == fopt_id::LINE_BOOLEAN_PROPS)
+                .and_then(|entry| match entry.value {
+                    FoptValue::Simple(v) => Some(v),
+                    _ => None,
+                })
+                .expect("line boolean props emitted");
+            props
+        };
+        assert_eq!(line_props(false), 0x0008_0008, "outlined shape sets fLine");
+        assert_eq!(line_props(true), 0x0008_0000, "no-outline shape clears fLine");
+    }
 
     fn test_control_shape(spid: u32, obj_id: u16) -> SheetShape {
         SheetShape::Control(ControlShape {
