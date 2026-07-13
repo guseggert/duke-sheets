@@ -7009,6 +7009,8 @@ mod tests {
             hidden: false,
             link_rgce: Vec::new(),
             input_rgce: Vec::new(),
+            txo_runs: Vec::new(),
+            macro_rgce: Vec::new(),
             radio_next_id: 0,
             radio_first: false,
         })

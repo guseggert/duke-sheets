@@ -288,8 +288,8 @@ fn xlsx_comment_anchor_round_trips() {
 /// and expose a parsed anchor for placeholder rendering.
 #[test]
 fn xlsx_raw_anchor_keeps_order_and_parsed_anchor() {
-    // A plain textbox shape is not modeled yet: build a file that
-    // contains image / shape / image, then verify order and anchor.
+    // Connector shapes are not modeled: build a file that contains
+    // image / connector / image, then verify order and anchor.
     let mut workbook = Workbook::new();
     let sheet = workbook.worksheet_mut(0).unwrap();
     sheet.add_drawing(png("Below").with_anchor(two_cell(0, 0, 2, 2)));
@@ -298,7 +298,7 @@ fn xlsx_raw_anchor_keeps_order_and_parsed_anchor() {
     XlsxWriter::write(&workbook, &mut output).expect("write");
     let bytes = output.into_inner();
 
-    // Splice a textbox anchor between the two pics in drawing1.xml.
+    // Splice a connector anchor between the two pics in drawing1.xml.
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
     let mut drawing = String::new();
     {
@@ -309,14 +309,14 @@ fn xlsx_raw_anchor_keeps_order_and_parsed_anchor() {
             .read_to_string(&mut drawing)
             .unwrap();
     }
-    let textbox = r#"<xdr:twoCellAnchor><xdr:from><xdr:col>3</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>3</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>4</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="99" name="TextBox 9"/><xdr:cNvSpPr txBox="1"/></xdr:nvSpPr><xdr:spPr><a:xfrm><a:off x="1828800" y="571500"/><a:ext cx="609600" cy="190500"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr><xdr:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>hello</a:t></a:r></a:p></xdr:txBody></xdr:sp><xdr:clientData/></xdr:twoCellAnchor>"#;
+    let connector = r#"<xdr:twoCellAnchor><xdr:from><xdr:col>3</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>3</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>4</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:cxnSp macro=""><xdr:nvCxnSpPr><xdr:cNvPr id="99" name="Straight Connector 9"/><xdr:cNvCxnSpPr/></xdr:nvCxnSpPr><xdr:spPr><a:xfrm><a:off x="1828800" y="571500"/><a:ext cx="609600" cy="190500"/></a:xfrm><a:prstGeom prst="line"><a:avLst/></a:prstGeom></xdr:spPr><xdr:style><a:lnRef idx="1"><a:schemeClr val="accent1"/></a:lnRef><a:fillRef idx="0"><a:schemeClr val="accent1"/></a:fillRef><a:effectRef idx="0"><a:schemeClr val="accent1"/></a:effectRef><a:fontRef idx="minor"><a:schemeClr val="tx1"/></a:fontRef></xdr:style></xdr:cxnSp><xdr:clientData/></xdr:twoCellAnchor>"#;
     let insert_at = {
         let first_end = drawing.find("</xdr:twoCellAnchor>").expect("first anchor")
             + "</xdr:twoCellAnchor>".len();
         first_end
     };
     let mut patched = drawing.clone();
-    patched.insert_str(insert_at, textbox);
+    patched.insert_str(insert_at, connector);
 
     // Rebuild the archive with the patched drawing part.
     let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
@@ -352,3 +352,22 @@ fn xlsx_raw_anchor_keeps_order_and_parsed_anchor() {
 }
 
 use std::io::Write;
+
+/// An anonymous (empty-author) comment keeps its own author slot
+/// instead of being attributed to the first named author.
+#[test]
+fn xlsx_empty_author_comment_keeps_attribution() {
+    let mut workbook = Workbook::new();
+    let sheet = workbook.worksheet_mut(0).unwrap();
+    sheet.set_comment_at(0, 0, CellComment::new("Bob", "named"));
+    sheet.set_comment_at(1, 0, CellComment::new("", "anonymous"));
+
+    let read = round_trip(&workbook);
+    let sheet = read.worksheet(0).unwrap();
+    assert_eq!(sheet.comment_at(0, 0).unwrap().author, "Bob");
+    assert_eq!(
+        sheet.comment_at(1, 0).unwrap().author,
+        "",
+        "anonymous comment must not inherit another author"
+    );
+}

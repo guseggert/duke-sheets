@@ -1271,11 +1271,13 @@ impl Worksheet {
             })
     }
 
-    /// Unique comment authors in first-appearance (z) order.
+    /// Unique comment authors in first-appearance (z) order. An empty
+    /// author is a distinct entry, so anonymous comments keep their
+    /// own author slot instead of being attributed to author 0.
     pub fn comment_authors(&self) -> Vec<String> {
         let mut authors: Vec<String> = Vec::new();
         for (_, comment) in self.comments() {
-            if !comment.author.is_empty() && !authors.iter().any(|a| *a == comment.author) {
+            if !authors.iter().any(|a| *a == comment.author) {
                 authors.push(comment.author.clone());
             }
         }
@@ -1756,6 +1758,11 @@ impl Worksheet {
     /// semantics. Checking an option button unchecks every sibling in
     /// its spatial radio group; unchecking one affects only that button.
     ///
+    /// Returns the number of controls whose state changed and the
+    /// paths participating in the interaction (the target, plus every
+    /// radio-group sibling for option buttons - the group shares its
+    /// linked-cell semantics even when only one member changes).
+    ///
     /// This changes control state only. Use
     /// [`crate::Workbook::set_form_control_check_state`] when linked
     /// cells should update immediately as part of the interaction.
@@ -1763,7 +1770,7 @@ impl Worksheet {
         &mut self,
         path: &[usize],
         new_state: CheckState,
-    ) -> Result<usize> {
+    ) -> Result<(usize, Vec<DrawingPath>)> {
         let placed = self.placed_form_controls();
         let target = placed
             .iter()
@@ -1784,16 +1791,24 @@ impl Worksheet {
             return Err(Error::other("option buttons cannot use the mixed state"));
         }
 
+        let group: Vec<usize> = if is_option {
+            radio_groups(&placed)
+                .into_iter()
+                .find(|group| group.contains(&target))
+                .ok_or_else(|| Error::other("option button has no radio group"))?
+        } else {
+            vec![target]
+        };
+        let affected: Vec<DrawingPath> = group
+            .iter()
+            .map(|&index| placed[index].path.clone())
+            .collect();
         let updates: Vec<(DrawingPath, CheckState)> = if is_option
             && new_state == CheckState::Checked
         {
-            let group = radio_groups(&placed)
-                .into_iter()
-                .find(|group| group.contains(&target))
-                .ok_or_else(|| Error::other("option button has no radio group"))?;
             group
-                .into_iter()
-                .map(|index| {
+                .iter()
+                .map(|&index| {
                     (
                         placed[index].path.clone(),
                         if index == target {
@@ -1824,7 +1839,7 @@ impl Worksheet {
                 changed += 1;
             }
         }
-        Ok(changed)
+        Ok((changed, affected))
     }
 
     /// Set the standalone auto-filter for this worksheet.

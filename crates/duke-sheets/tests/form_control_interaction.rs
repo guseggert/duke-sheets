@@ -67,6 +67,53 @@ fn checking_radio_updates_group_and_linked_cell() {
     );
 }
 
+/// Interacting with one control must not rewrite the linked cells of
+/// unrelated controls, matching Excel: a stale disagreeing link
+/// elsewhere stays untouched until a full sync or save.
+#[test]
+fn interaction_sync_is_scoped_to_the_affected_controls() {
+    let mut workbook = Workbook::new();
+    let sheet = workbook.worksheet_mut(0).unwrap();
+    sheet.add_drawing(
+        DrawingObject::form_control(FormControl::new(FormControlKind::Checkbox {
+            caption: "target".into(),
+            state: CheckState::Unchecked,
+            cell_link: Some("$A$1".into()),
+            no_3d: false,
+        }))
+        .with_anchor(anchor(0, 0, 2, 1)),
+    );
+    sheet.add_drawing(
+        DrawingObject::form_control(FormControl::new(FormControlKind::Checkbox {
+            caption: "unrelated".into(),
+            state: CheckState::Unchecked,
+            cell_link: Some("$B$1".into()),
+            no_3d: false,
+        }))
+        .with_anchor(anchor(0, 2, 2, 3)),
+    );
+    // B1 disagrees with the unrelated unchecked checkbox; Excel would
+    // only reconcile it on load/save, never on another control's click.
+    sheet.set_cell_value("B1", true).unwrap();
+
+    let result = workbook
+        .set_form_control_check_state(0, &[0], CheckState::Checked)
+        .unwrap();
+    assert_eq!(result.controls_changed, 1);
+    assert_eq!(result.linked_cells_changed, 1);
+    let sheet = workbook.worksheet(0).unwrap();
+    assert_eq!(
+        sheet.get_value("A1").unwrap(),
+        duke_sheets::CellValue::Boolean(true),
+        "target link updates"
+    );
+    assert_eq!(
+        sheet.get_value("B1").unwrap(),
+        duke_sheets::CellValue::Boolean(true),
+        "unrelated stale link must stay untouched"
+    );
+}
+
 #[test]
 fn checkbox_and_invalid_targets_use_semantic_validation() {
     let mut workbook = Workbook::new();

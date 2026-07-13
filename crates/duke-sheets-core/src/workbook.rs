@@ -153,7 +153,12 @@ impl Workbook {
     }
 
     /// Apply an interactive checkbox/option-button state change and
-    /// immediately synchronize all affected linked cells.
+    /// immediately synchronize the linked cells of the affected
+    /// controls only (the target, plus its radio-group siblings for
+    /// option buttons). Other controls' linked cells are left alone,
+    /// matching Excel, which never rewrites unrelated links on
+    /// interaction; use [`Self::sync_form_control_links`] for a full
+    /// projection.
     pub fn set_form_control_check_state(
         &mut self,
         sheet_index: usize,
@@ -163,8 +168,9 @@ impl Workbook {
         let sheet = self.worksheets.get_mut(sheet_index).ok_or_else(|| {
             Error::other(format!("worksheet index {sheet_index} out of bounds"))
         })?;
-        let controls_changed = sheet.set_form_control_check_state(path, state)?;
-        let linked_cells_changed = self.sync_form_control_links();
+        let (controls_changed, affected) = sheet.set_form_control_check_state(path, state)?;
+        let linked_cells_changed =
+            self.sync_form_control_links_scoped(false, Some((sheet_index, &affected)));
         Ok(FormControlInteractionResult {
             controls_changed,
             linked_cells_changed,
@@ -201,9 +207,26 @@ impl Workbook {
     }
 
     fn sync_form_control_links_impl(&mut self, skip_formula_cells: bool) -> usize {
+        self.sync_form_control_links_scoped(skip_formula_cells, None)
+    }
+
+    /// `scope` restricts which controls project into their linked
+    /// cells: `(sheet index, participating drawing paths)`. Radio
+    /// group values are still computed from the whole sheet so a
+    /// scoped member sees its group's true selection.
+    fn sync_form_control_links_scoped(
+        &mut self,
+        skip_formula_cells: bool,
+        scope: Option<(usize, &[crate::DrawingPath])>,
+    ) -> usize {
         let mut updates: BTreeMap<(usize, u32, u16), CellValue> = BTreeMap::new();
 
         for source_sheet in 0..self.worksheets.len() {
+            if let Some((scope_sheet, _)) = scope {
+                if source_sheet != scope_sheet {
+                    continue;
+                }
+            }
             let controls = self.worksheets[source_sheet].placed_form_controls();
             let mut radio_values = vec![None; controls.len()];
             for group in radio_groups(&controls) {
@@ -226,6 +249,11 @@ impl Workbook {
             }
 
             for (index, placed) in controls.iter().enumerate() {
+                if let Some((_, paths)) = scope {
+                    if !paths.iter().any(|path| *path == placed.path) {
+                        continue;
+                    }
+                }
                 let (link, value) = match &placed.control.kind {
                     FormControlKind::Checkbox {
                         state, cell_link, ..

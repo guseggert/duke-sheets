@@ -24,12 +24,7 @@ pub(crate) fn write_comments<W: Write + Seek>(
     }
     comments.sort_by_key(|((row, col), _)| (*row, *col));
 
-    let mut authors: Vec<String> = Vec::new();
-    for (_, comment) in &comments {
-        if !authors.contains(&comment.author) {
-            authors.push(comment.author.clone());
-        }
-    }
+    let authors = ws.comment_authors();
 
     let path = format!("xl/comments{}.bin", index + 1);
     zip.start_file(&path, *options)?;

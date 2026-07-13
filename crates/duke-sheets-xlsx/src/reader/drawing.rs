@@ -256,10 +256,11 @@ mod tests {
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].rel_id, "rId3");
         assert!(refs[0].is_chart_ex);
-        // Fallback inner content is captured without the wrapper tags.
+        // Fallback inner content is captured without the wrapper tags
+        // (surrounding whitespace is preserved verbatim).
         let fallback = refs[0].raw_mc_fallback.as_deref().expect("fallback");
         let fallback = std::str::from_utf8(fallback).unwrap();
-        assert!(fallback.starts_with("<xdr:sp>"), "{fallback}");
+        assert!(fallback.trim_start().starts_with("<xdr:sp>"), "{fallback}");
         assert!(!fallback.contains("mc:Fallback"), "{fallback}");
     }
 
@@ -510,10 +511,9 @@ mod tests {
     <xdr:grpSp>
       <xdr:nvGrpSpPr><xdr:cNvPr id="4" name="Group 1"/><xdr:cNvGrpSpPr/></xdr:nvGrpSpPr>
       <xdr:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1" cy="1"/><a:chOff x="0" y="0"/><a:chExt cx="1" cy="1"/></a:xfrm></xdr:grpSpPr>
-      <xdr:sp><xdr:nvSpPr><xdr:cNvPr id="5" name="TextBox 1"/><xdr:cNvSpPr txBox="1"/></xdr:nvSpPr>
-        <xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1" cy="1"/></a:xfrm></xdr:spPr>
-        <xdr:txBody><a:bodyPr/><a:p><a:r><a:t>hi</a:t></a:r></a:p></xdr:txBody>
-      </xdr:sp>
+      <xdr:cxnSp><xdr:nvCxnSpPr><xdr:cNvPr id="5" name="Connector 1"/><xdr:cNvCxnSpPr/></xdr:nvCxnSpPr>
+        <xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1" cy="1"/></a:xfrm><a:prstGeom prst="line"><a:avLst/></a:prstGeom></xdr:spPr>
+      </xdr:cxnSp>
     </xdr:grpSp>
     <xdr:clientData/>
   </xdr:twoCellAnchor>
@@ -524,6 +524,6 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert!(matches!(entries[0].kind, DrawingEntryKind::Raw));
         let raw = std::str::from_utf8(&entries[0].bytes).unwrap();
-        assert!(raw.contains("TextBox 1"), "raw bytes keep the group: {raw}");
+        assert!(raw.contains("Connector 1"), "raw bytes keep the group: {raw}");
     }
 }

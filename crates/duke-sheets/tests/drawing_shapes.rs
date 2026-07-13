@@ -307,3 +307,63 @@ fn xlsx_shape_preserves_unmodeled_shape_property_fragments() {
     assert!(drawing_xml.contains("outerShdw"));
     assert!(drawing_xml.contains("urn:duke-shape-test"));
 }
+
+/// Malformed preserved raw XML must fail the write instead of being
+/// spliced verbatim into the drawing part.
+#[test]
+fn malformed_preserved_shape_xml_fails_the_write() {
+    let mut shape = Shape::rectangle();
+    shape.raw_shape_properties = Some(b"<a:effectLst><unclosed>".to_vec());
+    let mut workbook = Workbook::new();
+    workbook
+        .worksheet_mut(0)
+        .unwrap()
+        .add_shape(shape, anchor(0, 0, 2, 2));
+    let error = XlsxWriter::write(&workbook, &mut Cursor::new(Vec::new())).unwrap_err();
+    assert!(
+        error.to_string().contains("unterminated"),
+        "expected raw-XML validation error, got: {error}"
+    );
+
+    let mut shape = Shape::rectangle().with_text(DrawingText::from("t"));
+    shape.raw_text_body = Some(b"<xdr:txBody><a:p></xdr:txBody><script/>".to_vec());
+    let mut workbook = Workbook::new();
+    workbook
+        .worksheet_mut(0)
+        .unwrap()
+        .add_shape(shape, anchor(0, 0, 2, 2));
+    assert!(XlsxWriter::write(&workbook, &mut Cursor::new(Vec::new())).is_err());
+}
+
+/// Shape equality tracks emission semantics: a stale preserved
+/// geometry (regenerates) is not equal to a current one (replays).
+#[test]
+fn shape_equality_tracks_preservation_staleness() {
+    let raw = br#"<a:custGeom><a:pathLst/></a:custGeom>"#.to_vec();
+    let mut preserved = Shape::preset("rect");
+    preserved.set_preserved_shape_properties(Some(raw.clone()));
+
+    let mut stale = preserved.clone();
+    stale.set_geometry(ShapeGeometry::Preset("ellipse".to_string()));
+    stale.set_geometry(ShapeGeometry::Preset("rect".to_string()));
+    assert_eq!(
+        preserved, stale,
+        "matching modeled state and staleness outcome compare equal"
+    );
+
+    let mut edited = preserved.clone();
+    edited.set_geometry(ShapeGeometry::Preset("ellipse".to_string()));
+    assert_ne!(
+        preserved, edited,
+        "different modeled geometry compares unequal"
+    );
+
+    let mut caller_supplied = Shape::preset("rect");
+    caller_supplied.raw_shape_properties = Some(raw);
+    let mut snapshot_stale = caller_supplied.clone();
+    snapshot_stale.raw_geometry_snapshot = Some(ShapeGeometry::Preset("ellipse".to_string()));
+    assert_ne!(
+        caller_supplied, snapshot_stale,
+        "same bytes but different staleness emit different XML and must not compare equal"
+    );
+}

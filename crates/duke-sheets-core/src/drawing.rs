@@ -311,6 +311,11 @@ pub struct Shape {
     pub raw_text_snapshot: Option<Option<DrawingText>>,
 }
 
+/// Two shapes are equal when they serialize identically: same modeled
+/// fields, same preserved raw bytes, and the same staleness outcome
+/// for each preserved block (a stale preserved geometry regenerates
+/// while a current one replays, so staleness is emission-relevant
+/// even though the snapshots themselves are bookkeeping).
 impl PartialEq for Shape {
     fn eq(&self, other: &Self) -> bool {
         self.geometry == other.geometry
@@ -322,6 +327,10 @@ impl PartialEq for Shape {
             && self.flip_v == other.flip_v
             && self.raw_shape_properties == other.raw_shape_properties
             && self.raw_text_body == other.raw_text_body
+            && self.preserved_geometry_unchanged() == other.preserved_geometry_unchanged()
+            && self.preserved_fill_unchanged() == other.preserved_fill_unchanged()
+            && self.preserved_line_unchanged() == other.preserved_line_unchanged()
+            && self.preserved_text_unchanged() == other.preserved_text_unchanged()
     }
 }
 
@@ -856,6 +865,11 @@ fn validate_kind(kind: &DrawingKind) -> Result<()> {
                 if child.transform.cx_emu < 0 || child.transform.cy_emu < 0 {
                     return Err(Error::other("group child extents cannot be negative"));
                 }
+                if matches!(child.kind, DrawingKind::Comment { .. }) {
+                    // Comments are cell-keyed top-level objects; no
+                    // format nests them in shape groups.
+                    return Err(Error::other("comments cannot be group children"));
+                }
                 validate_kind(&child.kind)?;
             }
         }
@@ -969,6 +983,10 @@ pub(crate) fn anchor_rect_emu_with_metrics(
 
 /// Map a child-space rectangle into the parent-space frame `outer`
 /// through a group's child coordinate mapping.
+///
+/// Group rotation and flips are ignored, like the default-metric
+/// approximation in [`crate::form_control::radio_groups`]: containment
+/// inside rotated or flipped groups uses the unrotated frame.
 pub(crate) fn map_child_rect(
     outer: RectEmu,
     transform: &GroupTransform,

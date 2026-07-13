@@ -17,7 +17,7 @@
 //! `controlPr@moveWithCells/sizeWithCells` attributes).
 
 use duke_sheets_chart::{
-    marker_position_emu, CellMarker, DefaultDrawingMetrics, DrawingAnchor, DrawingMetrics, EditAs,
+    marker_position_emu, CellMarker, DrawingAnchor, DrawingMetrics, EditAs,
 };
 use duke_sheets_core::style::Underline;
 use duke_sheets_core::{
@@ -96,15 +96,9 @@ pub fn decode_macro_formula(formula: &str) -> String {
         .to_string()
 }
 
-/// The 8-value `x:Anchor` tuple for a drawing anchor:
-/// `[colL, dxL_px, rowT, dyT_px, colR, dxR_px, rowB, dyB_px]`.
-/// One-cell and absolute anchors are extended to a cell footprint at
-/// default cell metrics.
-pub fn anchor_to_px(anchor: &DrawingAnchor) -> [i64; 8] {
-    anchor_to_px_with_metrics(anchor, &DefaultDrawingMetrics)
-}
-
-/// The 8-value VML `x:Anchor` tuple resolved with worksheet metrics.
+/// The 8-value VML `x:Anchor` tuple
+/// (`[colL, dxL_px, rowT, dyT_px, colR, dxR_px, rowB, dyB_px]`)
+/// resolved with worksheet metrics.
 pub fn anchor_to_px_with_metrics(
     anchor: &DrawingAnchor,
     metrics: &(impl DrawingMetrics + ?Sized),
@@ -120,12 +114,6 @@ pub fn anchor_to_px_with_metrics(
         to.row as i64,
         to.row_offset_emu / EMU_PER_PX,
     ]
-}
-
-/// Resolve any anchor variant to concrete from/to cell markers at
-/// default cell metrics.
-pub fn anchor_cell_markers(anchor: &DrawingAnchor) -> (CellMarker, CellMarker) {
-    anchor_cell_markers_with_metrics(anchor, &DefaultDrawingMetrics)
 }
 
 /// Resolve any anchor variant to concrete from/to markers using worksheet
@@ -355,33 +343,12 @@ fn caption_lines(text: &ControlText) -> Vec<Vec<(String, Option<RunFont>)>> {
     lines
 }
 
-/// Append one control `<v:shape>` to a VML part body. `shape_id` is
-/// the numeric part of `_x0000_s{id}` (must match the worksheet
-/// `control/@shapeId` in XLSX); `first_button` is the recomputed
-/// radio-group-head flag for option buttons. `meta` and `anchor`
-/// come from the control's wrapping drawing object.
-pub fn write_control_shape(
-    xml: &mut String,
-    shape_id: usize,
-    z_index: usize,
-    meta: &DrawingMeta,
-    anchor: &DrawingAnchor,
-    control: &FormControl,
-    first_button: bool,
-) {
-    write_control_shape_with_metrics(
-        xml,
-        shape_id,
-        z_index,
-        meta,
-        anchor,
-        control,
-        first_button,
-        &DefaultDrawingMetrics,
-    );
-}
-
-/// Append one control VML shape using worksheet row and column metrics.
+/// Append one control `<v:shape>` to a VML part body using worksheet
+/// row and column metrics. `shape_id` is the numeric part of
+/// `_x0000_s{id}` (must match the worksheet `control/@shapeId` in
+/// XLSX); `first_button` is the recomputed radio-group-head flag for
+/// option buttons. `meta` and `anchor` come from the control's
+/// wrapping drawing object.
 #[allow(clippy::too_many_arguments)]
 pub fn write_control_shape_with_metrics(
     xml: &mut String,
@@ -1575,6 +1542,7 @@ fn apply_client_data_text(ctrl: &mut VmlControl, elem: &str, text: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use duke_sheets_chart::DefaultDrawingMetrics;
     use duke_sheets_core::DrawingKind;
 
     fn checkbox(cell_link: Option<&str>) -> DrawingObject {
@@ -1604,7 +1572,7 @@ mod tests {
     fn shape_xml(object: &DrawingObject, shape_id: usize, z_index: usize, first: bool) -> String {
         let mut xml = String::new();
         let control = object.kind.as_form_control().expect("form control");
-        write_control_shape(
+        write_control_shape_with_metrics(
             &mut xml,
             shape_id,
             z_index,
@@ -1612,6 +1580,7 @@ mod tests {
             &object.anchor,
             control,
             first,
+            &DefaultDrawingMetrics,
         );
         xml
     }
@@ -1940,7 +1909,7 @@ mod tests {
             width_emu: i64::MAX,
             height_emu: i64::MAX,
         };
-        let (from, to) = anchor_cell_markers(&anchor);
+        let (from, to) = anchor_cell_markers_with_metrics(&anchor, &DefaultDrawingMetrics);
         assert_eq!(from.col, u16::MAX);
         assert_eq!(from.row, u32::MAX);
         assert_eq!(to.col, u16::MAX);

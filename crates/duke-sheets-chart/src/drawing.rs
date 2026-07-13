@@ -105,9 +105,9 @@ pub fn marker_position_emu(
 }
 
 fn column_at_emu(x: i128, metrics: &(impl DrawingMetrics + ?Sized)) -> (u16, i64) {
-    if x < 0 {
-        let width = i128::from(metrics.column_width_emu(0).max(0));
-        return (0, if width == 0 { 0 } else { x.rem_euclid(width) as i64 });
+    // Off-grid positions clamp to the grid origin.
+    if x <= 0 {
+        return (0, 0);
     }
     let mut low = 0u32;
     let mut high = u32::from(u16::MAX) + 1;
@@ -120,8 +120,21 @@ fn column_at_emu(x: i128, metrics: &(impl DrawingMetrics + ?Sized)) -> (u16, i64
             high = mid;
         }
     }
-    let col = low.saturating_sub(1).min(u32::from(u16::MAX)) as u16;
+    let mut col = low.saturating_sub(1).min(u32::from(u16::MAX)) as u16;
+    // Among zero-width columns sharing this position (degenerate
+    // metrics), resolve to the first of the run.
     let start = metrics.column_position_emu(col);
+    let mut first = 0u32;
+    let mut last = u32::from(col);
+    while first < last {
+        let mid = first + (last - first) / 2;
+        if metrics.column_position_emu(mid as u16) == start {
+            last = mid;
+        } else {
+            first = mid + 1;
+        }
+    }
+    col = first as u16;
     let width = i128::from(metrics.column_width_emu(col).max(0));
     let max_offset = width.saturating_sub(1).max(0);
     let offset = (x - start).clamp(0, max_offset).min(i128::from(i64::MAX)) as i64;
@@ -129,9 +142,9 @@ fn column_at_emu(x: i128, metrics: &(impl DrawingMetrics + ?Sized)) -> (u16, i64
 }
 
 fn row_at_emu(y: i128, metrics: &(impl DrawingMetrics + ?Sized)) -> (u32, i64) {
-    if y < 0 {
-        let height = i128::from(metrics.row_height_emu(0).max(0));
-        return (0, if height == 0 { 0 } else { y.rem_euclid(height) as i64 });
+    // Off-grid positions clamp to the grid origin.
+    if y <= 0 {
+        return (0, 0);
     }
     let mut low = 0u64;
     let mut high = u64::from(u32::MAX) + 1;
@@ -144,8 +157,21 @@ fn row_at_emu(y: i128, metrics: &(impl DrawingMetrics + ?Sized)) -> (u32, i64) {
             high = mid;
         }
     }
-    let row = low.saturating_sub(1).min(u64::from(u32::MAX)) as u32;
+    let mut row = low.saturating_sub(1).min(u64::from(u32::MAX)) as u32;
+    // Among zero-height rows sharing this position (degenerate
+    // metrics), resolve to the first of the run.
     let start = metrics.row_position_emu(row);
+    let mut first = 0u64;
+    let mut last = u64::from(row);
+    while first < last {
+        let mid = first + (last - first) / 2;
+        if metrics.row_position_emu(mid as u32) == start {
+            last = mid;
+        } else {
+            first = mid + 1;
+        }
+    }
+    row = first as u32;
     let height = i128::from(metrics.row_height_emu(row).max(0));
     let max_offset = height.saturating_sub(1).max(0);
     let offset = (y - start).clamp(0, max_offset).min(i128::from(i64::MAX)) as i64;

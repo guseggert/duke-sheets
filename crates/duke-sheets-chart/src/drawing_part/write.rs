@@ -13,7 +13,7 @@ use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
 
 use crate::{
-    marker_position_emu, CellMarker, ChildTransform, DefaultDrawingMetrics, DrawingAnchor,
+    marker_position_emu, CellMarker, ChildTransform, DrawingAnchor,
     DrawingMetrics, EditAs, EmbeddedImage, GroupTransform,
 };
 
@@ -302,21 +302,6 @@ impl EmitCtx<'_> {
 /// Form controls emit their placeholder twins in the chosen flavor;
 /// raw entries pass through verbatim. `shape_base` is the numeric
 /// spid of the first control twin (`_x0000_s{shape_base}`).
-pub fn write_drawing_part(
-    objects: &[PartObject<'_>],
-    plan: &DrawingPlan,
-    twin_style: TwinStyle,
-    shape_base: usize,
-) -> WriteResult<Vec<u8>> {
-    write_drawing_part_with_metrics(
-        objects,
-        plan,
-        twin_style,
-        shape_base,
-        &DefaultDrawingMetrics,
-    )
-}
-
 /// Serialize one sheet's drawing part with worksheet metrics available
 /// for control twins and other marker conversions. Native OneCell and
 /// Absolute wrappers remain in their original exact forms.
@@ -347,7 +332,7 @@ pub fn write_drawing_part_with_metrics(
         chart_i: 0,
         chartex_i: 0,
         image_i: 0,
-        cnv_id: 2,
+        cnv_id: next_cnv_id_after_raws(objects),
         frame_seq: 0,
         control_ordinal: 0,
         shape_base,
@@ -583,6 +568,13 @@ fn write_shape_element(
     w.write_event(Event::Empty(BytesStart::new("xdr:cNvSpPr")))?;
     w.write_event(Event::End(BytesEnd::new("xdr:nvSpPr")))?;
 
+    if let Some(raw) = shape.raw_shape_properties {
+        validate_raw_fragment(raw, "preserved shape properties")?;
+    }
+    if let Some(raw_text) = shape.raw_text_body {
+        validate_raw_text_body(raw_text)?;
+    }
+
     w.write_event(Event::Start(BytesStart::new("xdr:spPr")))?;
     let mut xfrm = BytesStart::new("a:xfrm");
     if placement.rot != 0 {
@@ -689,6 +681,125 @@ fn raw_has_any(raw: &[u8], names: &[&str]) -> bool {
     }
 }
 
+/// Generated `cNvPr@id`s must be unique across the whole drawing
+/// part, including ids inside verbatim raw passthrough anchors: seed
+/// allocation past the largest id any raw entry already uses.
+fn next_cnv_id_after_raws(objects: &[PartObject<'_>]) -> usize {
+    let mut next = 2usize;
+    for object in objects {
+        let PartKind::Raw { bytes, .. } = &object.kind else {
+            continue;
+        };
+        let mut reader = quick_xml::Reader::from_reader(*bytes);
+        let mut buf = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e))
+                    if e.local_name().as_ref() == b"cNvPr" =>
+                {
+                    let id = e
+                        .try_get_attribute("id")
+                        .ok()
+                        .flatten()
+                        .and_then(|attr| String::from_utf8(attr.value.into_owned()).ok())
+                        .and_then(|value| value.trim().parse::<usize>().ok());
+                    if let Some(id) = id {
+                        next = next.max(id.saturating_add(1));
+                    }
+                }
+                Ok(Event::Eof) | Err(_) => break,
+                _ => {}
+            }
+            buf.clear();
+        }
+    }
+    next
+}
+
+/// Reject preserved raw bytes that are not well-formed balanced XML
+/// so they cannot inject arbitrary content into the emitted part.
+fn validate_raw_fragment(raw: &[u8], context: &str) -> WriteResult<()> {
+    let mut reader = quick_xml::Reader::from_reader(raw);
+    reader.config_mut().trim_text(false);
+    let mut depth = 0i64;
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(_)) => depth += 1,
+            Ok(Event::End(_)) => {
+                depth -= 1;
+                if depth < 0 {
+                    return Err(std::io::Error::other(format!(
+                        "{context}: unbalanced closing tag in raw XML"
+                    )));
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(error) => {
+                return Err(std::io::Error::other(format!(
+                    "{context}: malformed raw XML: {error}"
+                )))
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+    if depth != 0 {
+        return Err(std::io::Error::other(format!(
+            "{context}: unterminated element in raw XML"
+        )));
+    }
+    Ok(())
+}
+
+/// A preserved text body must be exactly one well-formed `txBody`
+/// element; anything else regenerates unpredictably or corrupts the
+/// part when spliced verbatim.
+fn validate_raw_text_body(raw: &[u8]) -> WriteResult<()> {
+    validate_raw_fragment(raw, "preserved text body")?;
+    let mut reader = quick_xml::Reader::from_reader(raw);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+    let mut roots = 0usize;
+    let mut depth = 0i64;
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) => {
+                if depth == 0 {
+                    roots += 1;
+                    if e.local_name().as_ref() != b"txBody" {
+                        return Err(std::io::Error::other(
+                            "preserved text body root element must be txBody",
+                        ));
+                    }
+                }
+                depth += 1;
+            }
+            Ok(Event::End(_)) => depth -= 1,
+            Ok(Event::Empty(_)) if depth == 0 => {
+                return Err(std::io::Error::other(
+                    "preserved text body root element must be txBody",
+                ))
+            }
+            Ok(Event::Text(ref text)) if depth == 0 && !text.as_ref().is_empty() => {
+                return Err(std::io::Error::other(
+                    "preserved text body cannot contain top-level text",
+                ))
+            }
+            Ok(Event::Eof) => break,
+            Err(error) => return Err(std::io::Error::other(error)),
+            _ => {}
+        }
+        buf.clear();
+    }
+    if roots != 1 {
+        return Err(std::io::Error::other(
+            "preserved text body must contain exactly one txBody element",
+        ));
+    }
+    Ok(())
+}
+
 fn write_raw_shape_fragments(w: &mut XmlWriter, raw: &[u8], names: &[&str]) -> WriteResult<()> {
     write_selected_raw_fragments(w, raw, |name| names.iter().any(|value| *value == name))
 }
@@ -735,7 +846,11 @@ fn write_selected_raw_fragments(
                             depth -= 1;
                             fragment.write_event(Event::End(e.into_owned()))?;
                         }
-                        Ok(Event::Eof) => break,
+                        Ok(Event::Eof) => {
+                            return Err(std::io::Error::other(
+                                "unterminated element in preserved raw XML",
+                            ))
+                        }
                         Ok(event) => fragment.write_event(event.into_owned())?,
                         Err(error) => return Err(std::io::Error::other(error)),
                     }
@@ -750,9 +865,6 @@ fn write_selected_raw_fragments(
                 if include(&name) {
                     w.write_event(Event::Empty(e.to_owned()))?;
                 }
-            }
-            Ok(Event::Text(ref text)) if !text.as_ref().iter().all(u8::is_ascii_whitespace) => {
-                w.write_event(Event::Text(text.to_owned()))?;
             }
             Ok(Event::Eof) => break,
             Err(error) => return Err(std::io::Error::other(error)),

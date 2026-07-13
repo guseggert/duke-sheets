@@ -397,3 +397,22 @@ fn xlsb_comments_part_uses_spec_record_ids() {
         "comments part record sequence must match MS-XLSB (BrtBeginComments .. BrtEndComments)"
     );
 }
+
+/// An anonymous (empty-author) comment keeps its own author slot
+/// instead of being attributed to the first named author.
+#[test]
+fn xlsb_empty_author_comment_keeps_attribution() {
+    let mut workbook = Workbook::new();
+    let sheet = workbook.worksheet_mut(0).unwrap();
+    sheet.set_comment_at(0, 0, CellComment::new("Bob", "named"));
+    sheet.set_comment_at(1, 0, CellComment::new("", "anonymous"));
+
+    let read = round_trip(&workbook);
+    let sheet = read.worksheet(0).unwrap();
+    assert_eq!(sheet.comment_at(0, 0).unwrap().author, "Bob");
+    assert_eq!(
+        sheet.comment_at(1, 0).unwrap().author,
+        "",
+        "anonymous comment must not inherit another author"
+    );
+}

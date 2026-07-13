@@ -252,14 +252,10 @@ pub(super) fn write_comments<W: Write + Seek>(
 
         for ((row, col), comment) in comments {
             let cell_ref = CellAddress::new(row, col).to_a1_string();
-            let author_id = if comment.author.is_empty() {
-                0
-            } else {
-                author_index
-                    .get(comment.author.as_str())
-                    .copied()
-                    .unwrap_or(0)
-            };
+            let author_id = author_index
+                .get(comment.author.as_str())
+                .copied()
+                .unwrap_or(0);
             let aid = author_id.to_string();
 
             let mut c_tag = BytesStart::new("comment");
