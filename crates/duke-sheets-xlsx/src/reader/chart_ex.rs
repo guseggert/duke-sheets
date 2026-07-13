@@ -2,24 +2,22 @@ use std::io::{Read, Seek};
 
 use super::archive_by_name;
 use crate::error::{XlsxError, XlsxResult};
-use duke_sheets_chart::{ChartEx, DrawingAnchor};
+use duke_sheets_chart::ChartEx;
 
 pub(crate) fn read_chart_ex<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     chart_path: &str,
-    anchor: DrawingAnchor,
 ) -> XlsxResult<Option<ChartEx>> {
     let file = match archive_by_name(archive, chart_path) {
         Ok(f) => f,
         Err(_) => return Ok(None),
     };
 
-    let mut cx = duke_sheets_chart::parse::parse_chart_ex_xml(file).map_err(|e| {
+    let cx = duke_sheets_chart::parse::parse_chart_ex_xml(file).map_err(|e| {
         XlsxError::Xml(quick_xml::Error::from(std::io::Error::new(
             std::io::ErrorKind::Other,
             e.to_string(),
         )))
     })?;
-    cx.anchor = anchor;
     Ok(Some(cx))
 }

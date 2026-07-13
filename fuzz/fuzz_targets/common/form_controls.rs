@@ -65,26 +65,26 @@ impl<'a> Arbitrary<'a> for FuzzFormControl {
 
         let kind = match u.int_in_range(0..=8u8)? {
             0 => FormControlKind::Button {
-                caption: caption(u)?,
+                caption: caption(u)?.into(),
             },
             1 => FormControlKind::Checkbox {
-                caption: caption(u)?,
+                caption: caption(u)?.into(),
                 state: state(u)?,
                 cell_link: cell_link(u)?,
                 no_3d: u.arbitrary()?,
             },
             2 => FormControlKind::OptionButton {
-                caption: caption(u)?,
+                caption: caption(u)?.into(),
                 state: state(u)?,
                 cell_link: cell_link(u)?,
                 first_in_group: u.arbitrary()?,
                 no_3d: u.arbitrary()?,
             },
             3 => FormControlKind::Label {
-                caption: caption(u)?,
+                caption: caption(u)?.into(),
             },
             4 => FormControlKind::GroupBox {
-                caption: caption(u)?,
+                caption: caption(u)?.into(),
                 no_3d: u.arbitrary()?,
             },
             5 => {
@@ -152,25 +152,27 @@ impl<'a> Arbitrary<'a> for FuzzFormControl {
 }
 
 impl FuzzFormControl {
-    /// Materialize as a model control at the spec's anchor.
+    /// Materialize as a model control payload.
     pub fn to_control(&self) -> FormControl {
-        FormControl::with_anchor(
-            self.kind.clone(),
-            DrawingAnchor::TwoCell {
-                from: CellMarker {
-                    col: self.from_col,
-                    col_offset_emu: 0,
-                    row: self.from_row,
-                    row_offset_emu: 0,
-                },
-                to: CellMarker {
-                    col: self.from_col + self.col_span,
-                    col_offset_emu: 0,
-                    row: self.from_row + self.row_span,
-                    row_offset_emu: 0,
-                },
-                edit_as: None,
+        FormControl::new(self.kind.clone())
+    }
+
+    /// The spec's anchor.
+    pub fn anchor(&self) -> DrawingAnchor {
+        DrawingAnchor::TwoCell {
+            from: CellMarker {
+                col: self.from_col,
+                col_offset_emu: 0,
+                row: self.from_row,
+                row_offset_emu: 0,
             },
-        )
+            to: CellMarker {
+                col: self.from_col + self.col_span,
+                col_offset_emu: 0,
+                row: self.from_row + self.row_span,
+                row_offset_emu: 0,
+            },
+            edit_as: None,
+        }
     }
 }

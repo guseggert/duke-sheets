@@ -19,6 +19,24 @@ mod tests {
         XlsbReader::read(Cursor::new(&buf)).unwrap()
     }
 
+    fn add_raw_drawing(ws: &mut duke_sheets_core::Worksheet, bytes: Vec<u8>) {
+        use duke_sheets_core::{DrawingObject, RawDrawing};
+        ws.add_drawing(DrawingObject::raw(RawDrawing {
+            bytes,
+            rels: vec![],
+        }));
+    }
+
+    fn raw_drawing_bytes(ws: &duke_sheets_core::Worksheet) -> Vec<&Vec<u8>> {
+        ws.drawings()
+            .iter()
+            .filter_map(|o| match &o.kind {
+                duke_sheets_core::DrawingKind::Raw(raw) => Some(&raw.bytes),
+                _ => None,
+            })
+            .collect()
+    }
+
     #[test]
     fn empty_workbook() {
         let wb = Workbook::new();
@@ -1333,27 +1351,10 @@ mod tests {
 
     #[test]
     fn drawing_round_trip() {
-        use crate::drawing_bundle::DrawingBundle;
-
-        let drawing_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing">
-  <xdr:twoCellAnchor>
-    <xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
-    <xdr:to><xdr:col>5</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>10</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
-    <xdr:sp><xdr:txBody><a:p xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:r><a:t>Hello</a:t></a:r></a:p></xdr:txBody></xdr:sp>
-    <xdr:clientData/>
-  </xdr:twoCellAnchor>
-</xdr:wsDr>"#;
-
-        let mut bundle = DrawingBundle::new();
-        bundle.push("xl/drawings/drawing1.xml".into(), drawing_xml.to_vec());
-        let encoded = bundle.encode();
+        let anchor_xml = br#"<xdr:twoCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>5</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>10</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:cxnSp><xdr:nvCxnSpPr><xdr:cNvPr id="7" name="Hello Connector"/><xdr:cNvCxnSpPr/></xdr:nvCxnSpPr><xdr:spPr><a:xfrm xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:off x="0" y="0"/><a:ext cx="1" cy="1"/></a:xfrm></xdr:spPr></xdr:cxnSp><xdr:clientData/></xdr:twoCellAnchor>"#;
 
         let mut wb = Workbook::new();
-        wb.worksheet_mut(0)
-            .unwrap()
-            .raw_drawing_objects
-            .push(encoded);
+        add_raw_drawing(wb.worksheet_mut(0).unwrap(), anchor_xml.to_vec());
 
         let mut buf = Vec::new();
         XlsbWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -1397,41 +1398,30 @@ mod tests {
 
         let wb2 = XlsbReader::read(Cursor::new(&buf)).unwrap();
         let ws2 = wb2.worksheet(0).unwrap();
-        assert_eq!(ws2.raw_drawing_objects.len(), 1);
+        let raw2 = raw_drawing_bytes(ws2);
+        assert_eq!(raw2.len(), 1, "unmodeled anchor read back as raw");
+        let text = std::str::from_utf8(raw2[0]).unwrap();
+        assert!(text.contains("Hello"), "anchor content preserved: {text}");
 
-        let bundle2 = DrawingBundle::decode(&ws2.raw_drawing_objects[0]).unwrap();
-        let (_, round_tripped) = bundle2
-            .entries
-            .iter()
-            .find(|(p, _)| p.contains("/drawings/drawing"))
-            .unwrap();
-        assert_eq!(round_tripped, &drawing_xml.to_vec());
+        // The raw anchor survives a second write unchanged.
+        let wb3 = round_trip(&wb2);
+        let ws3 = wb3.worksheet(0).unwrap();
+        assert_eq!(raw_drawing_bytes(ws3), raw_drawing_bytes(ws2));
     }
 
     #[test]
     fn drawing_with_chart_round_trip() {
-        use crate::drawing_bundle::DrawingBundle;
-
-        let drawing_xml = b"<xdr:wsDr xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\"><xdr:twoCellAnchor/></xdr:wsDr>";
-        let chart_xml = b"<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"><c:chart/></c:chartSpace>";
-        let drawing_rels = br#"<?xml version="1.0" encoding="UTF-8"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/>
-</Relationships>"#;
-
-        let mut bundle = DrawingBundle::new();
-        bundle.push("xl/drawings/drawing1.xml".into(), drawing_xml.to_vec());
-        bundle.push(
-            "xl/drawings/_rels/drawing1.xml.rels".into(),
-            drawing_rels.to_vec(),
-        );
-        bundle.push("xl/charts/chart1.xml".into(), chart_xml.to_vec());
+        use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries, DrawingAnchor};
 
         let mut wb = Workbook::new();
-        wb.worksheet_mut(0)
-            .unwrap()
-            .raw_drawing_objects
-            .push(bundle.encode());
+        let ws = wb.worksheet_mut(0).unwrap();
+        for (i, v) in [3.0, 1.0, 4.0].iter().enumerate() {
+            ws.set_cell_value_at(i as u32, 0, *v).unwrap();
+        }
+        let mut chart = Chart::new(ChartType::ColumnClustered);
+        chart.title = Some("Chart Title".to_string());
+        chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$3")));
+        ws.add_chart(chart, DrawingAnchor::default());
 
         let mut buf = Vec::new();
         XlsbWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -1455,18 +1445,11 @@ mod tests {
 
         let wb2 = XlsbReader::read(Cursor::new(&buf)).unwrap();
         let ws2 = wb2.worksheet(0).unwrap();
-        assert_eq!(ws2.raw_drawing_objects.len(), 1);
-        let bundle2 = DrawingBundle::decode(&ws2.raw_drawing_objects[0]).unwrap();
-        assert!(bundle2
-            .entries
-            .iter()
-            .any(|(p, _)| p == "xl/charts/chart1.xml"));
-        let (_, chart_bytes) = bundle2
-            .entries
-            .iter()
-            .find(|(p, _)| p == "xl/charts/chart1.xml")
-            .unwrap();
-        assert_eq!(chart_bytes, &chart_xml.to_vec());
+        assert_eq!(ws2.chart_count(), 1);
+        let chart2 = ws2.charts().next().unwrap().payload;
+        assert_eq!(chart2.chart_type, ChartType::ColumnClustered);
+        assert_eq!(chart2.title.as_deref(), Some("Chart Title"));
+        assert_eq!(chart2.series.len(), 1);
     }
 
     #[test]
@@ -1491,10 +1474,7 @@ mod tests {
         let anchor = b"<xdr:twoCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>5</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>5</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:sp/><xdr:clientData/></xdr:twoCellAnchor>";
 
         let mut wb = Workbook::new();
-        wb.worksheet_mut(0)
-            .unwrap()
-            .raw_drawing_objects
-            .push(anchor.to_vec());
+        add_raw_drawing(wb.worksheet_mut(0).unwrap(), anchor.to_vec());
 
         let mut buf = Vec::new();
         XlsbWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -2036,6 +2016,124 @@ mod tests {
             }
             other => panic!("expected IconSet, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn advanced_cf_records_match_biff12_layout() {
+        use crate::biff12::{records, RecordIter};
+        use duke_sheets_core::conditional_format::{ConditionalFormatRule, IconSetStyle};
+        use std::io::Read;
+
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        let mut scale = ConditionalFormatRule::color_scale_3(
+            Color::rgb(255, 0, 0),
+            Color::rgb(255, 255, 0),
+            Color::rgb(0, 255, 0),
+        );
+        scale.ranges = vec![CellRange::parse("A1:A5").unwrap()];
+        ws.add_conditional_format(scale);
+        let mut bar = ConditionalFormatRule::data_bar(Color::rgb(99, 142, 198));
+        bar.ranges = vec![CellRange::parse("B1:B5").unwrap()];
+        ws.add_conditional_format(bar);
+        let mut icons = ConditionalFormatRule::icon_set(IconSetStyle::Arrows3);
+        icons.ranges = vec![CellRange::parse("C1:C5").unwrap()];
+        ws.add_conditional_format(icons);
+
+        let mut xlsb = Vec::new();
+        XlsbWriter::write(&wb, Cursor::new(&mut xlsb)).unwrap();
+        let mut zip = zip::ZipArchive::new(Cursor::new(xlsb)).unwrap();
+        let mut sheet = Vec::new();
+        zip.by_name("xl/worksheets/sheet1.bin")
+            .unwrap()
+            .read_to_end(&mut sheet)
+            .unwrap();
+        let mut iter = RecordIter::new(Cursor::new(sheet));
+        let mut buf = Vec::new();
+        let mut cf_records = Vec::new();
+        while let Ok((record_type, len)) = iter.next_record(&mut buf) {
+            if matches!(record_type, 461..=471 | 564) {
+                cf_records.push((record_type, buf[..len].to_vec()));
+            }
+        }
+
+        // Pinned against Excel output and [MS-XLSB] 2.4.23, 2.4.43, 2.4.91, 2.4.334, and 2.4.337.
+        let types: Vec<u16> = cf_records.iter().map(|record| record.0).collect();
+        assert_eq!(
+            types,
+            vec![
+                461, 463, 469, 471, 471, 471, 564, 564, 564, 470, 464, 462, 461, 463, 467, 471,
+                471, 564, 468, 464, 462, 461, 463, 465, 471, 471, 471, 466, 464, 462,
+            ]
+        );
+
+        let begin_formats: Vec<&Vec<u8>> = cf_records
+            .iter()
+            .filter(|record| record.0 == records::BRT_BEGIN_COND_FMT)
+            .map(|record| &record.1)
+            .collect();
+        assert_eq!(begin_formats.len(), 3);
+        assert!(begin_formats
+            .iter()
+            .all(|payload| &payload[..4] == 1u32.to_le_bytes()));
+        assert_eq!(
+            u32::from_le_bytes(begin_formats[0][20..24].try_into().unwrap()),
+            0
+        );
+        assert_eq!(
+            u32::from_le_bytes(begin_formats[1][20..24].try_into().unwrap()),
+            1
+        );
+        assert_eq!(
+            u32::from_le_bytes(begin_formats[2][20..24].try_into().unwrap()),
+            2
+        );
+
+        let rules: Vec<&Vec<u8>> = cf_records
+            .iter()
+            .filter(|record| record.0 == records::BRT_BEGIN_CF_RULE)
+            .map(|record| &record.1)
+            .collect();
+        assert_eq!((read_u32(rules[0], 0), read_u32(rules[0], 4)), (3, 2));
+        assert_eq!((read_u32(rules[1], 0), read_u32(rules[1], 4)), (4, 3));
+        assert_eq!((read_u32(rules[2], 0), read_u32(rules[2], 4)), (6, 4));
+        assert_eq!(
+            rules
+                .iter()
+                .map(|rule| read_u32(rule, 12))
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+
+        let data_bar = cf_records
+            .iter()
+            .find(|record| record.0 == records::BRT_BEGIN_DATA_BAR)
+            .unwrap();
+        assert_eq!(data_bar.1, [10, 90, 1]);
+        let icon_set = cf_records
+            .iter()
+            .find(|record| record.0 == records::BRT_BEGIN_ICON_SET)
+            .unwrap();
+        assert_eq!(icon_set.1, [0, 0, 0, 0, 0, 0]);
+
+        let cfvos: Vec<&Vec<u8>> = cf_records
+            .iter()
+            .filter(|record| record.0 == records::BRT_CFVO)
+            .map(|record| &record.1)
+            .collect();
+        assert!(cfvos.iter().all(|payload| payload.len() == 24));
+        assert_eq!(
+            f64::from_le_bytes(cfvos[1][4..12].try_into().unwrap()),
+            50.0
+        );
+        for payload in &cfvos[5..8] {
+            assert_eq!(read_u32(payload, 12), 1);
+            assert_eq!(read_u32(payload, 16), 1);
+        }
+    }
+
+    fn read_u32(data: &[u8], offset: usize) -> u32 {
+        u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap())
     }
 
     #[test]
@@ -2858,32 +2956,32 @@ mod tests {
 
         let kinds: Vec<FormControlKind> = vec![
             FormControlKind::Button {
-                caption: "Run Report".to_string(),
+                caption: "Run Report".into(),
             },
             FormControlKind::Checkbox {
-                caption: "Enable audit".to_string(),
+                caption: "Enable audit".into(),
                 state: CheckState::Checked,
                 cell_link: Some("$D$2".to_string()),
                 no_3d: true,
             },
             FormControlKind::Checkbox {
-                caption: "Tri state".to_string(),
+                caption: "Tri state".into(),
                 state: CheckState::Mixed,
                 cell_link: None,
                 no_3d: true,
             },
             FormControlKind::OptionButton {
-                caption: "Opt A".to_string(),
+                caption: "Opt A".into(),
                 state: CheckState::Checked,
                 cell_link: Some("$D$3".to_string()),
                 first_in_group: false,
                 no_3d: true,
             },
             FormControlKind::Label {
-                caption: "Status".to_string(),
+                caption: "Status".into(),
             },
             FormControlKind::GroupBox {
-                caption: "Choices".to_string(),
+                caption: "Choices".into(),
                 no_3d: true,
             },
             FormControlKind::ListBox {
@@ -2924,25 +3022,22 @@ mod tests {
         let count = kinds.len();
         for (i, kind) in kinds.iter().enumerate() {
             let row = 1 + 2 * i as u32;
-            ws.add_form_control(FormControl::with_anchor(
-                kind.clone(),
-                anchor(1, row, 3, row + 1),
-            ));
+            ws.add_form_control(FormControl::new(kind.clone()), anchor(1, row, 3, row + 1));
         }
 
         let wb2 = round_trip(&wb);
-        let controls = wb2.worksheet(0).unwrap().form_controls();
+        let controls: Vec<_> = wb2.worksheet(0).unwrap().form_controls().collect();
         assert_eq!(controls.len(), count, "every control survives");
-        for (i, control) in controls.iter().enumerate() {
+        for (i, drawn) in controls.iter().enumerate() {
             // The writer recomputes radio grouping; the single radio
             // becomes its own group head.
             let mut expected = kinds[i].clone();
             if let FormControlKind::OptionButton { first_in_group, .. } = &mut expected {
                 *first_in_group = true;
             }
-            assert_eq!(control.kind, expected, "control {i} kind mismatch");
+            assert_eq!(drawn.payload.kind, expected, "control {i} kind mismatch");
         }
-        match &controls[0].anchor {
+        match &controls[0].object.anchor {
             DrawingAnchor::TwoCell { from, to, .. } => {
                 assert_eq!((from.col, from.row), (1, 1));
                 assert_eq!((to.col, to.row), (3, 2));
@@ -2960,13 +3055,13 @@ mod tests {
         let mut wb = Workbook::new();
         let ws = wb.worksheet_mut(0).unwrap();
         ws.set_comment_at(0, 0, CellComment::new("Author", "note"));
-        ws.add_form_control(FormControl::with_anchor(
-            FormControlKind::Checkbox {
-                caption: "check".to_string(),
+        ws.add_form_control(
+            FormControl::new(FormControlKind::Checkbox {
+                caption: "check".into(),
                 state: CheckState::Checked,
                 cell_link: None,
                 no_3d: false,
-            },
+            }),
             DrawingAnchor::TwoCell {
                 from: CellMarker {
                     col: 1,
@@ -2982,13 +3077,21 @@ mod tests {
                 },
                 edit_as: None,
             },
-        ));
+        );
 
         let wb2 = round_trip(&wb);
         let ws2 = wb2.worksheet(0).unwrap();
         assert_eq!(ws2.comment_count(), 1, "comment survives");
         assert_eq!(ws2.form_control_count(), 1, "control survives");
-        assert_eq!(ws2.form_controls()[0].caption(), Some("check"));
+        assert_eq!(
+            ws2.form_controls()
+                .next()
+                .unwrap()
+                .payload
+                .caption_text()
+                .as_deref(),
+            Some("check")
+        );
     }
 
     #[test]
@@ -3021,13 +3124,13 @@ mod tests {
             totals_row_count: 0,
             totals_row_shown: false,
         });
-        ws.add_form_control(FormControl::with_anchor(
-            FormControlKind::Checkbox {
-                caption: "check".to_string(),
+        ws.add_form_control(
+            FormControl::new(FormControlKind::Checkbox {
+                caption: "check".into(),
                 state: CheckState::Checked,
                 cell_link: None,
                 no_3d: false,
-            },
+            }),
             DrawingAnchor::TwoCell {
                 from: CellMarker {
                     col: 2,
@@ -3043,7 +3146,7 @@ mod tests {
                 },
                 edit_as: None,
             },
-        ));
+        );
 
         let mut bytes = Vec::new();
         XlsbWriter::write(&wb, Cursor::new(&mut bytes)).unwrap();
@@ -3066,12 +3169,160 @@ mod tests {
         let mut payload = Vec::new();
         let mut legacy_rid = None;
         loop {
-            let Ok(record_type) = iter.read_type() else { break };
+            let Ok(record_type) = iter.read_type() else {
+                break;
+            };
             let len = iter.fill_buffer(&mut payload).unwrap();
             if record_type == crate::biff12::records::BRT_LEGACY_DRAWING {
-                legacy_rid = Some(crate::biff12::parser::wide_str(&payload[..len], 0).unwrap().0);
+                legacy_rid = Some(
+                    crate::biff12::parser::wide_str(&payload[..len], 0)
+                        .unwrap()
+                        .0,
+                );
             }
         }
         assert_eq!(legacy_rid.as_deref(), Some("rId2"));
+    }
+
+    /// The chartEx content type must use Excel's lowercase spelling
+    /// (`application/vnd.ms-office.chartex+xml`), matching the XLSX
+    /// writer.
+    #[test]
+    fn chart_ex_content_type_is_lowercase() {
+        use std::io::Read;
+
+        let chart_ex = duke_sheets_chart::ChartEx {
+            version: None,
+            feature_list: None,
+            fallback_img: None,
+            title: None,
+            data: Vec::new(),
+            external_data: None,
+            plot_area: Default::default(),
+            legend: None,
+            shape_properties: None,
+            text_properties: None,
+            color_map_override: None,
+            format_overrides: Vec::new(),
+            print_settings: None,
+            raw_chart_style: None,
+            raw_chart_color_style: None,
+            extensions: None,
+            raw_extensions: Default::default(),
+            raw_mc_fallback: None,
+        };
+        let mut wb = Workbook::new();
+        wb.worksheet_mut(0)
+            .unwrap()
+            .add_chart_ex(chart_ex, duke_sheets_chart::DrawingAnchor::default());
+
+        let mut bytes = Vec::new();
+        XlsbWriter::write(&wb, Cursor::new(&mut bytes)).unwrap();
+        let mut zip = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let mut content_types = String::new();
+        zip.by_name("[Content_Types].xml")
+            .unwrap()
+            .read_to_string(&mut content_types)
+            .unwrap();
+        assert!(
+            content_types.contains("application/vnd.ms-office.chartex+xml"),
+            "lowercase chartex content type: {content_types}"
+        );
+        assert!(
+            !content_types.contains("chartEx+xml"),
+            "no camel-case chartEx content type: {content_types}"
+        );
+    }
+
+    /// Non-visual CF rules must encode as CF_TYPE_EXPRIS (2) with the
+    /// matching CFTemp template. MS-XLSB 2.5.18 CFType defines only
+    /// values 1..6; 2.4.23 BrtBeginCFRule pins the allowed
+    /// iType/iTemplate pairs and the iParam semantics (CFTextOper
+    /// 2.5.17 for CONTAINSTEXT, CFDateOper 2.5.12 for TIMEPERIOD*).
+    #[test]
+    fn cf_rule_records_use_spec_type_template_pairs() {
+        use duke_sheets_core::conditional_format::{
+            CfRuleType, ConditionalFormatRule, TimePeriod,
+        };
+        use std::io::Read;
+
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        let range = CellRange::parse("A1:A10").unwrap();
+        let rules = [
+            CfRuleType::Expression {
+                formula: "MOD(A1,2)=0".into(),
+            },
+            CfRuleType::ContainsText { text: "x".into() },
+            CfRuleType::BeginsWith { text: "x".into() },
+            CfRuleType::EndsWith { text: "x".into() },
+            CfRuleType::UniqueValues,
+            CfRuleType::DuplicateValues,
+            CfRuleType::ContainsBlanks,
+            CfRuleType::NotContainsBlanks,
+            CfRuleType::ContainsErrors,
+            CfRuleType::NotContainsErrors,
+            CfRuleType::TimePeriod {
+                period: TimePeriod::LastWeek,
+            },
+            CfRuleType::AboveAverage {
+                above: true,
+                equal_average: false,
+                std_dev: None,
+            },
+            CfRuleType::AboveAverage {
+                above: false,
+                equal_average: true,
+                std_dev: None,
+            },
+        ];
+        for (i, rule_type) in rules.into_iter().enumerate() {
+            ws.add_conditional_format(
+                ConditionalFormatRule::new(rule_type)
+                    .with_range(range.clone())
+                    .with_priority((i + 1) as u32),
+            );
+        }
+
+        let mut bytes = Vec::new();
+        XlsbWriter::write(&wb, Cursor::new(&mut bytes)).unwrap();
+        let mut zip = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let mut sheet = Vec::new();
+        zip.by_name("xl/worksheets/sheet1.bin")
+            .unwrap()
+            .read_to_end(&mut sheet)
+            .unwrap();
+
+        let mut iter = crate::biff12::RecordIter::new(Cursor::new(sheet));
+        let mut payload = Vec::new();
+        let mut triples = Vec::new();
+        while let Ok((typ, len)) = iter.next_record(&mut payload) {
+            if typ == crate::biff12::records::BRT_BEGIN_CF_RULE && len >= 20 {
+                triples.push((
+                    crate::biff12::parser::read_u32(&payload, 0),
+                    crate::biff12::parser::read_u32(&payload, 4),
+                    crate::biff12::parser::read_u32(&payload, 16),
+                ));
+            }
+        }
+        assert_eq!(
+            triples,
+            vec![
+                (2, 0x01, 0), // Expression: FMLA
+                (2, 0x08, 0), // ContainsText: CONTAINSTEXT + CF_TEXTOPER_CONTAINS
+                (2, 0x08, 2), // BeginsWith: CONTAINSTEXT + CF_TEXTOPER_BEGINSWITH
+                (2, 0x08, 3), // EndsWith: CONTAINSTEXT + CF_TEXTOPER_ENDSWITH
+                (2, 0x07, 0), // UniqueValues
+                (2, 0x1B, 0), // DuplicateValues
+                (2, 0x09, 0), // ContainsBlanks
+                (2, 0x0A, 0), // NotContainsBlanks
+                (2, 0x0B, 0), // ContainsErrors
+                (2, 0x0C, 0), // NotContainsErrors
+                (2, 0x17, 4), // TimePeriod LastWeek + CF_TIMEPERIOD_LASTWEEK
+                (2, 0x19, 0), // AboveAverage
+                (2, 0x1E, 0), // EqualBelowAverage
+            ],
+            "BrtBeginCFRule (iType, iTemplate, iParam) triples"
+        );
     }
 }

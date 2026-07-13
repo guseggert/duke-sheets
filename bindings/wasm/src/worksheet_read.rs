@@ -5,9 +5,9 @@ use wasm_bindgen::prelude::*;
 use crate::{
     to_js_error, to_js_value,
     types::{
-        WasmAutoFilter, WasmChart, WasmChartEx, WasmColor, WasmComment, WasmCommentEntry,
-        WasmConditionalFormatRule, WasmDataValidation, WasmEmbeddedImage, WasmFormulaCell,
-        WasmFreezePanes, WasmHyperlink, WasmHyperlinkEntry, WasmImageInfo, WasmMergeSpan,
+        WasmAutoFilter, WasmColor, WasmComment, WasmCommentEntry, WasmConditionalFormatRule,
+        WasmDataValidation, WasmFormulaCell, WasmFreezePanes, WasmHyperlink,
+        WasmHyperlinkEntry, WasmImageInfo, WasmMergeSpan,
         WasmMergedRegion, WasmPageBreak, WasmPageSetup, WasmProtectedRange, WasmRow, WasmRowCell,
         WasmRowsOptions, WasmSelection, WasmSheetProtection, WasmSpillSource, WasmSplitPanes,
         WasmStyle, WasmTable,
@@ -317,7 +317,8 @@ impl Worksheet {
             };
 
             let comment = if inc_comments {
-                ws.comment_at(row, col).map(WasmComment::from)
+                ws.comment_at(row, col)
+                    .map(|comment| WasmComment::from_comment(comment, ws.comment_visible(row, col).unwrap_or(false)))
             } else {
                 None
             };
@@ -514,7 +515,13 @@ impl Worksheet {
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
         let comment = ws.comment(address).map_err(to_js_error)?;
         match comment {
-            Some(v) => to_js_value(&WasmComment::from(v)),
+            Some(v) => {
+                let addr = duke_sheets_core::CellAddress::parse(address).map_err(to_js_error)?;
+                to_js_value(&WasmComment::from_comment(
+                    v,
+                    ws.comment_visible(addr.row, addr.col).unwrap_or(false),
+                ))
+            }
             None => Ok(JsValue::NULL),
         }
     }
@@ -526,7 +533,10 @@ impl Worksheet {
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
         match ws.comment_at(row, col as u16) {
-            Some(v) => to_js_value(&WasmComment::from(v)),
+            Some(v) => to_js_value(&WasmComment::from_comment(
+                v,
+                ws.comment_visible(row, col as u16).unwrap_or(false),
+            )),
             None => Ok(JsValue::NULL),
         }
     }
@@ -565,11 +575,11 @@ impl Worksheet {
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
         let comments: Vec<WasmCommentEntry> = ws
-            .comments()
-            .map(|((row, col), c)| WasmCommentEntry {
-                row,
-                col: col as u32,
-                comment: WasmComment::from(c),
+            .comments_drawn()
+            .map(|drawn| WasmCommentEntry {
+                row: drawn.row,
+                col: drawn.col as u32,
+                comment: WasmComment::from_comment(drawn.comment, !drawn.object.meta.hidden),
             })
             .collect();
         to_js_value(&comments)
@@ -877,61 +887,4 @@ impl Worksheet {
         Ok(ws.is_merged_secondary(row, col as u16))
     }
 
-    #[wasm_bindgen(getter, js_name = charts)]
-    pub fn charts(&self) -> Result<JsValue, JsError> {
-        let wb = self.workbook.borrow();
-        let ws = wb
-            .worksheet(self.sheet_index)
-            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
-        let charts: Vec<WasmChart> = ws.charts().iter().map(WasmChart::from).collect();
-        to_js_value(&charts)
-    }
-
-    #[wasm_bindgen(getter, js_name = chartCount)]
-    pub fn chart_count(&self) -> Result<u32, JsError> {
-        let wb = self.workbook.borrow();
-        let ws = wb
-            .worksheet(self.sheet_index)
-            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
-        Ok(ws.chart_count() as u32)
-    }
-
-    #[wasm_bindgen(getter, js_name = chartsEx)]
-    pub fn charts_ex(&self) -> Result<JsValue, JsError> {
-        let wb = self.workbook.borrow();
-        let ws = wb
-            .worksheet(self.sheet_index)
-            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
-        let charts: Vec<WasmChartEx> = ws.charts_ex().iter().map(WasmChartEx::from).collect();
-        to_js_value(&charts)
-    }
-
-    #[wasm_bindgen(getter, js_name = chartExCount)]
-    pub fn chart_ex_count(&self) -> Result<u32, JsError> {
-        let wb = self.workbook.borrow();
-        let ws = wb
-            .worksheet(self.sheet_index)
-            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
-        Ok(ws.chart_ex_count() as u32)
-    }
-
-    #[wasm_bindgen(getter, js_name = images)]
-    pub fn images(&self) -> Result<JsValue, JsError> {
-        let wb = self.workbook.borrow();
-        let ws = wb
-            .worksheet(self.sheet_index)
-            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
-        let images: Vec<WasmEmbeddedImage> =
-            ws.images().iter().map(WasmEmbeddedImage::from).collect();
-        to_js_value(&images)
-    }
-
-    #[wasm_bindgen(getter, js_name = imageCount)]
-    pub fn image_count(&self) -> Result<u32, JsError> {
-        let wb = self.workbook.borrow();
-        let ws = wb
-            .worksheet(self.sheet_index)
-            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
-        Ok(ws.image_count() as u32)
-    }
 }

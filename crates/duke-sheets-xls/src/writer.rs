@@ -256,10 +256,16 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
         &name_table,
         &addin_table,
     );
+    write_macro_name_records(&mut stream, workbook)?;
     write_print_name_records(&mut stream, workbook);
     sst.write_records(&mut stream)?;
-    let drawing_state =
-        compute_drawing_state(workbook, &externsheet_table, &name_table, &addin_table)?;
+    let drawing_state = compute_drawing_state(
+        workbook,
+        &externsheet_table,
+        &name_table,
+        &addin_table,
+        &styles,
+    )?;
     write_msodrawinggroup(&mut stream, &drawing_state);
     write_eof(&mut stream);
 
@@ -309,7 +315,7 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
             &addin_table,
         );
         if let Some(sheet_drawing) = drawing_state.sheets.get(&sheet_idx) {
-            write_sheet_drawing_records(&mut stream, sheet_drawing)?;
+            write_sheet_drawing_records(&mut stream, sheet_drawing, sheet)?;
         }
         write_eof(&mut stream);
         sheet_bof_offsets.push(bof_pos);
@@ -465,6 +471,44 @@ impl StyleTables {
             }
         }
 
+        for sheet in workbook.worksheets() {
+            for placed in sheet.placed_form_controls() {
+                let Some(caption) = placed.control.caption() else {
+                    continue;
+                };
+                for run in &caption.runs {
+                    if let Some(rf) = &run.font {
+                        let font = run_font_to_font_style(rf);
+                        if !font_xf_index.contains_key(&font) {
+                            let on_disk = fonts_in_order.len() as u16;
+                            let xf_idx = if on_disk < 4 { on_disk } else { on_disk + 1 };
+                            fonts_in_order.push(font.clone());
+                            font_xf_index.insert(font, xf_idx);
+                        }
+                    }
+                }
+            }
+            for (_, node) in sheet.drawings_flat() {
+                let Some(shape) = node.kind.as_shape() else {
+                    continue;
+                };
+                let Some(text) = &shape.text else {
+                    continue;
+                };
+                for run in &text.runs {
+                    if let Some(rf) = &run.font {
+                        let font = run_font_to_font_style(rf);
+                        if !font_xf_index.contains_key(&font) {
+                            let on_disk = fonts_in_order.len() as u16;
+                            let xf_idx = if on_disk < 4 { on_disk } else { on_disk + 1 };
+                            fonts_in_order.push(font.clone());
+                            font_xf_index.insert(font, xf_idx);
+                        }
+                    }
+                }
+            }
+        }
+
         StyleTables {
             fonts_in_order,
             font_xf_index,
@@ -613,10 +657,12 @@ fn write_font_record(stream: &mut Vec<u8>, font: &FontStyle) -> XlsResult<()> {
     let icv = match font.color {
         Color::Auto => COLOR_AUTO,
         Color::Indexed(i) => i as u16,
-        // BIFF8 has no first-class RGB / theme support without a
-        // PALETTE record. Fall back to auto rather than emit an
-        // out-of-range icv that the reader would reject.
-        _ => COLOR_AUTO,
+        Color::Rgb { r, g, b } | Color::Argb { r, g, b, .. } => crate::styles::DEFAULT_PALETTE
+            .iter()
+            .position(|&(pr, pg, pb)| (pr, pg, pb) == (r, g, b))
+            .map(|index| index as u16 + 8)
+            .unwrap_or(COLOR_AUTO),
+        Color::Theme { .. } => COLOR_AUTO,
     };
     body.extend_from_slice(&icv.to_le_bytes());
 
@@ -857,15 +903,25 @@ fn encode_fill_colors(fill: &FillStyle) -> (u8, u8) {
 
 /// Encode a [`Color`] as a 7-bit `icv` value (the on-disk encoding
 /// used in border/fill XF fields). The font-side encoding uses 16
-/// bits and a different sentinel — see `write_font_record`.
+/// bits and a different auto sentinel (see `write_font_record`), but
+/// both sides share the raw-icv `Indexed` semantic and the
+/// palette-position mapping for RGB so a color means the same thing
+/// on every XF axis.
 fn color_to_icv7(color: &Color) -> u8 {
     match color {
         Color::Auto => 0x40,
-        Color::Indexed(i) => 0x08u8.saturating_add(i.min(&55).clone()),
-        // BIFF8 has no first-class RGB without a PALETTE record. Pick
-        // 0x40 (system foreground) as the closest no-op default; a
-        // future PALETTE-emission slice can express arbitrary RGB.
-        _ => 0x40,
+        // Model Indexed(i) is the raw icv (the OOXML indexed-colors
+        // table matches BIFF icv 0..=63; 0x40/0x41 are the system
+        // defaults), same as the font path and the reader.
+        Color::Indexed(i) => (*i).min(0x41),
+        Color::Rgb { r, g, b } | Color::Argb { r, g, b, .. } => crate::styles::DEFAULT_PALETTE
+            .iter()
+            .position(|&(pr, pg, pb)| (pr, pg, pb) == (*r, *g, *b))
+            .map(|index| index as u8 + 8)
+            // Off-palette RGB has no BIFF8 encoding without a PALETTE
+            // record; 0x40 (system foreground) is the no-op default.
+            .unwrap_or(0x40),
+        Color::Theme { .. } => 0x40,
     }
 }
 
@@ -1779,6 +1835,7 @@ fn write_mergecells(stream: &mut Vec<u8>, sheet: &Worksheet) {
 #[derive(Debug, Default)]
 struct NameTable {
     by_name: HashMap<String, NameInfo>,
+    macro_by_name: HashMap<String, u16>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1799,14 +1856,22 @@ impl NameTable {
             .get(&name.to_ascii_lowercase())
             .map(|info| info.body_class)
     }
+
+    fn idx_for_macro(&self, name: &str) -> Option<u16> {
+        self.macro_by_name.get(&name.to_ascii_lowercase()).copied()
+    }
 }
 
 fn build_name_table(workbook: &Workbook) -> NameTable {
     let mut by_name = HashMap::new();
-    for (i, nr) in user_names_in_xls_emit_order(workbook)
+    // Positional indices must be built from exactly the set of Lbl
+    // records write_user_name_records emits: an indexed-but-skipped
+    // name would shift every later PtgName onto the wrong Lbl.
+    let user_names: Vec<_> = user_names_in_xls_emit_order(workbook)
         .into_iter()
-        .enumerate()
-    {
+        .filter(|nr| xls_lbl_name_fits(&nr.name))
+        .collect();
+    for (i, nr) in user_names.iter().copied().enumerate() {
         if i >= u16::MAX as usize {
             break;
         }
@@ -1823,7 +1888,21 @@ fn build_name_table(workbook: &Workbook) -> NameTable {
             },
         );
     }
-    NameTable { by_name }
+    let mut macro_by_name = HashMap::new();
+    // Macro Lbls follow the user Lbls; unemittable macro names stay
+    // indexed because write_macro_name_records fails the whole write
+    // for them, so no emitted file can carry a skewed index.
+    for (offset, name) in macro_names_in_xls_emit_order(workbook).iter().enumerate() {
+        let index = user_names.len().saturating_add(offset).saturating_add(1);
+        if index > u16::MAX as usize {
+            break;
+        }
+        macro_by_name.insert(name.to_ascii_lowercase(), index as u16);
+    }
+    NameTable {
+        by_name,
+        macro_by_name,
+    }
 }
 
 /// Emit one NAME record (MS-XLS §2.4.176, Lbl) per user-defined named
@@ -1853,10 +1932,12 @@ fn write_user_name_records(
     use duke_sheets_core::named_range::NameScope;
 
     for nr in user_names_in_xls_emit_order(workbook) {
-        let name_units: Vec<u16> = nr.name.encode_utf16().collect();
-        if name_units.is_empty() || name_units.len() > u8::MAX as usize {
+        // Must stay in lockstep with build_name_table's filter: the
+        // PtgName indices are positions in this emitted sequence.
+        if !xls_lbl_name_fits(&nr.name) {
             continue;
         }
+        let name_units: Vec<u16> = nr.name.encode_utf16().collect();
 
         let formula_body: Vec<u8> = {
             if let Some(expr) = parse_name_body(&nr.refers_to) {
@@ -1930,6 +2011,64 @@ fn write_user_name_records(
     }
 }
 
+/// Emit procedure Lbl records referenced by control FtMacro formulas.
+/// MS-XLS 2.5.148 requires FtMacro to reference an Lbl with fProc=1.
+fn write_macro_name_records(stream: &mut Vec<u8>, workbook: &Workbook) -> XlsResult<()> {
+    for name in macro_names_in_xls_emit_order(workbook) {
+        if !is_xls_macro_procedure_name(&name) {
+            return Err(XlsError::InvalidFormat(format!(
+                "XLS control macro {name:?} must be a workbook-local procedure name"
+            )));
+        }
+        let name_units: Vec<u16> = name.encode_utf16().collect();
+        let high_byte = name_units.iter().any(|&unit| unit > 0xFF);
+        let mut body = Vec::with_capacity(17 + name_units.len() * 2);
+        // fOB + fProc identify a VBA procedure name (MS-XLS 2.4.150).
+        body.extend_from_slice(&0x000Cu16.to_le_bytes());
+        body.push(0); // chKey
+        body.push(name_units.len() as u8);
+        body.extend_from_slice(&2u16.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes()); // workbook scope
+        body.extend_from_slice(&[0u8; 4]);
+        body.push(if high_byte { 1 } else { 0 });
+        if high_byte {
+            for unit in name_units {
+                body.extend_from_slice(&unit.to_le_bytes());
+            }
+        } else {
+            body.extend(name_units.into_iter().map(|unit| unit as u8));
+        }
+        // A procedure Lbl has no cell definition; #REF! is the
+        // conventional NameParsedFormula placeholder.
+        body.extend_from_slice(&[0x1C, 0x17]);
+        write_biff_record(stream, NAME_RECORD, &body);
+    }
+    Ok(())
+}
+
+fn is_xls_macro_procedure_name(name: &str) -> bool {
+    // Lbl cch is a u8; an oversized name cannot be emitted, and
+    // skipping its Lbl would shift every later macro's PtgName index.
+    if !xls_lbl_name_fits(name) {
+        return false;
+    }
+    name.split('.').all(|part| {
+        let mut chars = part.chars();
+        chars
+            .next()
+            .is_some_and(|ch| ch == '_' || ch == '\\' || ch.is_alphabetic())
+            && chars.all(|ch| ch == '_' || ch.is_alphanumeric())
+    })
+}
+
+/// Whether a defined name fits an XLS Lbl record (cch is a u8).
+/// PtgName indices are positional over the emitted Lbl sequence, so
+/// the name table and the NAME emitters must apply this same filter.
+fn xls_lbl_name_fits(name: &str) -> bool {
+    (1..=usize::from(u8::MAX)).contains(&name.encode_utf16().count())
+}
+
 fn parse_name_body(refers_to: &str) -> Option<duke_sheets_formula::FormulaExpr> {
     let to_parse = if refers_to.starts_with('=') {
         refers_to.to_string()
@@ -1952,6 +2091,17 @@ fn user_names_in_xls_emit_order(
             .cmp(&b.name.to_ascii_lowercase())
             .then_with(|| name_scope_sort_key(&a.scope).cmp(&name_scope_sort_key(&b.scope)))
     });
+    names
+}
+
+fn macro_names_in_xls_emit_order(workbook: &Workbook) -> Vec<String> {
+    let mut names = workbook
+        .worksheets()
+        .flat_map(|sheet| sheet.placed_form_controls())
+        .filter_map(|placed| placed.control.macro_name.clone())
+        .collect::<Vec<_>>();
+    names.sort_by_key(|name| name.to_ascii_lowercase());
+    names.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
     names
 }
 
@@ -4414,25 +4564,147 @@ struct SheetDrawing {
     dgid: u16,
     /// Shape ID of the patriarch group (the implicit root group).
     patriarch_spid: u32,
-    /// One per picture on this sheet, in stable iteration order
-    /// (same order as `Worksheet::images()`).
-    pictures: Vec<PictureShape>,
-    /// One per comment, in stable iteration order (sorted by row,
-    /// then column).
-    comments: Vec<CommentShape>,
-    /// One per form control, in `Worksheet::form_controls()` order.
-    controls: Vec<ControlShape>,
+    /// Highest shape ID allocated in this drawing.
+    spid_last: u32,
+    /// Every shape on this sheet in `Worksheet::drawings()` (z)
+    /// order, with group children nested. The OfficeArt container
+    /// order — and therefore the OBJ record order — is the pre-order
+    /// walk of this list.
+    shapes: Vec<SheetShape>,
 }
 
 impl SheetDrawing {
     fn last_spid(&self) -> u32 {
-        self.controls
-            .last()
-            .map(|shape| shape.spid)
-            .or_else(|| self.comments.last().map(|shape| shape.spid))
-            .or_else(|| self.pictures.last().map(|shape| shape.spid))
-            .unwrap_or(self.patriarch_spid)
+        self.spid_last
     }
+
+    /// Shape count including the patriarch and group children (the
+    /// number of SP containers = FDG `csp_saved`).
+    fn shape_count(&self) -> usize {
+        1 + count_shapes(&self.shapes)
+    }
+}
+
+fn count_shapes(shapes: &[SheetShape]) -> usize {
+    shapes
+        .iter()
+        .map(|shape| match shape {
+            SheetShape::Group(group) => 1 + count_shapes(&group.children),
+            _ => 1,
+        })
+        .sum()
+}
+
+/// One shape queued for drawing emission, in z-order.
+#[derive(Debug, Clone)]
+enum SheetShape {
+    Picture(PictureShape),
+    Shape(BasicShape),
+    Comment(CommentShape),
+    Control(ControlShape),
+    Group(GroupShape),
+}
+
+/// A first-class basic shape queued for OfficeArt/OBJ/TXO emission.
+#[derive(Debug, Clone)]
+struct BasicShape {
+    spid: u32,
+    obj_id: u16,
+    text_id: Option<u32>,
+    shape_type: u16,
+    shape_name: Option<String>,
+    alt_text: Option<String>,
+    shape: duke_sheets_core::Shape,
+    txo_runs: Vec<(u16, u16)>,
+    anchor: EmitAnchor,
+    locked: bool,
+    printable: bool,
+    hidden: bool,
+    rotation: i32,
+    flip_h: bool,
+    flip_v: bool,
+}
+
+/// Placement source for a shape's anchor atom: a sheet anchor
+/// (`OfficeArtClientAnchor`) for top-level shapes, or a group-space
+/// rectangle (`OfficeArtChildAnchor`) for grouped shapes.
+#[derive(Debug, Clone)]
+enum EmitAnchor {
+    Sheet(duke_sheets_chart::DrawingAnchor),
+    Child(duke_sheets_core::ChildTransform),
+}
+
+impl EmitAnchor {
+    /// Serialise the matching anchor atom. Child anchors carry the
+    /// model's raw child-space units (the group's FSPGR rectangle
+    /// defines the space, so no unit conversion applies).
+    fn write_to(
+        &self,
+        out: &mut Vec<u8>,
+        metrics: &dyn duke_sheets_chart::DrawingMetrics,
+    ) -> XlsResult<()> {
+        match self {
+            EmitAnchor::Sheet(anchor) => {
+                client_anchor_from_drawing_anchor_with_metrics(anchor, metrics)?.write_to(out);
+                Ok(())
+            }
+            EmitAnchor::Child(transform) => {
+                let clamp = |v: i64| -> i32 { v.clamp(i32::MIN as i64, i32::MAX as i64) as i32 };
+                crate::biff::escher::OfficeArtChildAnchor {
+                    x_left: clamp(transform.x_emu),
+                    y_top: clamp(transform.y_emu),
+                    x_right: clamp(transform.x_emu.saturating_add(transform.cx_emu.max(0))),
+                    y_bottom: clamp(transform.y_emu.saturating_add(transform.cy_emu.max(0))),
+                }
+                .write_to(out);
+                Ok(())
+            }
+        }
+    }
+
+    fn flips(&self) -> (bool, bool) {
+        match self {
+            EmitAnchor::Sheet(_) => (false, false),
+            EmitAnchor::Child(transform) => (transform.flip_h, transform.flip_v),
+        }
+    }
+
+    fn is_child(&self) -> bool {
+        matches!(self, EmitAnchor::Child(_))
+    }
+}
+
+/// A shape group queued for emission: its own SP container (FSPGR +
+/// FSP + FOPT + anchor + ClientData + group OBJ) followed by its
+/// children inside one `SpgrContainer`.
+#[derive(Debug, Clone)]
+struct GroupShape {
+    /// Escher shape ID of the group's own shape.
+    spid: u32,
+    /// 1-based per-sheet object ID placed in the group OBJ's ftCmo.
+    obj_id: u16,
+    /// FOPT wzName, when the model names the group.
+    shape_name: Option<String>,
+    /// FOPT wzDescription.
+    alt_text: Option<String>,
+    /// `ftCmo.grbit` fLocked / fPrint.
+    locked: bool,
+    printable: bool,
+    /// FOPT 0x03BF fHidden (entry emitted only when hidden).
+    hidden: bool,
+    /// Rotation in 60,000ths of a degree (FOPT 0x0004 when non-zero).
+    rotation: i32,
+    /// FSP flip flags.
+    flip_h: bool,
+    flip_v: bool,
+    /// The group's placement: sheet anchor at top level, child
+    /// anchor when nested in another group.
+    anchor: EmitAnchor,
+    /// Child coordinate space rectangle (`OfficeArtFSPGR`), from
+    /// `GroupTransform`'s `child_*` fields (raw units).
+    child_rect: (i32, i32, i32, i32),
+    /// Children in z-order.
+    children: Vec<SheetShape>,
 }
 
 #[derive(Debug, Clone)]
@@ -4446,8 +4718,16 @@ struct PictureShape {
     blip_id: u32,
     /// User-visible shape name (e.g. `"Picture 1"`).
     shape_name: String,
-    /// Cell-anchor footprint copied from the `EmbeddedImage`.
-    anchor: duke_sheets_chart::DrawingAnchor,
+    /// FOPT wzDescription (alternative text), when set.
+    alt_text: Option<String>,
+    /// `ftCmo.grbit` fLocked / fPrint, from the wrapper's meta.
+    locked: bool,
+    printable: bool,
+    /// FOPT 0x03BF fHidden value bit.
+    hidden: bool,
+    /// Placement copied from the wrapping drawing object or, for
+    /// grouped pictures, the child transform.
+    anchor: EmitAnchor,
     /// Optional rotation in 60,000ths of a degree. Goes into the
     /// picture's FOPT `0x0004` property when set.
     rotation: Option<i32>,
@@ -4480,6 +4760,10 @@ struct CommentShape {
     /// Whether the comment box is visible by default (sets `NOTE.flags`
     /// bit 1).
     visible: bool,
+    /// Popup placement from the wrapping drawing object. Emitted as
+    /// the shape's ClientAnchor unless it is the synthesized default
+    /// placement (then Excel's canonical default bytes are written).
+    anchor: duke_sheets_chart::DrawingAnchor,
 }
 
 /// A form control queued for drawing emission.
@@ -4492,8 +4776,25 @@ struct ControlShape {
     /// `txid` for the FOPT `TEXT_ID` slot; `Some` only for captioned
     /// kinds (button, checkbox, option button, label, group box).
     text_id: Option<u32>,
-    /// The model control (kind, anchor, caption, flags).
+    /// FOPT wzName, when the model names the control.
+    shape_name: Option<String>,
+    /// FOPT wzDescription (alternative text), when set.
+    alt_text: Option<String>,
+    /// The model control (kind, caption).
     control: duke_sheets_core::FormControl,
+    /// TXO run boundaries `(UTF-16 offset, FONT index)`.
+    txo_runs: Vec<(u16, u16)>,
+    /// FtMacro ObjectParsedFormula rgce.
+    macro_rgce: Vec<u8>,
+    /// Placement copied from the wrapping drawing object or, for
+    /// grouped controls, the child transform.
+    anchor: EmitAnchor,
+    /// `ftCmo.grbit` fLocked, from the wrapper's `DrawingMeta`.
+    locked: bool,
+    /// `ftCmo.grbit` fPrintable, from the wrapper's `DrawingMeta`.
+    printable: bool,
+    /// FOPT 0x03BF fHidden (entry emitted only when hidden).
+    hidden: bool,
     /// Compiled rgce for the cell link (empty = no link).
     link_rgce: Vec<u8>,
     /// Compiled rgce for the input range (empty = none; list and
@@ -4509,16 +4810,16 @@ struct ControlShape {
 /// IDs, and assemble the [`DrawingState`] used by both
 /// [`write_msodrawinggroup`] and [`write_sheet_drawing_records`].
 ///
-/// Within each drawing, shape IDs are allocated in order:
-///   patriarch → pictures (in `Worksheet::images()` order) → comments
-///   (in sorted row/col order) → form controls (in
-///   `Worksheet::form_controls()` order). Each drawing starts in its
-///   own 1024-aligned cluster.
+/// Within each drawing, shape IDs are allocated in order: patriarch
+/// first, then every shape in `Worksheet::drawings()` (z) order with
+/// group children in pre-order. Each drawing starts in its own
+/// 1024-aligned cluster.
 fn compute_drawing_state(
     workbook: &Workbook,
     externsheet: &ExternSheetTable,
     names: &NameTable,
     addins: &AddinTable,
+    styles: &StyleTables,
 ) -> XlsResult<DrawingState> {
     let mut state = DrawingState::default();
     let mut next_dgid: u32 = 1;
@@ -4528,14 +4829,16 @@ fn compute_drawing_state(
     let mut highest_spid_used: u32 = 0;
 
     for (sheet_idx, sheet) in workbook.worksheets().enumerate() {
-        let comment_count = sheet.comment_count();
-        let picture_count = sheet.image_count();
-        let control_count = sheet.form_control_count();
-        if comment_count == 0 && picture_count == 0 && control_count == 0 {
+        let total_shapes: usize = sheet
+            .drawings()
+            .iter()
+            .map(|object| emittable_shape_count(&object.kind, false))
+            .sum();
+        if total_shapes == 0 {
             continue;
         }
 
-        validate_sheet_drawing_counts(picture_count, comment_count, control_count)?;
+        validate_sheet_drawing_counts(total_shapes)?;
         if next_dgid > 0x0FFE {
             return Err(XlsError::InvalidFormat(
                 "XLS OfficeArt supports at most 4094 worksheet drawings".into(),
@@ -4547,142 +4850,81 @@ fn compute_drawing_state(
             XlsError::InvalidFormat("XLS OfficeArt shape id space exhausted".into())
         })?;
 
-        let mut next_obj_id: u32 = 1;
-        let mut pictures = Vec::with_capacity(picture_count);
-        for image in sheet.images() {
-            let spid = next_spid;
-            next_spid = next_spid.checked_add(1).ok_or_else(|| {
-                XlsError::InvalidFormat("XLS OfficeArt shape id space exhausted".into())
-            })?;
-            let blip_id = next_blip_id;
-            next_blip_id += 1;
-            state.blip_store.push(BlipEntry {
-                format: image.format,
-                data: image.data.clone(),
-            });
-            pictures.push(PictureShape {
-                spid,
-                obj_id: next_obj_id as u16,
-                blip_id,
-                shape_name: image.name.clone(),
-                anchor: image.anchor.clone(),
-                rotation: image.rotation,
-                flip_h: image.flip_h,
-                flip_v: image.flip_v,
-            });
-            next_obj_id += 1;
+        let mut builder = ShapeBuilder {
+            externsheet,
+            names,
+            addins,
+            styles,
+            blip_store: &mut state.blip_store,
+            next_spid,
+            next_obj_id: 1,
+            next_text_id,
+            next_blip_id,
+        };
+        let mut shapes = Vec::new();
+        for object in sheet.drawings() {
+            if let Some(shape) = builder.build_top_level(object)? {
+                shapes.push(shape);
+            }
         }
+        next_spid = builder.next_spid;
+        next_text_id = builder.next_text_id;
+        next_blip_id = builder.next_blip_id;
 
-        let mut comments_sorted: Vec<_> = sheet.comments().collect();
-        comments_sorted.sort_by_key(|((row, col), _)| (*row, *col));
+        chain_option_buttons(&mut shapes, sheet);
 
-        let mut comments = Vec::with_capacity(comment_count);
-        for ((row, col), comment) in comments_sorted.iter() {
-            let spid = next_spid;
-            next_spid = next_spid.checked_add(1).ok_or_else(|| {
-                XlsError::InvalidFormat("XLS OfficeArt shape id space exhausted".into())
-            })?;
-            comments.push(CommentShape {
-                spid,
-                obj_id: next_obj_id as u16,
-                text_id: next_text_id,
-                row: *row,
-                col: *col,
-                author: comment.author.clone(),
-                text: comment.text.clone(),
-                visible: comment.visible,
-            });
-            next_obj_id += 1;
-            next_text_id = next_text_id.wrapping_add(1);
-        }
+        let spid_last = next_spid - 1;
+        highest_spid_used = highest_spid_used.max(spid_last);
 
-        let mut controls = Vec::with_capacity(control_count);
-        for control in sheet.form_controls() {
-            use duke_sheets_core::FormControlKind;
-            let spid = next_spid;
-            next_spid = next_spid.checked_add(1).ok_or_else(|| {
-                XlsError::InvalidFormat("XLS OfficeArt shape id space exhausted".into())
-            })?;
-            let text_id = if control.caption().is_some() {
-                let id = next_text_id;
-                next_text_id = next_text_id.wrapping_add(1);
-                Some(id)
-            } else {
-                None
-            };
-            let link_rgce = control
-                .cell_link()
-                .map(|f| encode_control_ref_formula(f, externsheet, names, addins))
-                .transpose()?
-                .unwrap_or_default();
-            let input_rgce = match &control.kind {
-                FormControlKind::ListBox { input_range, .. }
-                | FormControlKind::Dropdown { input_range, .. } => input_range
-                    .as_deref()
-                    .map(|f| encode_control_ref_formula(f, externsheet, names, addins))
-                    .transpose()?
-                    .unwrap_or_default(),
-                _ => Vec::new(),
-            };
-            controls.push(ControlShape {
-                spid,
-                obj_id: next_obj_id as u16,
-                text_id,
-                control: control.clone(),
-                link_rgce,
-                input_rgce,
-                radio_next_id: 0,
-                radio_first: false,
-            });
-            next_obj_id += 1;
-        }
-
-        chain_option_buttons(&mut controls);
-
-        highest_spid_used = highest_spid_used.max(next_spid - 1);
-
-        let total_shapes = 1 + picture_count + comment_count + control_count;
         state.sheets.insert(
             sheet_idx,
             SheetDrawing {
                 dgid: next_dgid as u16,
                 patriarch_spid,
-                pictures,
-                comments,
-                controls,
+                spid_last,
+                shapes,
             },
         );
         state.ordered_sheet_indices.push(sheet_idx);
         state.cdg_total += 1;
-        state.csp_total += total_shapes as u32;
+        state.csp_total += (1 + total_shapes) as u32;
         next_dgid += 1;
 
         // Round up to the next 1024-aligned base so the next drawing
         // lives in its own cluster (matching Excel's per-drawing
         // cluster allocation in MS-ODRAW §2.2.46).
-        next_spid = next_spid
-            .checked_add(1023)
-            .ok_or_else(|| {
-                XlsError::InvalidFormat("XLS OfficeArt shape id space exhausted".into())
-            })?
-            / 1024
+        next_spid = next_spid.checked_add(1023).ok_or_else(|| {
+            XlsError::InvalidFormat("XLS OfficeArt shape id space exhausted".into())
+        })? / 1024
             * 1024;
     }
-    state.spid_max = highest_spid_used.checked_add(1).ok_or_else(|| {
-        XlsError::InvalidFormat("XLS OfficeArt shape id space exhausted".into())
-    })?;
+    state.spid_max = highest_spid_used
+        .checked_add(1)
+        .ok_or_else(|| XlsError::InvalidFormat("XLS OfficeArt shape id space exhausted".into()))?;
     Ok(state)
 }
 
-fn validate_sheet_drawing_counts(
-    picture_count: usize,
-    comment_count: usize,
-    control_count: usize,
-) -> XlsResult<()> {
-    let object_count = picture_count
-        .checked_add(comment_count)
-        .and_then(|count| count.checked_add(control_count))
-        .ok_or_else(|| XlsError::InvalidFormat("XLS drawing object count overflow".into()))?;
+/// Number of SP containers a drawing node emits. Charts and raw
+/// fragments have no XLS drawing emission; group children that
+/// cannot live in an XLS group (comments, charts, raw) are dropped
+/// from the group rather than dropping the whole group.
+fn emittable_shape_count(kind: &duke_sheets_core::DrawingKind, nested: bool) -> usize {
+    use duke_sheets_core::DrawingKind;
+    match kind {
+        DrawingKind::Image(_) | DrawingKind::Shape(_) | DrawingKind::FormControl(_) => 1,
+        DrawingKind::Comment { .. } => usize::from(!nested),
+        DrawingKind::Group(group) => {
+            1 + group
+                .children
+                .iter()
+                .map(|child| emittable_shape_count(&child.kind, true))
+                .sum::<usize>()
+        }
+        DrawingKind::Chart(_) | DrawingKind::ChartEx(_) | DrawingKind::Raw(_) => 0,
+    }
+}
+
+fn validate_sheet_drawing_counts(object_count: usize) -> XlsResult<()> {
     if object_count > u16::MAX as usize {
         return Err(XlsError::InvalidFormat(format!(
             "XLS supports at most {} drawing objects per sheet, got {object_count}",
@@ -4692,18 +4934,399 @@ fn validate_sheet_drawing_counts(
     Ok(())
 }
 
+/// Allocates shape / object / text / blip IDs and converts model
+/// drawing objects into [`SheetShape`]s in z-order.
+struct ShapeBuilder<'a> {
+    externsheet: &'a ExternSheetTable,
+    names: &'a NameTable,
+    addins: &'a AddinTable,
+    styles: &'a StyleTables,
+    blip_store: &'a mut Vec<BlipEntry>,
+    next_spid: u32,
+    next_obj_id: u32,
+    next_text_id: u32,
+    next_blip_id: u32,
+}
+
+impl ShapeBuilder<'_> {
+    fn alloc_spid(&mut self) -> XlsResult<u32> {
+        let spid = self.next_spid;
+        self.next_spid = self.next_spid.checked_add(1).ok_or_else(|| {
+            XlsError::InvalidFormat("XLS OfficeArt shape id space exhausted".into())
+        })?;
+        Ok(spid)
+    }
+
+    fn alloc_obj_id(&mut self) -> XlsResult<u16> {
+        let id = u16::try_from(self.next_obj_id).map_err(|_| {
+            XlsError::InvalidFormat(format!(
+                "XLS supports at most {} drawing objects per sheet",
+                u16::MAX
+            ))
+        })?;
+        self.next_obj_id += 1;
+        Ok(id)
+    }
+
+    fn alloc_text_id(&mut self) -> u32 {
+        let id = self.next_text_id;
+        self.next_text_id = self.next_text_id.wrapping_add(1);
+        id
+    }
+
+    fn build_top_level(
+        &mut self,
+        object: &duke_sheets_core::DrawingObject,
+    ) -> XlsResult<Option<SheetShape>> {
+        use duke_sheets_core::DrawingKind;
+        let meta = &object.meta;
+        let anchor = EmitAnchor::Sheet(object.anchor.clone());
+        Ok(match &object.kind {
+            DrawingKind::Image(image) => Some(self.build_picture(
+                meta,
+                anchor,
+                image,
+                image.rotation,
+                image.flip_h,
+                image.flip_v,
+            )?),
+            DrawingKind::Shape(shape) => Some(self.build_shape(
+                meta,
+                anchor,
+                shape,
+                shape.rotation,
+                shape.flip_h,
+                shape.flip_v,
+            )?),
+            DrawingKind::Comment { row, col, comment } => {
+                Some(self.build_comment(*row, *col, comment, !meta.hidden, &object.anchor)?)
+            }
+            DrawingKind::FormControl(control) => Some(self.build_control(meta, anchor, control)?),
+            DrawingKind::Group(group) => Some(self.build_group(
+                meta,
+                anchor,
+                group.transform.rotation,
+                group.transform.flip_h,
+                group.transform.flip_v,
+                group,
+            )?),
+            // No XLS drawing emission for these kinds.
+            DrawingKind::Chart(_) | DrawingKind::ChartEx(_) | DrawingKind::Raw(_) => None,
+        })
+    }
+
+    fn build_group(
+        &mut self,
+        meta: &duke_sheets_core::DrawingMeta,
+        anchor: EmitAnchor,
+        rotation: i32,
+        flip_h: bool,
+        flip_v: bool,
+        group: &duke_sheets_core::Group,
+    ) -> XlsResult<SheetShape> {
+        use duke_sheets_core::DrawingKind;
+        let spid = self.alloc_spid()?;
+        let obj_id = self.alloc_obj_id()?;
+        let clamp = |v: i64| -> i32 { v.clamp(i32::MIN as i64, i32::MAX as i64) as i32 };
+        let t = &group.transform;
+        let child_rect = (
+            clamp(t.child_x_emu),
+            clamp(t.child_y_emu),
+            clamp(t.child_x_emu.saturating_add(t.child_cx_emu.max(0))),
+            clamp(t.child_y_emu.saturating_add(t.child_cy_emu.max(0))),
+        );
+        let mut children = Vec::new();
+        for child in &group.children {
+            let child_anchor = EmitAnchor::Child(child.transform.clone());
+            match &child.kind {
+                DrawingKind::Image(image) => children.push(self.build_picture(
+                    &child.meta,
+                    child_anchor,
+                    image,
+                    (child.transform.rotation != 0).then_some(child.transform.rotation),
+                    child.transform.flip_h,
+                    child.transform.flip_v,
+                )?),
+                DrawingKind::Shape(shape) => children.push(self.build_shape(
+                    &child.meta,
+                    child_anchor,
+                    shape,
+                    if shape.rotation != 0 {
+                        shape.rotation
+                    } else {
+                        child.transform.rotation
+                    },
+                    shape.flip_h || child.transform.flip_h,
+                    shape.flip_v || child.transform.flip_v,
+                )?),
+                DrawingKind::FormControl(control) => {
+                    children.push(self.build_control(&child.meta, child_anchor, control)?)
+                }
+                DrawingKind::Group(inner) => children.push(self.build_group(
+                    &child.meta,
+                    child_anchor,
+                    child.transform.rotation,
+                    child.transform.flip_h,
+                    child.transform.flip_v,
+                    inner,
+                )?),
+                // No XLS group representation for these kinds.
+                DrawingKind::Comment { .. }
+                | DrawingKind::Chart(_)
+                | DrawingKind::ChartEx(_)
+                | DrawingKind::Raw(_) => {}
+            }
+        }
+        Ok(SheetShape::Group(GroupShape {
+            spid,
+            obj_id,
+            shape_name: meta.name.clone(),
+            alt_text: meta.alt_text.clone(),
+            locked: meta.locked,
+            printable: meta.printable,
+            hidden: meta.hidden,
+            rotation,
+            flip_h,
+            flip_v,
+            anchor,
+            child_rect,
+            children,
+        }))
+    }
+
+    fn build_picture(
+        &mut self,
+        meta: &duke_sheets_core::DrawingMeta,
+        anchor: EmitAnchor,
+        image: &duke_sheets_chart::EmbeddedImage,
+        rotation: Option<i32>,
+        flip_h: bool,
+        flip_v: bool,
+    ) -> XlsResult<SheetShape> {
+        let spid = self.alloc_spid()?;
+        let obj_id = self.alloc_obj_id()?;
+        let blip_id = self.next_blip_id;
+        self.next_blip_id += 1;
+        self.blip_store.push(BlipEntry {
+            format: image.format,
+            data: image.data.clone(),
+        });
+        let shape_name = meta
+            .name
+            .clone()
+            .unwrap_or_else(|| format!("Picture {obj_id}"));
+        Ok(SheetShape::Picture(PictureShape {
+            spid,
+            obj_id,
+            blip_id,
+            shape_name,
+            alt_text: meta.alt_text.clone(),
+            locked: meta.locked,
+            printable: meta.printable,
+            hidden: meta.hidden,
+            anchor,
+            rotation,
+            flip_h,
+            flip_v,
+        }))
+    }
+
+    fn build_shape(
+        &mut self,
+        meta: &duke_sheets_core::DrawingMeta,
+        anchor: EmitAnchor,
+        shape: &duke_sheets_core::Shape,
+        rotation: i32,
+        flip_h: bool,
+        flip_v: bool,
+    ) -> XlsResult<SheetShape> {
+        use crate::biff::escher::shape_type;
+        use duke_sheets_core::ShapeGeometry;
+
+        let preset = match &shape.geometry {
+            ShapeGeometry::Preset(preset) => preset.as_str(),
+        };
+        let office_shape_type = match preset {
+            "rect" => shape_type::RECTANGLE,
+            "roundRect" => shape_type::ROUND_RECTANGLE,
+            "ellipse" => shape_type::ELLIPSE,
+            "triangle" => shape_type::ISOSCELES_TRIANGLE,
+            "line" => shape_type::LINE,
+            unsupported => {
+                return Err(XlsError::InvalidFormat(format!(
+                    "XLS writer does not support shape preset '{unsupported}'"
+                )))
+            }
+        };
+        let spid = self.alloc_spid()?;
+        let obj_id = self.alloc_obj_id()?;
+        let text_id = shape.text.as_ref().map(|_| self.alloc_text_id());
+        let mut txo_runs = Vec::new();
+        if let Some(text) = &shape.text {
+            let mut offset = 0usize;
+            for run in &text.runs {
+                let font_index = run
+                    .font
+                    .as_ref()
+                    .map(run_font_to_font_style)
+                    .and_then(|font| self.styles.font_xf_index.get(&font).copied())
+                    .unwrap_or(0);
+                txo_runs.push((offset.min(u16::MAX as usize) as u16, font_index));
+                offset = offset.saturating_add(run.text.encode_utf16().count());
+            }
+        }
+        Ok(SheetShape::Shape(BasicShape {
+            spid,
+            obj_id,
+            text_id,
+            shape_type: office_shape_type,
+            shape_name: meta.name.clone(),
+            alt_text: meta.alt_text.clone(),
+            shape: shape.clone(),
+            txo_runs,
+            anchor,
+            locked: meta.locked,
+            printable: meta.printable,
+            hidden: meta.hidden,
+            rotation,
+            flip_h,
+            flip_v,
+        }))
+    }
+
+    fn build_comment(
+        &mut self,
+        row: u32,
+        col: u16,
+        comment: &duke_sheets_core::CellComment,
+        visible: bool,
+        anchor: &duke_sheets_chart::DrawingAnchor,
+    ) -> XlsResult<SheetShape> {
+        let spid = self.alloc_spid()?;
+        let obj_id = self.alloc_obj_id()?;
+        let text_id = self.alloc_text_id();
+        Ok(SheetShape::Comment(CommentShape {
+            spid,
+            obj_id,
+            text_id,
+            row,
+            col,
+            author: comment.author.clone(),
+            text: comment.text.clone(),
+            visible,
+            anchor: anchor.clone(),
+        }))
+    }
+
+    fn build_control(
+        &mut self,
+        meta: &duke_sheets_core::DrawingMeta,
+        anchor: EmitAnchor,
+        control: &duke_sheets_core::FormControl,
+    ) -> XlsResult<SheetShape> {
+        use duke_sheets_core::FormControlKind;
+        control.validate()?;
+        let spid = self.alloc_spid()?;
+        let obj_id = self.alloc_obj_id()?;
+        let text_id = control.caption().is_some().then(|| self.alloc_text_id());
+        let link_rgce = control
+            .cell_link()
+            .map(|f| encode_control_ref_formula(f, self.externsheet, self.names, self.addins))
+            .transpose()?
+            .unwrap_or_default();
+        let input_rgce = match &control.kind {
+            FormControlKind::ListBox { input_range, .. }
+            | FormControlKind::Dropdown { input_range, .. } => input_range
+                .as_deref()
+                .map(|f| encode_control_ref_formula(f, self.externsheet, self.names, self.addins))
+                .transpose()?
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        let mut txo_runs = Vec::new();
+        if let Some(caption) = control.caption() {
+            let mut offset = 0usize;
+            for run in &caption.runs {
+                let font_index = run
+                    .font
+                    .as_ref()
+                    .map(run_font_to_font_style)
+                    .and_then(|font| self.styles.font_xf_index.get(&font).copied())
+                    .unwrap_or(0);
+                txo_runs.push((offset.min(u16::MAX as usize) as u16, font_index));
+                offset = offset.saturating_add(run.text.encode_utf16().count());
+            }
+        }
+        let macro_rgce = control
+            .macro_name
+            .as_deref()
+            .and_then(|name| self.names.idx_for_macro(name))
+            .map(|index| {
+                let mut rgce = Vec::with_capacity(5);
+                rgce.push(0x23); // PtgName, reference class
+                rgce.extend_from_slice(&(u32::from(index)).to_le_bytes());
+                rgce
+            })
+            .unwrap_or_default();
+        Ok(SheetShape::Control(ControlShape {
+            spid,
+            obj_id,
+            text_id,
+            shape_name: meta.name.clone(),
+            alt_text: meta.alt_text.clone(),
+            control: control.clone(),
+            txo_runs,
+            macro_rgce,
+            anchor,
+            locked: meta.locked,
+            printable: meta.printable,
+            hidden: meta.hidden,
+            link_rgce,
+            input_rgce,
+            radio_next_id: 0,
+            radio_first: false,
+        }))
+    }
+}
+
 /// Chain a sheet's option buttons into per-group circular
 /// `FtRboData` linked lists, mirroring how Excel persists radio
 /// grouping (see [`duke_sheets_core::radio_groups`]). Within a group
 /// the chain follows insertion order, wraps to the head, and the
 /// head carries `fFirstBtn`; a single-member group points at itself.
-fn chain_option_buttons(controls: &mut [ControlShape]) {
-    let models: Vec<duke_sheets_core::FormControl> =
-        controls.iter().map(|c| c.control.clone()).collect();
-    for members in duke_sheets_core::radio_groups(&models) {
+///
+/// Grouping is computed over the sheet's placed controls, whose
+/// depth-first order matches the pre-order emission of `shapes`, so
+/// controls nested inside shape groups participate in the chains.
+fn chain_option_buttons(shapes: &mut [SheetShape], sheet: &Worksheet) {
+    fn collect<'a>(shapes: &'a mut [SheetShape], out: &mut Vec<&'a mut ControlShape>) {
+        for shape in shapes {
+            match shape {
+                SheetShape::Control(control) => out.push(control),
+                SheetShape::Group(group) => collect(&mut group.children, out),
+                _ => {}
+            }
+        }
+    }
+    let mut controls: Vec<&mut ControlShape> = Vec::new();
+    collect(shapes, &mut controls);
+    let placed = sheet.placed_form_controls();
+    debug_assert_eq!(
+        placed.len(),
+        controls.len(),
+        "placed_form_controls() must walk the same control set as the built shapes"
+    );
+    if placed.len() != controls.len() {
+        // Positional pairing is broken; in release, degrade to
+        // unchained (self-grouped) radios rather than cross-linking
+        // the wrong controls.
+        return;
+    }
+    for members in duke_sheets_core::radio_groups(&placed) {
         for (pos, &idx) in members.iter().enumerate() {
             let next_pos = (pos + 1) % members.len();
-            controls[idx].radio_next_id = controls[members[next_pos]].obj_id;
+            let next_id = controls[members[next_pos]].obj_id;
+            controls[idx].radio_next_id = next_id;
             controls[idx].radio_first = pos == 0;
         }
     }
@@ -4806,166 +5429,47 @@ fn write_msodrawinggroup(stream: &mut Vec<u8>, state: &DrawingState) {
 /// shape's `ClientTextbox` before its `OBJ` produces a file Excel
 /// refuses to open with `RPC failed (0x800706BE)`.
 ///
-/// Layout emitted, for `N` comments:
+/// Layout emitted, for `N` shapes (in `Worksheet::drawings()` order):
 ///
 /// ```text
 /// MSODRAWING #1   = DgContainer header + FDG + SpgrContainer header
 ///                   + patriarch SpContainer
-///                   + comment[0] SpContainer header
-///                   + comment[0]: FSP + FOPT + ClientAnchor + ClientData
+///                   + shape[0] SpContainer header
+///                   + shape[0]: FSP + FOPT + anchor + ClientData
 /// OBJ #1
-/// MSODRAWING #2   = comment[0]: ClientTextbox (closes SpContainer 0)
+/// MSODRAWING #2   = shape[0]: ClientTextbox (comments + captioned
+///                   controls; closes SpContainer 0)
 /// TXO #1 + CONTINUE×2
-/// MSODRAWING #3   = comment[1] SpContainer header
-///                   + comment[1]: FSP + FOPT + ClientAnchor + ClientData
+/// MSODRAWING #3   = shape[1] SpContainer header + …
 /// OBJ #2
-/// MSODRAWING #4   = comment[1]: ClientTextbox
-/// TXO #2 + CONTINUE×2
-/// ... (one MSODRAWING-pair per remaining comment)
-/// NOTE #1 .. NOTE #N
+/// ... (one MSODRAWING span per remaining shape)
+/// NOTE #1 .. NOTE (one per comment, sorted by cell)
 /// ```
 ///
-/// The `DgContainer` / `SpgrContainer` / per-comment `SpContainer`
+/// A shape group contributes its `SpgrContainer` header + its own
+/// SP container (FSPGR + FSP + FOPT + anchor + ClientData) followed
+/// by a group OBJ (ftCmo ot=0x00 + ftGmo + ftEnd), then each child
+/// shape follows the same per-shape pattern with an
+/// `OfficeArtChildAnchor` in place of the client anchor.
+///
+/// The `DgContainer` / `SpgrContainer` / per-shape `SpContainer`
 /// header `rec_len` fields all reflect their LOGICAL byte counts
 /// across the entire concatenated drawing stream. Readers
 /// concatenate the bodies of all `MSODRAWING` records for a sheet,
 /// then walk the resulting Escher tree.
-fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) -> XlsResult<()> {
+fn write_sheet_drawing_records(
+    stream: &mut Vec<u8>,
+    drawing: &SheetDrawing,
+    metrics: &dyn duke_sheets_chart::DrawingMetrics,
+) -> XlsResult<()> {
     use crate::biff::escher::{
-        comment_fopt, fsp_flags, rec_type as er, shape_type, write_client_data,
-        write_client_textbox, write_patriarch_sp_container, OfficeArtClientAnchor, OfficeArtFdg,
-        OfficeArtFsp, OfficeArtRecordHeader, HEADER_LEN,
+        rec_type as er, write_patriarch_sp_container, OfficeArtFdg, OfficeArtRecordHeader,
+        HEADER_LEN,
     };
 
-    // Each shape boils down to its SP_CONTAINER bytes split into two
-    // halves around the OBJ record:
-    //   - `pre_obj`: SP_CONTAINER header + FSP + FOPT + ClientAnchor
-    //                + ClientData. Emitted in a MSODRAWING that
-    //                precedes the shape's OBJ.
-    //   - `post_obj`: ClientTextbox marker (8 bytes) for comments,
-    //                empty for pictures. Emitted in a MSODRAWING
-    //                that follows the OBJ — Excel uses the position
-    //                of the ClientTextbox in the BIFF stream to
-    //                associate the next TXO with this shape.
-    //   - `obj`: the OBJ record bytes themselves.
-    //   - `post_txo`: TXO + CONTINUE×2 for comments (text + run);
-    //                empty for pictures.
-    struct ShapeRecord {
-        sp_payload: Vec<u8>, // header is added separately
-        post_obj: Vec<u8>,
-        obj: Vec<u8>,
-        post_txo: Vec<u8>,
-    }
-
-    fn picture_record(picture: &PictureShape, anchor_emit: Vec<u8>) -> ShapeRecord {
-        use crate::biff::escher::picture_fopt_with;
-        let mut pre = Vec::new();
-        let mut grf = fsp_flags::HAVE_ANCHOR | fsp_flags::HAVE_SPT;
-        if picture.flip_h {
-            grf |= fsp_flags::FLIP_H;
-        }
-        if picture.flip_v {
-            grf |= fsp_flags::FLIP_V;
-        }
-        OfficeArtFsp {
-            spid: picture.spid,
-            grf_persistence: grf,
-        }
-        .write_to(shape_type::PICTURE_FRAME, &mut pre);
-        picture_fopt_with(picture.blip_id, &picture.shape_name, picture.rotation)
-            .write_to(&mut pre);
-        pre.extend_from_slice(&anchor_emit);
-        write_client_data(&mut pre);
-
-        let mut obj = Vec::new();
-        write_picture_obj_to_vec(&mut obj, picture);
-        ShapeRecord {
-            sp_payload: pre,
-            post_obj: Vec::new(),
-            obj,
-            post_txo: Vec::new(),
-        }
-    }
-
-    fn comment_record(comment: &CommentShape) -> XlsResult<ShapeRecord> {
-        let mut pre = Vec::new();
-        OfficeArtFsp {
-            spid: comment.spid,
-            grf_persistence: fsp_flags::HAVE_ANCHOR | fsp_flags::HAVE_SPT,
-        }
-        .write_to(shape_type::TEXT_BOX, &mut pre);
-        comment_fopt(comment.text_id).write_to(&mut pre);
-        OfficeArtClientAnchor::comment_default(comment.row, comment.col).write_to(&mut pre);
-        write_client_data(&mut pre);
-
-        let mut post = Vec::new();
-        write_client_textbox(&mut post);
-
-        let mut obj = Vec::new();
-        write_comment_obj_to_vec(&mut obj, comment);
-
-        let mut post_txo = Vec::new();
-        write_comment_txo_to_vec(&mut post_txo, comment)?;
-
-        Ok(ShapeRecord {
-            sp_payload: pre,
-            post_obj: post,
-            obj,
-            post_txo,
-        })
-    }
-
-    fn control_record(control: &ControlShape) -> XlsResult<ShapeRecord> {
-        let mut pre = Vec::new();
-        OfficeArtFsp {
-            spid: control.spid,
-            grf_persistence: fsp_flags::HAVE_ANCHOR | fsp_flags::HAVE_SPT,
-        }
-        .write_to(shape_type::HOST_CONTROL, &mut pre);
-        control_fopt(&control.control.kind, control.text_id).write_to(&mut pre);
-        client_anchor_from_drawing_anchor(&control.control.anchor)?.write_to(&mut pre);
-        write_client_data(&mut pre);
-
-        // Captioned controls carry their text like comments do: a
-        // ClientTextbox marker after the OBJ, then the TXO records.
-        let mut post = Vec::new();
-        let mut post_txo = Vec::new();
-        if let Some(caption) = control.control.caption() {
-            write_client_textbox(&mut post);
-            write_control_txo_to_vec(
-                &mut post_txo,
-                caption,
-                control_txo_flags(&control.control.kind),
-            )?;
-        }
-
-        let mut obj = Vec::new();
-        write_control_obj_to_vec(&mut obj, control)?;
-
-        Ok(ShapeRecord {
-            sp_payload: pre,
-            post_obj: post,
-            obj,
-            post_txo,
-        })
-    }
-
-    // Build ShapeRecord for every shape in canonical order:
-    // pictures first (lower spids), then comments, then form
-    // controls. This must match the order shapes appear in the
-    // SPGR_CONTAINER so OBJ records line up with SP_CONTAINERs by
-    // BIFF stream position.
-    let mut shape_records: Vec<ShapeRecord> = Vec::new();
-    for picture in &drawing.pictures {
-        let mut anchor = Vec::new();
-        client_anchor_from_drawing_anchor(&picture.anchor)?.write_to(&mut anchor);
-        shape_records.push(picture_record(picture, anchor));
-    }
-    for comment in &drawing.comments {
-        shape_records.push(comment_record(comment)?);
-    }
-    for control in &drawing.controls {
-        shape_records.push(control_record(control)?);
+    let mut flats: Vec<FlatShape> = Vec::new();
+    for shape in &drawing.shapes {
+        flatten_shape(shape, &mut flats, metrics)?;
     }
 
     // The patriarch SP_CONTAINER (FSPGR + FSP) is always emitted
@@ -4974,55 +5478,43 @@ fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) -> 
     let mut patriarch_bytes = Vec::new();
     write_patriarch_sp_container(drawing.patriarch_spid, &mut patriarch_bytes);
 
-    // Logical SP_CONTAINER total = header (8) + sp_payload + post_obj.
-    let sp_total_size =
-        |r: &ShapeRecord| -> u32 { (HEADER_LEN + r.sp_payload.len() + r.post_obj.len()) as u32 };
-    let sp_payload_size =
-        |r: &ShapeRecord| -> u32 { (r.sp_payload.len() + r.post_obj.len()) as u32 };
-
-    // SPGR_CONTAINER's rec_len spans the patriarch and every shape.
-    let spgr_payload_len: u32 =
-        patriarch_bytes.len() as u32 + shape_records.iter().map(sp_total_size).sum::<u32>();
+    // SPGR_CONTAINER's rec_len spans the patriarch and every shape;
+    // every escher byte of the subtree lives in exactly one flat's
+    // pre or post_obj.
+    let flats_len: u32 = flats
+        .iter()
+        .map(|f| (f.pre.len() + f.post_obj.len()) as u32)
+        .sum();
+    let spgr_payload_len: u32 = patriarch_bytes.len() as u32 + flats_len;
     let fdg_total_len = HEADER_LEN as u32 + 8;
     let dg_payload_len = fdg_total_len + HEADER_LEN as u32 + spgr_payload_len;
 
     // MSODRAWING #1: DG_CONTAINER header + FDG + SPGR_CONTAINER
     // header + patriarch SP_CONTAINER + (if any shape) the FIRST
-    // shape's SP_CONTAINER header + sp_payload (i.e. up through
-    // ClientData; ClientTextbox lands in a separate MSODRAWING
-    // after the OBJ for comment shapes).
+    // shape's opening bytes (through ClientData; ClientTextbox lands
+    // in a separate MSODRAWING after the OBJ for textual shapes).
     let mut first_drawing = Vec::new();
     OfficeArtRecordHeader::container(er::DG_CONTAINER, 0, dg_payload_len)
         .write_to(&mut first_drawing);
-    let spid_last = drawing
-        .controls
-        .last()
-        .map(|c| c.spid)
-        .or_else(|| drawing.comments.last().map(|c| c.spid))
-        .or_else(|| drawing.pictures.last().map(|p| p.spid))
-        .unwrap_or(drawing.patriarch_spid);
     OfficeArtFdg {
-        csp_saved: (1 + drawing.pictures.len() + drawing.comments.len() + drawing.controls.len())
-            as u32,
-        spid_last,
+        csp_saved: drawing.shape_count() as u32,
+        spid_last: drawing.spid_last,
     }
     .write_to(drawing.dgid, &mut first_drawing);
     OfficeArtRecordHeader::container(er::SPGR_CONTAINER, 0, spgr_payload_len)
         .write_to(&mut first_drawing);
     first_drawing.extend_from_slice(&patriarch_bytes);
-    if let Some(first) = shape_records.first() {
-        OfficeArtRecordHeader::container(er::SP_CONTAINER, 0, sp_payload_size(first))
-            .write_to(&mut first_drawing);
-        first_drawing.extend_from_slice(&first.sp_payload);
+    if let Some(first) = flats.first() {
+        first_drawing.extend_from_slice(&first.pre);
     }
     write_biff_record_chunked(stream, MSODRAWING_RECORD, &first_drawing);
 
-    // For each shape: emit OBJ; if it has a post_obj (comment's
-    // ClientTextbox), emit that in a separate MSODRAWING; then
-    // emit its TXO+CONTINUEs; finally, if there's a next shape,
-    // open its SP_CONTAINER in a fresh MSODRAWING.
-    for idx in 0..shape_records.len() {
-        let rec = &shape_records[idx];
+    // For each shape: emit OBJ; if it has a post_obj (ClientTextbox),
+    // emit that in a separate MSODRAWING; then emit its
+    // TXO+CONTINUEs; finally, if there's a next shape, open its
+    // container(s) in a fresh MSODRAWING.
+    for idx in 0..flats.len() {
+        let rec = &flats[idx];
         stream.extend_from_slice(&rec.obj);
 
         if !rec.post_obj.is_empty() {
@@ -5032,40 +5524,445 @@ fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) -> 
             stream.extend_from_slice(&rec.post_txo);
         }
 
-        if let Some(next) = shape_records.get(idx + 1) {
-            let mut open_drawing = Vec::new();
-            OfficeArtRecordHeader::container(er::SP_CONTAINER, 0, sp_payload_size(next))
-                .write_to(&mut open_drawing);
-            open_drawing.extend_from_slice(&next.sp_payload);
-            write_biff_record_chunked(stream, MSODRAWING_RECORD, &open_drawing);
+        if let Some(next) = flats.get(idx + 1) {
+            write_biff_record_chunked(stream, MSODRAWING_RECORD, &next.pre);
         }
     }
 
-    // NOTE records at the end, in comment order. Pictures have no
-    // NOTE record.
-    for comment in &drawing.comments {
+    // NOTE records at the end. Sorted by cell; only the shape
+    // containers carry the z-order.
+    let mut comments: Vec<&CommentShape> = drawing
+        .shapes
+        .iter()
+        .filter_map(|shape| match shape {
+            SheetShape::Comment(comment) => Some(comment),
+            _ => None,
+        })
+        .collect();
+    comments.sort_by_key(|comment| (comment.row, comment.col));
+    for comment in comments {
         write_comment_note(stream, comment);
     }
     Ok(())
 }
 
-/// One EMU unit of the ClientAnchor `dxL`/`dxR` field, in EMUs.
-/// MS-XLS encodes within-cell horizontal offsets in 1024ths of the
-/// cell's width; with Excel's default column width of 64 pixels
-/// (609,600 EMU) one `dxL` unit equals 595 EMU.
-pub(crate) const ANCHOR_DX_EMU_PER_UNIT: i64 = 595;
-/// One EMU unit of the ClientAnchor `dyT`/`dyB` field, in EMUs.
-/// MS-XLS encodes within-cell vertical offsets in 256ths of the
-/// row's height; with Excel's default row height of 15 pt
-/// (190,500 EMU) one `dyT` unit equals 744 EMU.
-pub(crate) const ANCHOR_DY_EMU_PER_UNIT: i64 = 744;
-
-fn emu_to_dx_units(emu: i64) -> i16 {
-    (emu / ANCHOR_DX_EMU_PER_UNIT).clamp(i16::MIN as i64, 1023) as i16
+/// One shape's contribution to the interleaved MSODRAWING / OBJ /
+/// TXO record stream:
+///   - `pre`: the escher bytes opening the shape — for leaves the
+///     SP_CONTAINER header + FSP + FOPT + anchor + ClientData; for
+///     groups additionally the enclosing SPGR_CONTAINER header.
+///     Emitted in a MSODRAWING that precedes the shape's OBJ.
+///   - `post_obj`: ClientTextbox marker for comments and captioned
+///     controls, emitted in a MSODRAWING that follows the OBJ —
+///     Excel uses the position of the ClientTextbox in the BIFF
+///     stream to associate the next TXO with this shape.
+///   - `obj`: the OBJ record bytes themselves.
+///   - `post_txo`: TXO + CONTINUE×2 (text + runs), when the shape
+///     has text.
+struct FlatShape {
+    pre: Vec<u8>,
+    post_obj: Vec<u8>,
+    obj: Vec<u8>,
+    post_txo: Vec<u8>,
 }
 
-fn emu_to_dy_units(emu: i64) -> i16 {
-    (emu / ANCHOR_DY_EMU_PER_UNIT).clamp(i16::MIN as i64, 255) as i16
+impl FlatShape {
+    /// Wrap an SP payload (FSP through ClientData) in its
+    /// SP_CONTAINER header, whose rec_len also covers the trailing
+    /// ClientTextbox bytes.
+    fn leaf(sp_payload: Vec<u8>, post_obj: Vec<u8>, obj: Vec<u8>, post_txo: Vec<u8>) -> Self {
+        use crate::biff::escher::{rec_type as er, OfficeArtRecordHeader, HEADER_LEN};
+        let mut pre = Vec::with_capacity(HEADER_LEN + sp_payload.len());
+        OfficeArtRecordHeader::container(
+            er::SP_CONTAINER,
+            0,
+            (sp_payload.len() + post_obj.len()) as u32,
+        )
+        .write_to(&mut pre);
+        pre.extend_from_slice(&sp_payload);
+        FlatShape {
+            pre,
+            post_obj,
+            obj,
+            post_txo,
+        }
+    }
+}
+
+/// Flatten one shape (and, for groups, its subtree) into the
+/// interleaved emission list, in pre-order.
+fn flatten_shape(
+    shape: &SheetShape,
+    out: &mut Vec<FlatShape>,
+    metrics: &dyn duke_sheets_chart::DrawingMetrics,
+) -> XlsResult<()> {
+    use crate::biff::escher::{
+        comment_fopt, complex_string_entry, fsp_flags, rec_type as er, shape_type,
+        write_client_data, write_client_textbox, FoptEntry, FoptTable, OfficeArtClientAnchor,
+        OfficeArtFsp, OfficeArtFspgr, OfficeArtRecordHeader, HEADER_LEN,
+    };
+
+    match shape {
+        SheetShape::Picture(picture) => {
+            use crate::biff::escher::picture_fopt_with;
+            let mut pre = Vec::new();
+            let mut grf = fsp_flags::HAVE_ANCHOR | fsp_flags::HAVE_SPT;
+            if picture.anchor.is_child() {
+                grf |= fsp_flags::CHILD;
+            }
+            if picture.flip_h {
+                grf |= fsp_flags::FLIP_H;
+            }
+            if picture.flip_v {
+                grf |= fsp_flags::FLIP_V;
+            }
+            OfficeArtFsp {
+                spid: picture.spid,
+                grf_persistence: grf,
+            }
+            .write_to(shape_type::PICTURE_FRAME, &mut pre);
+            picture_fopt_with(
+                picture.blip_id,
+                &picture.shape_name,
+                picture.rotation.map(rotation_to_officeart_fixed),
+                picture.alt_text.as_deref(),
+                picture.hidden,
+            )
+            .write_to(&mut pre);
+            picture.anchor.write_to(&mut pre, metrics)?;
+            write_client_data(&mut pre);
+
+            let mut obj = Vec::new();
+            write_picture_obj_to_vec(&mut obj, picture);
+            out.push(FlatShape::leaf(pre, Vec::new(), obj, Vec::new()));
+        }
+        SheetShape::Shape(shape) => {
+            let mut pre = Vec::new();
+            let mut grf = fsp_flags::HAVE_ANCHOR | fsp_flags::HAVE_SPT;
+            if shape.anchor.is_child() {
+                grf |= fsp_flags::CHILD;
+            }
+            if shape.flip_h {
+                grf |= fsp_flags::FLIP_H;
+            }
+            if shape.flip_v {
+                grf |= fsp_flags::FLIP_V;
+            }
+            OfficeArtFsp {
+                spid: shape.spid,
+                grf_persistence: grf,
+            }
+            .write_to(shape.shape_type, &mut pre);
+            basic_shape_fopt(shape).write_to(&mut pre);
+            shape.anchor.write_to(&mut pre, metrics)?;
+            write_client_data(&mut pre);
+
+            let mut post = Vec::new();
+            let mut post_txo = Vec::new();
+            if let Some(text) = &shape.shape.text {
+                write_client_textbox(&mut post);
+                write_txo_records(
+                    &mut post_txo,
+                    &text.plain_text(),
+                    drawing_text_txo_flags(text),
+                    &shape.txo_runs,
+                )?;
+            }
+            let mut obj = Vec::new();
+            write_basic_shape_obj_to_vec(&mut obj, shape)?;
+            out.push(FlatShape::leaf(pre, post, obj, post_txo));
+        }
+        SheetShape::Comment(comment) => {
+            let mut pre = Vec::new();
+            OfficeArtFsp {
+                spid: comment.spid,
+                grf_persistence: fsp_flags::HAVE_ANCHOR | fsp_flags::HAVE_SPT,
+            }
+            .write_to(shape_type::TEXT_BOX, &mut pre);
+            comment_fopt(comment.text_id).write_to(&mut pre);
+            // A user-placed popup keeps its model anchor; the
+            // synthesized default placement (and anchors the metrics
+            // conversion rejects) emit Excel's canonical default
+            // bytes instead.
+            let is_default_anchor = comment.anchor
+                == duke_sheets_core::default_comment_anchor(comment.row, comment.col);
+            let converted = (!is_default_anchor)
+                .then(|| client_anchor_from_drawing_anchor_with_metrics(&comment.anchor, metrics))
+                .and_then(Result::ok);
+            converted
+                .unwrap_or_else(|| {
+                    OfficeArtClientAnchor::comment_default(comment.row, comment.col)
+                })
+                .write_to(&mut pre);
+            write_client_data(&mut pre);
+
+            let mut post = Vec::new();
+            write_client_textbox(&mut post);
+
+            let mut obj = Vec::new();
+            write_comment_obj_to_vec(&mut obj, comment);
+
+            let mut post_txo = Vec::new();
+            write_comment_txo_to_vec(&mut post_txo, comment)?;
+            out.push(FlatShape::leaf(pre, post, obj, post_txo));
+        }
+        SheetShape::Control(control) => {
+            let mut pre = Vec::new();
+            let mut grf = fsp_flags::HAVE_ANCHOR | fsp_flags::HAVE_SPT;
+            if control.anchor.is_child() {
+                grf |= fsp_flags::CHILD;
+            }
+            let (flip_h, flip_v) = control.anchor.flips();
+            if flip_h {
+                grf |= fsp_flags::FLIP_H;
+            }
+            if flip_v {
+                grf |= fsp_flags::FLIP_V;
+            }
+            OfficeArtFsp {
+                spid: control.spid,
+                grf_persistence: grf,
+            }
+            .write_to(shape_type::HOST_CONTROL, &mut pre);
+            control_fopt(
+                &control.control.kind,
+                control.text_id,
+                control.shape_name.as_deref(),
+                control.alt_text.as_deref(),
+                control.hidden,
+            )
+            .write_to(&mut pre);
+            control.anchor.write_to(&mut pre, metrics)?;
+            write_client_data(&mut pre);
+
+            // Captioned controls carry their text like comments do:
+            // a ClientTextbox marker after the OBJ, then the TXO
+            // records.
+            let mut post = Vec::new();
+            let mut post_txo = Vec::new();
+            if let Some(caption) = control.control.caption() {
+                write_client_textbox(&mut post);
+                write_control_txo_to_vec(
+                    &mut post_txo,
+                    caption,
+                    control_txo_flags(&control.control.kind, caption),
+                    &control.txo_runs,
+                )?;
+            }
+
+            let mut obj = Vec::new();
+            write_control_obj_to_vec(&mut obj, control)?;
+            out.push(FlatShape::leaf(pre, post, obj, post_txo));
+        }
+        SheetShape::Group(group) => {
+            let mut kids: Vec<FlatShape> = Vec::new();
+            for child in &group.children {
+                flatten_shape(child, &mut kids, metrics)?;
+            }
+
+            // The group's own SP container: FSPGR (child coordinate
+            // space) + FSP + optional FOPT + anchor + ClientData.
+            let mut sp_payload = Vec::new();
+            let (x_left, y_top, x_right, y_bottom) = group.child_rect;
+            OfficeArtFspgr {
+                x_left,
+                y_top,
+                x_right,
+                y_bottom,
+            }
+            .write_to(&mut sp_payload);
+            let mut grf = fsp_flags::GROUP | fsp_flags::HAVE_ANCHOR;
+            if group.anchor.is_child() {
+                grf |= fsp_flags::CHILD;
+            }
+            if group.flip_h {
+                grf |= fsp_flags::FLIP_H;
+            }
+            if group.flip_v {
+                grf |= fsp_flags::FLIP_V;
+            }
+            OfficeArtFsp {
+                spid: group.spid,
+                grf_persistence: grf,
+            }
+            .write_to(shape_type::NOT_PRIMITIVE, &mut sp_payload);
+            let mut fopt = FoptTable::new();
+            if group.rotation != 0 {
+                fopt.push(FoptEntry::simple(
+                    0x0004,
+                    rotation_to_officeart_fixed(group.rotation),
+                ));
+            }
+            if let Some(name) = group.shape_name.as_deref() {
+                fopt.push(complex_string_entry(0x0380, name));
+            }
+            if let Some(descr) = group.alt_text.as_deref() {
+                fopt.push(complex_string_entry(0x0381, descr));
+            }
+            if group.hidden {
+                fopt.push(FoptEntry::simple(
+                    crate::biff::escher::fopt_id::GROUP_SHAPE_BOOLEAN_PROPS,
+                    crate::biff::escher::GROUP_SHAPE_HIDDEN,
+                ));
+            }
+            if !fopt.is_empty() {
+                fopt.write_to(&mut sp_payload);
+            }
+            group.anchor.write_to(&mut sp_payload, metrics)?;
+            write_client_data(&mut sp_payload);
+
+            // SPGR rec_len spans the group SP container plus every
+            // child's escher bytes.
+            let kids_len: usize = kids.iter().map(|f| f.pre.len() + f.post_obj.len()).sum();
+            let spgr_payload_len = HEADER_LEN + sp_payload.len() + kids_len;
+            let mut pre = Vec::new();
+            OfficeArtRecordHeader::container(er::SPGR_CONTAINER, 0, spgr_payload_len as u32)
+                .write_to(&mut pre);
+            OfficeArtRecordHeader::container(er::SP_CONTAINER, 0, sp_payload.len() as u32)
+                .write_to(&mut pre);
+            pre.extend_from_slice(&sp_payload);
+
+            let mut obj = Vec::new();
+            write_group_obj_to_vec(&mut obj, group)?;
+            out.push(FlatShape {
+                pre,
+                post_obj: Vec::new(),
+                obj,
+                post_txo: Vec::new(),
+            });
+            out.append(&mut kids);
+        }
+    }
+    Ok(())
+}
+
+/// Build the OfficeArt properties for a basic shape. Shape type lives
+/// in `FSP.recInstance` ([MS-ODRAW] 2.2.40/2.4.24); visual properties
+/// live in FOPT ([MS-ODRAW] 2.3.7, 2.3.8, and 2.3.18.5).
+fn basic_shape_fopt(shape: &BasicShape) -> crate::biff::escher::FoptTable {
+    use crate::biff::escher::{
+        complex_string_entry, fopt_id, FoptEntry, FoptTable, GROUP_SHAPE_HIDDEN,
+        GROUP_SHAPE_VISIBLE,
+    };
+    use duke_sheets_core::ShapeFill;
+
+    let mut table = FoptTable::new();
+    if shape.rotation != 0 {
+        table.push(FoptEntry::simple(
+            0x0004,
+            rotation_to_officeart_fixed(shape.rotation),
+        ));
+    }
+    if let Some(text_id) = shape.text_id {
+        table.push(FoptEntry::simple(fopt_id::TEXT_ID, text_id));
+        table.push(FoptEntry::simple(fopt_id::WRAP_TEXT, 1));
+        table.push(FoptEntry::simple(fopt_id::TEXT_BOOLEAN_PROPS, 0x0008_0008));
+    }
+    match shape.shape.fill {
+        ShapeFill::None => {
+            table.push(FoptEntry::simple(fopt_id::FILL_BOOLEAN_PROPS, 0x0010_0000));
+        }
+        ShapeFill::Solid(color) => {
+            table.push(FoptEntry::simple(
+                fopt_id::FILL_COLOR,
+                color_to_officeart(color),
+            ));
+            table.push(FoptEntry::simple(fopt_id::FILL_BOOLEAN_PROPS, 0x0010_0010));
+        }
+    }
+    if let Some(color) = shape.shape.line.color {
+        table.push(FoptEntry::simple(
+            fopt_id::LINE_COLOR,
+            color_to_officeart(color),
+        ));
+    }
+    if let Some(width) = shape.shape.line.width_emu {
+        table.push(FoptEntry::simple(
+            fopt_id::LINE_WIDTH,
+            width.clamp(0, i64::from(i32::MAX)) as u32,
+        ));
+    }
+    if let Some(dash) = shape.shape.line.dash_style.as_deref() {
+        table.push(FoptEntry::simple(
+            fopt_id::LINE_DASHING,
+            drawing_dash_to_officeart(dash),
+        ));
+    }
+    // MS-ODRAW 2.3.8.44: fLine (0x00000008) displays the outline;
+    // fUsefLine is 0x00080000.
+    table.push(FoptEntry::simple(
+        fopt_id::LINE_BOOLEAN_PROPS,
+        if shape.shape.line.no_fill {
+            0x0008_0000
+        } else {
+            0x0008_0008
+        },
+    ));
+    if let Some(name) = shape.shape_name.as_deref() {
+        table.push(complex_string_entry(0x0380, name));
+    }
+    if let Some(alt_text) = shape.alt_text.as_deref() {
+        table.push(complex_string_entry(0x0381, alt_text));
+    }
+    table.push(FoptEntry::simple(
+        fopt_id::GROUP_SHAPE_BOOLEAN_PROPS,
+        if shape.hidden {
+            GROUP_SHAPE_HIDDEN
+        } else {
+            GROUP_SHAPE_VISIBLE
+        },
+    ));
+    table.sort_entries();
+    table
+}
+
+/// Convert a model rotation (60,000ths of a degree) to the FOPT
+/// 0x0004 wire value: FixedPoint 16.16 degrees ([MS-ODRAW] 2.3.18.5).
+fn rotation_to_officeart_fixed(rotation: i32) -> u32 {
+    let numerator = i64::from(rotation) * 65_536;
+    let fixed = if numerator >= 0 {
+        (numerator + 30_000) / 60_000
+    } else {
+        (numerator - 30_000) / 60_000
+    };
+    (fixed.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32) as u32
+}
+
+fn color_to_officeart(color: duke_sheets_core::Color) -> u32 {
+    let (r, g, b) = color.to_rgb();
+    u32::from(r) | (u32::from(g) << 8) | (u32::from(b) << 16)
+}
+
+fn drawing_dash_to_officeart(dash: &str) -> u32 {
+    match dash {
+        "sysDash" => 1,
+        "sysDot" => 2,
+        "sysDashDot" => 3,
+        "sysDashDotDot" => 4,
+        "dot" => 5,
+        "dash" => 6,
+        "lgDash" => 7,
+        "dashDot" => 8,
+        "lgDashDot" => 9,
+        "lgDashDotDot" => 10,
+        _ => 0,
+    }
+}
+
+fn emu_to_fraction_units(emu: i64, extent_emu: i64, denominator: i128, max: i128) -> i16 {
+    if extent_emu <= 0 {
+        return 0;
+    }
+    let numerator = i128::from(emu) * denominator;
+    let divisor = i128::from(extent_emu);
+    let rounded = if numerator >= 0 {
+        (numerator + divisor / 2) / divisor
+    } else {
+        (numerator - divisor / 2) / divisor
+    };
+    // MS-XLS 2.5.193: ClientAnchor fractions are 0..=1024 (dx) and
+    // 0..=256 (dy); negative offsets clamp to the cell edge.
+    rounded.clamp(0, max) as i16
 }
 
 /// Translate a `duke_sheets_chart::DrawingAnchor` to the
@@ -5082,21 +5979,14 @@ fn emu_to_dy_units(emu: i64) -> i16 {
 ///       `xdr:absoluteAnchor`)
 ///
 /// Within-cell EMU offsets carried by the source `CellMarker` are
-/// quantised to the anchor's 1024ths-of-cell-width / 256ths-of-cell-
-/// height units. The reader inverts the same quantisation, so EMU
-/// values that are multiples of `ANCHOR_DX_EMU_PER_UNIT` /
-/// `ANCHOR_DY_EMU_PER_UNIT` round-trip exactly; others snap to the
-/// nearest unit boundary.
-fn client_anchor_from_drawing_anchor(
+/// quantised to 1/1024 of that marker's current column width and
+/// 1/256 of its current row height.
+fn client_anchor_from_drawing_anchor_with_metrics(
     anchor: &duke_sheets_chart::DrawingAnchor,
+    metrics: &dyn duke_sheets_chart::DrawingMetrics,
 ) -> XlsResult<crate::biff::escher::OfficeArtClientAnchor> {
     use crate::biff::escher::OfficeArtClientAnchor;
     use duke_sheets_chart::{DrawingAnchor, EditAs};
-
-    /// Default column width in EMU (8.43 char ≈ 64 px).
-    const DEFAULT_COL_EMU: i64 = 609_600;
-    /// Default row height in EMU (15 pt).
-    const DEFAULT_ROW_EMU: i64 = 190_500;
 
     /// Convert an `EditAs` enum into the ClientAnchor flag.
     fn edit_as_to_flag(edit_as: &Option<EditAs>) -> u16 {
@@ -5105,50 +5995,6 @@ fn client_anchor_from_drawing_anchor(
             Some(EditAs::OneCell) => 2,
             Some(EditAs::Absolute) => 3,
         }
-    }
-
-    /// For OneCell / Absolute → compute the (col_r, dx_r, row_b,
-    /// dy_b) fields by adding width/height EMU to the (col, offset)
-    /// starting point at default cell sizes.
-    fn extend_anchor(
-        start_col: u16,
-        start_off_x: i64,
-        width: i64,
-        start_row: u32,
-        start_off_y: i64,
-        height: i64,
-    ) -> XlsResult<(u16, i64, u32, i64)> {
-        if width < 0 || height < 0 {
-            return Err(XlsError::InvalidFormat(
-                "XLS drawing anchor width/height cannot be negative".into(),
-            ));
-        }
-        let total_x = start_col as i128 * DEFAULT_COL_EMU as i128
-            + start_off_x as i128
-            + width as i128;
-        let total_y = start_row as i128 * DEFAULT_ROW_EMU as i128
-            + start_off_y as i128
-            + height as i128;
-        if total_x < 0 || total_y < 0 {
-            return Err(XlsError::InvalidFormat(
-                "XLS drawing anchor coordinates cannot be negative".into(),
-            ));
-        }
-        let end_col = total_x / DEFAULT_COL_EMU as i128;
-        let end_row = total_y / DEFAULT_ROW_EMU as i128;
-        if end_col > 0xFF || end_row > u16::MAX as i128 {
-            return Err(XlsError::InvalidFormat(
-                "XLS drawing anchor exceeds the BIFF8 sheet grid".into(),
-            ));
-        }
-        let end_off_x = total_x - end_col * DEFAULT_COL_EMU as i128;
-        let end_off_y = total_y - end_row * DEFAULT_ROW_EMU as i128;
-        Ok((
-            end_col as u16,
-            end_off_x as i64,
-            end_row as u32,
-            end_off_y as i64,
-        ))
     }
 
     let validate_marker = |marker: &duke_sheets_chart::CellMarker| -> XlsResult<()> {
@@ -5160,86 +6006,56 @@ fn client_anchor_from_drawing_anchor(
         Ok(())
     };
 
-    let result = match anchor {
-        DrawingAnchor::TwoCell { from, to, edit_as } => {
-            validate_marker(from)?;
-            validate_marker(to)?;
-            if (to.col, to.col_offset_emu) < (from.col, from.col_offset_emu)
-                || (to.row, to.row_offset_emu) < (from.row, from.row_offset_emu)
-            {
-                return Err(XlsError::InvalidFormat(
-                    "XLS drawing anchor endpoints are reversed".into(),
-                ));
-            }
-            OfficeArtClientAnchor {
-                flag: edit_as_to_flag(edit_as),
-                col_l: from.col,
-                dx_l: emu_to_dx_units(from.col_offset_emu),
-                row_t: from.row as u16,
-                dy_t: emu_to_dy_units(from.row_offset_emu),
-                col_r: to.col,
-                dx_r: emu_to_dx_units(to.col_offset_emu),
-                row_b: to.row as u16,
-                dy_b: emu_to_dy_units(to.row_offset_emu),
-            }
-        }
-        DrawingAnchor::OneCell {
-            from,
-            width_emu,
-            height_emu,
-        } => {
-            validate_marker(from)?;
-            let (col_r, off_r, row_b, off_b) = extend_anchor(
-                from.col,
-                from.col_offset_emu,
-                *width_emu,
-                from.row,
-                from.row_offset_emu,
-                *height_emu,
-            )?;
-            OfficeArtClientAnchor {
-                flag: 2,
-                col_l: from.col,
-                dx_l: emu_to_dx_units(from.col_offset_emu),
-                row_t: from.row as u16,
-                dy_t: emu_to_dy_units(from.row_offset_emu),
-                col_r,
-                dx_r: emu_to_dx_units(off_r),
-                row_b: row_b.min(u16::MAX as u32) as u16,
-                dy_b: emu_to_dy_units(off_b),
-            }
-        }
-        DrawingAnchor::Absolute {
-            x_emu,
-            y_emu,
-            width_emu,
-            height_emu,
-        } => {
-            if *x_emu < 0 || *y_emu < 0 {
-                return Err(XlsError::InvalidFormat(
-                    "XLS absolute drawing anchor cannot start at a negative position".into(),
-                ));
-            }
-            // Absolute coordinates are relative to (0, 0); position
-            // the from cell at the origin with the x/y offsets.
-            let (col_l, off_l, row_t, off_t) =
-                extend_anchor(0, 0, *x_emu, 0, 0, *y_emu)?;
-            let (col_r, off_r, row_b, off_b) =
-                extend_anchor(col_l, off_l, *width_emu, row_t, off_t, *height_emu)?;
-            OfficeArtClientAnchor {
-                flag: 3,
-                col_l,
-                dx_l: emu_to_dx_units(off_l),
-                row_t: row_t.min(u16::MAX as u32) as u16,
-                dy_t: emu_to_dy_units(off_t),
-                col_r,
-                dx_r: emu_to_dx_units(off_r),
-                row_b: row_b.min(u16::MAX as u32) as u16,
-                dy_b: emu_to_dy_units(off_b),
-            }
-        }
+    if matches!(anchor, DrawingAnchor::Absolute { x_emu, y_emu, .. } if *x_emu < 0 || *y_emu < 0)
+    {
+        return Err(XlsError::InvalidFormat(
+            "XLS absolute drawing anchor cannot start at a negative position".into(),
+        ));
+    }
+    let flag = match anchor {
+        DrawingAnchor::TwoCell { edit_as, .. } => edit_as_to_flag(edit_as),
+        DrawingAnchor::OneCell { .. } => 2,
+        DrawingAnchor::Absolute { .. } => 3,
     };
-    Ok(result)
+    let DrawingAnchor::TwoCell { from, to, .. } = anchor.to_two_cell_with_metrics(metrics) else {
+        unreachable!("to_two_cell_with_metrics always returns TwoCell");
+    };
+    validate_marker(&from)?;
+    validate_marker(&to)?;
+    if (to.col, to.col_offset_emu) < (from.col, from.col_offset_emu)
+        || (to.row, to.row_offset_emu) < (from.row, from.row_offset_emu)
+    {
+        return Err(XlsError::InvalidFormat(
+            "XLS drawing anchor endpoints are reversed".into(),
+        ));
+    }
+    let dx = |marker: &duke_sheets_chart::CellMarker| {
+        emu_to_fraction_units(
+            marker.col_offset_emu,
+            metrics.column_width_emu(marker.col),
+            1024,
+            1023,
+        )
+    };
+    let dy = |marker: &duke_sheets_chart::CellMarker| {
+        emu_to_fraction_units(
+            marker.row_offset_emu,
+            metrics.row_height_emu(marker.row),
+            256,
+            255,
+        )
+    };
+    Ok(OfficeArtClientAnchor {
+        flag,
+        col_l: from.col,
+        dx_l: dx(&from),
+        row_t: from.row as u16,
+        dy_t: dy(&from),
+        col_r: to.col,
+        dx_r: dx(&to),
+        row_b: to.row as u16,
+        dy_b: dy(&to),
+    })
 }
 
 /// Emit an `OBJ` record (BIFF 0x005D) for a picture shape. Carries
@@ -5257,13 +6073,24 @@ fn client_anchor_from_drawing_anchor(
 fn write_picture_obj_to_vec(out: &mut Vec<u8>, picture: &PictureShape) {
     let mut body = Vec::new();
 
+    // grbit: undefined bits 13/14 mirrored from Excel output plus
+    // fLocked / fPrint from the wrapper's meta (default 0x6011).
+    let mut grbit: u16 =
+        crate::biff::obj::cmo_flags::UNDEFINED_13 | crate::biff::obj::cmo_flags::UNDEFINED_14;
+    if picture.locked {
+        grbit |= crate::biff::obj::cmo_flags::LOCKED;
+    }
+    if picture.printable {
+        grbit |= crate::biff::obj::cmo_flags::PRINT;
+    }
+
     // ftCmo: rt + cb + ot + id + grbit + 12 reserved bytes = 22 bytes total,
     // cb = 18.
     body.extend_from_slice(&0x0015u16.to_le_bytes()); // rt = ftCmo
     body.extend_from_slice(&0x0012u16.to_le_bytes()); // cb = 18
     body.extend_from_slice(&0x0008u16.to_le_bytes()); // ot = picture
     body.extend_from_slice(&picture.obj_id.to_le_bytes()); // id
-    body.extend_from_slice(&0x6011u16.to_le_bytes()); // grbit: fLocked|fAutoFill|fAutoLine|fPrintable
+    body.extend_from_slice(&grbit.to_le_bytes());
     body.extend_from_slice(&[0u8; 12]); // reserved
 
     // ftCf: rt + cb + cf = 6 bytes total, cb = 2.
@@ -5281,6 +6108,60 @@ fn write_picture_obj_to_vec(out: &mut Vec<u8>, picture: &PictureShape) {
     body.extend_from_slice(&0x0000u16.to_le_bytes()); // cb = 0
 
     write_biff_record(out, OBJ_RECORD, &body);
+}
+
+/// Emit the host record paired with an ordinary OfficeArt shape.
+/// [MS-XLS] 2.4.181 (OBJ) and 2.5.143 (FtCmo) identify object type
+/// 0x001E as "Microsoft Office drawing"; the concrete geometry remains
+/// the FSP `recInstance` ([MS-ODRAW] 2.2.40 and 2.4.24).
+fn write_basic_shape_obj_to_vec(out: &mut Vec<u8>, shape: &BasicShape) -> XlsResult<()> {
+    use crate::biff::obj::{self, cmo_flags, ot};
+
+    let mut grbit = cmo_flags::UNDEFINED_13 | cmo_flags::UNDEFINED_14;
+    if shape.locked {
+        grbit |= cmo_flags::LOCKED;
+    }
+    if shape.printable {
+        grbit |= cmo_flags::PRINT;
+    }
+    let mut body = Vec::new();
+    obj::FtCmo {
+        ot: ot::OFFICE_ART,
+        id: shape.obj_id,
+        grbit,
+    }
+    .write_to(&mut body);
+    obj::push_end(&mut body)?;
+    write_biff_record(out, OBJ_RECORD, &body);
+    Ok(())
+}
+
+/// Emit an `OBJ` record for a shape group (MS-XLS 2.4.181): ftCmo
+/// with ot=0x00 (group), the mandatory ftGmo group marker (MS-XLS
+/// 2.5.146: ft=0x0006, cb=0x0002, 2 unused bytes), and ftEnd.
+fn write_group_obj_to_vec(out: &mut Vec<u8>, group: &GroupShape) -> XlsResult<()> {
+    use crate::biff::obj::{self, cmo_flags, ft, ot};
+
+    let mut grbit: u16 = cmo_flags::UNDEFINED_13 | cmo_flags::UNDEFINED_14;
+    if group.locked {
+        grbit |= cmo_flags::LOCKED;
+    }
+    if group.printable {
+        grbit |= cmo_flags::PRINT;
+    }
+
+    let mut body = Vec::new();
+    obj::FtCmo {
+        ot: ot::GROUP,
+        id: group.obj_id,
+        grbit,
+    }
+    .write_to(&mut body);
+    obj::push_subrecord(&mut body, ft::GMO, &[0u8; 2])?;
+    obj::push_end(&mut body)?;
+
+    write_biff_record(out, OBJ_RECORD, &body);
+    Ok(())
 }
 
 /// Emit an `OBJ` record (BIFF 0x005D) for a comment shape. Carries
@@ -5337,7 +6218,7 @@ fn deterministic_guid(seed: u32) -> [u8; 16] {
 /// Emit a `TXO` record (BIFF 0x01B6) plus its two `CONTINUE`
 /// records carrying the comment's text and a single formatting run.
 ///
-/// TXO header layout (MS-XLS §2.4.324, 18 bytes):
+/// TXO header layout (MS-XLS §2.4.329, 18 bytes):
 ///
 /// - `flags` (u16): horizontal/vertical alignment, text-locked flag.
 ///   We write `0x0212` to match Excel: halign=left, valign=top,
@@ -5351,14 +6232,19 @@ fn deterministic_guid(seed: u32) -> [u8; 16] {
 /// Emit a comment's `TXO` record + the two `CONTINUE` records that
 /// carry its text payload and formatting runs.
 fn write_comment_txo_to_vec(out: &mut Vec<u8>, comment: &CommentShape) -> XlsResult<()> {
-    write_txo_records(out, &comment.text, 0x0212)
+    write_txo_records(out, &comment.text, 0x0212, &[])
 }
 
 /// Emit a `TXO` record with the given flags, plus (for non-empty
 /// text) the two `CONTINUE` records carrying the text payload and a
 /// single plain formatting run. Empty text writes only the 18-byte
 /// header with `cchText = 0` and `cbRuns = 0` (MS-XLS 2.4.329).
-fn write_txo_records(out: &mut Vec<u8>, text: &str, flags: u16) -> XlsResult<()> {
+fn write_txo_records(
+    out: &mut Vec<u8>,
+    text: &str,
+    flags: u16,
+    formatting: &[(u16, u16)],
+) -> XlsResult<()> {
     let utf16: Vec<u16> = text.encode_utf16().collect();
     let cch_text = u16::try_from(utf16.len()).map_err(|_| {
         XlsError::InvalidFormat(format!(
@@ -5375,7 +6261,13 @@ fn write_txo_records(out: &mut Vec<u8>, text: &str, flags: u16) -> XlsResult<()>
     header.extend_from_slice(&0u16.to_le_bytes()); // rot
     header.extend_from_slice(&[0u8; 6]); // reserved
     header.extend_from_slice(&cch_text.to_le_bytes()); // cchText
-    let cb_runs: u16 = if utf16.is_empty() { 0 } else { 16 };
+    let run_count = if utf16.is_empty() {
+        0
+    } else {
+        formatting.len().max(1).saturating_add(1)
+    };
+    let cb_runs = u16::try_from(run_count.saturating_mul(8))
+        .map_err(|_| XlsError::InvalidFormat("XLS text box has too many formatting runs".into()))?;
     header.extend_from_slice(&cb_runs.to_le_bytes()); // cbRuns
     header.extend_from_slice(&[0u8; 2]); // ifntEmpty
     header.extend_from_slice(&[0u8; 2]); // reserved3
@@ -5407,46 +6299,97 @@ fn write_txo_records(out: &mut Vec<u8>, text: &str, flags: u16) -> XlsResult<()>
         }
     }
 
-    // Second CONTINUE: formatting runs. Two TxoRun entries (8 bytes
-    // each): (ich=0, ifnt=0, reserved=0) opens the default-font run,
-    // (ich=text_len, ifnt=0, reserved=0) closes it. This produces a
-    // single-run plain-text body.
-    let mut runs_body = Vec::with_capacity(16);
-    runs_body.extend_from_slice(&0u16.to_le_bytes()); // ich = 0
-    runs_body.extend_from_slice(&0u16.to_le_bytes()); // ifnt = 0
-    runs_body.extend_from_slice(&[0u8; 4]); // reserved
+    let default_run = [(0u16, 0u16)];
+    let formatting = if formatting.is_empty() {
+        &default_run[..]
+    } else {
+        formatting
+    };
+    let mut runs_body = Vec::with_capacity(cb_runs as usize);
+    for &(ich, ifnt) in formatting {
+        runs_body.extend_from_slice(&ich.min(cch_text).to_le_bytes());
+        runs_body.extend_from_slice(&ifnt.to_le_bytes());
+        runs_body.extend_from_slice(&[0u8; 4]);
+    }
     runs_body.extend_from_slice(&(utf16.len() as u16).to_le_bytes()); // ich = end
     runs_body.extend_from_slice(&0u16.to_le_bytes()); // ifnt = 0
     runs_body.extend_from_slice(&[0u8; 4]); // reserved
-    write_biff_record(out, CONTINUE_RECORD, &runs_body);
+    for chunk in runs_body.chunks(BIFF_MAX_RECORD_BODY) {
+        write_biff_record(out, CONTINUE_RECORD, chunk);
+    }
     Ok(())
 }
 
 /// Emit a form control's caption `TXO` (+ CONTINUEs).
-fn write_control_txo_to_vec(out: &mut Vec<u8>, caption: &str, flags: u16) -> XlsResult<()> {
-    write_txo_records(out, caption, flags)
+fn write_control_txo_to_vec(
+    out: &mut Vec<u8>,
+    caption: &duke_sheets_core::ControlText,
+    flags: u16,
+    formatting: &[(u16, u16)],
+) -> XlsResult<()> {
+    write_txo_records(out, &caption.plain_text(), flags, formatting)
 }
 
 /// TXO alignment flags per control kind, as pinned from Excel
 /// output: buttons center/center, checkbox-likes left/center,
 /// labels and group boxes left/top. All set `fLockText` (0x0200).
-fn control_txo_flags(kind: &duke_sheets_core::FormControlKind) -> u16 {
+fn control_txo_flags(
+    kind: &duke_sheets_core::FormControlKind,
+    caption: &duke_sheets_core::ControlText,
+) -> u16 {
     use duke_sheets_core::FormControlKind;
-    match kind {
-        FormControlKind::Button { .. } => 0x0224,
-        FormControlKind::Checkbox { .. } | FormControlKind::OptionButton { .. } => 0x0222,
-        _ => 0x0212,
-    }
+    let (default_horizontal, default_vertical) = match kind {
+        FormControlKind::Button { .. } => (HorizontalAlignment::Center, VerticalAlignment::Center),
+        FormControlKind::Checkbox { .. } | FormControlKind::OptionButton { .. } => {
+            (HorizontalAlignment::Left, VerticalAlignment::Center)
+        }
+        _ => (HorizontalAlignment::Left, VerticalAlignment::Top),
+    };
+    drawing_text_txo_flags_with_defaults(caption, default_horizontal, default_vertical)
+}
+
+fn drawing_text_txo_flags(text: &duke_sheets_core::DrawingText) -> u16 {
+    drawing_text_txo_flags_with_defaults(text, HorizontalAlignment::Left, VerticalAlignment::Top)
+}
+
+fn drawing_text_txo_flags_with_defaults(
+    text: &duke_sheets_core::DrawingText,
+    default_horizontal: HorizontalAlignment,
+    default_vertical: VerticalAlignment,
+) -> u16 {
+    let horizontal = match text.horizontal_alignment.unwrap_or(default_horizontal) {
+        HorizontalAlignment::Center | HorizontalAlignment::CenterContinuous => 2,
+        HorizontalAlignment::Right => 3,
+        HorizontalAlignment::Justify => 4,
+        HorizontalAlignment::Distributed => 7,
+        HorizontalAlignment::General | HorizontalAlignment::Left | HorizontalAlignment::Fill => 1,
+    };
+    let vertical = match text.vertical_alignment.unwrap_or(default_vertical) {
+        VerticalAlignment::Top => 1,
+        VerticalAlignment::Center => 2,
+        VerticalAlignment::Bottom => 3,
+        VerticalAlignment::Justify => 4,
+        VerticalAlignment::Distributed => 7,
+    };
+    0x0200 | (horizontal << 1) | (vertical << 4)
 }
 
 /// Build the per-kind `FOPT` property table for a form control. The
 /// property sets and values mirror what Excel writes for each Forms
-/// control kind (pinned via COM-driven BIFF8 dumps).
+/// control kind (pinned via COM-driven BIFF8 dumps). A model-set
+/// shape name / alt text appends the wzName (0x0380) /
+/// wzDescription (0x0381) complex properties; when absent the table
+/// matches the pinned bytes exactly.
 fn control_fopt(
     kind: &duke_sheets_core::FormControlKind,
     text_id: Option<u32>,
+    shape_name: Option<&str>,
+    alt_text: Option<&str>,
+    hidden: bool,
 ) -> crate::biff::escher::FoptTable {
-    use crate::biff::escher::{FoptEntry, FoptTable};
+    use crate::biff::escher::{
+        complex_string_entry, fopt_id, FoptEntry, FoptTable, GROUP_SHAPE_HIDDEN,
+    };
     use duke_sheets_core::FormControlKind;
 
     let mut t = FoptTable::new();
@@ -5526,6 +6469,28 @@ fn control_fopt(
             t.push(FoptEntry::simple(0x007F, 0x0104_0104));
             t.push(FoptEntry::simple(0x00BF, 0x0008_0008));
         }
+        FormControlKind::Unknown { .. } => {
+            t.push(FoptEntry::simple(0x007F, 0x0100_0100));
+            t.push(FoptEntry::simple(0x0080, text_id.unwrap_or(0)));
+            t.push(FoptEntry::simple(0x0085, 0x0000_0001));
+            t.push(FoptEntry::simple(0x008B, 0x0000_0002));
+            t.push(FoptEntry::simple(0x00BF, 0x001A_0008));
+        }
+    }
+    // 0x0380/0x0381/0x03BF sort after every per-kind entry, so
+    // appending keeps the required ascending opid order.
+    if let Some(name) = shape_name {
+        t.push(complex_string_entry(0x0380, name));
+    }
+    if let Some(descr) = alt_text {
+        t.push(complex_string_entry(0x0381, descr));
+    }
+    // Absent = visible (today's bytes for Excel-authored controls).
+    if hidden {
+        t.push(FoptEntry::simple(
+            fopt_id::GROUP_SHAPE_BOOLEAN_PROPS,
+            GROUP_SHAPE_HIDDEN,
+        ));
     }
     t
 }
@@ -5538,6 +6503,87 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
     use duke_sheets_core::{CheckState, FormControlKind, ListSelection};
 
     let kind = &control.control.kind;
+    if let FormControlKind::Unknown {
+        legacy_object_type,
+        raw_obj,
+        ..
+    } = kind
+    {
+        let Some(raw_obj) = raw_obj else {
+            return Err(XlsError::InvalidFormat(
+                "XLS unknown controls require a raw OBJ body captured from an XLS file".into(),
+            ));
+        };
+        let parsed = obj::parse_obj(raw_obj).map_err(|_| {
+            XlsError::InvalidFormat("XLS unknown control has an invalid raw OBJ body".into())
+        })?;
+        if !matches!(parsed.ot, ot::EDIT_BOX | ot::DIALOG_BOX) {
+            return Err(XlsError::InvalidFormat(format!(
+                "XLS passthrough does not support unknown OBJ type 0x{:04X}",
+                parsed.ot
+            )));
+        }
+        if legacy_object_type.is_some_and(|object_type| object_type != parsed.ot) {
+            return Err(XlsError::InvalidFormat(
+                "XLS unknown control legacy object type does not match its raw OBJ body".into(),
+            ));
+        }
+        if raw_obj.len() < 10 {
+            return Err(XlsError::InvalidFormat(
+                "XLS unknown control raw OBJ body is truncated".into(),
+            ));
+        }
+        // Rebuild the body instead of replaying it verbatim: an
+        // embedded FtMacro's PtgName indexes the SOURCE workbook's
+        // Lbl table and is stale in this file, so it is stripped and
+        // a fresh FtMacro is emitted when the model names a macro.
+        // Everything else replays untouched — in particular
+        // FtEdoData.id (MS-XLS 2.5.144) still references another
+        // object by its source-sheet id and is NOT renumbered, so a
+        // control relying on that link may point at the wrong object
+        // after a rewrite.
+        let cmo_end = 4usize
+            .saturating_add(u16::from_le_bytes([raw_obj[2], raw_obj[3]]) as usize)
+            .min(raw_obj.len());
+        let mut body = raw_obj[..cmo_end].to_vec();
+        body[6..8].copy_from_slice(&control.obj_id.to_le_bytes());
+        let mut grbit = u16::from_le_bytes([body[8], body[9]]);
+        grbit &= !(obj::cmo_flags::LOCKED | obj::cmo_flags::PRINT);
+        if control.locked {
+            grbit |= obj::cmo_flags::LOCKED;
+        }
+        if control.printable {
+            grbit |= obj::cmo_flags::PRINT;
+        }
+        body[8..10].copy_from_slice(&grbit.to_le_bytes());
+        if control.control.macro_name.is_some() {
+            if control.macro_rgce.is_empty() {
+                return Err(XlsError::InvalidFormat(
+                    "XLS control macro could not be resolved to a procedure name".into(),
+                ));
+            }
+            // Edit and dialog boxes carry none of cbls/rbo/sbs, so
+            // directly after ftCmo is the MS-XLS 2.4.181 FtMacro
+            // position.
+            obj::push_fmla_subrecord(&mut body, obj::ft::MACRO, &control.macro_rgce)?;
+        }
+        let mut pos = cmo_end;
+        while pos + 4 <= raw_obj.len() {
+            let ft_id = u16::from_le_bytes([raw_obj[pos], raw_obj[pos + 1]]);
+            let cb = u16::from_le_bytes([raw_obj[pos + 2], raw_obj[pos + 3]]) as usize;
+            let end = pos.saturating_add(4).saturating_add(cb);
+            if end > raw_obj.len() {
+                break;
+            }
+            if ft_id != obj::ft::MACRO {
+                body.extend_from_slice(&raw_obj[pos..end]);
+            }
+            pos = end;
+        }
+        // A malformed tail replays verbatim rather than being dropped.
+        body.extend_from_slice(&raw_obj[pos..]);
+        return write_control_obj_records(out, &mut body, None);
+    }
     let ot_code = match kind {
         FormControlKind::Button { .. } => ot::BUTTON,
         FormControlKind::Checkbox { .. } => ot::CHECKBOX,
@@ -5548,6 +6594,7 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
         FormControlKind::Dropdown { .. } => ot::DROPDOWN,
         FormControlKind::Scrollbar { .. } => ot::SCROLLBAR,
         FormControlKind::Spinner { .. } => ot::SPINNER,
+        FormControlKind::Unknown { .. } => unreachable!("unknown controls return above"),
     };
     // Undefined ftCmo grbit bits 13/14, mirrored per kind from Excel
     // output for byte parity.
@@ -5556,13 +6603,14 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
         FormControlKind::Button { .. }
         | FormControlKind::Dropdown { .. }
         | FormControlKind::Label { .. } => obj::cmo_flags::UNDEFINED_14,
+        FormControlKind::Unknown { .. } => unreachable!("unknown controls return above"),
         _ => obj::cmo_flags::UNDEFINED_13 | obj::cmo_flags::UNDEFINED_14,
     };
     let mut grbit = base_bits;
-    if control.control.locked {
+    if control.locked {
         grbit |= obj::cmo_flags::LOCKED;
     }
-    if control.control.printable {
+    if control.printable {
         grbit |= obj::cmo_flags::PRINT;
     }
 
@@ -5572,6 +6620,23 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
             CheckState::Checked => 1,
             CheckState::Mixed => 2,
         }
+    };
+
+    // MS-XLS 2.4.181 subrecord order: cmo, cbls, rbo, sbs, macro,
+    // linkFmla, checkBox, radioButton, list, gbo. FtMacro therefore
+    // follows the state mirrors, not ftCmo. MS-XLS 2.5.148: the
+    // ObjFmla holds a single PtgName referencing an fProc Lbl in the
+    // Globals Substream.
+    let push_macro = |body: &mut Vec<u8>| -> XlsResult<()> {
+        if control.control.macro_name.is_none() {
+            return Ok(());
+        }
+        if control.macro_rgce.is_empty() {
+            return Err(XlsError::InvalidFormat(
+                "XLS control macro could not be resolved to a procedure name".into(),
+            ));
+        }
+        obj::push_fmla_subrecord(body, obj::ft::MACRO, &control.macro_rgce)
     };
 
     let mut body = Vec::new();
@@ -5585,10 +6650,13 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
     let mut needs_end = true;
     let mut lbs_start = None;
     match kind {
-        FormControlKind::Button { .. } | FormControlKind::Label { .. } => {}
+        FormControlKind::Button { .. } | FormControlKind::Label { .. } => {
+            push_macro(&mut body)?;
+        }
         FormControlKind::Checkbox { state, no_3d, .. } => {
             let s = state_u16(state);
             obj::push_cbls(&mut body, s)?;
+            push_macro(&mut body)?;
             if !control.link_rgce.is_empty() {
                 obj::push_fmla_subrecord(&mut body, obj::ft::CBLS_FMLA, &control.link_rgce)?;
             }
@@ -5603,6 +6671,7 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
             let s = state_u16(state);
             obj::push_cbls(&mut body, s)?;
             obj::push_rbo(&mut body, s)?;
+            push_macro(&mut body)?;
             if !control.link_rgce.is_empty() {
                 obj::push_fmla_subrecord(&mut body, obj::ft::CBLS_FMLA, &control.link_rgce)?;
             }
@@ -5610,6 +6679,7 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
             obj::push_rbo_data(&mut body, control.radio_next_id, control.radio_first)?;
         }
         FormControlKind::GroupBox { no_3d, .. } => {
+            push_macro(&mut body)?;
             obj::push_gbo_data(&mut body, *no_3d)?;
         }
         FormControlKind::Scrollbar {
@@ -5634,6 +6704,7 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
                 flags: 0x0001, // fDraw
             }
             .write_to(&mut body)?;
+            push_macro(&mut body)?;
             if !control.link_rgce.is_empty() {
                 obj::push_fmla_subrecord(&mut body, obj::ft::SBS_FMLA, &control.link_rgce)?;
             }
@@ -5645,8 +6716,7 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
             increment,
             ..
         } => {
-            let (val, min, max, inc, _) =
-                validated_sbs_values(*value, *min, *max, *increment, 10)?;
+            let (val, min, max, inc, _) = validated_sbs_values(*value, *min, *max, *increment, 10)?;
             obj::SbsData {
                 val,
                 min,
@@ -5658,6 +6728,7 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
                 flags: 0x0001, // fDraw
             }
             .write_to(&mut body)?;
+            push_macro(&mut body)?;
             if !control.link_rgce.is_empty() {
                 obj::push_fmla_subrecord(&mut body, obj::ft::SBS_FMLA, &control.link_rgce)?;
             }
@@ -5680,6 +6751,7 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
                 flags: 0x0001,
             }
             .write_to(&mut body)?;
+            push_macro(&mut body)?;
             if !control.link_rgce.is_empty() {
                 obj::push_fmla_subrecord(&mut body, obj::ft::SBS_FMLA, &control.link_rgce)?;
             }
@@ -5738,6 +6810,7 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
                 flags: 0x0000,
             }
             .write_to(&mut body)?;
+            push_macro(&mut body)?;
             if !control.link_rgce.is_empty() {
                 obj::push_fmla_subrecord(&mut body, obj::ft::SBS_FMLA, &control.link_rgce)?;
             }
@@ -5747,11 +6820,8 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
                 ));
             }
             let selections: Vec<u16> = selected.iter().copied().collect();
-            let item_count = validated_list_selection_count(
-                &control.input_rgce,
-                &selections,
-                true,
-            )?;
+            let item_count =
+                validated_list_selection_count(&control.input_rgce, &selections, true)?;
             lbs_start = Some(body.len());
             obj::LbsData {
                 input_rgce: control.input_rgce.clone(),
@@ -5771,6 +6841,7 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
             .write_to(&mut body)?;
             needs_end = false;
         }
+        FormControlKind::Unknown { .. } => unreachable!("unknown controls return above"),
     }
     if needs_end {
         obj::push_end(&mut body)?;
@@ -6042,24 +7113,270 @@ mod tests {
     use duke_sheets_core::{FormControl, FormControlKind};
     use duke_sheets_formula::FormulaExpr;
 
-    fn test_control_shape(spid: u32, obj_id: u16) -> ControlShape {
-        ControlShape {
+    /// MS-ODRAW 2.3.8.44: fLine (0x00000008) displays the outline and
+    /// fUsefLine is 0x00080000, so a default shape (outlined) must set
+    /// both bits and a no-outline shape only the use flag. Reader and
+    /// writer agreeing on inverted bytes renders every outline wrong
+    /// in Excel while all round-trips stay green.
+    #[test]
+    fn shape_fopt_line_flag_shows_outline_unless_no_fill() {
+        use crate::biff::escher::{fopt_id, FoptValue};
+        let line_props = |no_fill: bool| -> u32 {
+            let mut shape = duke_sheets_core::Shape::default();
+            shape.line.no_fill = no_fill;
+            let basic = BasicShape {
+                spid: 1025,
+                obj_id: 1,
+                text_id: None,
+                shape_type: 1,
+                shape_name: None,
+                alt_text: None,
+                shape,
+                txo_runs: Vec::new(),
+                anchor: EmitAnchor::Sheet(duke_sheets_chart::DrawingAnchor::default()),
+                locked: true,
+                printable: true,
+                hidden: false,
+                rotation: 0,
+                flip_h: false,
+                flip_v: false,
+            };
+            let table = basic_shape_fopt(&basic);
+            let props = table
+                .entries()
+                .find(|entry| entry.id == fopt_id::LINE_BOOLEAN_PROPS)
+                .and_then(|entry| match entry.value {
+                    FoptValue::Simple(v) => Some(v),
+                    _ => None,
+                })
+                .expect("line boolean props emitted");
+            props
+        };
+        assert_eq!(line_props(false), 0x0008_0008, "outlined shape sets fLine");
+        assert_eq!(line_props(true), 0x0008_0000, "no-outline shape clears fLine");
+    }
+
+    fn test_control_shape(spid: u32, obj_id: u16) -> SheetShape {
+        SheetShape::Control(ControlShape {
             spid,
             obj_id,
             text_id: Some(obj_id as u32),
+            shape_name: None,
+            alt_text: None,
             control: FormControl::new(FormControlKind::Button {
-                caption: "button".to_string(),
+                caption: "button".into(),
             }),
+            anchor: EmitAnchor::Sheet(duke_sheets_chart::DrawingAnchor::default()),
+            locked: true,
+            printable: true,
+            hidden: false,
             link_rgce: Vec::new(),
             input_rgce: Vec::new(),
+            txo_runs: Vec::new(),
+            macro_rgce: Vec::new(),
             radio_next_id: 0,
             radio_first: false,
+        })
+    }
+
+    /// Return the first FOPT 0x0004 value found in an emitted escher
+    /// byte run, walking record headers.
+    fn fopt_rotation_in(bytes: &[u8]) -> Option<u32> {
+        use crate::biff::escher::{
+            rec_type as er, FoptTable, FoptValue, OfficeArtRecordHeader, HEADER_LEN,
+        };
+        let mut cursor = 0usize;
+        while cursor + HEADER_LEN <= bytes.len() {
+            let h = OfficeArtRecordHeader::read_from(&bytes[cursor..]).ok()?;
+            if h.rec_type == er::FOPT {
+                let (table, _) = FoptTable::read_from(&bytes[cursor..]).ok()?;
+                return table.entries().find(|entry| entry.id == 0x0004).map(
+                    |entry| match entry.value {
+                        FoptValue::Simple(v) => v,
+                        FoptValue::Complex(_) => panic!("rotation is a simple property"),
+                    },
+                );
+            }
+            cursor += HEADER_LEN
+                + if h.is_container() {
+                    0
+                } else {
+                    h.rec_len as usize
+                };
         }
+        None
+    }
+
+    /// [MS-ODRAW] 2.3.18.5: FOPT rotation (0x0004) is a FixedPoint
+    /// 16.16 value in degrees. 90 degrees is 5,400,000 model units
+    /// (60,000ths of a degree) and 90 * 65,536 = 5,898,240 on the
+    /// wire. Groups and pictures must use the same conversion basic
+    /// shapes already do.
+    #[test]
+    fn group_fopt_rotation_is_16_16_fixed_point_degrees() {
+        let group = GroupShape {
+            spid: 1025,
+            obj_id: 1,
+            shape_name: None,
+            alt_text: None,
+            locked: true,
+            printable: true,
+            hidden: false,
+            rotation: 5_400_000,
+            flip_h: false,
+            flip_v: false,
+            anchor: EmitAnchor::Sheet(duke_sheets_chart::DrawingAnchor::default()),
+            child_rect: (0, 0, 1000, 1000),
+            children: Vec::new(),
+        };
+        let metrics = duke_sheets_core::Worksheet::new("m");
+        let mut flats = Vec::new();
+        flatten_shape(&SheetShape::Group(group), &mut flats, &metrics).expect("flatten");
+        assert_eq!(
+            fopt_rotation_in(&flats[0].pre),
+            Some(5_898_240),
+            "group FOPT 0x0004 must be 16.16 fixed-point degrees"
+        );
+    }
+
+    #[test]
+    fn picture_fopt_rotation_is_16_16_fixed_point_degrees() {
+        let picture = PictureShape {
+            spid: 1025,
+            obj_id: 1,
+            blip_id: 1,
+            shape_name: "Picture 1".to_string(),
+            alt_text: None,
+            locked: true,
+            printable: true,
+            hidden: false,
+            anchor: EmitAnchor::Sheet(duke_sheets_chart::DrawingAnchor::default()),
+            rotation: Some(5_400_000),
+            flip_h: false,
+            flip_v: false,
+        };
+        let metrics = duke_sheets_core::Worksheet::new("m");
+        let mut flats = Vec::new();
+        flatten_shape(&SheetShape::Picture(picture), &mut flats, &metrics).expect("flatten");
+        assert_eq!(
+            fopt_rotation_in(&flats[0].pre),
+            Some(5_898_240),
+            "picture FOPT 0x0004 must be 16.16 fixed-point degrees"
+        );
+    }
+
+    /// Walk an OBJ record's body and collect the subrecord ids in
+    /// order. `record` is the full BIFF record (type + len + body).
+    fn obj_subrecord_ids(record: &[u8]) -> Vec<u16> {
+        assert_eq!(
+            u16::from_le_bytes([record[0], record[1]]),
+            OBJ_RECORD,
+            "expected an OBJ record"
+        );
+        let body = &record[4..];
+        let mut ids = Vec::new();
+        let mut pos = 0usize;
+        while pos + 4 <= body.len() {
+            let ft = u16::from_le_bytes([body[pos], body[pos + 1]]);
+            let cb = u16::from_le_bytes([body[pos + 2], body[pos + 3]]) as usize;
+            ids.push(ft);
+            pos += 4 + cb;
+            if ft == crate::biff::obj::ft::END {
+                break;
+            }
+        }
+        ids
+    }
+
+    /// MS-XLS 2.4.181 orders OBJ subrecords cmo, cbls, rbo, sbs,
+    /// macro, linkFmla, checkBox, radioButton, ...: FtMacro follows
+    /// the state mirrors, it does not sit directly after ftCmo.
+    #[test]
+    fn checkbox_obj_places_ftmacro_after_ftcbls() {
+        use crate::biff::obj::ft;
+        let control = ControlShape {
+            spid: 1025,
+            obj_id: 1,
+            text_id: Some(1),
+            shape_name: None,
+            alt_text: None,
+            control: FormControl::new(FormControlKind::Checkbox {
+                caption: "boxed".into(),
+                state: duke_sheets_core::CheckState::Checked,
+                cell_link: None,
+                no_3d: false,
+            })
+            .with_macro_name("RunMe"),
+            anchor: EmitAnchor::Sheet(duke_sheets_chart::DrawingAnchor::default()),
+            locked: true,
+            printable: true,
+            hidden: false,
+            link_rgce: Vec::new(),
+            input_rgce: Vec::new(),
+            txo_runs: Vec::new(),
+            macro_rgce: vec![0x23, 0x01, 0x00, 0x00, 0x00],
+            radio_next_id: 0,
+            radio_first: false,
+        };
+        let mut out = Vec::new();
+        write_control_obj_to_vec(&mut out, &control).expect("emit OBJ");
+        assert_eq!(
+            obj_subrecord_ids(&out),
+            vec![ft::CMO, ft::CBLS, ft::MACRO, ft::CBLS_DATA, ft::END],
+            "FtMacro must follow FtCbls (MS-XLS 2.4.181)"
+        );
+    }
+
+    /// Same ordering rule for option buttons: macro follows cbls+rbo
+    /// and precedes checkBox/radioButton data.
+    #[test]
+    fn option_button_obj_places_ftmacro_after_ftrbo() {
+        use crate::biff::obj::ft;
+        let control = ControlShape {
+            spid: 1025,
+            obj_id: 1,
+            text_id: Some(1),
+            shape_name: None,
+            alt_text: None,
+            control: FormControl::new(FormControlKind::OptionButton {
+                caption: "radio".into(),
+                state: duke_sheets_core::CheckState::Unchecked,
+                cell_link: None,
+                first_in_group: true,
+                no_3d: false,
+            })
+            .with_macro_name("RunMe"),
+            anchor: EmitAnchor::Sheet(duke_sheets_chart::DrawingAnchor::default()),
+            locked: true,
+            printable: true,
+            hidden: false,
+            link_rgce: Vec::new(),
+            input_rgce: Vec::new(),
+            txo_runs: Vec::new(),
+            macro_rgce: vec![0x23, 0x01, 0x00, 0x00, 0x00],
+            radio_next_id: 1,
+            radio_first: true,
+        };
+        let mut out = Vec::new();
+        write_control_obj_to_vec(&mut out, &control).expect("emit OBJ");
+        assert_eq!(
+            obj_subrecord_ids(&out),
+            vec![
+                ft::CMO,
+                ft::CBLS,
+                ft::RBO,
+                ft::MACRO,
+                ft::CBLS_DATA,
+                ft::RBO_DATA,
+                ft::END
+            ],
+            "FtMacro must follow FtCbls/FtRbo (MS-XLS 2.4.181)"
+        );
     }
 
     #[test]
     fn drawing_id_clusters_include_controls_and_split_at_1024() {
-        let controls: Vec<ControlShape> = (1u16..=1024)
+        let shapes: Vec<SheetShape> = (1u16..=1024)
             .map(|id| test_control_shape(1024 + id as u32, id))
             .collect();
         let mut state = DrawingState::default();
@@ -6068,9 +7385,8 @@ mod tests {
             SheetDrawing {
                 dgid: 1,
                 patriarch_spid: 1024,
-                pictures: Vec::new(),
-                comments: Vec::new(),
-                controls,
+                spid_last: 2048,
+                shapes,
             },
         );
         state.ordered_sheet_indices.push(0);
@@ -6085,8 +7401,8 @@ mod tests {
 
     #[test]
     fn drawing_object_limit_is_checked_without_overflow() {
-        validate_sheet_drawing_counts(0, 0, u16::MAX as usize).unwrap();
-        let err = validate_sheet_drawing_counts(0, 0, u16::MAX as usize + 1).unwrap_err();
+        validate_sheet_drawing_counts(u16::MAX as usize).unwrap();
+        let err = validate_sheet_drawing_counts(u16::MAX as usize + 1).unwrap_err();
         assert!(err.to_string().contains("at most 65535"));
     }
 

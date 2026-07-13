@@ -1,6 +1,6 @@
 use duke_sheets::{
-    CellError, CellValue, CheckState, FormControl, FormControlKind, ListSelection, Workbook,
-    WorkbookCalculationExt, WorkbookExt, WorkbookOpenOptions, WorkbookSaveOptions,
+    CellError, CellValue, CheckState, DrawingAnchor, FormControl, FormControlKind, ListSelection,
+    Workbook, WorkbookCalculationExt, WorkbookExt, WorkbookOpenOptions, WorkbookSaveOptions,
 };
 
 fn linked_controls_workbook() -> Workbook {
@@ -77,7 +77,7 @@ fn linked_controls_workbook() -> Workbook {
         },
     ];
     for kind in kinds {
-        sheet.add_form_control(FormControl::new(kind));
+        sheet.add_form_control(FormControl::new(kind), DrawingAnchor::default());
     }
     workbook
 }
@@ -114,21 +114,27 @@ fn calculation_keeps_linked_cells_and_controls_live() {
     let sheet = workbook.worksheet_mut(0).unwrap();
     // Control -> cell: the checkbox state must be visible to formulas.
     sheet.set_cell_formula("C1", "=IF(D2,10,0)").unwrap();
-    sheet.add_form_control(FormControl::new(FormControlKind::Checkbox {
-        caption: "input".into(),
-        state: CheckState::Checked,
-        cell_link: Some("$D$2".into()),
-        no_3d: false,
-    }));
+    sheet.add_form_control(
+        FormControl::new(FormControlKind::Checkbox {
+            caption: "input".into(),
+            state: CheckState::Checked,
+            cell_link: Some("$D$2".into()),
+            no_3d: false,
+        }),
+        DrawingAnchor::default(),
+    );
     // Cell -> control: a formula in a linked cell drives the control.
     sheet.set_cell_value("B1", 5.0).unwrap();
     sheet.set_cell_formula("D3", "=B1>0").unwrap();
-    sheet.add_form_control(FormControl::new(FormControlKind::Checkbox {
-        caption: "driven".into(),
-        state: CheckState::Unchecked,
-        cell_link: Some("$D$3".into()),
-        no_3d: false,
-    }));
+    sheet.add_form_control(
+        FormControl::new(FormControlKind::Checkbox {
+            caption: "driven".into(),
+            state: CheckState::Unchecked,
+            cell_link: Some("$D$3".into()),
+            no_3d: false,
+        }),
+        DrawingAnchor::default(),
+    );
 
     workbook.calculate().unwrap();
     let sheet = workbook.worksheet(0).unwrap();
@@ -139,7 +145,7 @@ fn calculation_keeps_linked_cells_and_controls_live() {
         "formulas must see the synchronized control state"
     );
     assert!(sheet.has_formula_at(2, 3), "driving formula survives");
-    match &sheet.form_controls()[1].kind {
+    match &sheet.form_controls().nth(1).unwrap().payload.kind {
         FormControlKind::Checkbox { state, .. } => {
             assert_eq!(*state, CheckState::Checked, "formula result drives the control");
         }
@@ -153,7 +159,15 @@ fn calculation_keeps_linked_cells_and_controls_live() {
         .set_cell_value("B1", -1.0)
         .unwrap();
     workbook.calculate().unwrap();
-    match &workbook.worksheet(0).unwrap().form_controls()[1].kind {
+    match &workbook
+        .worksheet(0)
+        .unwrap()
+        .form_controls()
+        .nth(1)
+        .unwrap()
+        .payload
+        .kind
+    {
         FormControlKind::Checkbox { state, .. } => assert_eq!(*state, CheckState::Unchecked),
         other => panic!("expected Checkbox, got {other:?}"),
     }
@@ -167,7 +181,8 @@ fn calculation_keeps_linked_cells_and_controls_live() {
     let sheet = reopened.worksheet(0).unwrap();
     assert!(sheet.has_formula_at(2, 3), "formula persists in the file");
     assert_eq!(sheet.get_value("D3").unwrap(), CellValue::Boolean(false));
-    match &sheet.form_controls()[1].kind {
+    let driven = sheet.form_controls().nth(1).unwrap();
+    match &driven.payload.kind {
         FormControlKind::Checkbox { state, .. } => assert_eq!(*state, CheckState::Unchecked),
         other => panic!("expected Checkbox, got {other:?}"),
     }

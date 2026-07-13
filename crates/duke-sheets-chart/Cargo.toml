@@ -19,3 +19,4 @@ pretty_assertions.workspace = true
 default = []
 serde = ["dep:serde"]
 parse = ["dep:quick-xml"]
+write = ["dep:quick-xml"]

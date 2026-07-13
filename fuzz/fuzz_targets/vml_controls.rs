@@ -10,6 +10,6 @@ use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
     for shape in duke_sheets_vml::parse_vml_controls(data) {
-        let _ = shape.to_form_control();
+        let _ = shape.to_drawing_object();
     }
 });

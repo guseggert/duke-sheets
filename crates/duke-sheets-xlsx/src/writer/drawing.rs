@@ -1,541 +1,307 @@
 use std::io::{Seek, Write};
 
-use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
+use duke_sheets_chart::drawing_part::write::{
+    self as part_write, PartChild, PartKind, PartObject, PartRel, PartShape, TwinStyle,
+};
+use duke_sheets_chart::drawing_part::{
+    ShapeFill as PartShapeFill, ShapeLine as PartShapeLine, TwinText,
+};
+use duke_sheets_chart::Chart;
+use duke_sheets_core::{
+    DrawingKind, DrawingMeta, FormControl, Shape, ShapeFill, ShapeGeometry, Worksheet,
+};
 
-use duke_sheets_chart::{CellMarker, Chart, ChartEx, DrawingAnchor, EmbeddedImage};
-
-use super::{write_xml_part, XlsxResult, XmlWriter, NS_DOC_RELS, NS_RELATIONSHIPS, RT_CHART};
-
-const NS_SPREADSHEET_DRAWING: &str =
-    "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing";
-const NS_DRAWING_MAIN: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
-const NS_CHART: &str = "http://schemas.openxmlformats.org/drawingml/2006/chart";
-const NS_CX: &str = "http://schemas.microsoft.com/office/drawing/2014/chartex";
-const NS_MC: &str = "http://schemas.openxmlformats.org/markup-compatibility/2006";
-const NS_CX1: &str = "http://schemas.microsoft.com/office/drawing/2015/9/8/chartex";
-const RT_CHART_EX: &str = "http://schemas.microsoft.com/office/2014/relationships/chartEx";
-/// OOXML relationship type for embedded image parts (`xl/media/*`).
-pub(super) const RT_IMAGE: &str =
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
-
-/// One image referenced by a sheet's drawing, paired with the global
-/// part number used for its filename in `xl/media/imageN.<ext>`. The
-/// pair lets the drawing writer and the rels writer agree on which
-/// rId points at which media part.
-pub(super) struct DrawingImage<'a> {
-    pub image: &'a EmbeddedImage,
-    pub global_num: usize,
+fn control_twin_text(control: &FormControl) -> Option<TwinText> {
+    control.caption().map(|text| text.to_drawing_part_text())
 }
 
+fn shape_part(shape: &Shape) -> PartShape<'_> {
+    let geometry = match &shape.geometry {
+        ShapeGeometry::Preset(name) => name.as_str(),
+    };
+    let fill = match shape.fill {
+        ShapeFill::None => PartShapeFill::None,
+        ShapeFill::Solid(color) => duke_sheets_core::drawing::color_to_drawing_part(color)
+            .map(PartShapeFill::Solid)
+            .unwrap_or(PartShapeFill::None),
+    };
+    PartShape {
+        geometry,
+        fill,
+        line: PartShapeLine {
+            color: shape
+                .line
+                .color
+                .and_then(duke_sheets_core::drawing::color_to_drawing_part),
+            width_emu: shape.line.width_emu,
+            dash_style: shape.line.dash_style.clone(),
+            no_fill: shape.line.no_fill,
+        },
+        text: shape.text.as_ref().map(|text| text.to_drawing_part_text()),
+        rotation: shape.rotation,
+        flip_h: shape.flip_h,
+        flip_v: shape.flip_v,
+        raw_shape_properties: shape.raw_shape_properties.as_deref(),
+        raw_text_body: shape.raw_text_body.as_deref(),
+        raw_geometry_unchanged: shape.preserved_geometry_unchanged(),
+        raw_fill_unchanged: shape.preserved_fill_unchanged(),
+        raw_line_unchanged: shape.preserved_line_unchanged(),
+        raw_text_unchanged: shape.preserved_text_unchanged(),
+    }
+}
+
+use super::{XlsxResult, RT_CHART};
+
+pub(super) use duke_sheets_chart::drawing_part::write::{DrawingPlan, PlannedRel};
+pub(super) use duke_sheets_chart::drawing_part::{image_format_extension, image_format_mime};
+
+pub(super) fn is_unsupported(chart: &Chart) -> bool {
+    matches!(
+        chart.chart_type,
+        duke_sheets_chart::ChartType::Unsupported(_)
+    )
+}
+
+/// Convert one drawing node into its part-emission form. Comments and
+/// unsupported charts have no drawing-part presence. `control_ordinal`
+/// advances across the whole tree in emission (depth-first) order and
+/// drives default control names.
+fn convert_kind<'a>(
+    kind: &'a DrawingKind,
+    meta: &'a DrawingMeta,
+    comment_count: usize,
+    control_ordinal: &mut usize,
+) -> Option<PartKind<'a>> {
+    match kind {
+        DrawingKind::Comment { .. } => None,
+        DrawingKind::Chart(chart) => {
+            if is_unsupported(chart) {
+                None
+            } else {
+                Some(PartKind::Chart)
+            }
+        }
+        DrawingKind::ChartEx(chart) => Some(PartKind::ChartEx {
+            fallback: chart.raw_mc_fallback.as_deref(),
+        }),
+        DrawingKind::Image(image) => Some(PartKind::Image(image)),
+        DrawingKind::Shape(shape) => Some(PartKind::Shape(shape_part(shape))),
+        DrawingKind::FormControl(control) => {
+            let name = meta.name.clone().unwrap_or_else(|| {
+                super::form_controls::default_control_name(
+                    &control.kind,
+                    comment_count + *control_ordinal + 1,
+                )
+            });
+            *control_ordinal += 1;
+            Some(PartKind::Control { name })
+        }
+        DrawingKind::Group(group) => {
+            let children = group
+                .children
+                .iter()
+                .filter_map(|child| {
+                    convert_kind(&child.kind, &child.meta, comment_count, control_ordinal).map(
+                        |kind| PartChild {
+                            name: child.meta.name.as_deref(),
+                            alt_text: child.meta.alt_text.as_deref(),
+                            title: child.meta.title.as_deref(),
+                            macro_name: child
+                                .kind
+                                .as_form_control()
+                                .and_then(|control| control.macro_name.as_deref())
+                                .map(duke_sheets_vml::encode_macro_formula),
+                            control_text: child.kind.as_form_control().and_then(control_twin_text),
+                            hidden: child.meta.hidden,
+                            transform: &child.transform,
+                            kind,
+                        },
+                    )
+                })
+                .collect();
+            Some(PartKind::Group {
+                transform: &group.transform,
+                children,
+            })
+        }
+        DrawingKind::Raw(raw) => Some(PartKind::Raw {
+            bytes: &raw.bytes,
+            rels: raw
+                .rels
+                .iter()
+                .map(|rel| PartRel {
+                    id: &rel.id,
+                    rel_type: &rel.rel_type,
+                    target: &rel.target,
+                    external: rel.external,
+                })
+                .collect(),
+        }),
+    }
+}
+
+/// The sheet's drawing list in part-emission form.
+fn part_objects(sheet: &Worksheet) -> Vec<PartObject<'_>> {
+    let comment_count = sheet.comment_count();
+    let mut control_ordinal = 0usize;
+    sheet
+        .drawings()
+        .iter()
+        .filter_map(|object| {
+            convert_kind(
+                &object.kind,
+                &object.meta,
+                comment_count,
+                &mut control_ordinal,
+            )
+            .map(|kind| PartObject {
+                name: object.meta.name.as_deref(),
+                alt_text: object.meta.alt_text.as_deref(),
+                title: object.meta.title.as_deref(),
+                macro_name: object
+                    .kind
+                    .as_form_control()
+                    .and_then(|control| control.macro_name.as_deref())
+                    .map(duke_sheets_vml::encode_macro_formula),
+                control_text: object.kind.as_form_control().and_then(control_twin_text),
+                locked: object.meta.locked,
+                printable: object.meta.printable,
+                hidden: object.meta.hidden,
+                anchor: &object.anchor,
+                kind,
+            })
+        })
+        .collect()
+}
+
+/// Assign relationship ids for the sheet's drawing part. Raw entries
+/// keep their original ids; generated ids skip over them.
+pub(super) fn plan_drawing_rels(
+    sheet: &Worksheet,
+    chart_globals: &[usize],
+    chartex_globals: &[usize],
+    image_parts: &[(usize, &'static str)],
+) -> DrawingPlan {
+    part_write::plan_drawing_rels(
+        &part_objects(sheet),
+        chart_globals,
+        chartex_globals,
+        image_parts,
+    )
+}
+
+/// Write one sheet's drawing part: every drawing object in list
+/// order. Comments have no native-part presence; form controls emit
+/// their a14 placeholder twins; raw entries pass through verbatim.
 pub(super) fn write_drawing<W: Write + Seek>(
     zip: &mut zip::ZipWriter<W>,
-    charts: &[&Chart],
-    charts_ex: &[&ChartEx],
-    images: &[DrawingImage<'_>],
-    raw_drawing_objects: &[Vec<u8>],
+    sheet: &Worksheet,
+    sheet_index: usize,
+    plan: &DrawingPlan,
     drawing_num: usize,
 ) -> XlsxResult<()> {
     let path = format!("xl/drawings/drawing{}.xml", drawing_num);
-    write_xml_part(zip, &path, |w| {
-        let mut tag = BytesStart::new("xdr:wsDr");
-        tag.push_attribute(("xmlns:xdr", NS_SPREADSHEET_DRAWING));
-        tag.push_attribute(("xmlns:a", NS_DRAWING_MAIN));
-        tag.push_attribute(("xmlns:r", NS_DOC_RELS));
-        w.write_event(Event::Start(tag))?;
-
-        for (i, chart) in charts.iter().enumerate() {
-            let rid = format!("rId{}", i + 1);
-            write_two_cell_anchor(w, &chart.anchor, &rid, i)?;
-        }
-
-        let chartex_rid_start = charts.len() + 1;
-        for (i, cx) in charts_ex.iter().enumerate() {
-            let rid = format!("rId{}", chartex_rid_start + i);
-            let obj_idx = charts.len() + i;
-            write_chartex_two_cell_anchor(
-                w,
-                &cx.anchor,
-                &rid,
-                obj_idx,
-                cx.raw_mc_fallback.as_deref(),
-            )?;
-        }
-
-        // Pictures: rId numbering continues after charts + chartEx.
-        let pic_rid_start = charts.len() + charts_ex.len() + 1;
-        for (i, drawing_image) in images.iter().enumerate() {
-            let rid = format!("rId{}", pic_rid_start + i);
-            // Shape ID space follows the chart-frame convention used
-            // elsewhere in this file: the first non-DOM object is id=2,
-            // then incrementing.
-            let shape_idx = charts.len() + charts_ex.len() + i;
-            write_picture_anchor(w, drawing_image.image, &rid, shape_idx)?;
-        }
-
-        for raw in raw_drawing_objects {
-            w.get_mut().write_all(raw)?;
-        }
-
-        w.write_event(Event::End(BytesEnd::new("xdr:wsDr")))?;
-        Ok(())
-    })
-}
-
-/// Emit an `<xdr:twoCellAnchor>` / `<xdr:oneCellAnchor>` /
-/// `<xdr:absoluteAnchor>` wrapper around an `<xdr:pic>` element,
-/// dispatching on the source `DrawingAnchor` variant.
-fn write_picture_anchor(
-    w: &mut XmlWriter,
-    image: &EmbeddedImage,
-    rid: &str,
-    shape_idx: usize,
-) -> XlsxResult<()> {
-    match &image.anchor {
-        DrawingAnchor::TwoCell { from, to, edit_as } => {
-            let mut tag = BytesStart::new("xdr:twoCellAnchor");
-            if let Some(ea) = edit_as {
-                let s = match ea {
-                    duke_sheets_chart::EditAs::TwoCell => "twoCell",
-                    duke_sheets_chart::EditAs::OneCell => "oneCell",
-                    duke_sheets_chart::EditAs::Absolute => "absolute",
-                };
-                tag.push_attribute(("editAs", s));
-            }
-            w.write_event(Event::Start(tag))?;
-            w.write_event(Event::Start(BytesStart::new("xdr:from")))?;
-            write_cell_marker(w, from)?;
-            w.write_event(Event::End(BytesEnd::new("xdr:from")))?;
-            w.write_event(Event::Start(BytesStart::new("xdr:to")))?;
-            write_cell_marker(w, to)?;
-            w.write_event(Event::End(BytesEnd::new("xdr:to")))?;
-            write_picture_element(w, image, rid, shape_idx)?;
-            w.write_event(Event::Empty(BytesStart::new("xdr:clientData")))?;
-            w.write_event(Event::End(BytesEnd::new("xdr:twoCellAnchor")))?;
-        }
-        DrawingAnchor::OneCell {
-            from,
-            width_emu,
-            height_emu,
-        } => {
-            w.write_event(Event::Start(BytesStart::new("xdr:oneCellAnchor")))?;
-            w.write_event(Event::Start(BytesStart::new("xdr:from")))?;
-            write_cell_marker(w, from)?;
-            w.write_event(Event::End(BytesEnd::new("xdr:from")))?;
-            let cx_s = width_emu.to_string();
-            let cy_s = height_emu.to_string();
-            w.create_element("xdr:ext")
-                .with_attribute(("cx", cx_s.as_str()))
-                .with_attribute(("cy", cy_s.as_str()))
-                .write_empty()?;
-            write_picture_element(w, image, rid, shape_idx)?;
-            w.write_event(Event::Empty(BytesStart::new("xdr:clientData")))?;
-            w.write_event(Event::End(BytesEnd::new("xdr:oneCellAnchor")))?;
-        }
-        DrawingAnchor::Absolute {
-            x_emu,
-            y_emu,
-            width_emu,
-            height_emu,
-        } => {
-            w.write_event(Event::Start(BytesStart::new("xdr:absoluteAnchor")))?;
-            let x_s = x_emu.to_string();
-            let y_s = y_emu.to_string();
-            w.create_element("xdr:pos")
-                .with_attribute(("x", x_s.as_str()))
-                .with_attribute(("y", y_s.as_str()))
-                .write_empty()?;
-            let cx_s = width_emu.to_string();
-            let cy_s = height_emu.to_string();
-            w.create_element("xdr:ext")
-                .with_attribute(("cx", cx_s.as_str()))
-                .with_attribute(("cy", cy_s.as_str()))
-                .write_empty()?;
-            write_picture_element(w, image, rid, shape_idx)?;
-            w.write_event(Event::Empty(BytesStart::new("xdr:clientData")))?;
-            w.write_event(Event::End(BytesEnd::new("xdr:absoluteAnchor")))?;
-        }
-    }
+    let shape_base = (sheet_index + 1) * 1024 + 1 + sheet.comment_count();
+    let bytes = part_write::write_drawing_part_with_metrics(
+        &part_objects(sheet),
+        plan,
+        TwinStyle::CompatExtSp,
+        shape_base,
+        sheet,
+    )?;
+    zip.start_file(&path, zip::write::SimpleFileOptions::default())?;
+    zip.write_all(&bytes)?;
     Ok(())
 }
 
-/// Emit just the `<xdr:pic>` element (without the surrounding anchor
-/// wrapper). Used by all three anchor variants.
-fn write_picture_element(
-    w: &mut XmlWriter,
-    image: &EmbeddedImage,
-    rid: &str,
-    shape_idx: usize,
+/// Write a drawing part's .rels from its plan.
+pub(super) fn write_drawing_rels<W: Write + Seek>(
+    zip: &mut zip::ZipWriter<W>,
+    drawing_num: usize,
+    rels: &[PlannedRel],
 ) -> XlsxResult<()> {
-    w.write_event(Event::Start(BytesStart::new("xdr:pic")))?;
-
-    // <xdr:nvPicPr> non-visual picture properties.
-    w.write_event(Event::Start(BytesStart::new("xdr:nvPicPr")))?;
-    let cnv_id = (shape_idx + 2).to_string();
-    let mut cnv_pr = BytesStart::new("xdr:cNvPr");
-    cnv_pr.push_attribute(("id", cnv_id.as_str()));
-    cnv_pr.push_attribute(("name", image.name.as_str()));
-    if let Some(desc) = image.description.as_deref() {
-        cnv_pr.push_attribute(("descr", desc));
-    }
-    w.write_event(Event::Empty(cnv_pr))?;
-    w.write_event(Event::Start(BytesStart::new("xdr:cNvPicPr")))?;
-    let mut pic_locks = BytesStart::new("a:picLocks");
-    pic_locks.push_attribute(("noChangeAspect", "1"));
-    w.write_event(Event::Empty(pic_locks))?;
-    w.write_event(Event::End(BytesEnd::new("xdr:cNvPicPr")))?;
-    w.write_event(Event::End(BytesEnd::new("xdr:nvPicPr")))?;
-
-    // <xdr:blipFill> blip reference to the image part.
-    w.write_event(Event::Start(BytesStart::new("xdr:blipFill")))?;
-    let mut blip = BytesStart::new("a:blip");
-    blip.push_attribute(("xmlns:r", NS_DOC_RELS));
-    blip.push_attribute(("r:embed", rid));
-    w.write_event(Event::Empty(blip))?;
-    w.write_event(Event::Start(BytesStart::new("a:stretch")))?;
-    w.write_event(Event::Empty(BytesStart::new("a:fillRect")))?;
-    w.write_event(Event::End(BytesEnd::new("a:stretch")))?;
-    w.write_event(Event::End(BytesEnd::new("xdr:blipFill")))?;
-
-    // <xdr:spPr> shape properties: xfrm with image-supplied geometry.
-    w.write_event(Event::Start(BytesStart::new("xdr:spPr")))?;
-    let mut xfrm = BytesStart::new("a:xfrm");
-    if let Some(rot) = image.rotation {
-        xfrm.push_attribute(("rot", rot.to_string().as_str()));
-    }
-    if image.flip_h {
-        xfrm.push_attribute(("flipH", "1"));
-    }
-    if image.flip_v {
-        xfrm.push_attribute(("flipV", "1"));
-    }
-    w.write_event(Event::Start(xfrm))?;
-    w.create_element("a:off")
-        .with_attribute(("x", "0"))
-        .with_attribute(("y", "0"))
-        .write_empty()?;
-    let cx_s = image.width_emu.to_string();
-    let cy_s = image.height_emu.to_string();
-    w.create_element("a:ext")
-        .with_attribute(("cx", cx_s.as_str()))
-        .with_attribute(("cy", cy_s.as_str()))
-        .write_empty()?;
-    w.write_event(Event::End(BytesEnd::new("a:xfrm")))?;
-    let mut prst = BytesStart::new("a:prstGeom");
-    prst.push_attribute(("prst", "rect"));
-    w.write_event(Event::Start(prst))?;
-    w.write_event(Event::Empty(BytesStart::new("a:avLst")))?;
-    w.write_event(Event::End(BytesEnd::new("a:prstGeom")))?;
-    w.write_event(Event::End(BytesEnd::new("xdr:spPr")))?;
-
-    w.write_event(Event::End(BytesEnd::new("xdr:pic")))?;
+    let path = format!("xl/drawings/_rels/drawing{}.xml.rels", drawing_num);
+    let bytes = part_write::write_rels_part(rels)?;
+    zip.start_file(&path, zip::write::SimpleFileOptions::default())?;
+    zip.write_all(&bytes)?;
     Ok(())
+}
+
+/// A chartsheet's drawing emission plan: anchor fragments in order,
+/// the relationships captured for them, and a chart rel id allocated
+/// around every id the anchors keep.
+pub(super) struct ChartsheetDrawingPlan {
+    pub anchors: Vec<Vec<u8>>,
+    pub raw_rels: Vec<duke_sheets_core::RawRel>,
+    pub chart_rid: String,
+}
+
+pub(super) fn plan_chartsheet_drawing(
+    raw_drawing_objects: &[Vec<u8>],
+    raw_drawing_rels: &[duke_sheets_core::RawRel],
+) -> ChartsheetDrawingPlan {
+    let anchors: Vec<Vec<u8>> = raw_drawing_objects.to_vec();
+    let raw_rels: Vec<duke_sheets_core::RawRel> = raw_drawing_rels.to_vec();
+    let mut taken: std::collections::HashSet<usize> = raw_rels
+        .iter()
+        .filter_map(|rel| rel.id.strip_prefix("rId").and_then(|n| n.parse().ok()))
+        .collect();
+    for anchor in &anchors {
+        taken.extend(part_write::quoted_rel_id_nums(anchor));
+    }
+    let mut next = 1usize;
+    while taken.contains(&next) {
+        next += 1;
+    }
+    ChartsheetDrawingPlan {
+        anchors,
+        raw_rels,
+        chart_rid: format!("rId{next}"),
+    }
 }
 
 pub(super) fn write_chartsheet_drawing<W: Write + Seek>(
     zip: &mut zip::ZipWriter<W>,
-    _chart: &Chart,
-    raw_drawing_objects: &[Vec<u8>],
+    plan: &ChartsheetDrawingPlan,
+    has_chart: bool,
     drawing_num: usize,
 ) -> XlsxResult<()> {
     let path = format!("xl/drawings/drawing{}.xml", drawing_num);
-    write_xml_part(zip, &path, |w| {
-        let mut tag = BytesStart::new("xdr:wsDr");
-        tag.push_attribute(("xmlns:xdr", NS_SPREADSHEET_DRAWING));
-        tag.push_attribute(("xmlns:a", NS_DRAWING_MAIN));
-        tag.push_attribute(("xmlns:r", NS_DOC_RELS));
-        w.write_event(Event::Start(tag))?;
-
-        write_absolute_anchor(w, "rId1", 0)?;
-
-        for raw in raw_drawing_objects {
-            w.get_mut().write_all(raw)?;
-        }
-
-        w.write_event(Event::End(BytesEnd::new("xdr:wsDr")))?;
-        Ok(())
-    })
-}
-
-fn write_absolute_anchor(w: &mut XmlWriter, rid: &str, chart_idx: usize) -> XlsxResult<()> {
-    w.write_event(Event::Start(BytesStart::new("xdr:absoluteAnchor")))?;
-
-    w.create_element("xdr:pos")
-        .with_attribute(("x", "0"))
-        .with_attribute(("y", "0"))
-        .write_empty()?;
-    w.create_element("xdr:ext")
-        .with_attribute(("cx", "9144000"))
-        .with_attribute(("cy", "6858000"))
-        .write_empty()?;
-
-    w.write_event(Event::Start(BytesStart::new("xdr:graphicFrame")))?;
-
-    w.write_event(Event::Start(BytesStart::new("xdr:nvGraphicFramePr")))?;
-    let cnv_id = (chart_idx + 2).to_string();
-    let name = format!("Chart {}", chart_idx + 1);
-    w.create_element("xdr:cNvPr")
-        .with_attribute(("id", cnv_id.as_str()))
-        .with_attribute(("name", name.as_str()))
-        .write_empty()?;
-    w.write_event(Event::Empty(BytesStart::new("xdr:cNvGraphicFramePr")))?;
-    w.write_event(Event::End(BytesEnd::new("xdr:nvGraphicFramePr")))?;
-
-    w.write_event(Event::Start(BytesStart::new("xdr:xfrm")))?;
-    w.create_element("a:off")
-        .with_attribute(("x", "0"))
-        .with_attribute(("y", "0"))
-        .write_empty()?;
-    w.create_element("a:ext")
-        .with_attribute(("cx", "0"))
-        .with_attribute(("cy", "0"))
-        .write_empty()?;
-    w.write_event(Event::End(BytesEnd::new("xdr:xfrm")))?;
-
-    w.write_event(Event::Start(BytesStart::new("a:graphic")))?;
-    let mut gd = BytesStart::new("a:graphicData");
-    gd.push_attribute(("uri", NS_CHART));
-    w.write_event(Event::Start(gd))?;
-
-    let mut chart_el = BytesStart::new("c:chart");
-    chart_el.push_attribute(("xmlns:c", NS_CHART));
-    chart_el.push_attribute(("r:id", rid));
-    w.write_event(Event::Empty(chart_el))?;
-
-    w.write_event(Event::End(BytesEnd::new("a:graphicData")))?;
-    w.write_event(Event::End(BytesEnd::new("a:graphic")))?;
-
-    w.write_event(Event::End(BytesEnd::new("xdr:graphicFrame")))?;
-    w.write_event(Event::Empty(BytesStart::new("xdr:clientData")))?;
-    w.write_event(Event::End(BytesEnd::new("xdr:absoluteAnchor")))?;
+    let bytes = part_write::write_chartsheet_drawing_part(
+        has_chart.then_some(plan.chart_rid.as_str()),
+        &plan.anchors,
+    )?;
+    zip.start_file(&path, zip::write::SimpleFileOptions::default())?;
+    zip.write_all(&bytes)?;
     Ok(())
 }
 
-fn write_two_cell_anchor(
-    w: &mut XmlWriter,
-    anchor: &DrawingAnchor,
-    rid: &str,
-    chart_idx: usize,
-) -> XlsxResult<()> {
-    let (from, to) = match anchor {
-        DrawingAnchor::TwoCell { from, to, .. } => (from.clone(), to.clone()),
-        _ => (CellMarker::default(), CellMarker::default()),
-    };
-    w.write_event(Event::Start(BytesStart::new("xdr:twoCellAnchor")))?;
-
-    w.write_event(Event::Start(BytesStart::new("xdr:from")))?;
-    write_cell_marker(w, &from)?;
-    w.write_event(Event::End(BytesEnd::new("xdr:from")))?;
-
-    w.write_event(Event::Start(BytesStart::new("xdr:to")))?;
-    write_cell_marker(w, &to)?;
-    w.write_event(Event::End(BytesEnd::new("xdr:to")))?;
-
-    w.write_event(Event::Start(BytesStart::new("xdr:graphicFrame")))?;
-
-    w.write_event(Event::Start(BytesStart::new("xdr:nvGraphicFramePr")))?;
-    let cnv_id = (chart_idx + 2).to_string();
-    let name = format!("Chart {}", chart_idx + 1);
-    w.create_element("xdr:cNvPr")
-        .with_attribute(("id", cnv_id.as_str()))
-        .with_attribute(("name", name.as_str()))
-        .write_empty()?;
-    w.write_event(Event::Empty(BytesStart::new("xdr:cNvGraphicFramePr")))?;
-    w.write_event(Event::End(BytesEnd::new("xdr:nvGraphicFramePr")))?;
-
-    w.write_event(Event::Start(BytesStart::new("xdr:xfrm")))?;
-    w.create_element("a:off")
-        .with_attribute(("x", "0"))
-        .with_attribute(("y", "0"))
-        .write_empty()?;
-    w.create_element("a:ext")
-        .with_attribute(("cx", "9525000"))
-        .with_attribute(("cy", "6096000"))
-        .write_empty()?;
-    w.write_event(Event::End(BytesEnd::new("xdr:xfrm")))?;
-
-    w.write_event(Event::Start(BytesStart::new("a:graphic")))?;
-    let mut gd = BytesStart::new("a:graphicData");
-    gd.push_attribute(("uri", NS_CHART));
-    w.write_event(Event::Start(gd))?;
-
-    let mut chart_el = BytesStart::new("c:chart");
-    chart_el.push_attribute(("xmlns:c", NS_CHART));
-    chart_el.push_attribute(("r:id", rid));
-    w.write_event(Event::Empty(chart_el))?;
-
-    w.write_event(Event::End(BytesEnd::new("a:graphicData")))?;
-    w.write_event(Event::End(BytesEnd::new("a:graphic")))?;
-
-    w.write_event(Event::End(BytesEnd::new("xdr:graphicFrame")))?;
-    w.write_event(Event::Empty(BytesStart::new("xdr:clientData")))?;
-    w.write_event(Event::End(BytesEnd::new("xdr:twoCellAnchor")))?;
-    Ok(())
-}
-
-fn write_chartex_two_cell_anchor(
-    w: &mut XmlWriter,
-    anchor: &DrawingAnchor,
-    rid: &str,
-    obj_idx: usize,
-    raw_mc_fallback: Option<&[u8]>,
-) -> XlsxResult<()> {
-    let (from, to) = match anchor {
-        DrawingAnchor::TwoCell { from, to, .. } => (from.clone(), to.clone()),
-        _ => (CellMarker::default(), CellMarker::default()),
-    };
-    w.write_event(Event::Start(BytesStart::new("xdr:twoCellAnchor")))?;
-
-    w.write_event(Event::Start(BytesStart::new("xdr:from")))?;
-    write_cell_marker(w, &from)?;
-    w.write_event(Event::End(BytesEnd::new("xdr:from")))?;
-
-    w.write_event(Event::Start(BytesStart::new("xdr:to")))?;
-    write_cell_marker(w, &to)?;
-    w.write_event(Event::End(BytesEnd::new("xdr:to")))?;
-
-    let mut mc_tag = BytesStart::new("mc:AlternateContent");
-    mc_tag.push_attribute(("xmlns:mc", NS_MC));
-    w.write_event(Event::Start(mc_tag))?;
-
-    let mut choice_tag = BytesStart::new("mc:Choice");
-    choice_tag.push_attribute(("xmlns:cx1", NS_CX1));
-    choice_tag.push_attribute(("Requires", "cx1"));
-    w.write_event(Event::Start(choice_tag))?;
-
-    let mut gf_tag = BytesStart::new("xdr:graphicFrame");
-    gf_tag.push_attribute(("macro", ""));
-    w.write_event(Event::Start(gf_tag))?;
-
-    w.write_event(Event::Start(BytesStart::new("xdr:nvGraphicFramePr")))?;
-    let cnv_id = (obj_idx + 2).to_string();
-    let name = format!("Chart {}", obj_idx + 1);
-    w.create_element("xdr:cNvPr")
-        .with_attribute(("id", cnv_id.as_str()))
-        .with_attribute(("name", name.as_str()))
-        .write_empty()?;
-    w.write_event(Event::Empty(BytesStart::new("xdr:cNvGraphicFramePr")))?;
-    w.write_event(Event::End(BytesEnd::new("xdr:nvGraphicFramePr")))?;
-
-    w.write_event(Event::Start(BytesStart::new("xdr:xfrm")))?;
-    w.create_element("a:off")
-        .with_attribute(("x", "0"))
-        .with_attribute(("y", "0"))
-        .write_empty()?;
-    w.create_element("a:ext")
-        .with_attribute(("cx", "0"))
-        .with_attribute(("cy", "0"))
-        .write_empty()?;
-    w.write_event(Event::End(BytesEnd::new("xdr:xfrm")))?;
-
-    w.write_event(Event::Start(BytesStart::new("a:graphic")))?;
-    let mut gd = BytesStart::new("a:graphicData");
-    gd.push_attribute(("uri", NS_CX));
-    w.write_event(Event::Start(gd))?;
-
-    let mut cx_chart = BytesStart::new("cx:chart");
-    cx_chart.push_attribute(("xmlns:cx", NS_CX));
-    cx_chart.push_attribute(("xmlns:r", NS_DOC_RELS));
-    cx_chart.push_attribute(("r:id", rid));
-    w.write_event(Event::Empty(cx_chart))?;
-
-    w.write_event(Event::End(BytesEnd::new("a:graphicData")))?;
-    w.write_event(Event::End(BytesEnd::new("a:graphic")))?;
-    w.write_event(Event::End(BytesEnd::new("xdr:graphicFrame")))?;
-
-    w.write_event(Event::End(BytesEnd::new("mc:Choice")))?;
-
-    w.write_event(Event::Start(BytesStart::new("mc:Fallback")))?;
-    if let Some(raw) = raw_mc_fallback {
-        w.get_mut().write_all(raw)?;
-    }
-    w.write_event(Event::End(BytesEnd::new("mc:Fallback")))?;
-
-    w.write_event(Event::End(BytesEnd::new("mc:AlternateContent")))?;
-
-    w.write_event(Event::Empty(BytesStart::new("xdr:clientData")))?;
-    w.write_event(Event::End(BytesEnd::new("xdr:twoCellAnchor")))?;
-    Ok(())
-}
-
-fn write_cell_marker(w: &mut XmlWriter, marker: &CellMarker) -> XlsxResult<()> {
-    let col_s = marker.col.to_string();
-    w.create_element("xdr:col")
-        .write_text_content(BytesText::new(&col_s))?;
-    let col_off_s = marker.col_offset_emu.to_string();
-    w.create_element("xdr:colOff")
-        .write_text_content(BytesText::new(&col_off_s))?;
-    let row_s = marker.row.to_string();
-    w.create_element("xdr:row")
-        .write_text_content(BytesText::new(&row_s))?;
-    let row_off_s = marker.row_offset_emu.to_string();
-    w.create_element("xdr:rowOff")
-        .write_text_content(BytesText::new(&row_off_s))?;
-    Ok(())
-}
-
-pub(super) fn write_drawing_rels<W: Write + Seek>(
+/// Chartsheet drawing rels: the chart (when present) plus every
+/// relationship preserved for raw anchors.
+pub(super) fn write_chartsheet_drawing_rels<W: Write + Seek>(
     zip: &mut zip::ZipWriter<W>,
     drawing_num: usize,
-    chart_nums: &[usize],
-    chart_ex_nums: &[usize],
-    image_parts: &[(usize, &'static str)],
+    chart: Option<(&str, usize)>,
+    raw_rels: &[duke_sheets_core::RawRel],
 ) -> XlsxResult<()> {
-    let path = format!("xl/drawings/_rels/drawing{}.xml.rels", drawing_num);
-    write_xml_part(zip, &path, |w| {
-        let mut tag = BytesStart::new("Relationships");
-        tag.push_attribute(("xmlns", NS_RELATIONSHIPS));
-        w.write_event(Event::Start(tag))?;
-
-        for (i, &chart_num) in chart_nums.iter().enumerate() {
-            let rid = format!("rId{}", i + 1);
-            let target = format!("../charts/chart{}.xml", chart_num);
-            w.create_element("Relationship")
-                .with_attribute(("Id", rid.as_str()))
-                .with_attribute(("Type", RT_CHART))
-                .with_attribute(("Target", target.as_str()))
-                .write_empty()?;
-        }
-
-        let cx_rid_start = chart_nums.len() + 1;
-        for (i, &cx_num) in chart_ex_nums.iter().enumerate() {
-            let rid = format!("rId{}", cx_rid_start + i);
-            let target = format!("../charts/chartEx{}.xml", cx_num);
-            w.create_element("Relationship")
-                .with_attribute(("Id", rid.as_str()))
-                .with_attribute(("Type", RT_CHART_EX))
-                .with_attribute(("Target", target.as_str()))
-                .write_empty()?;
-        }
-
-        let pic_rid_start = chart_nums.len() + chart_ex_nums.len() + 1;
-        for (i, (global_num, ext)) in image_parts.iter().enumerate() {
-            let rid = format!("rId{}", pic_rid_start + i);
-            let target = format!("../media/image{global_num}.{ext}");
-            w.create_element("Relationship")
-                .with_attribute(("Id", rid.as_str()))
-                .with_attribute(("Type", RT_IMAGE))
-                .with_attribute(("Target", target.as_str()))
-                .write_empty()?;
-        }
-
-        w.write_event(Event::End(BytesEnd::new("Relationships")))?;
-        Ok(())
-    })
-}
-
-/// Map an `ImageFormat` to the file extension used in `xl/media/`.
-pub(super) fn image_format_extension(fmt: duke_sheets_chart::ImageFormat) -> &'static str {
-    use duke_sheets_chart::ImageFormat;
-    match fmt {
-        ImageFormat::Png => "png",
-        ImageFormat::Jpeg => "jpeg",
-        ImageFormat::Gif => "gif",
-        ImageFormat::Bmp => "bmp",
-        ImageFormat::Tiff => "tiff",
-        ImageFormat::Emf => "emf",
-        ImageFormat::Wmf => "wmf",
-        ImageFormat::Svg => "svg",
+    let mut rels: Vec<PlannedRel> = Vec::new();
+    if let Some((rid, cn)) = chart {
+        rels.push(PlannedRel {
+            id: rid.to_string(),
+            rel_type: RT_CHART.to_string(),
+            target: format!("../charts/chart{}.xml", cn),
+            external: false,
+        });
     }
+    for rel in raw_rels {
+        rels.push(PlannedRel {
+            id: rel.id.clone(),
+            rel_type: rel.rel_type.clone(),
+            target: rel.target.clone(),
+            external: rel.external,
+        });
+    }
+    write_drawing_rels(zip, drawing_num, &rels)
 }
 
 /// Write the raw image bytes as a part `xl/media/imageN.<ext>` inside

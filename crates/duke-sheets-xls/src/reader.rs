@@ -45,15 +45,108 @@ struct BlipData {
     data: Vec<u8>,
 }
 
-/// One non-patriarch `SP_CONTAINER`'s identifying data, collected in
-/// document order so shapes can be paired with OBJ records by
-/// position.
-#[derive(Debug, Clone)]
-struct EscherShapeInfo {
-    /// MSOSPT shape type from the FSP atom.
+/// One non-patriarch `SP_CONTAINER`'s parsed atoms. Nodes are
+/// collected in document (pre-order) order — a group's own shape,
+/// then its children, then the group's next sibling — matching the
+/// order of the sheet's OBJ records: the Nth ClientData-bearing node
+/// pairs with the Nth OBJ record.
+#[derive(Debug, Clone, Default)]
+struct EscherShapeNode {
+    /// MSOSPT shape type from the FSP atom header instance.
     shape_type: u16,
-    /// The shape's client anchor, when present.
-    anchor: Option<crate::biff::escher::OfficeArtClientAnchor>,
+    /// Shape ID from the FSP atom.
+    spid: u32,
+    /// FSP flip flags.
+    flip_h: bool,
+    flip_v: bool,
+    /// FOPT rotation (0x0004) wire value: FixedPoint 16.16 degrees
+    /// ([MS-ODRAW] 2.3.18.5). Model conversion (to 60,000ths of a
+    /// degree) happens via `officeart_fixed_to_rotation`.
+    rotation: Option<i32>,
+    /// FOPT pib (0x0104): 1-based blip-store index.
+    blip_id: Option<u32>,
+    /// Basic shape fill and line properties from FOPT.
+    fill_color: Option<u32>,
+    fill_enabled: Option<bool>,
+    line_color: Option<u32>,
+    line_width: Option<u32>,
+    line_dashing: Option<u32>,
+    line_no_fill: Option<bool>,
+    /// FOPT wzName (0x0380).
+    name: Option<String>,
+    /// FOPT wzDescription (0x0381).
+    alt_text: Option<String>,
+    /// FOPT Group Shape Boolean Properties (0x03BF) fHidden, gated
+    /// on its use-bit (MS-ODRAW §2.3.4.44).
+    hidden: bool,
+    /// Sheet anchor (top-level shapes).
+    client_anchor: Option<crate::biff::escher::OfficeArtClientAnchor>,
+    /// Group-space anchor (grouped shapes).
+    child_anchor: Option<crate::biff::escher::OfficeArtChildAnchor>,
+    /// Group child coordinate space (group shapes only).
+    fspgr: Option<crate::biff::escher::OfficeArtFspgr>,
+    /// Whether the SP container carries a ClientData marker (and so
+    /// pairs with an OBJ record).
+    has_client_data: bool,
+    /// Whether this node is a shape group (an `SpgrContainer`).
+    is_group: bool,
+    /// Group children in document order (groups only).
+    children: Vec<EscherShapeNode>,
+}
+
+/// One NOTE record's fields, collected during the record loop and
+/// resolved against comment shapes after the sheet's drawing stream
+/// is assembled.
+#[derive(Debug, Clone)]
+struct NoteData {
+    row: u32,
+    col: u16,
+    visible: bool,
+    obj_id: u16,
+    author: String,
+}
+
+fn officeart_color_to_core(value: u32) -> Option<duke_sheets_core::Color> {
+    // [MS-ODRAW] 2.2.2: OfficeArtCOLORREF carries RGB in the low three
+    // bytes. Scheme/system-index colors need external context.
+    let flags = value >> 24;
+    // fSystemRGB/fPaletteRGB still carry usable RGB channels. System,
+    // scheme, and palette-index references require external context.
+    if flags & 0x19 != 0 {
+        return None;
+    }
+    Some(duke_sheets_core::Color::rgb(
+        value as u8,
+        (value >> 8) as u8,
+        (value >> 16) as u8,
+    ))
+}
+
+fn officeart_fixed_to_rotation(value: i32) -> i32 {
+    let numerator = i64::from(value) * 60_000;
+    let rotation = if numerator >= 0 {
+        (numerator + 32_768) / 65_536
+    } else {
+        (numerator - 32_768) / 65_536
+    };
+    rotation.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+}
+
+fn officeart_dash_to_drawing(value: u32) -> String {
+    match value {
+        1 => "sysDash",
+        2 => "sysDot",
+        3 => "sysDashDot",
+        4 => "sysDashDotDot",
+        5 => "dot",
+        6 => "dash",
+        7 => "lgDash",
+        8 => "dashDot",
+        9 => "lgDashDot",
+        10 => "lgDashDotDot",
+        _ => "solid",
+    }
+    .to_string()
 }
 
 /// Metadata for a sheet parsed from the BOUNDSHEET record.
@@ -245,7 +338,7 @@ impl XlsReader {
         // Workbook-globals blip store, populated from MSODRAWINGGROUP
         // records. Indexed 1-based by the FOPT `pib` (picture blip id)
         // property referenced from picture SP_CONTAINERs.
-        let mut blip_store: Vec<BlipData> = Vec::new();
+        let mut blip_store: Vec<Option<BlipData>> = Vec::new();
         // Excel splits a large drawing group across multiple
         // MSODRAWINGGROUP records, each holding a fragment of one
         // logical DggContainer stream, so bodies are concatenated
@@ -576,7 +669,7 @@ impl XlsReader {
         style_ctx: &StyleContext,
         formula_ctx: &FormulaContext,
         auto_filter_range: Option<&CellRange>,
-        blip_store: &[BlipData],
+        blip_store: &[Option<BlipData>],
     ) -> XlsResult<()> {
         // We need to track the last FORMULA record to associate a STRING record
         let mut pending_formula_cell: Option<(u32, u16)> = None;
@@ -601,8 +694,10 @@ impl XlsReader {
 
         // Comment support: OBJ → TXO → NOTE correlation
         let mut last_obj_id: Option<u16> = None;
-        let mut obj_texts: std::collections::HashMap<u16, String> =
+        let mut obj_texts: std::collections::HashMap<u16, duke_sheets_core::ControlText> =
             std::collections::HashMap::new();
+        // NOTE records, resolved against comment shapes after the loop.
+        let mut notes: Vec<NoteData> = Vec::new();
 
         // Conditional formatting: CONDFMT range header for following CF records
         let mut cf_ranges: Vec<CellRange> = Vec::new();
@@ -796,12 +891,18 @@ impl XlsReader {
                 }
                 records::TXO => {
                     if let Some(oid) = last_obj_id.take() {
-                        if let Some(text) = Self::parse_txo_text(&rec.data, &rec.continue_offsets) {
+                        if let Some(text) =
+                            Self::parse_txo_text(&rec.data, &rec.continue_offsets, style_ctx)
+                        {
                             obj_texts.insert(oid, text);
                         }
                     }
                 }
-                records::NOTE => Self::parse_note(&rec.data, ws, &obj_texts)?,
+                records::NOTE => {
+                    if let Some(note) = Self::parse_note(&rec.data)? {
+                        notes.push(note);
+                    }
+                }
                 // ── Hyperlinks ──────────────────────────────────────
                 records::HLINK => Self::parse_hlink(&rec.data, ws)?,
                 records::HLINKTOOLTIP => {
@@ -995,13 +1096,18 @@ impl XlsReader {
             log::warn!("AUTOFILTER records found without _FilterDatabase name");
         }
 
-        // Walk the per-sheet Escher byte stream (concatenated MSODRAWING
-        // bodies) for picture shapes and add them to the worksheet.
-        Self::parse_escher_pictures(&escher_bytes, blip_store, ws);
-
-        // Walk it again pairing SP_CONTAINERs with OBJ records by
-        // position to extract form controls.
-        Self::parse_form_controls(&escher_bytes, &obj_bodies, &obj_texts, formula_ctx, ws);
+        // Assemble the drawing list from the per-sheet Escher byte
+        // stream (concatenated MSODRAWING bodies), the OBJ record
+        // bodies, the TXO texts, and the NOTE records.
+        Self::build_sheet_drawings(
+            &escher_bytes,
+            &obj_bodies,
+            &obj_texts,
+            &notes,
+            blip_store,
+            formula_ctx,
+            ws,
+        );
 
         Ok(())
     }
@@ -2428,66 +2534,115 @@ impl XlsReader {
         }
     }
 
-    /// Walk the per-sheet concatenated Escher byte stream looking for
-    /// picture `SP_CONTAINER`s and add an `EmbeddedImage` to `ws`
-    /// for each one whose blip resolves into `blip_store`.
-    fn parse_escher_pictures(
-        escher_bytes: &[u8],
-        blip_store: &[BlipData],
-        ws: &mut duke_sheets_core::Worksheet,
-    ) {
-        use crate::biff::escher::rec_type as er;
-        Self::walk_escher_records(escher_bytes, |h, body| {
-            if h.rec_type == er::SP_CONTAINER {
-                Self::extract_picture(body, blip_store, ws);
-                false
-            } else {
-                true
-            }
-        });
+    /// Parse the per-sheet Escher stream into a tree of shape nodes
+    /// in document (pre-order) order: a group's own SP container,
+    /// then its children, then the group's next sibling. The
+    /// patriarch shape (the implicit per-sheet root group) is
+    /// dropped, and its `SpgrContainer` is transparent — its members
+    /// become the top-level node list.
+    fn parse_shape_tree(escher_bytes: &[u8]) -> Vec<EscherShapeNode> {
+        let mut nodes = Vec::new();
+        let mut budget: usize = 1_000_000;
+        Self::collect_shape_nodes(escher_bytes, 0, &mut nodes, &mut budget);
+        nodes
     }
 
-    /// Inspect an `SP_CONTAINER` body. If its FSP shape type is
-    /// `PICTURE_FRAME` and its FOPT contains a `pib` (`0x0104`)
-    /// entry resolving into `blip_store`, build an `EmbeddedImage`
-    /// and call `ws.add_image()`.
-    fn extract_picture(
-        sp_body: &[u8],
-        blip_store: &[BlipData],
-        ws: &mut duke_sheets_core::Worksheet,
+    fn collect_shape_nodes(
+        body: &[u8],
+        depth: usize,
+        out: &mut Vec<EscherShapeNode>,
+        budget: &mut usize,
     ) {
+        use crate::biff::escher::{rec_type as er, OfficeArtRecordHeader, HEADER_LEN};
+        // Groups nest at most a handful of levels in real files.
+        const MAX_DEPTH: usize = 64;
+        if depth > MAX_DEPTH {
+            return;
+        }
+        let mut cursor = 0usize;
+        while cursor.saturating_add(HEADER_LEN) <= body.len() {
+            if *budget == 0 {
+                return;
+            }
+            *budget -= 1;
+            let Ok(h) = OfficeArtRecordHeader::read_from(&body[cursor..]) else {
+                return;
+            };
+            let Some((body_start, body_end)) =
+                Self::escher_record_bounds(cursor, body.len(), h.rec_len)
+            else {
+                return;
+            };
+            let inner = &body[body_start..body_end];
+            match h.rec_type {
+                er::SP_CONTAINER => {
+                    if let Some(node) = Self::parse_sp_container_node(inner) {
+                        out.push(node);
+                    }
+                }
+                er::SPGR_CONTAINER => {
+                    let mut members = Vec::new();
+                    Self::collect_shape_nodes(inner, depth + 1, &mut members, budget);
+                    // The container's first member is the group's own
+                    // shape (the leaf SP carrying the FSPGR). The
+                    // patriarch SPGR falls through to the flatten arm
+                    // because its own SP was dropped above.
+                    if !members.is_empty() && !members[0].is_group && members[0].fspgr.is_some() {
+                        let mut own = members.remove(0);
+                        own.is_group = true;
+                        own.children = members;
+                        out.push(own);
+                    } else {
+                        out.append(&mut members);
+                    }
+                }
+                _ if h.is_container() => {
+                    Self::collect_shape_nodes(inner, depth + 1, out, budget);
+                }
+                _ => {}
+            }
+            cursor = body_end;
+        }
+    }
+
+    /// Parse one `SP_CONTAINER` body into a shape node. Returns
+    /// `None` for the patriarch shape and for deleted tombstone
+    /// shapes — neither participates in OBJ pairing.
+    fn parse_sp_container_node(sp_body: &[u8]) -> Option<EscherShapeNode> {
         use crate::biff::escher::{
-            rec_type as er, shape_type, FoptTable, FoptValue, OfficeArtClientAnchor, OfficeArtFsp,
-            OfficeArtRecordHeader, HEADER_LEN,
+            fsp_flags, rec_type as er, FoptTable, FoptValue, OfficeArtChildAnchor,
+            OfficeArtClientAnchor, OfficeArtFsp, OfficeArtFspgr, OfficeArtRecordHeader, HEADER_LEN,
         };
 
-        let mut fsp_spid: u32 = 0;
-        let mut is_picture = false;
-        let mut flip_h = false;
-        let mut flip_v = false;
-        let mut blip_id: Option<u32> = None;
-        let mut shape_name: Option<String> = None;
-        let mut rotation: Option<i32> = None;
-        let mut anchor: Option<OfficeArtClientAnchor> = None;
+        let mut node = EscherShapeNode::default();
+        let mut has_fsp = false;
+        let mut patriarch = false;
+        let mut deleted = false;
 
-        let mut cursor = 0;
-        while cursor + HEADER_LEN <= sp_body.len() {
+        let mut cursor = 0usize;
+        while cursor.saturating_add(HEADER_LEN) <= sp_body.len() {
             let Ok(h) = OfficeArtRecordHeader::read_from(&sp_body[cursor..]) else {
-                return;
+                break;
             };
             let Some((_, body_end)) = Self::escher_record_bounds(cursor, sp_body.len(), h.rec_len)
             else {
-                return;
+                break;
             };
             match h.rec_type {
                 er::FSP => {
                     if let Ok((fsp, st, _)) = OfficeArtFsp::read_from(&sp_body[cursor..]) {
-                        fsp_spid = fsp.spid;
-                        is_picture = st == shape_type::PICTURE_FRAME;
-                        flip_h =
-                            (fsp.grf_persistence & crate::biff::escher::fsp_flags::FLIP_H) != 0;
-                        flip_v =
-                            (fsp.grf_persistence & crate::biff::escher::fsp_flags::FLIP_V) != 0;
+                        has_fsp = true;
+                        node.shape_type = st;
+                        node.spid = fsp.spid;
+                        node.flip_h = fsp.grf_persistence & fsp_flags::FLIP_H != 0;
+                        node.flip_v = fsp.grf_persistence & fsp_flags::FLIP_V != 0;
+                        patriarch = fsp.grf_persistence & fsp_flags::PATRIARCH != 0;
+                        deleted = fsp.grf_persistence & fsp_flags::DELETED != 0;
+                    }
+                }
+                er::FSPGR => {
+                    if let Ok((fspgr, _)) = OfficeArtFspgr::read_from(&sp_body[cursor..]) {
+                        node.fspgr = Some(fspgr);
                     }
                 }
                 er::FOPT => {
@@ -2496,17 +2651,66 @@ impl XlsReader {
                             match entry.id {
                                 0x0004 => {
                                     if let FoptValue::Simple(v) = entry.value {
-                                        rotation = Some(v as i32);
+                                        node.rotation = Some(v as i32);
                                     }
                                 }
                                 0x0104 => {
                                     if let FoptValue::Simple(v) = entry.value {
-                                        blip_id = Some(v);
+                                        node.blip_id = Some(v);
+                                    }
+                                }
+                                0x0181 => {
+                                    if let FoptValue::Simple(v) = entry.value {
+                                        node.fill_color = Some(v);
+                                    }
+                                }
+                                0x01BF => {
+                                    if let FoptValue::Simple(v) = entry.value {
+                                        if v & 0x0010_0000 != 0 {
+                                            node.fill_enabled = Some(v & 0x0000_0010 != 0);
+                                        }
+                                    }
+                                }
+                                0x01C0 => {
+                                    if let FoptValue::Simple(v) = entry.value {
+                                        node.line_color = Some(v);
+                                    }
+                                }
+                                0x01CB => {
+                                    if let FoptValue::Simple(v) = entry.value {
+                                        node.line_width = Some(v);
+                                    }
+                                }
+                                0x01CE => {
+                                    if let FoptValue::Simple(v) = entry.value {
+                                        node.line_dashing = Some(v);
+                                    }
+                                }
+                                0x01FF => {
+                                    if let FoptValue::Simple(v) = entry.value {
+                                        // MS-ODRAW 2.3.8.44: fLine
+                                        // (0x8) displays the outline;
+                                        // the line is absent when it
+                                        // is explicitly cleared.
+                                        if v & 0x0008_0000 != 0 {
+                                            node.line_no_fill = Some(v & 0x0000_0008 == 0);
+                                        }
                                     }
                                 }
                                 0x0380 => {
                                     if let FoptValue::Complex(bytes) = &entry.value {
-                                        shape_name = Some(decode_utf16le_null_terminated(bytes));
+                                        node.name = Some(decode_utf16le_null_terminated(bytes));
+                                    }
+                                }
+                                0x0381 => {
+                                    if let FoptValue::Complex(bytes) = &entry.value {
+                                        node.alt_text = Some(decode_utf16le_null_terminated(bytes));
+                                    }
+                                }
+                                0x03BF => {
+                                    if let FoptValue::Simple(v) = entry.value {
+                                        node.hidden =
+                                            crate::biff::escher::group_shape_props_hidden(v);
                                     }
                                 }
                                 _ => {}
@@ -2516,157 +2720,38 @@ impl XlsReader {
                 }
                 er::CLIENT_ANCHOR => {
                     if let Ok((a, _)) = OfficeArtClientAnchor::read_from(&sp_body[cursor..]) {
-                        anchor = Some(a);
+                        node.client_anchor = Some(a);
                     }
                 }
+                er::CHILD_ANCHOR => {
+                    if let Ok((a, _)) = OfficeArtChildAnchor::read_from(&sp_body[cursor..]) {
+                        node.child_anchor = Some(a);
+                    }
+                }
+                er::CLIENT_DATA => node.has_client_data = true,
                 _ => {}
             }
             cursor = body_end;
         }
 
-        if !is_picture {
-            return;
-        }
-        let Some(id) = blip_id else { return };
-        let idx = id.saturating_sub(1) as usize;
-        let Some(blip) = blip_store.get(idx) else {
-            return;
-        };
-        let anchor = anchor.unwrap_or_default();
-        let name = shape_name.unwrap_or_else(|| format!("Picture {fsp_spid}"));
-
-        // Reverse the writer's EMU↔anchor-unit quantisation. The
-        // writer's `emu_to_dx_units` / `emu_to_dy_units` use the
-        // same per-unit constants.
-        let dx_emu_per_unit: i64 = 595;
-        let dy_emu_per_unit: i64 = 744;
-        let from_col_off = anchor.dx_l as i64 * dx_emu_per_unit;
-        let from_row_off = anchor.dy_t as i64 * dy_emu_per_unit;
-        let to_col_off = anchor.dx_r as i64 * dx_emu_per_unit;
-        let to_row_off = anchor.dy_b as i64 * dy_emu_per_unit;
-
-        // Synthesise the picture's overall width / height in EMU
-        // from the anchored cell range plus default cell sizes.
-        // Excel itself does not store an absolute EMU dimension on
-        // XLS pictures — the bounding box is implicit in the cell
-        // anchor — so this is a best-effort estimate using Excel's
-        // default column width (8.43 char ≈ 64 px ≈ 609,600 EMU)
-        // and row height (15 pt = 190,500 EMU).
-        const DEFAULT_COL_EMU: i64 = 609_600;
-        const DEFAULT_ROW_EMU: i64 = 190_500;
-        let col_span = (anchor.col_r as i64 - anchor.col_l as i64).max(0);
-        let row_span = (anchor.row_b as i64 - anchor.row_t as i64).max(0);
-        let width_emu = (col_span * DEFAULT_COL_EMU + to_col_off - from_col_off).max(0);
-        let height_emu = (row_span * DEFAULT_ROW_EMU + to_row_off - from_row_off).max(0);
-
-        // Map the ClientAnchor flag back to the OOXML `editAs`
-        // hint:
-        //   0 → editAs="twoCell"  (move + resize with cells)
-        //   2 → editAs="oneCell"  (move only)
-        //   3 → editAs="absolute" (no move, no resize)
-        // OneCell and Absolute inputs collapse to TwoCell on
-        // read since the byte layout is identical; the editAs hint
-        // preserves the semantic intent so a downstream XLSX writer
-        // can re-emit the appropriate variant.
-        let edit_as = match anchor.flag {
-            0 => Some(duke_sheets_chart::EditAs::TwoCell),
-            2 => Some(duke_sheets_chart::EditAs::OneCell),
-            3 => Some(duke_sheets_chart::EditAs::Absolute),
-            _ => None,
-        };
-        let image = duke_sheets_chart::EmbeddedImage {
-            id: fsp_spid,
-            name,
-            description: None,
-            anchor: duke_sheets_chart::DrawingAnchor::TwoCell {
-                from: duke_sheets_chart::CellMarker {
-                    col: anchor.col_l,
-                    col_offset_emu: from_col_off,
-                    row: anchor.row_t as u32,
-                    row_offset_emu: from_row_off,
-                },
-                to: duke_sheets_chart::CellMarker {
-                    col: anchor.col_r,
-                    col_offset_emu: to_col_off,
-                    row: anchor.row_b as u32,
-                    row_offset_emu: to_row_off,
-                },
-                edit_as,
-            },
-            format: blip.format,
-            media_path: String::new(),
-            svg_media_path: None,
-            width_emu,
-            height_emu,
-            rotation,
-            flip_h,
-            flip_v,
-            data: blip.data.clone(),
-            svg_data: None,
-        };
-        ws.add_image(image);
+        (has_fsp && !patriarch && !deleted).then_some(node)
     }
 
-    /// Collect every non-patriarch `SP_CONTAINER` in the per-sheet
-    /// Escher stream, in document order, capturing its FSP shape type
-    /// and client anchor. The Nth entry corresponds to the sheet's
-    /// Nth OBJ record.
-    fn collect_escher_shapes(escher_bytes: &[u8]) -> Vec<EscherShapeInfo> {
-        let mut shapes = Vec::new();
-        use crate::biff::escher::{
-            fsp_flags, rec_type as er, OfficeArtClientAnchor, OfficeArtFsp,
-            OfficeArtRecordHeader, HEADER_LEN,
-        };
-        Self::walk_escher_records(escher_bytes, |h, inner| {
-            if h.rec_type != er::SP_CONTAINER {
-                return true;
-            }
-            let mut shape_type: u16 = 0;
-            let mut patriarch = false;
-            let mut deleted = false;
-            let mut has_fsp = false;
-            let mut has_client_data = false;
-            let mut anchor: Option<OfficeArtClientAnchor> = None;
-            let mut c = 0usize;
-            while c.saturating_add(HEADER_LEN) <= inner.len() {
-                let Ok(ih) = OfficeArtRecordHeader::read_from(&inner[c..]) else {
-                    break;
-                };
-                let Some((_, end)) = Self::escher_record_bounds(c, inner.len(), ih.rec_len) else {
-                    break;
-                };
-                match ih.rec_type {
-                    er::FSP => {
-                        if let Ok((fsp, st, _)) = OfficeArtFsp::read_from(&inner[c..]) {
-                            has_fsp = true;
-                            shape_type = st;
-                            patriarch = fsp.grf_persistence & fsp_flags::PATRIARCH != 0;
-                            deleted = fsp.grf_persistence & fsp_flags::DELETED != 0;
-                        }
-                    }
-                    er::CLIENT_ANCHOR => {
-                        if let Ok((a, _)) = OfficeArtClientAnchor::read_from(&inner[c..]) {
-                            anchor = Some(a);
-                        }
-                    }
-                    er::CLIENT_DATA => has_client_data = true,
-                    _ => {}
-                }
-                c = end;
-            }
-            if has_fsp && has_client_data && !patriarch && !deleted {
-                shapes.push(EscherShapeInfo { shape_type, anchor });
-            }
-            false
-        });
-        shapes
+    /// Number of nodes in the tree that pair with an OBJ record.
+    fn client_data_count(nodes: &[EscherShapeNode]) -> usize {
+        nodes
+            .iter()
+            .map(|node| usize::from(node.has_client_data) + Self::client_data_count(&node.children))
+            .sum()
     }
 
-    /// Iteratively walk OfficeArt records. A record budget prevents
-    /// adversarial streams from consuming unbounded CPU/memory; an
-    /// explicit stack avoids process-aborting recursion over deeply
-    /// nested containers. The callback returns whether to descend
-    /// into a container's body.
+    /// Iteratively walk OfficeArt records in pre-order (a container
+    /// is visited before its children, children before the
+    /// container's next sibling), i.e. document order. A record
+    /// budget prevents adversarial streams from consuming unbounded
+    /// CPU/memory; an explicit frame stack avoids process-aborting
+    /// recursion over deeply nested containers. The callback returns
+    /// whether to descend into a container's body.
     fn walk_escher_records<'a, F>(root: &'a [u8], mut visit: F)
     where
         F: FnMut(&crate::biff::escher::OfficeArtRecordHeader, &'a [u8]) -> bool,
@@ -2674,28 +2759,34 @@ impl XlsReader {
         use crate::biff::escher::{OfficeArtRecordHeader, HEADER_LEN};
         const MAX_RECORDS: usize = 1_000_000;
 
-        let mut stack = vec![root];
+        // (container body, read cursor) frames. Depth is bounded by
+        // the record budget: a frame is only pushed after a visit.
+        let mut stack: Vec<(&'a [u8], usize)> = vec![(root, 0)];
         let mut seen = 0usize;
-        while let Some(body) = stack.pop() {
-            let mut cursor = 0usize;
-            while cursor.saturating_add(HEADER_LEN) <= body.len() {
-                if seen >= MAX_RECORDS {
-                    return;
-                }
-                seen += 1;
-                let Ok(h) = OfficeArtRecordHeader::read_from(&body[cursor..]) else {
-                    break;
-                };
-                let Some((body_start, body_end)) =
-                    Self::escher_record_bounds(cursor, body.len(), h.rec_len)
-                else {
-                    break;
-                };
-                let inner = &body[body_start..body_end];
-                if h.is_container() && visit(&h, inner) {
-                    stack.push(inner);
-                }
-                cursor = body_end;
+        while let Some(frame) = stack.last_mut() {
+            let (body, cursor) = *frame;
+            if cursor.saturating_add(HEADER_LEN) > body.len() {
+                stack.pop();
+                continue;
+            }
+            if seen >= MAX_RECORDS {
+                return;
+            }
+            seen += 1;
+            let Ok(h) = OfficeArtRecordHeader::read_from(&body[cursor..]) else {
+                stack.pop();
+                continue;
+            };
+            let Some((body_start, body_end)) =
+                Self::escher_record_bounds(cursor, body.len(), h.rec_len)
+            else {
+                stack.pop();
+                continue;
+            };
+            frame.1 = body_end;
+            let inner = &body[body_start..body_end];
+            if h.is_container() && visit(&h, inner) {
+                stack.push((inner, 0));
             }
         }
     }
@@ -2713,14 +2804,33 @@ impl XlsReader {
 
     /// Convert an Escher client anchor into the model's two-cell
     /// drawing anchor, reversing the writer's EMU quantisation and
-    /// mapping the placement flag to an `editAs` hint.
+    /// mapping the placement flag to an `editAs` hint:
+    ///   0 → None (the default: move + resize with cells — the byte
+    ///       layout cannot distinguish an explicit `twoCell` from an
+    ///       absent hint, and both mean the same thing)
+    ///   2 → editAs="oneCell"  (move only)
+    ///   3 → editAs="absolute" (no move, no resize)
+    /// OneCell and Absolute inputs collapse to TwoCell anchors on
+    /// read since the byte layout is identical; the editAs hint
+    /// preserves the semantic intent so a downstream XLSX writer can
+    /// re-emit the appropriate variant.
     fn client_anchor_to_drawing_anchor(
         anchor: &crate::biff::escher::OfficeArtClientAnchor,
+        metrics: &dyn duke_sheets_chart::DrawingMetrics,
     ) -> duke_sheets_chart::DrawingAnchor {
-        const DX_EMU_PER_UNIT: i64 = 595;
-        const DY_EMU_PER_UNIT: i64 = 744;
+        let fraction_to_emu = |units: i16, extent: i64, denominator: i128| -> i64 {
+            if extent <= 0 {
+                return 0;
+            }
+            let numerator = i128::from(units) * i128::from(extent);
+            let rounded = if numerator >= 0 {
+                (numerator + denominator / 2) / denominator
+            } else {
+                (numerator - denominator / 2) / denominator
+            };
+            rounded.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
+        };
         let edit_as = match anchor.flag {
-            0 => Some(duke_sheets_chart::EditAs::TwoCell),
             2 => Some(duke_sheets_chart::EditAs::OneCell),
             3 => Some(duke_sheets_chart::EditAs::Absolute),
             _ => None,
@@ -2728,53 +2838,659 @@ impl XlsReader {
         duke_sheets_chart::DrawingAnchor::TwoCell {
             from: duke_sheets_chart::CellMarker {
                 col: anchor.col_l,
-                col_offset_emu: anchor.dx_l as i64 * DX_EMU_PER_UNIT,
+                col_offset_emu: fraction_to_emu(
+                    anchor.dx_l,
+                    metrics.column_width_emu(anchor.col_l),
+                    1024,
+                ),
                 row: anchor.row_t as u32,
-                row_offset_emu: anchor.dy_t as i64 * DY_EMU_PER_UNIT,
+                row_offset_emu: fraction_to_emu(
+                    anchor.dy_t,
+                    metrics.row_height_emu(u32::from(anchor.row_t)),
+                    256,
+                ),
             },
             to: duke_sheets_chart::CellMarker {
                 col: anchor.col_r,
-                col_offset_emu: anchor.dx_r as i64 * DX_EMU_PER_UNIT,
+                col_offset_emu: fraction_to_emu(
+                    anchor.dx_r,
+                    metrics.column_width_emu(anchor.col_r),
+                    1024,
+                ),
                 row: anchor.row_b as u32,
-                row_offset_emu: anchor.dy_b as i64 * DY_EMU_PER_UNIT,
+                row_offset_emu: fraction_to_emu(
+                    anchor.dy_b,
+                    metrics.row_height_emu(u32::from(anchor.row_b)),
+                    256,
+                ),
             },
             edit_as,
         }
     }
 
-    /// Pair the sheet's OBJ records with their SP_CONTAINERs by
-    /// position and add a [`duke_sheets_core::FormControl`] for every
-    /// Forms control object.
+    /// Assemble the worksheet's drawing list from the Escher shape
+    /// tree and the sheet's OBJ / TXO / NOTE records.
     ///
-    /// Permissive: a malformed OBJ body, a shape-type mismatch, or an
-    /// Escher/OBJ count mismatch degrades to skipping the affected
-    /// control (or its anchor) rather than failing the sheet load.
-    fn parse_form_controls(
+    /// The OfficeArt container order is the z-order, so the list is
+    /// built in one pre-order pass across all shape kinds: pictures,
+    /// comment boxes, form controls, and groups appear at their
+    /// container positions. The Nth ClientData-bearing shape pairs
+    /// with the Nth OBJ record; auxiliary UI shapes (autofilter /
+    /// data-validation dropdowns) consume their OBJ slot without
+    /// producing a drawing object, keeping later pairings intact.
+    ///
+    /// Permissive: when the shape count does not match the OBJ
+    /// count, positional pairing is untrustworthy and the reader
+    /// degrades to the kind-by-kind extraction (pictures with their
+    /// own anchors, comments from NOTE records, controls with
+    /// default anchors) rather than failing the sheet load.
+    fn build_sheet_drawings(
         escher_bytes: &[u8],
         obj_bodies: &[Vec<u8>],
-        obj_texts: &std::collections::HashMap<u16, String>,
+        obj_texts: &std::collections::HashMap<u16, duke_sheets_core::ControlText>,
+        notes: &[NoteData],
+        blip_store: &[Option<BlipData>],
         formula_ctx: &FormulaContext,
         ws: &mut duke_sheets_core::Worksheet,
     ) {
+        use crate::biff::obj;
+
+        let nodes = Self::parse_shape_tree(escher_bytes);
+        let expected_objs = Self::client_data_count(&nodes);
+        let aligned = expected_objs == obj_bodies.len();
+
+        let mut note_used = vec![false; notes.len()];
+        if aligned {
+            let mut next_obj = 0usize;
+            for node in &nodes {
+                let mut hoisted = Vec::new();
+                if let Some(object) = Self::drawing_from_node(
+                    node,
+                    obj_bodies,
+                    &mut next_obj,
+                    obj_texts,
+                    notes,
+                    &mut note_used,
+                    blip_store,
+                    formula_ctx,
+                    &mut hoisted,
+                    ws,
+                ) {
+                    ws.add_drawing(object);
+                }
+                for object in hoisted {
+                    ws.add_drawing(object);
+                }
+            }
+        } else {
+            log::warn!(
+                "escher shape count ({expected_objs}) does not match OBJ count ({}); \
+                 drawing objects will use default pairing",
+                obj_bodies.len()
+            );
+            // Pictures keep their own container anchors (they do not
+            // need OBJ pairing).
+            let mut flat = Vec::new();
+            fn flatten<'a>(nodes: &'a [EscherShapeNode], out: &mut Vec<&'a EscherShapeNode>) {
+                for node in nodes {
+                    out.push(node);
+                    flatten(&node.children, out);
+                }
+            }
+            flatten(&nodes, &mut flat);
+            for node in flat {
+                if let Some(payload) = Self::image_payload_from_node(node, blip_store) {
+                    let object = Self::top_level_image(node, payload, None, ws);
+                    ws.add_drawing(object);
+                }
+            }
+            // Comments straight from their NOTE records.
+            for (i, note) in notes.iter().enumerate() {
+                note_used[i] = true;
+                Self::add_note_comment(note, obj_texts, ws);
+            }
+            // Controls from OBJ bodies with default anchors.
+            for body in obj_bodies {
+                let Ok(parsed) = obj::parse_obj(body) else {
+                    continue;
+                };
+                if let Some(control) = Self::control_from_obj(&parsed, None, obj_texts, formula_ctx)
+                {
+                    let mut object = duke_sheets_core::DrawingObject::form_control(control);
+                    object.meta.locked = parsed.grbit & obj::cmo_flags::LOCKED != 0;
+                    object.meta.printable = parsed.grbit & obj::cmo_flags::PRINT != 0;
+                    ws.add_drawing(object);
+                }
+            }
+        }
+
+        // NOTE records not claimed by a comment shape still surface
+        // as comments (files with no drawing stream, or malformed
+        // pairing).
+        for (i, note) in notes.iter().enumerate() {
+            if !note_used[i] {
+                Self::add_note_comment(note, obj_texts, ws);
+            }
+        }
+    }
+
+    fn add_note_comment(
+        note: &NoteData,
+        obj_texts: &std::collections::HashMap<u16, duke_sheets_core::ControlText>,
+        ws: &mut duke_sheets_core::Worksheet,
+    ) {
+        let text = obj_texts
+            .get(&note.obj_id)
+            .map(duke_sheets_core::ControlText::plain_text)
+            .unwrap_or_default();
+        // Permissive read: a NOTE pointing outside the model grid is
+        // dropped rather than failing the sheet load.
+        if ws
+            .set_comment_at(
+                note.row,
+                note.col,
+                CellComment::new(note.author.clone(), text),
+            )
+            .is_ok()
+        {
+            ws.set_comment_visible(note.row, note.col, note.visible);
+        }
+    }
+
+    /// Build the drawing object for one top-level shape node,
+    /// consuming its (and its children's) OBJ slots. Returns `None`
+    /// when the node has no model representation (auxiliary UI
+    /// dropdowns, unmodeled shape kinds); the OBJ slots are consumed
+    /// regardless so later pairings stay intact. Comment shapes found
+    /// inside groups are appended to `hoisted` as top-level objects.
+    #[allow(clippy::too_many_arguments)]
+    fn drawing_from_node(
+        node: &EscherShapeNode,
+        obj_bodies: &[Vec<u8>],
+        next_obj: &mut usize,
+        obj_texts: &std::collections::HashMap<u16, duke_sheets_core::ControlText>,
+        notes: &[NoteData],
+        note_used: &mut [bool],
+        blip_store: &[Option<BlipData>],
+        formula_ctx: &FormulaContext,
+        hoisted: &mut Vec<duke_sheets_core::DrawingObject>,
+        metrics: &dyn duke_sheets_chart::DrawingMetrics,
+    ) -> Option<duke_sheets_core::DrawingObject> {
+        use crate::biff::obj;
+
+        let parsed = Self::consume_obj(node, obj_bodies, next_obj);
+
+        if node.is_group {
+            let group = Self::group_from_node(
+                node,
+                obj_bodies,
+                next_obj,
+                obj_texts,
+                notes,
+                note_used,
+                blip_store,
+                formula_ctx,
+                hoisted,
+                metrics,
+            );
+            let anchor = node
+                .client_anchor
+                .as_ref()
+                .map(|anchor| Self::client_anchor_to_drawing_anchor(anchor, metrics))
+                .unwrap_or_default();
+            let mut object = duke_sheets_core::DrawingObject::group(group);
+            object.anchor = anchor;
+            object.meta = Self::node_meta(node, parsed.as_ref());
+            return Some(object);
+        }
+
+        if let Some(payload) = Self::image_payload_from_node(node, blip_store) {
+            return Some(Self::top_level_image(node, payload, parsed.as_ref(), metrics));
+        }
+
+        let parsed = parsed?;
+        if parsed.ot == obj::ot::NOTE {
+            let (index, note) = notes
+                .iter()
+                .enumerate()
+                .find(|(i, note)| !note_used[*i] && note.obj_id == parsed.id)?;
+            note_used[index] = true;
+            let text = obj_texts
+                .get(&note.obj_id)
+                .map(duke_sheets_core::ControlText::plain_text)
+                .unwrap_or_default();
+            let mut object = duke_sheets_core::DrawingObject::comment(
+                note.row,
+                note.col,
+                CellComment::new(note.author.clone(), text),
+            );
+            if let Some(anchor) = &node.client_anchor {
+                object.anchor = Self::client_anchor_to_drawing_anchor(anchor, metrics);
+            }
+            object.meta.hidden = !note.visible;
+            return Some(object);
+        }
+
+        if Self::is_shape_obj_type(parsed.ot) {
+            let shape = Self::shape_from_node(node, &parsed, obj_texts)?;
+            let anchor = node
+                .client_anchor
+                .as_ref()
+                .map(|anchor| Self::client_anchor_to_drawing_anchor(anchor, metrics))
+                .unwrap_or_default();
+            let mut object = duke_sheets_core::DrawingObject::shape(shape).with_anchor(anchor);
+            object.meta = Self::node_meta(node, Some(&parsed));
+            return Some(object);
+        }
+
+        let control =
+            Self::control_from_obj(&parsed, Some(node.shape_type), obj_texts, formula_ctx)?;
+        let anchor = node
+            .client_anchor
+            .as_ref()
+            .map(|anchor| Self::client_anchor_to_drawing_anchor(anchor, metrics))
+            .unwrap_or_default();
+        let mut object = duke_sheets_core::DrawingObject::form_control(control).with_anchor(anchor);
+        object.meta = Self::node_meta(node, Some(&parsed));
+        Some(object)
+    }
+
+    /// Build a [`duke_sheets_core::Group`] from a group node,
+    /// consuming the children's OBJ slots. Children without a model
+    /// representation are dropped from the group (their OBJ slots are
+    /// still consumed); comment children are hoisted to top level.
+    ///
+    /// Group-space geometry note: the FSPGR rectangle and each
+    /// child's `OfficeArtChildAnchor` share one unit-agnostic
+    /// coordinate space — rendering scales the child rectangles from
+    /// the FSPGR rect onto the group's sheet anchor. The raw values
+    /// are stored in the model's `*_emu` fields unconverted; the
+    /// child-to-parent scaling normalizes whatever unit they are in.
+    #[allow(clippy::too_many_arguments)]
+    fn group_from_node(
+        node: &EscherShapeNode,
+        obj_bodies: &[Vec<u8>],
+        next_obj: &mut usize,
+        obj_texts: &std::collections::HashMap<u16, duke_sheets_core::ControlText>,
+        notes: &[NoteData],
+        note_used: &mut [bool],
+        blip_store: &[Option<BlipData>],
+        formula_ctx: &FormulaContext,
+        hoisted: &mut Vec<duke_sheets_core::DrawingObject>,
+        metrics: &dyn duke_sheets_chart::DrawingMetrics,
+    ) -> duke_sheets_core::Group {
+        use duke_sheets_core::{DrawingKind, GroupChild, GroupTransform};
+
+        let fspgr = node.fspgr.unwrap_or_default();
+        // The group's own placement mirrors its sheet anchor in the
+        // worksheet's metric-aware EMU space (or the parent child
+        // space for nested groups), matching what the writer emits.
+        let (x_emu, y_emu, cx_emu, cy_emu) = if let Some(anchor) = &node.client_anchor {
+            let (x1, y1, x2, y2) = Self::client_anchor_rect_emu(anchor, metrics);
+            (x1, y1, (x2 - x1).max(0), (y2 - y1).max(0))
+        } else if let Some(child) = &node.child_anchor {
+            (
+                i64::from(child.x_left),
+                i64::from(child.y_top),
+                i64::from(child.x_right - child.x_left).max(0),
+                i64::from(child.y_bottom - child.y_top).max(0),
+            )
+        } else {
+            (0, 0, 0, 0)
+        };
+        let transform = GroupTransform {
+            x_emu,
+            y_emu,
+            cx_emu,
+            cy_emu,
+            child_x_emu: i64::from(fspgr.x_left),
+            child_y_emu: i64::from(fspgr.y_top),
+            child_cx_emu: i64::from(fspgr.x_right - fspgr.x_left),
+            child_cy_emu: i64::from(fspgr.y_bottom - fspgr.y_top),
+            rotation: node.rotation.map(officeart_fixed_to_rotation).unwrap_or(0),
+            flip_h: node.flip_h,
+            flip_v: node.flip_v,
+        };
+
+        let mut children = Vec::new();
+        for child in &node.children {
+            if child.is_group {
+                let parsed = Self::consume_obj(child, obj_bodies, next_obj);
+                let inner = Self::group_from_node(
+                    child,
+                    obj_bodies,
+                    next_obj,
+                    obj_texts,
+                    notes,
+                    note_used,
+                    blip_store,
+                    formula_ctx,
+                    hoisted,
+                    metrics,
+                );
+                children.push(GroupChild {
+                    meta: Self::node_meta(child, parsed.as_ref()),
+                    transform: Self::child_transform(child),
+                    kind: DrawingKind::Group(Box::new(inner)),
+                });
+                continue;
+            }
+
+            let parsed = Self::consume_obj(child, obj_bodies, next_obj);
+            if let Some(mut payload) = Self::image_payload_from_node(child, blip_store) {
+                // The child transform is authoritative for grouped
+                // shapes; the payload keeps neutral placement fields,
+                // mirroring the XLSX reader.
+                payload.rotation = None;
+                payload.flip_h = false;
+                payload.flip_v = false;
+                if let Some(anchor) = &child.child_anchor {
+                    payload.width_emu = i64::from(anchor.x_right - anchor.x_left).max(0);
+                    payload.height_emu = i64::from(anchor.y_bottom - anchor.y_top).max(0);
+                }
+                let mut meta = Self::node_meta(child, parsed.as_ref());
+                meta.name = Some(
+                    child
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| format!("Picture {}", child.spid)),
+                );
+                children.push(GroupChild {
+                    meta,
+                    transform: Self::child_transform(child),
+                    kind: DrawingKind::Image(payload),
+                });
+                continue;
+            }
+            let Some(parsed) = parsed else { continue };
+            if parsed.ot == crate::biff::obj::ot::NOTE {
+                // Comments are never grouped in practice; surface one
+                // as a top-level object rather than losing it.
+                if let Some((index, note)) = notes
+                    .iter()
+                    .enumerate()
+                    .find(|(i, note)| !note_used[*i] && note.obj_id == parsed.id)
+                {
+                    note_used[index] = true;
+                    let text = obj_texts
+                        .get(&note.obj_id)
+                        .map(duke_sheets_core::ControlText::plain_text)
+                        .unwrap_or_default();
+                    let mut object = duke_sheets_core::DrawingObject::comment(
+                        note.row,
+                        note.col,
+                        CellComment::new(note.author.clone(), text),
+                    );
+                    object.meta.hidden = !note.visible;
+                    hoisted.push(object);
+                }
+                continue;
+            }
+            if Self::is_shape_obj_type(parsed.ot) {
+                if let Some(shape) = Self::shape_from_node(child, &parsed, obj_texts) {
+                    let mut transform = Self::child_transform(child);
+                    transform.rotation = shape.rotation;
+                    children.push(GroupChild {
+                        meta: Self::node_meta(child, Some(&parsed)),
+                        transform,
+                        kind: DrawingKind::Shape(Box::new(shape)),
+                    });
+                }
+                continue;
+            }
+            if let Some(control) =
+                Self::control_from_obj(&parsed, Some(child.shape_type), obj_texts, formula_ctx)
+            {
+                children.push(GroupChild {
+                    meta: Self::node_meta(child, Some(&parsed)),
+                    transform: Self::child_transform(child),
+                    kind: DrawingKind::FormControl(control),
+                });
+            }
+        }
+
+        duke_sheets_core::Group {
+            transform,
+            children,
+        }
+    }
+
+    /// Convert a supported OfficeArt FSP + paired ftCmo(ot=0x001E)
+    /// into the public shape model. Unknown MSOSPT values are dropped
+    /// rather than being mislabeled as rectangles.
+    fn is_shape_obj_type(object_type: u16) -> bool {
+        use crate::biff::obj::ot;
+
+        matches!(
+            object_type,
+            ot::LINE
+                | ot::RECTANGLE
+                | ot::OVAL
+                | ot::ARC
+                | ot::TEXT
+                | ot::POLYGON
+                | ot::OFFICE_ART
+        )
+    }
+
+    fn shape_from_node(
+        node: &EscherShapeNode,
+        parsed: &crate::biff::obj::ParsedObj,
+        obj_texts: &std::collections::HashMap<u16, duke_sheets_core::ControlText>,
+    ) -> Option<duke_sheets_core::Shape> {
+        use crate::biff::escher::shape_type;
+        use duke_sheets_core::{Shape, ShapeFill, ShapeLine};
+
+        let preset = match node.shape_type {
+            shape_type::RECTANGLE => "rect",
+            shape_type::ROUND_RECTANGLE => "roundRect",
+            shape_type::ELLIPSE => "ellipse",
+            shape_type::ISOSCELES_TRIANGLE => "triangle",
+            shape_type::LINE => "line",
+            _ => return None,
+        };
+        let fill = match node.fill_enabled {
+            Some(false) => ShapeFill::None,
+            Some(true) => node
+                .fill_color
+                .and_then(officeart_color_to_core)
+                .map(ShapeFill::Solid)
+                .unwrap_or(ShapeFill::Solid(duke_sheets_core::Color::Auto)),
+            None => ShapeFill::None,
+        };
+        let mut shape = Shape::preset(preset);
+        shape.fill = fill;
+        shape.line = ShapeLine {
+            color: node.line_color.and_then(officeart_color_to_core),
+            width_emu: node.line_width.map(i64::from),
+            dash_style: node.line_dashing.map(officeart_dash_to_drawing),
+            no_fill: node.line_no_fill.unwrap_or(false),
+        };
+        // The writer emits Left/Top TXO flags for alignment-less
+        // shape text; strip those defaults back to None (mirroring
+        // the control caption path) so defaults round-trip as None.
+        shape.text = obj_texts.get(&parsed.id).cloned().map(|mut text| {
+            if text.horizontal_alignment == Some(duke_sheets_core::HorizontalAlignment::Left) {
+                text.horizontal_alignment = None;
+            }
+            if text.vertical_alignment == Some(duke_sheets_core::VerticalAlignment::Top) {
+                text.vertical_alignment = None;
+            }
+            text
+        });
+        shape.rotation = node.rotation.map(officeart_fixed_to_rotation).unwrap_or(0);
+        shape.flip_h = node.flip_h;
+        shape.flip_v = node.flip_v;
+        Some(shape)
+    }
+
+    /// Consume the node's OBJ slot, if it has one. A malformed OBJ
+    /// body still consumes its slot.
+    fn consume_obj(
+        node: &EscherShapeNode,
+        obj_bodies: &[Vec<u8>],
+        next_obj: &mut usize,
+    ) -> Option<crate::biff::obj::ParsedObj> {
+        if !node.has_client_data {
+            return None;
+        }
+        let body = obj_bodies.get(*next_obj)?;
+        *next_obj += 1;
+        crate::biff::obj::parse_obj(body).ok()
+    }
+
+    fn node_meta(
+        node: &EscherShapeNode,
+        parsed: Option<&crate::biff::obj::ParsedObj>,
+    ) -> duke_sheets_core::DrawingMeta {
+        use crate::biff::obj::cmo_flags;
+        duke_sheets_core::DrawingMeta {
+            name: node.name.clone(),
+            alt_text: node.alt_text.clone(),
+            hidden: node.hidden,
+            locked: parsed.is_none_or(|p| p.grbit & cmo_flags::LOCKED != 0),
+            printable: parsed.is_none_or(|p| p.grbit & cmo_flags::PRINT != 0),
+            ..duke_sheets_core::DrawingMeta::default()
+        }
+    }
+
+    fn child_transform(node: &EscherShapeNode) -> duke_sheets_core::ChildTransform {
+        let anchor = node.child_anchor.unwrap_or_default();
+        duke_sheets_core::ChildTransform {
+            x_emu: i64::from(anchor.x_left),
+            y_emu: i64::from(anchor.y_top),
+            cx_emu: i64::from(anchor.x_right - anchor.x_left).max(0),
+            cy_emu: i64::from(anchor.y_bottom - anchor.y_top).max(0),
+            rotation: node.rotation.map(officeart_fixed_to_rotation).unwrap_or(0),
+            flip_h: node.flip_h,
+            flip_v: node.flip_v,
+        }
+    }
+
+    /// Build the image payload for a picture-frame node whose blip
+    /// resolves, with placement fields (rotation/flips) from the
+    /// shape and a zero extent for the caller to fill.
+    fn image_payload_from_node(
+        node: &EscherShapeNode,
+        blip_store: &[Option<BlipData>],
+    ) -> Option<duke_sheets_chart::EmbeddedImage> {
+        use crate::biff::escher::shape_type;
+        if node.shape_type != shape_type::PICTURE_FRAME {
+            return None;
+        }
+        let idx = node.blip_id?.saturating_sub(1) as usize;
+        let blip = blip_store.get(idx)?.as_ref()?;
+        Some(duke_sheets_chart::EmbeddedImage {
+            format: blip.format,
+            media_path: String::new(),
+            svg_media_path: None,
+            width_emu: 0,
+            height_emu: 0,
+            rotation: node.rotation.map(officeart_fixed_to_rotation),
+            flip_h: node.flip_h,
+            flip_v: node.flip_v,
+            data: blip.data.clone(),
+            svg_data: None,
+        })
+    }
+
+    /// Wrap an image payload into a top-level drawing object,
+    /// synthesising the extent from the anchored cell range and the
+    /// worksheet's row and column metrics. Excel does not store a
+    /// separate absolute EMU dimension on XLS pictures.
+    fn top_level_image(
+        node: &EscherShapeNode,
+        mut payload: duke_sheets_chart::EmbeddedImage,
+        parsed: Option<&crate::biff::obj::ParsedObj>,
+        metrics: &dyn duke_sheets_chart::DrawingMetrics,
+    ) -> duke_sheets_core::DrawingObject {
+        let anchor = node.client_anchor.unwrap_or_default();
+        let (x1, y1, x2, y2) = Self::client_anchor_rect_emu(&anchor, metrics);
+        payload.width_emu = (x2 - x1).max(0);
+        payload.height_emu = (y2 - y1).max(0);
+
+        let mut object = duke_sheets_core::DrawingObject::image(payload)
+            .with_anchor(Self::client_anchor_to_drawing_anchor(&anchor, metrics));
+        object.meta = Self::node_meta(node, parsed);
+        object.meta.name = Some(
+            node.name
+                .clone()
+                .unwrap_or_else(|| format!("Picture {}", node.spid)),
+        );
+        object
+    }
+
+    /// Absolute EMU rectangle of a client anchor using worksheet metrics.
+    fn client_anchor_rect_emu(
+        anchor: &crate::biff::escher::OfficeArtClientAnchor,
+        metrics: &dyn duke_sheets_chart::DrawingMetrics,
+    ) -> (i64, i64, i64, i64) {
+        let duke_sheets_chart::DrawingAnchor::TwoCell { from, to, .. } =
+            Self::client_anchor_to_drawing_anchor(anchor, metrics)
+        else {
+            unreachable!("client anchors always convert to TwoCell")
+        };
+        let (x1, y1) = duke_sheets_chart::marker_position_emu(&from, metrics);
+        let (x2, y2) = duke_sheets_chart::marker_position_emu(&to, metrics);
+        let clamp = |value: i128| value.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64;
+        (clamp(x1), clamp(y1), clamp(x2), clamp(y2))
+    }
+
+    /// Build a [`duke_sheets_core::FormControl`] from a parsed OBJ
+    /// body. Returns `None` for non-control object types, for
+    /// auxiliary UI dropdowns, and (when the paired shape type is
+    /// known) for OBJ/shape kind mismatches.
+    fn control_from_obj(
+        parsed: &crate::biff::obj::ParsedObj,
+        paired_shape_type: Option<u16>,
+        obj_texts: &std::collections::HashMap<u16, duke_sheets_core::ControlText>,
+        formula_ctx: &FormulaContext,
+    ) -> Option<duke_sheets_core::FormControl> {
         use crate::biff::escher::shape_type;
         use crate::biff::obj::{self, ot};
         use duke_sheets_core::{CheckState, FormControl, FormControlKind, ListSelection};
 
-        if obj_bodies.is_empty() {
-            return;
+        let is_control = matches!(
+            parsed.ot,
+            ot::BUTTON
+                | ot::CHECKBOX
+                | ot::OPTION_BUTTON
+                | ot::LABEL
+                | ot::GROUP_BOX
+                | ot::LIST_BOX
+                | ot::DROPDOWN
+                | ot::SCROLLBAR
+                | ot::SPINNER
+                | ot::EDIT_BOX
+                | ot::DIALOG_BOX
+        );
+        if !is_control {
+            return None;
         }
-        let shapes = Self::collect_escher_shapes(escher_bytes);
-        // Positional pairing is only trustworthy when the counts line
-        // up; otherwise controls are still extracted but keep default
-        // anchors.
-        let aligned = shapes.len() == obj_bodies.len();
-        if !aligned {
-            log::warn!(
-                "escher shape count ({}) does not match OBJ count ({}); \
-                 form controls will use default anchors",
-                shapes.len(),
-                obj_bodies.len()
-            );
+        if matches!(parsed.ot, ot::LIST_BOX | ot::DROPDOWN)
+            && (parsed.lbs_malformed || parsed.lbs.is_none())
+        {
+            return None;
+        }
+        // Excel persists auxiliary UI dropdowns (one ot=0x14 OBJ per
+        // autofilter column, and similar pivot/table-total dropdowns)
+        // that are not user Forms controls. They are marked with
+        // fUIObj in ftCmo and a non-regular lct behavior class in
+        // ftLbsData; skip both signals.
+        if parsed.grbit & obj::cmo_flags::UI_OBJ != 0 {
+            return None;
+        }
+        if let Some(lbs) = &parsed.lbs {
+            if lbs.use_cb && lbs.lct != 0 {
+                return None;
+            }
+        }
+        if let Some(st) = paired_shape_type {
+            if st != shape_type::HOST_CONTROL {
+                // OBJ says control but the paired shape isn't a host
+                // control: the pairing is off for this entry, skip it.
+                return None;
+            }
         }
 
         let decompile_rgce = |rgce: &Option<Vec<u8>>| -> Option<String> {
@@ -2790,165 +3506,149 @@ impl XlsReader {
             }
         };
 
-        for (i, body) in obj_bodies.iter().enumerate() {
-            let Ok(parsed) = obj::parse_obj(body) else {
-                continue;
+        let caption = || {
+            let mut caption = obj_texts.get(&parsed.id).cloned().unwrap_or_default();
+            let (default_horizontal, default_vertical) = match parsed.ot {
+                ot::BUTTON => (
+                    duke_sheets_core::HorizontalAlignment::Center,
+                    duke_sheets_core::VerticalAlignment::Center,
+                ),
+                ot::CHECKBOX | ot::OPTION_BUTTON => (
+                    duke_sheets_core::HorizontalAlignment::Left,
+                    duke_sheets_core::VerticalAlignment::Center,
+                ),
+                _ => (
+                    duke_sheets_core::HorizontalAlignment::Left,
+                    duke_sheets_core::VerticalAlignment::Top,
+                ),
             };
-            let is_control = matches!(
-                parsed.ot,
-                ot::BUTTON
-                    | ot::CHECKBOX
-                    | ot::OPTION_BUTTON
-                    | ot::LABEL
-                    | ot::GROUP_BOX
-                    | ot::LIST_BOX
-                    | ot::DROPDOWN
-                    | ot::SCROLLBAR
-                    | ot::SPINNER
-            );
-            if !is_control {
-                continue;
+            if caption.horizontal_alignment == Some(default_horizontal) {
+                caption.horizontal_alignment = None;
             }
-            if matches!(parsed.ot, ot::LIST_BOX | ot::DROPDOWN)
-                && (parsed.lbs_malformed || parsed.lbs.is_none())
-            {
-                continue;
+            if caption.vertical_alignment == Some(default_vertical) {
+                caption.vertical_alignment = None;
             }
-            // Excel persists auxiliary UI dropdowns (one ot=0x14 OBJ
-            // per autofilter column, and similar pivot/table-total
-            // dropdowns) that are not user Forms controls. They are
-            // marked with fUIObj in ftCmo and a non-regular lct
-            // behavior class in ftLbsData; skip both signals.
-            if parsed.grbit & obj::cmo_flags::UI_OBJ != 0 {
-                continue;
-            }
-            if let Some(lbs) = &parsed.lbs {
-                if lbs.use_cb && lbs.lct != 0 {
-                    continue;
-                }
-            }
-            if aligned && shapes[i].shape_type != shape_type::HOST_CONTROL {
-                // OBJ says control but the paired shape isn't a host
-                // control: the pairing is off for this entry, skip it.
-                continue;
-            }
+            caption
+        };
+        let state = match parsed.checked {
+            Some(2) => CheckState::Mixed,
+            Some(v) if v != 0 => CheckState::Checked,
+            _ => CheckState::Unchecked,
+        };
+        let cell_link = decompile_rgce(&parsed.link_rgce);
 
-            let caption = || obj_texts.get(&parsed.id).cloned().unwrap_or_default();
-            let state = match parsed.checked {
-                Some(2) => CheckState::Mixed,
-                Some(v) if v != 0 => CheckState::Checked,
-                _ => CheckState::Unchecked,
-            };
-            let cell_link = decompile_rgce(&parsed.link_rgce);
-
-            let kind = match parsed.ot {
-                ot::BUTTON => FormControlKind::Button { caption: caption() },
-                ot::CHECKBOX => FormControlKind::Checkbox {
-                    caption: caption(),
-                    state,
+        let kind = match parsed.ot {
+            ot::BUTTON => FormControlKind::Button { caption: caption() },
+            ot::CHECKBOX => FormControlKind::Checkbox {
+                caption: caption(),
+                state,
+                cell_link,
+                no_3d: parsed.cbls_no_3d,
+            },
+            ot::OPTION_BUTTON => FormControlKind::OptionButton {
+                caption: caption(),
+                // Mixed is checkbox-only (MS-XLS 2.5.141); clamp
+                // out-of-spec radio states to Checked.
+                state: if state == CheckState::Mixed {
+                    CheckState::Checked
+                } else {
+                    state
+                },
+                cell_link,
+                first_in_group: parsed.radio.map(|(_, first)| first).unwrap_or(false),
+                no_3d: parsed.cbls_no_3d,
+            },
+            ot::LABEL => FormControlKind::Label { caption: caption() },
+            ot::GROUP_BOX => FormControlKind::GroupBox {
+                caption: caption(),
+                no_3d: parsed.gbo_no_3d.unwrap_or(false),
+            },
+            ot::LIST_BOX => {
+                let lbs = parsed.lbs.clone().unwrap_or_default();
+                let selection = match lbs.sel_type {
+                    1 => ListSelection::Multi,
+                    2 => ListSelection::Extend,
+                    _ => ListSelection::Single,
+                };
+                // iSel is one-based (0 = none); the model is
+                // zero-based. bsels positions are already 0-based.
+                let selected: Vec<u16> = if lbs.sel_type == 0 {
+                    if lbs.sel > 0 {
+                        vec![lbs.sel - 1]
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    lbs.multi_sel
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, &s)| s)
+                        .map(|(idx, _)| idx as u16)
+                        .collect()
+                };
+                FormControlKind::ListBox {
+                    input_range: decompile_rgce(&Some(lbs.input_rgce)),
                     cell_link,
-                    no_3d: parsed.cbls_no_3d,
-                },
-                ot::OPTION_BUTTON => FormControlKind::OptionButton {
-                    caption: caption(),
-                    // Mixed is checkbox-only (MS-XLS 2.5.141); clamp
-                    // out-of-spec radio states to Checked.
-                    state: if state == CheckState::Mixed {
-                        CheckState::Checked
-                    } else {
-                        state
-                    },
+                    selection,
+                    selected,
+                    no_3d: lbs.no_3d,
+                }
+            }
+            ot::DROPDOWN => {
+                let lbs = parsed.lbs.clone().unwrap_or_default();
+                FormControlKind::Dropdown {
+                    input_range: decompile_rgce(&Some(lbs.input_rgce)),
                     cell_link,
-                    first_in_group: parsed.radio.map(|(_, first)| first).unwrap_or(false),
-                    no_3d: parsed.cbls_no_3d,
-                },
-                ot::LABEL => FormControlKind::Label { caption: caption() },
-                ot::GROUP_BOX => FormControlKind::GroupBox {
-                    caption: caption(),
-                    no_3d: parsed.gbo_no_3d.unwrap_or(false),
-                },
-                ot::LIST_BOX => {
-                    let lbs = parsed.lbs.clone().unwrap_or_default();
-                    let selection = match lbs.sel_type {
-                        1 => ListSelection::Multi,
-                        2 => ListSelection::Extend,
-                        _ => ListSelection::Single,
-                    };
-                    // iSel is one-based (0 = none); the model is
-                    // zero-based. bsels positions are already 0-based.
-                    let selected: Vec<u16> = if lbs.sel_type == 0 {
-                        if lbs.sel > 0 {
-                            vec![lbs.sel - 1]
-                        } else {
-                            Vec::new()
-                        }
-                    } else {
-                        lbs.multi_sel
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, &s)| s)
-                            .map(|(idx, _)| idx as u16)
-                            .collect()
-                    };
-                    FormControlKind::ListBox {
-                        input_range: decompile_rgce(&Some(lbs.input_rgce)),
+                    selected: if lbs.sel > 0 { Some(lbs.sel - 1) } else { None },
+                    lines: lbs.drop.as_ref().map(|d| d.lines).unwrap_or(8),
+                    no_3d: lbs.no_3d,
+                }
+            }
+            ot::SCROLLBAR | ot::SPINNER => {
+                let sbs = parsed.sbs.unwrap_or_default();
+                let clamp = |v: i16| v.max(0) as u16;
+                if parsed.ot == ot::SCROLLBAR {
+                    FormControlKind::Scrollbar {
+                        value: clamp(sbs.val),
+                        min: clamp(sbs.min),
+                        max: clamp(sbs.max),
+                        increment: clamp(sbs.inc),
+                        page: clamp(sbs.page),
+                        horizontal: sbs.horizontal,
                         cell_link,
-                        selection,
-                        selected,
-                        no_3d: lbs.no_3d,
                     }
-                }
-                ot::DROPDOWN => {
-                    let lbs = parsed.lbs.clone().unwrap_or_default();
-                    FormControlKind::Dropdown {
-                        input_range: decompile_rgce(&Some(lbs.input_rgce)),
+                } else {
+                    FormControlKind::Spinner {
+                        value: clamp(sbs.val),
+                        min: clamp(sbs.min),
+                        max: clamp(sbs.max),
+                        increment: clamp(sbs.inc),
                         cell_link,
-                        selected: if lbs.sel > 0 { Some(lbs.sel - 1) } else { None },
-                        lines: lbs.drop.as_ref().map(|d| d.lines).unwrap_or(8),
-                        no_3d: lbs.no_3d,
                     }
                 }
-                ot::SCROLLBAR | ot::SPINNER => {
-                    let sbs = parsed.sbs.unwrap_or_default();
-                    let clamp = |v: i16| v.max(0) as u16;
-                    if parsed.ot == ot::SCROLLBAR {
-                        FormControlKind::Scrollbar {
-                            value: clamp(sbs.val),
-                            min: clamp(sbs.min),
-                            max: clamp(sbs.max),
-                            increment: clamp(sbs.inc),
-                            page: clamp(sbs.page),
-                            horizontal: sbs.horizontal,
-                            cell_link,
-                        }
-                    } else {
-                        FormControlKind::Spinner {
-                            value: clamp(sbs.val),
-                            min: clamp(sbs.min),
-                            max: clamp(sbs.max),
-                            increment: clamp(sbs.inc),
-                            cell_link,
-                        }
-                    }
-                }
-                _ => unreachable!(),
-            };
+            }
+            ot::EDIT_BOX | ot::DIALOG_BOX => FormControlKind::Unknown {
+                object_type: if parsed.ot == ot::EDIT_BOX {
+                    "EditBox".to_string()
+                } else {
+                    "Dialog".to_string()
+                },
+                legacy_object_type: Some(parsed.ot),
+                caption: caption(),
+                raw_properties: Vec::new(),
+                raw_client_data: Vec::new(),
+                raw_obj: Some(parsed.raw_body.clone()),
+            },
+            _ => unreachable!(),
+        };
 
-            let anchor = if aligned {
-                shapes[i]
-                    .anchor
-                    .as_ref()
-                    .map(Self::client_anchor_to_drawing_anchor)
-                    .unwrap_or_default()
-            } else {
-                duke_sheets_chart::DrawingAnchor::default()
-            };
-
-            let mut control = FormControl::with_anchor(kind, anchor);
-            control.locked = parsed.grbit & obj::cmo_flags::LOCKED != 0;
-            control.printable = parsed.grbit & obj::cmo_flags::PRINT != 0;
-            ws.add_form_control(control);
-        }
+        let mut control = FormControl::new(kind);
+        control.macro_name = parsed.macro_rgce.as_ref().and_then(|rgce| {
+            let name = crate::biff::formula::decompile(rgce, formula_ctx);
+            let name = name.strip_prefix('=').unwrap_or(&name).trim();
+            (!name.is_empty()).then(|| name.to_string())
+        });
+        Some(control)
     }
 
     // ── Drawing record parsers ───────────────────────────────────────────
@@ -2960,7 +3660,7 @@ impl XlsReader {
     /// Failures inside the Escher tree are swallowed and skipped —
     /// the reader is intentionally permissive so a malformed drawing
     /// group cannot prevent reading the rest of the workbook.
-    fn parse_msodrawinggroup(data: &[u8], blip_store: &mut Vec<BlipData>) {
+    fn parse_msodrawinggroup(data: &[u8], blip_store: &mut Vec<Option<BlipData>>) {
         use crate::biff::escher::rec_type as er;
         Self::walk_escher_records(data, |h, body| {
             if h.rec_type == er::BSTORE_CONTAINER {
@@ -2974,7 +3674,7 @@ impl XlsReader {
 
     /// Walk a `BSTORE_CONTAINER` body, decoding each `FBSE` child to
     /// extract its embedded blip's image bytes + format.
-    fn parse_bstore_container(body: &[u8], blip_store: &mut Vec<BlipData>) {
+    fn parse_bstore_container(body: &[u8], blip_store: &mut Vec<Option<BlipData>>) {
         use crate::biff::escher::{rec_type as er, OfficeArtRecordHeader, HEADER_LEN};
         let mut cursor = 0;
         while cursor + HEADER_LEN <= body.len() {
@@ -2987,9 +3687,11 @@ impl XlsReader {
                 return;
             };
             if h.rec_type == er::FBSE {
-                if let Some(blip) = Self::parse_fbse_entry(&body[entry_start..entry_end]) {
-                    blip_store.push(blip);
-                }
+                // Placeholder entries (no embedded blip) must keep
+                // their slot: pib references are 1-based positional
+                // indices over every FBSE, and Excel emits header-only
+                // entries when it rasterizes transforms on save.
+                blip_store.push(Self::parse_fbse_entry(&body[entry_start..entry_end]));
             }
             cursor = entry_end;
         }
@@ -3082,19 +3784,44 @@ impl XlsReader {
         Some(u16::from_le_bytes([data[6], data[7]]))
     }
 
-    /// Extract text from a TXO record (with merged CONTINUE data).
+    /// Extract text, formatting runs, and alignment from a TXO record.
     ///
     /// TXO header (18 bytes): options(2) + rotation(2) + reserved(6) +
     /// text_len(2) + format_run_size(2) + reserved(4).
     /// First CONTINUE: grbit(1) + text_data.
-    /// Second CONTINUE: formatting runs (ignored).
-    fn parse_txo_text(data: &[u8], continue_offsets: &[usize]) -> Option<String> {
+    /// Second CONTINUE: formatting runs (`ich`, `ifnt`, reserved).
+    fn parse_txo_text(
+        data: &[u8],
+        continue_offsets: &[usize],
+        style_ctx: &StyleContext,
+    ) -> Option<duke_sheets_core::ControlText> {
         if data.len() < 18 {
             return None;
         }
+        let flags = u16::from_le_bytes([data[0], data[1]]);
+        let horizontal_alignment = match (flags >> 1) & 0x7 {
+            1 => Some(duke_sheets_core::HorizontalAlignment::Left),
+            2 => Some(duke_sheets_core::HorizontalAlignment::Center),
+            3 => Some(duke_sheets_core::HorizontalAlignment::Right),
+            4 => Some(duke_sheets_core::HorizontalAlignment::Justify),
+            7 => Some(duke_sheets_core::HorizontalAlignment::Distributed),
+            _ => None,
+        };
+        let vertical_alignment = match (flags >> 4) & 0x7 {
+            1 => Some(duke_sheets_core::VerticalAlignment::Top),
+            2 => Some(duke_sheets_core::VerticalAlignment::Center),
+            3 => Some(duke_sheets_core::VerticalAlignment::Bottom),
+            4 => Some(duke_sheets_core::VerticalAlignment::Justify),
+            7 => Some(duke_sheets_core::VerticalAlignment::Distributed),
+            _ => None,
+        };
         let text_len = u16::from_le_bytes([data[10], data[11]]) as usize;
         if text_len == 0 {
-            return Some(String::new());
+            return Some(duke_sheets_core::ControlText {
+                runs: Vec::new(),
+                horizontal_alignment,
+                vertical_alignment,
+            });
         }
 
         // Text starts in the first CONTINUE block. Every subsequent
@@ -3152,19 +3879,76 @@ impl XlsReader {
                 chars.extend(encoded.iter().take(remaining).map(|&byte| byte as u16));
             }
         }
-        (!chars.is_empty()).then(|| String::from_utf16_lossy(&chars))
+        if chars.is_empty() {
+            return None;
+        }
+
+        let run_bytes = data.get(text_end..text_end.saturating_add(cb_runs))?;
+        let formatting = run_bytes
+            .chunks_exact(8)
+            .map(|run| {
+                (
+                    u16::from_le_bytes([run[0], run[1]]) as usize,
+                    u16::from_le_bytes([run[2], run[3]]),
+                )
+            })
+            .collect::<Vec<_>>();
+        let plain_default =
+            formatting.len() == 2 && formatting[0] == (0, 0) && formatting[1] == (text_len, 0);
+        let runs = if formatting.is_empty() || plain_default {
+            vec![RichTextRun::plain(String::from_utf16_lossy(&chars))]
+        } else {
+            let boundaries = formatting
+                .iter()
+                .copied()
+                .filter(|(start, _)| *start < text_len)
+                .collect::<Vec<_>>();
+            let mut runs = Vec::new();
+            if boundaries.first().is_some_and(|(start, _)| *start > 0) {
+                runs.push(RichTextRun::plain(String::from_utf16_lossy(
+                    &chars[..boundaries[0].0.min(chars.len())],
+                )));
+            }
+            for (index, &(start, font_index)) in boundaries.iter().enumerate() {
+                let end = boundaries
+                    .get(index + 1)
+                    .map(|(next, _)| *next)
+                    .unwrap_or(text_len)
+                    .min(chars.len());
+                let start = start.min(end);
+                if start == end {
+                    continue;
+                }
+                runs.push(RichTextRun {
+                    text: String::from_utf16_lossy(&chars[start..end]),
+                    // ifnt 0 is the workbook default font (what the
+                    // writer emits for font-less runs); resolving it
+                    // would pin an explicit default onto plain runs.
+                    font: (font_index != 0)
+                        .then(|| style_ctx.resolve_run_font(font_index))
+                        .flatten(),
+                });
+            }
+            if runs.is_empty() {
+                vec![RichTextRun::plain(String::from_utf16_lossy(&chars))]
+            } else {
+                runs
+            }
+        };
+        Some(duke_sheets_core::ControlText {
+            runs,
+            horizontal_alignment,
+            vertical_alignment,
+        })
     }
 
-    /// Parse a NOTE record to create a cell comment.
+    /// Parse a NOTE record's fields. The comment itself is created
+    /// later, once the note can be matched with its comment shape.
     ///
     /// NOTE: row(2) + col(2) + flags(2) + objId(2) + author(XLUnicodeString).
-    fn parse_note(
-        data: &[u8],
-        ws: &mut duke_sheets_core::Worksheet,
-        obj_texts: &std::collections::HashMap<u16, String>,
-    ) -> XlsResult<()> {
+    fn parse_note(data: &[u8]) -> XlsResult<Option<NoteData>> {
         if data.len() < 8 {
-            return Ok(());
+            return Ok(None);
         }
         let mut off = 0;
         let row = read_u16(data, &mut off)? as u32;
@@ -3179,12 +3963,13 @@ impl XlsReader {
             String::new()
         };
 
-        let text = obj_texts.get(&obj_id).cloned().unwrap_or_default();
-
-        let visible = (flags & 0x0002) != 0;
-        let comment = CellComment::new(author, text).with_visible(visible);
-        ws.set_comment_at(row, col, comment);
-        Ok(())
+        Ok(Some(NoteData {
+            row,
+            col,
+            visible: (flags & 0x0002) != 0,
+            obj_id,
+            author,
+        }))
     }
 
     // ── Hyperlink record parsers ────────────────────────────────────────
@@ -3847,6 +4632,45 @@ fn decode_utf16le_null_terminated(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    /// Excel emits header-only FBSE placeholders (e.g. when it
+    /// rasterizes picture transforms on save); pib blip ids are
+    /// 1-based positions over every FBSE, so a skipped placeholder
+    /// must still occupy its slot or every later picture resolves to
+    /// the wrong blip (or none).
+    #[test]
+    fn bstore_placeholder_entries_keep_their_blip_slot() {
+        // Placeholder FBSE: 36-byte body, no embedded blip record.
+        let mut bstore = Vec::new();
+        let fbse_placeholder_body = [0u8; 36];
+        bstore.extend_from_slice(&[0x02, 0x00, 0x07, 0xF0]); // ver=2, FBSE
+        bstore.extend_from_slice(&(fbse_placeholder_body.len() as u32).to_le_bytes());
+        bstore.extend_from_slice(&fbse_placeholder_body);
+
+        // Real FBSE: 36-byte header followed by an embedded PNG blip
+        // (rh: ver=0, inst=0x6E0, type=0xF01E; payload = 16-byte UID +
+        // tag byte + png bytes).
+        let png = [0x89u8, b'P', b'N', b'G'];
+        let mut blip = Vec::new();
+        blip.extend_from_slice(&[0x00, 0x6E, 0x1E, 0xF0]);
+        blip.extend_from_slice(&((16 + 1 + png.len()) as u32).to_le_bytes());
+        blip.extend_from_slice(&[0u8; 16]);
+        blip.push(0xFF);
+        blip.extend_from_slice(&png);
+        let mut fbse_real_body = vec![0u8; 36];
+        fbse_real_body[0] = 6; // btWin32 = PNG
+        fbse_real_body.extend_from_slice(&blip);
+        bstore.extend_from_slice(&[0x02, 0x00, 0x07, 0xF0]);
+        bstore.extend_from_slice(&(fbse_real_body.len() as u32).to_le_bytes());
+        bstore.extend_from_slice(&fbse_real_body);
+
+        let mut store: Vec<Option<BlipData>> = Vec::new();
+        XlsReader::parse_bstore_container(&bstore, &mut store);
+        assert_eq!(store.len(), 2, "placeholder keeps its slot");
+        assert!(store[0].is_none());
+        let real = store[1].as_ref().expect("second slot holds the PNG");
+        assert_eq!(real.data, png);
+    }
+
     #[test]
     fn resolve_workbook_stream_prefers_workbook() {
         let s = resolve_workbook_stream(|p| p == "/Workbook").unwrap();
@@ -4146,8 +4970,12 @@ mod tests {
         let continue_start = data.len();
         data.extend_from_slice(&text_data);
 
-        let text = XlsReader::parse_txo_text(&data, &[continue_start]);
-        assert_eq!(text, Some("Hello".to_string()));
+        let styles = StyleContext::new();
+        let text = XlsReader::parse_txo_text(&data, &[continue_start], &styles);
+        assert_eq!(
+            text.map(|text| text.plain_text()),
+            Some("Hello".to_string())
+        );
     }
 
     #[test]
@@ -4165,8 +4993,9 @@ mod tests {
         let continue_start = data.len();
         data.extend_from_slice(&text_data);
 
-        let text = XlsReader::parse_txo_text(&data, &[continue_start]);
-        assert_eq!(text, Some("ABC".to_string()));
+        let styles = StyleContext::new();
+        let text = XlsReader::parse_txo_text(&data, &[continue_start], &styles);
+        assert_eq!(text.map(|text| text.plain_text()), Some("ABC".to_string()));
     }
 
     #[test]
@@ -4184,8 +5013,12 @@ mod tests {
         let runs = data.len();
         data.extend_from_slice(&[0u8; 16]);
 
-        let text = XlsReader::parse_txo_text(&data, &[first, second, runs]);
-        assert_eq!(text, Some("ABCDE".to_string()));
+        let styles = StyleContext::new();
+        let text = XlsReader::parse_txo_text(&data, &[first, second, runs], &styles);
+        assert_eq!(
+            text.map(|text| text.plain_text()),
+            Some("ABCDE".to_string())
+        );
     }
 
     #[test]
@@ -4245,7 +5078,7 @@ mod tests {
         let comment = ws.comment_at(2, 3).expect("comment should exist");
         assert_eq!(comment.author, "John");
         assert_eq!(comment.text, "Review this");
-        assert!(comment.visible);
+        assert_eq!(ws.comment_visible(2, 3), Some(true));
     }
 
     #[test]
@@ -4327,13 +5160,13 @@ mod tests {
         // degrades to a default anchor, not a dropped control.
         let ws = parse(vec![rec(records::OBJ, checkbox_obj_body(3))]);
         assert_eq!(ws.form_control_count(), 1);
-        let control = &ws.form_controls()[0];
+        let control = ws.form_controls().next().unwrap();
         assert_eq!(
-            control.anchor,
+            control.object.anchor,
             duke_sheets_chart::DrawingAnchor::default(),
             "mismatched pairing falls back to the default anchor"
         );
-        match &control.kind {
+        match &control.payload.kind {
             duke_sheets_core::FormControlKind::Checkbox { state, .. } => {
                 assert_eq!(*state, duke_sheets_core::CheckState::Checked);
             }
@@ -4361,7 +5194,8 @@ mod tests {
 
         let ws = parse(vec![rec(records::OBJ, body)]);
         assert_eq!(ws.form_control_count(), 1);
-        match &ws.form_controls()[0].kind {
+        let control = ws.form_controls().next().unwrap();
+        match &control.payload.kind {
             duke_sheets_core::FormControlKind::OptionButton { state, .. } => {
                 assert_eq!(*state, duke_sheets_core::CheckState::Checked);
             }
@@ -4374,15 +5208,10 @@ mod tests {
         use crate::biff::escher::{rec_type, OfficeArtRecordHeader};
 
         let mut nested = Vec::new();
-        OfficeArtRecordHeader::container(rec_type::DG_CONTAINER, 0, 0)
-            .write_to(&mut nested);
+        OfficeArtRecordHeader::container(rec_type::DG_CONTAINER, 0, 0).write_to(&mut nested);
         for _ in 0..20_000 {
             let mut outer = Vec::with_capacity(nested.len() + 8);
-            OfficeArtRecordHeader::container(
-                rec_type::DG_CONTAINER,
-                0,
-                nested.len() as u32,
-            )
+            OfficeArtRecordHeader::container(rec_type::DG_CONTAINER, 0, nested.len() as u32)
             .write_to(&mut outer);
             outer.extend_from_slice(&nested);
             nested = outer;
@@ -4409,8 +5238,7 @@ mod tests {
     #[test]
     fn escher_shape_pairing_skips_deleted_and_clientless_shapes() {
         use crate::biff::escher::{
-            fsp_flags, rec_type, shape_type, write_client_data, OfficeArtFsp,
-            OfficeArtRecordHeader,
+            fsp_flags, rec_type, shape_type, write_client_data, OfficeArtFsp, OfficeArtRecordHeader,
         };
 
         let shape = |spid: u32, flags: u32, has_client_data: bool| {
@@ -4446,9 +5274,15 @@ mod tests {
             true,
         ));
 
-        let shapes = XlsReader::collect_escher_shapes(&bytes);
-        assert_eq!(shapes.len(), 1);
-        assert_eq!(shapes[0].shape_type, shape_type::HOST_CONTROL);
+        // The deleted shape is dropped from the tree entirely; the
+        // clientless shape stays in the tree but does not consume an
+        // OBJ pairing slot.
+        let nodes = XlsReader::parse_shape_tree(&bytes);
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(nodes[0].spid, 1026);
+        assert_eq!(nodes[1].spid, 1027);
+        assert_eq!(nodes[1].shape_type, shape_type::HOST_CONTROL);
+        assert_eq!(XlsReader::client_data_count(&nodes), 1);
     }
 
     // ── Hyperlink tests ───────────────────────────────────────────────

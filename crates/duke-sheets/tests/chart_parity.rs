@@ -39,7 +39,7 @@ fn chart_parity_matches_excel() {
 
     assert_eq!(chart_count, 8, "expected 8 charts from Excel fixture");
 
-    let charts = ws.charts();
+    let charts: Vec<&Chart> = ws.charts().map(|drawn| drawn.payload).collect();
     let mut failures: Vec<String> = Vec::new();
     let mut pass = 0;
 

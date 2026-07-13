@@ -416,168 +416,623 @@ fn make_array(values: &[JsValue]) -> JsValue {
     array.into()
 }
 
-fn control_anchor() -> JsValue {
+fn drawing_marker(col: u32, row: u32) -> JsValue {
     make_options(&[
-        ("fromCol", JsValue::from_f64(1.0)),
-        ("fromRow", JsValue::from_f64(1.0)),
-        ("fromColOffset", JsValue::from_f64(0.0)),
-        ("fromRowOffset", JsValue::from_f64(0.0)),
-        ("toCol", JsValue::from_f64(3.0)),
-        ("toRow", JsValue::from_f64(2.0)),
-        ("toColOffset", JsValue::from_f64(0.0)),
-        ("toRowOffset", JsValue::from_f64(0.0)),
+        ("col", JsValue::from_f64(col as f64)),
+        ("row", JsValue::from_f64(row as f64)),
+    ])
+}
+
+fn drawing_anchor(from_col: u32, from_row: u32, to_col: u32, to_row: u32) -> JsValue {
+    make_options(&[
+        ("type", JsValue::from_str("twoCell")),
+        ("from", drawing_marker(from_col, from_row)),
+        ("to", drawing_marker(to_col, to_row)),
         ("editAs", JsValue::from_str("twoCell")),
     ])
 }
 
-fn form_control(kind: JsValue) -> JsValue {
-    make_options(&[("anchor", control_anchor()), ("kind", kind)])
+fn child_transform(x: u32, y: u32) -> JsValue {
+    make_options(&[
+        ("xEmu", JsValue::from_f64(x as f64)),
+        ("yEmu", JsValue::from_f64(y as f64)),
+        ("cxEmu", JsValue::from_f64(100_000.0)),
+        ("cyEmu", JsValue::from_f64(50_000.0)),
+    ])
+}
+
+fn drawing_text(text: &str) -> JsValue {
+    let run = make_options(&[("text", JsValue::from_str(text))]);
+    make_options(&[("runs", make_array(&[run]))])
+}
+
+fn shape_drawing(name: &str, anchor: JsValue) -> JsValue {
+    let shape = make_options(&[("geometry", JsValue::from_str("rect"))]);
+    make_options(&[
+        ("name", JsValue::from_str(name)),
+        ("anchor", anchor),
+        ("kind", JsValue::from_str("shape")),
+        ("shape", shape),
+    ])
+}
+
+fn form_control_drawing(
+    name: &str,
+    anchor: JsValue,
+    control_kind: JsValue,
+) -> JsValue {
+    let form_control = make_options(&[("kind", control_kind)]);
+    make_options(&[
+        ("name", JsValue::from_str(name)),
+        ("anchor", anchor),
+        ("kind", JsValue::from_str("formControl")),
+        ("formControl", form_control),
+    ])
+}
+
+fn drawing_path(values: &[u32]) -> JsValue {
+    make_array(
+        &values
+            .iter()
+            .map(|value| JsValue::from_f64(*value as f64))
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn assert_drawing_path(drawing: &JsValue, expected: &[f64]) {
+    let path = Array::from(&Reflect::get(drawing, &"drawingPath".into()).unwrap());
+    let actual: Vec<f64> = path.iter().map(|value| value.as_f64().unwrap()).collect();
+    assert_eq!(actual, expected);
 }
 
 #[wasm_bindgen_test]
-fn test_form_control_mutations_and_roundtrip() {
+fn test_drawing_paths_order_and_nested_groups() {
     let wb = Workbook::new();
     let sheet = wb.get_sheet(0).unwrap();
-    // Zero-based: first and third items.
-    let selected = Array::new();
-    selected.push(&JsValue::from_f64(0.0));
-    selected.push(&JsValue::from_f64(2.0));
-    let kinds = vec![
-        make_options(&[("kind", JsValue::from_str("button")), ("caption", JsValue::from_str("Run"))]),
-        make_options(&[("kind", JsValue::from_str("checkbox")), ("caption", JsValue::from_str("Check")), ("state", JsValue::from_str("checked")), ("cellLink", JsValue::from_str("$D$2")), ("no3D", JsValue::FALSE)]),
-        make_options(&[("kind", JsValue::from_str("optionButton")), ("caption", JsValue::from_str("Option")), ("state", JsValue::from_str("unchecked")), ("no3D", JsValue::FALSE)]),
-        make_options(&[("kind", JsValue::from_str("label")), ("caption", JsValue::from_str("Label"))]),
-        make_options(&[("kind", JsValue::from_str("groupBox")), ("caption", JsValue::from_str("Group")), ("no3D", JsValue::FALSE)]),
-        make_options(&[("kind", JsValue::from_str("listBox")), ("inputRange", JsValue::from_str("$A$1:$A$3")), ("selection", JsValue::from_str("multi")), ("selected", selected.into()), ("no3D", JsValue::FALSE)]),
-        make_options(&[("kind", JsValue::from_str("dropdown")), ("inputRange", JsValue::from_str("$A$1:$A$3")), ("selected", JsValue::from_f64(2.0)), ("lines", JsValue::from_f64(8.0)), ("no3D", JsValue::FALSE)]),
-        make_options(&[("kind", JsValue::from_str("scrollbar")), ("value", JsValue::from_f64(5.0)), ("min", JsValue::from_f64(0.0)), ("max", JsValue::from_f64(10.0)), ("increment", JsValue::from_f64(1.0)), ("page", JsValue::from_f64(2.0)), ("horizontal", JsValue::FALSE)]),
-        make_options(&[("kind", JsValue::from_str("spinner")), ("value", JsValue::from_f64(2.0)), ("min", JsValue::from_f64(0.0)), ("max", JsValue::from_f64(10.0)), ("increment", JsValue::from_f64(1.0))]),
-    ];
-    for kind in kinds {
-        sheet.add_form_control(form_control(kind)).unwrap();
-    }
-    assert_eq!(sheet.form_control_count().unwrap(), 9);
-    let controls = Array::from(&sheet.form_controls().unwrap());
-    assert_eq!(controls.length(), 9);
-
-    assert!(sheet
-        .add_form_control(form_control(make_options(&[
-            ("kind", JsValue::from_str("optionButton")),
-            ("caption", JsValue::from_str("Bad")),
-            ("state", JsValue::from_str("mixed")),
-            ("no3D", JsValue::FALSE),
-        ])))
-        .is_err(), "mixed option buttons must be rejected");
-    assert!(sheet.remove_form_control(99).is_err(), "OOB removal must fail");
-    assert!(
-        sheet
-            .set_form_control(
-                99,
-                form_control(make_options(&[
-                    ("kind", JsValue::from_str("label")),
-                    ("caption", JsValue::from_str("nope")),
-                ])),
-            )
-            .is_err(),
-        "OOB set must fail"
-    );
-
     sheet
-        .set_form_control(
-            0,
-            form_control(make_options(&[("kind", JsValue::from_str("label")), ("caption", JsValue::from_str("Replaced"))])),
+        .add_drawing(shape_drawing(
+            "back",
+            drawing_anchor(0, 0, 1, 1),
+        ))
+        .unwrap();
+
+    let label = make_options(&[
+        ("transform", child_transform(0, 0)),
+        ("kind", JsValue::from_str("formControl")),
+        (
+            "formControl",
+            make_options(&[(
+                "kind",
+                make_options(&[
+                    ("kind", JsValue::from_str("label")),
+                    ("caption", drawing_text("nested")),
+                ]),
+            )]),
+        ),
+    ]);
+    let nested_shape = make_options(&[
+        ("transform", child_transform(10, 20)),
+        ("kind", JsValue::from_str("shape")),
+        (
+            "shape",
+            make_options(&[("geometry", JsValue::from_str("ellipse"))]),
+        ),
+    ]);
+    let nested_group = make_options(&[
+        ("transform", child_transform(100, 200)),
+        ("kind", JsValue::from_str("group")),
+        (
+            "group",
+            make_options(&[("children", make_array(&[nested_shape]))]),
+        ),
+    ]);
+    let group = make_options(&[
+        ("name", JsValue::from_str("front group")),
+        ("anchor", drawing_anchor(1, 1, 5, 6)),
+        ("kind", JsValue::from_str("group")),
+        (
+            "group",
+            make_options(&[("children", make_array(&[label, nested_group]))]),
+        ),
+    ]);
+    sheet.add_drawing(group).unwrap();
+
+    let drawings = Array::from(&sheet.drawings().unwrap());
+    assert_eq!(drawings.length(), 2);
+    assert_eq!(get_string_field(&drawings.get(0), "name"), "back");
+    assert_eq!(get_string_field(&drawings.get(1), "name"), "front group");
+    assert_drawing_path(&drawings.get(0), &[0.0]);
+    assert_drawing_path(&drawings.get(1), &[1.0]);
+    let group = Reflect::get(&drawings.get(1), &"group".into()).unwrap();
+    let children = Array::from(&Reflect::get(&group, &"children".into()).unwrap());
+    assert_drawing_path(&children.get(0), &[1.0, 0.0]);
+    let nested = Reflect::get(&children.get(1), &"group".into()).unwrap();
+    let grandchildren = Array::from(&Reflect::get(&nested, &"children".into()).unwrap());
+    assert_drawing_path(&grandchildren.get(0), &[1.0, 1.0, 0.0]);
+
+    let controls = Array::from(&sheet.form_controls().unwrap());
+    assert_eq!(controls.length(), 1);
+    assert_drawing_path(&controls.get(0), &[1.0, 0.0]);
+}
+
+#[wasm_bindgen_test]
+fn test_drawing_image_bytes_are_lazy() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    let bytes = js_sys::Uint8Array::from(&[137, 80, 78, 71][..]);
+    let image = make_options(&[
+        ("format", JsValue::from_str("png")),
+        ("widthEmu", JsValue::from_f64(200_000.0)),
+        ("heightEmu", JsValue::from_f64(100_000.0)),
+        ("data", bytes.into()),
+    ]);
+    let drawing = make_options(&[
+        ("anchor", drawing_anchor(0, 0, 2, 2)),
+        ("kind", JsValue::from_str("image")),
+        ("image", image),
+    ]);
+    sheet.add_drawing(drawing).unwrap();
+
+    let images = Array::from(&sheet.images().unwrap());
+    let image = Reflect::get(&images.get(0), &"image".into()).unwrap();
+    assert!(Reflect::get(&image, &"data".into()).unwrap().is_undefined());
+    assert_eq!(
+        sheet
+            .drawing_image_data(drawing_path(&[0]))
+            .unwrap(),
+        [137, 80, 78, 71]
+    );
+    assert!(sheet
+        .drawing_svg_data(drawing_path(&[0]))
+        .unwrap()
+        .is_none());
+}
+
+#[wasm_bindgen_test]
+fn test_drawing_mutation_and_raw_rejection() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    sheet
+        .add_drawing(shape_drawing("one", drawing_anchor(0, 0, 1, 1)))
+        .unwrap();
+    sheet
+        .add_drawing(shape_drawing("three", drawing_anchor(2, 0, 3, 1)))
+        .unwrap();
+    sheet
+        .insert_drawing(
+            1,
+            shape_drawing("two", drawing_anchor(1, 0, 2, 1)),
         )
         .unwrap();
-    sheet.remove_form_control(0).unwrap();
-    assert_eq!(sheet.form_control_count().unwrap(), 8);
+    sheet.move_drawing(2, 0).unwrap();
 
-    // After removing the leading button: checkbox, optionButton,
-    // label, groupBox, listBox, dropdown, scrollbar, spinner.
-    let assert_controls_survive = |sheet: &Worksheet| {
-        let controls = Array::from(&sheet.form_controls().unwrap());
-        let kind_of = |i: u32| -> JsValue {
-            Reflect::get(&controls.get(i), &"kind".into()).unwrap()
-        };
-        let tags: Vec<String> = (0..controls.length())
-            .map(|i| get_string_field(&kind_of(i), "kind"))
-            .collect();
-        assert_eq!(
-            tags,
-            [
-                "checkbox",
-                "optionButton",
-                "label",
-                "groupBox",
-                "listBox",
-                "dropdown",
-                "scrollbar",
-                "spinner"
-            ]
-        );
-        let checkbox = kind_of(0);
-        assert_eq!(get_string_field(&checkbox, "state"), "checked");
-        let list_box = kind_of(4);
-        assert_eq!(get_string_field(&list_box, "selection"), "multi");
-        let selected: Vec<f64> =
-            Array::from(&Reflect::get(&list_box, &"selected".into()).unwrap())
-                .iter()
-                .map(|v| v.as_f64().unwrap())
-                .collect();
-        assert_eq!(selected, [0.0, 2.0]);
-        let dropdown = kind_of(5);
-        assert_eq!(get_f64_field(&dropdown, "selected"), 2.0);
-        assert_eq!(get_f64_field(&dropdown, "lines"), 8.0);
-        let scrollbar = kind_of(6);
-        assert_eq!(get_f64_field(&scrollbar, "value"), 5.0);
-        assert_eq!(get_f64_field(&scrollbar, "page"), 2.0);
-        assert!(!get_bool_field(&scrollbar, "horizontal"));
-        let spinner = kind_of(7);
-        assert_eq!(get_f64_field(&spinner, "increment"), 1.0);
-    };
-    assert_controls_survive(&sheet);
-
-    for bytes in [wb.save_xlsx_bytes().unwrap(), wb.save_xlsb_bytes().unwrap()] {
-        let reopened = Workbook::from_bytes(&bytes).unwrap();
-        let sheet = reopened.get_sheet(0).unwrap();
-        assert_eq!(sheet.form_control_count().unwrap(), 8);
-        assert_controls_survive(&sheet);
-        assert_eq!(sheet.get_cell("D2").unwrap().as_boolean(), Some(true));
-    }
-    let xls = wb
-        .save_xls_bytes_encrypted("password", None, None)
+    let child = make_options(&[
+        ("transform", child_transform(0, 0)),
+        ("kind", JsValue::from_str("shape")),
+        (
+            "shape",
+            make_options(&[("geometry", JsValue::from_str("rect"))]),
+        ),
+    ]);
+    let group = make_options(&[
+        ("anchor", drawing_anchor(3, 0, 5, 2)),
+        ("kind", JsValue::from_str("group")),
+        (
+            "group",
+            make_options(&[("children", make_array(&[child]))]),
+        ),
+    ]);
+    sheet.add_drawing(group).unwrap();
+    let replacement = make_options(&[
+        ("name", JsValue::from_str("nested label")),
+        ("transform", child_transform(5, 5)),
+        ("kind", JsValue::from_str("formControl")),
+        (
+            "formControl",
+            make_options(&[(
+                "kind",
+                make_options(&[
+                    ("kind", JsValue::from_str("label")),
+                    ("caption", drawing_text("replacement")),
+                ]),
+            )]),
+        ),
+    ]);
+    sheet
+        .set_drawing(drawing_path(&[3, 0]), replacement)
         .unwrap();
-    let reopened = Workbook::from_bytes_with_password(&xls, "password", None).unwrap();
-    let sheet = reopened.get_sheet(0).unwrap();
-    assert_eq!(sheet.form_control_count().unwrap(), 8);
-    assert_controls_survive(&sheet);
-    assert_eq!(sheet.get_cell("D2").unwrap().as_boolean(), Some(true));
+    assert_eq!(sheet.form_control_count().unwrap(), 1);
+    sheet.remove_drawing(drawing_path(&[3, 0])).unwrap();
+    assert_eq!(sheet.form_control_count().unwrap(), 0);
+
+    let raw = make_options(&[
+        ("anchor", drawing_anchor(0, 0, 1, 1)),
+        ("kind", JsValue::from_str("raw")),
+        ("raw", make_options(&[])),
+    ]);
+    assert!(sheet.add_drawing(raw).is_err());
 }
 
-/// The form-control API must be reachable through its documented
-/// camelCase JS names. Rust method calls bypass JS property lookup,
-/// so a missing `js_name` attribute is only caught here.
+fn comment_drawing(anchor: JsValue, row: u32, col: u32, text: &str) -> JsValue {
+    let comment = make_options(&[
+        ("row", JsValue::from_f64(row as f64)),
+        ("col", JsValue::from_f64(col as f64)),
+        ("author", JsValue::from_str("author")),
+        ("text", JsValue::from_str(text)),
+    ]);
+    make_options(&[
+        ("anchor", anchor),
+        ("kind", JsValue::from_str("comment")),
+        ("comment", comment),
+    ])
+}
+
+fn form_control_kind(control: &JsValue) -> JsValue {
+    Reflect::get(
+        &Reflect::get(control, &"formControl".into()).unwrap(),
+        &"kind".into(),
+    )
+    .unwrap()
+}
+
+fn byte_array_to_vec(value: &JsValue) -> Vec<u8> {
+    Array::from(value)
+        .iter()
+        .map(|item| item.as_f64().unwrap() as u8)
+        .collect()
+}
+
 #[wasm_bindgen_test]
-fn test_form_control_js_api_names() {
+fn test_unknown_control_passthrough_survives_set_drawing_and_save() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    let raw_properties = make_array(&[
+        make_array(&[JsValue::from_str("customFlag"), JsValue::from_str("kept")]),
+        make_array(&[JsValue::from_str("val"), JsValue::from_str("17")]),
+        make_array(&[JsValue::from_str("fmlaLink"), JsValue::from_str("$A$1")]),
+    ]);
+    let raw_client_data = make_array(&[make_array(
+        &b"<x:Val>17</x:Val>"
+            .iter()
+            .map(|byte| JsValue::from_f64(f64::from(*byte)))
+            .collect::<Vec<_>>(),
+    )]);
+    sheet
+        .add_drawing(form_control_drawing(
+            "Legacy editor",
+            drawing_anchor(1, 2, 3, 4),
+            make_options(&[
+                ("kind", JsValue::from_str("unknown")),
+                ("objectType", JsValue::from_str("EditBox")),
+                ("caption", drawing_text("Unsupported editor")),
+                ("rawProperties", raw_properties),
+                ("rawClientData", raw_client_data),
+            ]),
+        ))
+        .unwrap();
+    let bytes = wb.save_xlsx_bytes().unwrap();
+
+    let first = Workbook::from_bytes(&bytes).unwrap();
+    let sheet = first.get_sheet(0).unwrap();
+    let control = Array::from(&sheet.form_controls().unwrap()).get(0);
+    let kind = form_control_kind(&control);
+    assert_eq!(get_string_field(&kind, "kind"), "unknown");
+    assert_eq!(get_string_field(&kind, "objectType"), "EditBox");
+    let properties = Array::from(&Reflect::get(&kind, &"rawProperties".into()).unwrap());
+    let property_count = properties.length();
+    assert!(
+        property_count >= 3,
+        "expected raw properties to survive the read, got {property_count}"
+    );
+    let client_data = Array::from(&Reflect::get(&kind, &"rawClientData".into()).unwrap());
+    assert!(client_data.length() >= 1);
+
+    // Identity rewrite: the read snapshot keeps its passthrough data.
+    sheet.set_drawing(drawing_path(&[0]), control).unwrap();
+    let bytes = first.save_xlsx_bytes().unwrap();
+
+    let second = Workbook::from_bytes(&bytes).unwrap();
+    let sheet = second.get_sheet(0).unwrap();
+    let control = Array::from(&sheet.form_controls().unwrap()).get(0);
+    let kind = form_control_kind(&control);
+    assert_eq!(get_string_field(&kind, "objectType"), "EditBox");
+    let properties = Array::from(&Reflect::get(&kind, &"rawProperties".into()).unwrap());
+    assert_eq!(properties.length(), property_count);
+    let has_custom_flag = properties.iter().any(|pair| {
+        let pair = Array::from(&pair);
+        pair.get(0).as_string().as_deref() == Some("customFlag")
+            && pair.get(1).as_string().as_deref() == Some("kept")
+    });
+    assert!(has_custom_flag, "customFlag raw property must survive rewrite");
+    let client_data = Array::from(&Reflect::get(&kind, &"rawClientData".into()).unwrap());
+    let has_val_fragment = client_data.iter().any(|fragment| {
+        String::from_utf8_lossy(&byte_array_to_vec(&fragment)).contains("<x:Val>17</x:Val>")
+    });
+    assert!(has_val_fragment, "raw ClientData fragment must survive rewrite");
+}
+
+#[wasm_bindgen_test]
+fn test_uint8array_payloads_survive_add_and_set_drawing() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+
+    // Image svgData as Uint8Array.
+    let svg = b"<svg xmlns='http://www.w3.org/2000/svg'/>";
+    let image = make_options(&[
+        ("format", JsValue::from_str("png")),
+        ("widthEmu", JsValue::from_f64(200_000.0)),
+        ("heightEmu", JsValue::from_f64(100_000.0)),
+        (
+            "data",
+            js_sys::Uint8Array::from(&[137u8, 80, 78, 71][..]).into(),
+        ),
+        ("svgData", js_sys::Uint8Array::from(&svg[..]).into()),
+    ]);
+    sheet
+        .add_drawing(make_options(&[
+            ("anchor", drawing_anchor(0, 0, 2, 2)),
+            ("kind", JsValue::from_str("image")),
+            ("image", image),
+        ]))
+        .unwrap();
+    assert_eq!(
+        sheet
+            .drawing_svg_data(drawing_path(&[0]))
+            .unwrap()
+            .as_deref(),
+        Some(&svg[..])
+    );
+
+    // Unknown-control rawClientData elements and rawObj as Uint8Array,
+    // exercised through both addDrawing and setDrawing (both pass the
+    // payload through serde's tagged-enum buffering).
+    let fragment = b"<x:Val>17</x:Val>";
+    let obj_body = [0x15u8, 0x00, 0x12, 0x00];
+    let unknown_control = |name: &str| {
+        form_control_drawing(
+            name,
+            drawing_anchor(1, 2, 3, 4),
+            make_options(&[
+                ("kind", JsValue::from_str("unknown")),
+                ("objectType", JsValue::from_str("EditBox")),
+                ("caption", drawing_text("editor")),
+                (
+                    "rawClientData",
+                    make_array(&[js_sys::Uint8Array::from(&fragment[..]).into()]),
+                ),
+                ("rawObj", js_sys::Uint8Array::from(&obj_body[..]).into()),
+            ]),
+        )
+    };
+    sheet.add_drawing(unknown_control("added")).unwrap();
+    sheet
+        .set_drawing(drawing_path(&[1]), unknown_control("replaced"))
+        .unwrap();
+
+    let control = Array::from(&sheet.form_controls().unwrap()).get(0);
+    assert_eq!(get_string_field(&control, "name"), "replaced");
+    let kind = form_control_kind(&control);
+    let client_data = Array::from(&Reflect::get(&kind, &"rawClientData".into()).unwrap());
+    assert_eq!(byte_array_to_vec(&client_data.get(0)), fragment.to_vec());
+    let raw_obj = Reflect::get(&kind, &"rawObj".into()).unwrap();
+    assert_eq!(byte_array_to_vec(&raw_obj), obj_body.to_vec());
+}
+
+#[wasm_bindgen_test]
+fn test_set_drawing_rejects_comment_group_children() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    let child = make_options(&[
+        ("transform", child_transform(0, 0)),
+        ("kind", JsValue::from_str("shape")),
+        (
+            "shape",
+            make_options(&[("geometry", JsValue::from_str("rect"))]),
+        ),
+    ]);
+    let group = make_options(&[
+        ("anchor", drawing_anchor(0, 0, 2, 2)),
+        ("kind", JsValue::from_str("group")),
+        (
+            "group",
+            make_options(&[("children", make_array(&[child]))]),
+        ),
+    ]);
+    sheet.add_drawing(group).unwrap();
+    let comment_child = make_options(&[
+        ("transform", child_transform(0, 0)),
+        ("kind", JsValue::from_str("comment")),
+        (
+            "comment",
+            make_options(&[
+                ("row", JsValue::from_f64(0.0)),
+                ("col", JsValue::from_f64(0.0)),
+                ("author", JsValue::from_str("a")),
+                ("text", JsValue::from_str("nested")),
+            ]),
+        ),
+    ]);
+    assert!(sheet
+        .set_drawing(drawing_path(&[0, 0]), comment_child)
+        .is_err());
+}
+
+#[wasm_bindgen_test]
+fn test_set_drawing_rejects_duplicate_comment_cell() {
     let wb = Workbook::new();
     let sheet = wb.get_sheet(0).unwrap();
     sheet
-        .add_form_control(form_control(make_options(&[
-            ("kind", JsValue::from_str("button")),
-            ("caption", JsValue::from_str("Run")),
-        ])))
+        .add_drawing(comment_drawing(drawing_anchor(2, 0, 4, 2), 0, 0, "first"))
+        .unwrap();
+    sheet
+        .add_drawing(comment_drawing(drawing_anchor(2, 4, 4, 6), 4, 0, "second"))
+        .unwrap();
+
+    // Replacing the second comment with one for the first comment's
+    // cell must be rejected.
+    assert!(sheet
+        .set_drawing(
+            drawing_path(&[1]),
+            comment_drawing(drawing_anchor(2, 4, 4, 6), 0, 0, "duplicate"),
+        )
+        .is_err());
+
+    // Replacing a comment in place (same cell) stays allowed.
+    sheet
+        .set_drawing(
+            drawing_path(&[0]),
+            comment_drawing(drawing_anchor(2, 0, 4, 2), 0, 0, "updated"),
+        )
+        .unwrap();
+    assert_eq!(Array::from(&sheet.drawings().unwrap()).length(), 2);
+}
+
+#[wasm_bindgen_test]
+fn test_form_control_radio_semantics_and_linked_cell_sync() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    sheet
+        .add_drawing(form_control_drawing(
+            "group",
+            drawing_anchor(0, 0, 4, 6),
+            make_options(&[
+                ("kind", JsValue::from_str("groupBox")),
+                ("caption", drawing_text("Choose")),
+            ]),
+        ))
+        .unwrap();
+    for (name, state, row) in [("one", "checked", 1), ("two", "unchecked", 3)] {
+        sheet
+            .add_drawing(form_control_drawing(
+                name,
+                drawing_anchor(1, row, 2, row + 1),
+                make_options(&[
+                    ("kind", JsValue::from_str("optionButton")),
+                    ("caption", drawing_text(name)),
+                    ("state", JsValue::from_str(state)),
+                    ("cellLink", JsValue::from_str("$D$2")),
+                ]),
+            ))
+            .unwrap();
+    }
+
+    let result = sheet
+        .set_form_control_check_state(drawing_path(&[2]), "checked")
+        .unwrap();
+    assert_eq!(get_f64_field(&result, "controlsChanged"), 2.0);
+    assert_eq!(get_f64_field(&result, "linkedCellsChanged"), 1.0);
+    assert_eq!(sheet.get_cell("D2").unwrap().as_number(), Some(2.0));
+
+    let controls = Array::from(&sheet.form_controls().unwrap());
+    let first = Reflect::get(&controls.get(1), &"formControl".into()).unwrap();
+    let second = Reflect::get(&controls.get(2), &"formControl".into()).unwrap();
+    assert_eq!(
+        get_string_field(&Reflect::get(&first, &"kind".into()).unwrap(), "state"),
+        "unchecked"
+    );
+    assert_eq!(
+        get_string_field(&Reflect::get(&second, &"kind".into()).unwrap(), "state"),
+        "checked"
+    );
+}
+
+#[wasm_bindgen_test]
+fn test_drawing_rich_caption_and_shared_metadata() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    let font = make_options(&[("bold", JsValue::TRUE), ("size", JsValue::from_f64(14.0))]);
+    let runs = make_array(&[
+        make_options(&[("text", JsValue::from_str("Run "))]),
+        make_options(&[("text", JsValue::from_str("now")), ("font", font)]),
+    ]);
+    let caption = make_options(&[
+        ("runs", runs),
+        ("horizontalAlignment", JsValue::from_str("center")),
+    ]);
+    let form_control = make_options(&[
+        (
+            "kind",
+            make_options(&[
+                ("kind", JsValue::from_str("button")),
+                ("caption", caption),
+            ]),
+        ),
+        ("macroName", JsValue::from_str("RunReport")),
+    ]);
+    let drawing = make_options(&[
+        ("name", JsValue::from_str("Run button")),
+        ("hidden", JsValue::TRUE),
+        ("locked", JsValue::FALSE),
+        ("printable", JsValue::FALSE),
+        ("altText", JsValue::from_str("Runs the report")),
+        ("title", JsValue::from_str("Report action")),
+        ("anchor", drawing_anchor(0, 0, 2, 1)),
+        ("kind", JsValue::from_str("formControl")),
+        ("formControl", form_control),
+    ]);
+    sheet.add_drawing(drawing).unwrap();
+
+    let drawing = Array::from(&sheet.drawings().unwrap()).get(0);
+    assert_eq!(get_string_field(&drawing, "name"), "Run button");
+    assert!(get_bool_field(&drawing, "hidden"));
+    assert!(!get_bool_field(&drawing, "locked"));
+    assert!(!get_bool_field(&drawing, "printable"));
+    assert_eq!(get_string_field(&drawing, "altText"), "Runs the report");
+    assert_eq!(get_string_field(&drawing, "title"), "Report action");
+    let control = Reflect::get(&drawing, &"formControl".into()).unwrap();
+    assert_eq!(get_string_field(&control, "macroName"), "RunReport");
+    let kind = Reflect::get(&control, &"kind".into()).unwrap();
+    let caption = Reflect::get(&kind, &"caption".into()).unwrap();
+    let runs = Array::from(&Reflect::get(&caption, &"runs".into()).unwrap());
+    assert_eq!(runs.length(), 2);
+    assert_eq!(get_string_field(&runs.get(1), "text"), "now");
+}
+
+/// CamelCase names are checked through JS reflection because direct Rust calls
+/// do not exercise wasm-bindgen's exported property names.
+#[wasm_bindgen_test]
+fn test_drawing_js_api_names() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    sheet
+        .add_drawing(shape_drawing("shape", drawing_anchor(0, 0, 1, 1)))
         .unwrap();
 
     let sheet_js = JsValue::from(sheet);
-    let count = Reflect::get(&sheet_js, &"formControlCount".into()).unwrap();
-    assert_eq!(count.as_f64(), Some(1.0), "formControlCount getter");
-    let controls = Reflect::get(&sheet_js, &"formControls".into()).unwrap();
-    assert!(Array::is_array(&controls), "formControls getter");
-    let kind = Reflect::get(&Array::from(&controls).get(0), &"kind".into()).unwrap();
-    let kind_tag = Reflect::get(&kind, &"kind".into()).unwrap();
-    assert_eq!(kind_tag.as_string().as_deref(), Some("button"));
-    for name in ["addFormControl", "setFormControl", "removeFormControl"] {
-        let method = Reflect::get(&sheet_js, &(*name).into()).unwrap();
+    for name in ["drawings", "formControls", "images", "charts", "chartsEx"] {
+        let value = Reflect::get(&sheet_js, &name.into()).unwrap();
+        assert!(Array::is_array(&value), "{name} getter missing");
+    }
+    for name in [
+        "addDrawing",
+        "insertDrawing",
+        "setDrawing",
+        "removeDrawing",
+        "moveDrawing",
+        "drawingImageData",
+        "drawingSvgData",
+        "setFormControlCheckState",
+    ] {
+        let method = Reflect::get(&sheet_js, &name.into()).unwrap();
         assert!(method.is_function(), "{name} missing from the JS API");
+    }
+    for removed in ["addFormControl", "setFormControl", "removeFormControl"] {
+        assert!(
+            Reflect::get(&sheet_js, &removed.into())
+                .unwrap()
+                .is_undefined(),
+            "{removed} must not remain in the JS API"
+        );
+    }
+
+    let workbook_js = JsValue::from(wb);
+    for name in ["syncFormControls", "syncFormControlsFromLinkedCells"] {
+        assert!(
+            Reflect::get(&workbook_js, &name.into())
+                .unwrap()
+                .is_function(),
+            "{name} missing from the JS API"
+        );
     }
 }
 
@@ -866,11 +1321,7 @@ fn test_populated_feature_reads_through_binding() {
     ws.set_cell_value("A2", 1.0).unwrap();
     ws.set_comment(
         "A1",
-        CellComment {
-            author: "Tester".to_string(),
-            text: "fixture comment".to_string(),
-            visible: false,
-        },
+        CellComment::new("Tester", "fixture comment"),
     )
     .unwrap();
     let mut af = AutoFilter::new(CellRange::new(

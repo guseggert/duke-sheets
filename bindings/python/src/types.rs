@@ -11,9 +11,9 @@ use duke_sheets_core::{
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::{PyBytes, PyDict, PyList};
 
-use crate::PyCalculationImage;
+use crate::{PyCalculationImage, PyDrawingText};
 
 #[pyclass(name = "Color")]
 #[derive(Clone)]
@@ -686,7 +686,7 @@ fn color_parts_to_core(
     }
 }
 
-fn py_color_to_core(color: &PyColor) -> PyResult<CoreColor> {
+pub(crate) fn py_color_to_core(color: &PyColor) -> PyResult<CoreColor> {
     color_parts_to_core(
         Some(color.color_type.as_str()),
         Some(color.hex.as_str()),
@@ -700,7 +700,7 @@ fn py_color_to_core(color: &PyColor) -> PyResult<CoreColor> {
     )
 }
 
-fn color_input_to_core(input: &Bound<'_, PyAny>) -> PyResult<CoreColor> {
+pub(crate) fn color_input_to_core(input: &Bound<'_, PyAny>) -> PyResult<CoreColor> {
     if let Ok(color) = input.extract::<PyRef<PyColor>>() {
         return py_color_to_core(&color);
     }
@@ -1136,7 +1136,7 @@ fn apply_border_input(input: &Bound<'_, PyAny>, border: &mut CoreBorderStyle) ->
     Ok(())
 }
 
-fn parse_horizontal_alignment_input(value: &str) -> PyResult<HorizontalAlignment> {
+pub(crate) fn parse_horizontal_alignment_input(value: &str) -> PyResult<HorizontalAlignment> {
     match value {
         "general" => Ok(HorizontalAlignment::General),
         "left" => Ok(HorizontalAlignment::Left),
@@ -1152,7 +1152,7 @@ fn parse_horizontal_alignment_input(value: &str) -> PyResult<HorizontalAlignment
     }
 }
 
-fn parse_vertical_alignment_input(value: &str) -> PyResult<VerticalAlignment> {
+pub(crate) fn parse_vertical_alignment_input(value: &str) -> PyResult<VerticalAlignment> {
     match value {
         "top" => Ok(VerticalAlignment::Top),
         "center" => Ok(VerticalAlignment::Center),
@@ -1401,8 +1401,6 @@ pub struct PyComment {
     pub author: String,
     #[pyo3(get)]
     pub text: String,
-    #[pyo3(get)]
-    pub visible: bool,
 }
 
 impl From<&core::CellComment> for PyComment {
@@ -1410,7 +1408,18 @@ impl From<&core::CellComment> for PyComment {
         Self {
             author: c.author.clone(),
             text: c.text.clone(),
-            visible: c.visible,
+        }
+    }
+}
+
+#[pymethods]
+impl PyComment {
+    #[new]
+    #[pyo3(signature=(text, *, author=None))]
+    fn new(text: String, author: Option<String>) -> Self {
+        Self {
+            author: author.unwrap_or_default(),
+            text,
         }
     }
 }
@@ -2387,6 +2396,27 @@ impl From<&core::RichTextRun> for PyRichTextRun {
     }
 }
 
+impl PyRichTextRun {
+    pub(crate) fn to_core(&self) -> PyResult<core::RichTextRun> {
+        Ok(core::RichTextRun {
+            text: self.text.clone(),
+            font: self.font.as_ref().map(PyRunFont::to_core).transpose()?,
+        })
+    }
+}
+
+#[pymethods]
+impl PyRichTextRun {
+    #[new]
+    #[pyo3(signature=(text, *, font=None))]
+    fn new(text: String, font: Option<PyRef<'_, PyRunFont>>) -> Self {
+        Self {
+            text,
+            font: font.map(|font| font.clone()),
+        }
+    }
+}
+
 #[pyclass(name = "RunFont")]
 #[derive(Clone)]
 pub struct PyRunFont {
@@ -2406,6 +2436,12 @@ pub struct PyRunFont {
     pub strikethrough: Option<bool>,
     #[pyo3(get)]
     pub vertical_align: Option<String>,
+    #[pyo3(get)]
+    pub family: Option<u8>,
+    #[pyo3(get)]
+    pub charset: Option<u8>,
+    #[pyo3(get)]
+    pub scheme: Option<String>,
 }
 
 impl From<&core::RunFont> for PyRunFont {
@@ -2422,7 +2458,89 @@ impl From<&core::RunFont> for PyRunFont {
                 .vertical_align
                 .as_ref()
                 .map(|v| font_valign_to_string(v).into()),
+            family: f.family,
+            charset: f.charset,
+            scheme: f.scheme.clone(),
         }
+    }
+}
+
+impl PyRunFont {
+    pub(crate) fn to_core(&self) -> PyResult<core::RunFont> {
+        let underline = self
+            .underline
+            .as_deref()
+            .map(|value| match value {
+                "none" => Ok(Underline::None),
+                "single" => Ok(Underline::Single),
+                "double" => Ok(Underline::Double),
+                "singleAccounting" => Ok(Underline::SingleAccounting),
+                "doubleAccounting" => Ok(Underline::DoubleAccounting),
+                _ => Err(PyValueError::new_err(
+                    "underline must be none, single, double, singleAccounting, or doubleAccounting",
+                )),
+            })
+            .transpose()?;
+        let vertical_align = self
+            .vertical_align
+            .as_deref()
+            .map(|value| match value {
+                "baseline" => Ok(FontVerticalAlign::Baseline),
+                "superscript" => Ok(FontVerticalAlign::Superscript),
+                "subscript" => Ok(FontVerticalAlign::Subscript),
+                _ => Err(PyValueError::new_err(
+                    "vertical_align must be baseline, superscript, or subscript",
+                )),
+            })
+            .transpose()?;
+        Ok(core::RunFont {
+            bold: self.bold,
+            italic: self.italic,
+            size: self.size,
+            color: self.color.as_ref().map(py_color_to_core).transpose()?,
+            name: self.name.clone(),
+            underline,
+            strikethrough: self.strikethrough,
+            vertical_align,
+            family: self.family,
+            charset: self.charset,
+            scheme: self.scheme.clone(),
+        })
+    }
+}
+
+#[pymethods]
+impl PyRunFont {
+    #[new]
+    #[pyo3(signature=(*, bold=None, italic=None, size=None, color=None, name=None, underline=None, strikethrough=None, vertical_align=None, family=None, charset=None, scheme=None))]
+    fn new(
+        bold: Option<bool>,
+        italic: Option<bool>,
+        size: Option<f64>,
+        color: Option<&Bound<'_, PyAny>>,
+        name: Option<String>,
+        underline: Option<String>,
+        strikethrough: Option<bool>,
+        vertical_align: Option<String>,
+        family: Option<u8>,
+        charset: Option<u8>,
+        scheme: Option<String>,
+    ) -> PyResult<Self> {
+        let font = Self {
+            bold,
+            italic,
+            size,
+            color: color.map(color_input_to_core).transpose()?.as_ref().map(PyColor::from),
+            name,
+            underline,
+            strikethrough,
+            vertical_align,
+            family,
+            charset,
+            scheme,
+        };
+        font.to_core()?;
+        Ok(font)
     }
 }
 
@@ -2512,91 +2630,56 @@ pub struct PyMergeSpan {
     pub col_span: u32,
 }
 
-/// Flat two-cell drawing anchor. Objects read from files with
-/// one-cell or absolute anchors are flattened to from/to markers at
-/// Excel's default cell metrics, with `edit_as` preserving the
-/// original sizing behavior.
+/// A drawing anchor in its native variant: two-cell, one-cell, or
+/// absolute. Anchors read from files keep their variant; writers
+/// flatten only when a target format requires it.
 #[pyclass(name = "DrawingAnchor")]
 #[derive(Clone)]
 pub struct PyDrawingAnchor {
-    #[pyo3(get)]
-    pub from_col: u16,
-    #[pyo3(get)]
-    pub from_row: u32,
-    #[pyo3(get)]
-    pub from_col_offset: i64,
-    #[pyo3(get)]
-    pub from_row_offset: i64,
-    #[pyo3(get)]
-    pub to_col: u16,
-    #[pyo3(get)]
-    pub to_row: u32,
-    #[pyo3(get)]
-    pub to_col_offset: i64,
-    #[pyo3(get)]
-    pub to_row_offset: i64,
-    /// "two_cell", "one_cell", or "absolute".
-    #[pyo3(get)]
-    pub edit_as: String,
+    pub(crate) inner: duke_sheets::DrawingAnchor,
 }
 
 impl From<&duke_sheets::DrawingAnchor> for PyDrawingAnchor {
     fn from(a: &duke_sheets::DrawingAnchor) -> Self {
-        match a {
-            duke_sheets::DrawingAnchor::TwoCell { from, to, edit_as } => Self {
-                from_col: from.col,
-                from_row: from.row,
-                from_col_offset: from.col_offset_emu,
-                from_row_offset: from.row_offset_emu,
-                to_col: to.col,
-                to_row: to.row,
-                to_col_offset: to.col_offset_emu,
-                to_row_offset: to.row_offset_emu,
-                edit_as: match edit_as.clone().unwrap_or(duke_sheets::EditAs::TwoCell) {
-                    duke_sheets::EditAs::TwoCell => "two_cell",
-                    duke_sheets::EditAs::OneCell => "one_cell",
-                    duke_sheets::EditAs::Absolute => "absolute",
-                }
-                .to_string(),
-            },
-            _ => Self::from(&a.to_two_cell()),
-        }
+        Self { inner: a.clone() }
     }
 }
 
 impl PyDrawingAnchor {
-    fn to_core(&self) -> PyResult<duke_sheets::DrawingAnchor> {
-        use duke_sheets::{CellMarker, DrawingAnchor, EditAs};
-        let edit_as = match self.edit_as.as_str() {
-            "two_cell" => EditAs::TwoCell,
-            "one_cell" => EditAs::OneCell,
-            "absolute" => EditAs::Absolute,
-            other => {
-                return Err(PyValueError::new_err(format!(
-                    "invalid edit_as {other:?}; expected two_cell, one_cell, or absolute"
-                )))
-            }
-        };
-        Ok(DrawingAnchor::TwoCell {
-            from: CellMarker {
-                col: self.from_col,
-                col_offset_emu: self.from_col_offset,
-                row: self.from_row,
-                row_offset_emu: self.from_row_offset,
-            },
-            to: CellMarker {
-                col: self.to_col,
-                col_offset_emu: self.to_col_offset,
-                row: self.to_row,
-                row_offset_emu: self.to_row_offset,
-            },
-            edit_as: Some(edit_as),
-        })
+    pub(crate) fn to_core(&self) -> PyResult<duke_sheets::DrawingAnchor> {
+        Ok(self.inner.clone())
+    }
+
+    fn from_marker(&self) -> Option<&duke_sheets::CellMarker> {
+        match &self.inner {
+            duke_sheets::DrawingAnchor::TwoCell { from, .. }
+            | duke_sheets::DrawingAnchor::OneCell { from, .. } => Some(from),
+            duke_sheets::DrawingAnchor::Absolute { .. } => None,
+        }
+    }
+
+    fn to_marker(&self) -> Option<&duke_sheets::CellMarker> {
+        match &self.inner {
+            duke_sheets::DrawingAnchor::TwoCell { to, .. } => Some(to),
+            _ => None,
+        }
+    }
+}
+
+fn parse_edit_as(value: &str) -> PyResult<duke_sheets::EditAs> {
+    match value {
+        "two_cell" => Ok(duke_sheets::EditAs::TwoCell),
+        "one_cell" => Ok(duke_sheets::EditAs::OneCell),
+        "absolute" => Ok(duke_sheets::EditAs::Absolute),
+        other => Err(PyValueError::new_err(format!(
+            "invalid edit_as {other:?}; expected two_cell, one_cell, or absolute"
+        ))),
     }
 }
 
 #[pymethods]
 impl PyDrawingAnchor {
+    /// Two-cell anchor (the default Excel drawing placement).
     #[new]
     #[pyo3(signature=(from_row, from_col, to_row, to_col, *, from_row_offset=0, from_col_offset=0, to_row_offset=0, to_col_offset=0, edit_as="two_cell"))]
     fn new(
@@ -2610,19 +2693,212 @@ impl PyDrawingAnchor {
         to_col_offset: i64,
         edit_as: &str,
     ) -> PyResult<Self> {
-        let anchor = Self {
-            from_col,
+        Self::two_cell(
             from_row,
-            from_col_offset,
-            from_row_offset,
-            to_col,
+            from_col,
             to_row,
-            to_col_offset,
+            to_col,
+            from_row_offset,
+            from_col_offset,
             to_row_offset,
-            edit_as: edit_as.to_string(),
-        };
-        anchor.to_core()?;
-        Ok(anchor)
+            to_col_offset,
+            edit_as,
+        )
+    }
+
+    /// Anchor spanning two cell markers; `edit_as` records the sizing
+    /// behavior Excel applies when cells move or resize.
+    #[staticmethod]
+    #[pyo3(signature=(from_row, from_col, to_row, to_col, *, from_row_offset=0, from_col_offset=0, to_row_offset=0, to_col_offset=0, edit_as="two_cell"))]
+    fn two_cell(
+        from_row: u32,
+        from_col: u16,
+        to_row: u32,
+        to_col: u16,
+        from_row_offset: i64,
+        from_col_offset: i64,
+        to_row_offset: i64,
+        to_col_offset: i64,
+        edit_as: &str,
+    ) -> PyResult<Self> {
+        let edit_as = parse_edit_as(edit_as)?;
+        Ok(Self {
+            inner: duke_sheets::DrawingAnchor::TwoCell {
+                from: duke_sheets::CellMarker {
+                    col: from_col,
+                    col_offset_emu: from_col_offset,
+                    row: from_row,
+                    row_offset_emu: from_row_offset,
+                },
+                to: duke_sheets::CellMarker {
+                    col: to_col,
+                    col_offset_emu: to_col_offset,
+                    row: to_row,
+                    row_offset_emu: to_row_offset,
+                },
+                edit_as: Some(edit_as),
+            },
+        })
+    }
+
+    /// Anchor pinned to one cell with a fixed EMU extent.
+    #[staticmethod]
+    #[pyo3(signature=(from_row, from_col, *, width_emu, height_emu, from_row_offset=0, from_col_offset=0))]
+    fn one_cell(
+        from_row: u32,
+        from_col: u16,
+        width_emu: i64,
+        height_emu: i64,
+        from_row_offset: i64,
+        from_col_offset: i64,
+    ) -> PyResult<Self> {
+        if width_emu < 0 || height_emu < 0 {
+            return Err(PyValueError::new_err(
+                "drawing anchor dimensions cannot be negative",
+            ));
+        }
+        Ok(Self {
+            inner: duke_sheets::DrawingAnchor::OneCell {
+                from: duke_sheets::CellMarker {
+                    col: from_col,
+                    col_offset_emu: from_col_offset,
+                    row: from_row,
+                    row_offset_emu: from_row_offset,
+                },
+                width_emu,
+                height_emu,
+            },
+        })
+    }
+
+    /// Anchor at a fixed EMU position and extent, independent of cells.
+    #[staticmethod]
+    fn absolute(x_emu: i64, y_emu: i64, width_emu: i64, height_emu: i64) -> PyResult<Self> {
+        if x_emu < 0 || y_emu < 0 || width_emu < 0 || height_emu < 0 {
+            return Err(PyValueError::new_err(
+                "absolute drawing anchor values cannot be negative",
+            ));
+        }
+        Ok(Self {
+            inner: duke_sheets::DrawingAnchor::Absolute {
+                x_emu,
+                y_emu,
+                width_emu,
+                height_emu,
+            },
+        })
+    }
+
+    /// "two_cell", "one_cell", or "absolute".
+    #[getter]
+    fn anchor_type(&self) -> &'static str {
+        match &self.inner {
+            duke_sheets::DrawingAnchor::TwoCell { .. } => "two_cell",
+            duke_sheets::DrawingAnchor::OneCell { .. } => "one_cell",
+            duke_sheets::DrawingAnchor::Absolute { .. } => "absolute",
+        }
+    }
+
+    /// From-marker row (two-cell and one-cell anchors).
+    #[getter]
+    fn from_row(&self) -> Option<u32> {
+        self.from_marker().map(|marker| marker.row)
+    }
+
+    /// From-marker column (two-cell and one-cell anchors).
+    #[getter]
+    fn from_col(&self) -> Option<u16> {
+        self.from_marker().map(|marker| marker.col)
+    }
+
+    #[getter]
+    fn from_row_offset(&self) -> Option<i64> {
+        self.from_marker().map(|marker| marker.row_offset_emu)
+    }
+
+    #[getter]
+    fn from_col_offset(&self) -> Option<i64> {
+        self.from_marker().map(|marker| marker.col_offset_emu)
+    }
+
+    /// To-marker row (two-cell anchors only).
+    #[getter]
+    fn to_row(&self) -> Option<u32> {
+        self.to_marker().map(|marker| marker.row)
+    }
+
+    /// To-marker column (two-cell anchors only).
+    #[getter]
+    fn to_col(&self) -> Option<u16> {
+        self.to_marker().map(|marker| marker.col)
+    }
+
+    #[getter]
+    fn to_row_offset(&self) -> Option<i64> {
+        self.to_marker().map(|marker| marker.row_offset_emu)
+    }
+
+    #[getter]
+    fn to_col_offset(&self) -> Option<i64> {
+        self.to_marker().map(|marker| marker.col_offset_emu)
+    }
+
+    /// "two_cell", "one_cell", or "absolute" when the two-cell anchor
+    /// carries an explicit editing behavior; None otherwise.
+    #[getter]
+    fn edit_as(&self) -> Option<&'static str> {
+        match &self.inner {
+            duke_sheets::DrawingAnchor::TwoCell { edit_as, .. } => {
+                edit_as.as_ref().map(|edit_as| match edit_as {
+                    duke_sheets::EditAs::TwoCell => "two_cell",
+                    duke_sheets::EditAs::OneCell => "one_cell",
+                    duke_sheets::EditAs::Absolute => "absolute",
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// Fixed EMU width (one-cell and absolute anchors).
+    #[getter]
+    fn width_emu(&self) -> Option<i64> {
+        match &self.inner {
+            duke_sheets::DrawingAnchor::OneCell { width_emu, .. }
+            | duke_sheets::DrawingAnchor::Absolute { width_emu, .. } => Some(*width_emu),
+            _ => None,
+        }
+    }
+
+    /// Fixed EMU height (one-cell and absolute anchors).
+    #[getter]
+    fn height_emu(&self) -> Option<i64> {
+        match &self.inner {
+            duke_sheets::DrawingAnchor::OneCell { height_emu, .. }
+            | duke_sheets::DrawingAnchor::Absolute { height_emu, .. } => Some(*height_emu),
+            _ => None,
+        }
+    }
+
+    /// Absolute EMU x position (absolute anchors only).
+    #[getter]
+    fn x_emu(&self) -> Option<i64> {
+        match &self.inner {
+            duke_sheets::DrawingAnchor::Absolute { x_emu, .. } => Some(*x_emu),
+            _ => None,
+        }
+    }
+
+    /// Absolute EMU y position (absolute anchors only).
+    #[getter]
+    fn y_emu(&self) -> Option<i64> {
+        match &self.inner {
+            duke_sheets::DrawingAnchor::Absolute { y_emu, .. } => Some(*y_emu),
+            _ => None,
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("DrawingAnchor(anchor_type={:?})", self.anchor_type())
     }
 }
 
@@ -2643,15 +2919,10 @@ impl From<&core::FormControl> for PyFormControl {
 impl PyFormControl {
     fn create(
         kind: core::FormControlKind,
-        anchor: &PyDrawingAnchor,
-        name: Option<String>,
-        locked: bool,
-        printable: bool,
+        macro_name: Option<String>,
     ) -> PyResult<Self> {
-        let mut control = core::FormControl::with_anchor(kind, anchor.to_core()?);
-        control.name = name;
-        control.locked = locked;
-        control.printable = printable;
+        let mut control = core::FormControl::new(kind);
+        control.macro_name = macro_name;
         control
             .validate()
             .map_err(|err| PyValueError::new_err(err.to_string()))?;
@@ -2662,80 +2933,163 @@ impl PyFormControl {
 #[pymethods]
 impl PyFormControl {
     #[staticmethod]
-    #[pyo3(signature=(caption, anchor, *, name=None, locked=true, printable=true))]
-    fn button(caption: String, anchor: PyRef<'_, PyDrawingAnchor>, name: Option<String>, locked: bool, printable: bool) -> PyResult<Self> {
-        Self::create(core::FormControlKind::Button { caption }, &anchor, name, locked, printable)
+    #[pyo3(signature=(caption, *, macro_name=None))]
+    fn button(caption: &Bound<'_, PyAny>, macro_name: Option<String>) -> PyResult<Self> {
+        Self::create(
+            core::FormControlKind::Button {
+                caption: drawing_text_input_to_core(caption)?,
+            },
+            macro_name,
+        )
     }
 
     #[staticmethod]
-    #[pyo3(signature=(caption, anchor, *, state="unchecked", cell_link=None, no_3d=false, name=None, locked=true, printable=true))]
-    fn checkbox(caption: String, anchor: PyRef<'_, PyDrawingAnchor>, state: &str, cell_link: Option<String>, no_3d: bool, name: Option<String>, locked: bool, printable: bool) -> PyResult<Self> {
-        Self::create(core::FormControlKind::Checkbox { caption, state: parse_check_state(state)?, cell_link, no_3d }, &anchor, name, locked, printable)
+    #[pyo3(signature=(caption, *, state="unchecked", cell_link=None, no_3d=false, macro_name=None))]
+    fn checkbox(caption: &Bound<'_, PyAny>, state: &str, cell_link: Option<String>, no_3d: bool, macro_name: Option<String>) -> PyResult<Self> {
+        Self::create(
+            core::FormControlKind::Checkbox {
+                caption: drawing_text_input_to_core(caption)?,
+                state: parse_check_state(state)?,
+                cell_link,
+                no_3d,
+            },
+            macro_name,
+        )
     }
 
     /// Create an option (radio) button. Radio grouping is derived
     /// from group-box containment when writing, so there is no
     /// grouping argument; `first_in_group` is read-side information.
     #[staticmethod]
-    #[pyo3(signature=(caption, anchor, *, state="unchecked", cell_link=None, no_3d=false, name=None, locked=true, printable=true))]
-    fn option_button(caption: String, anchor: PyRef<'_, PyDrawingAnchor>, state: &str, cell_link: Option<String>, no_3d: bool, name: Option<String>, locked: bool, printable: bool) -> PyResult<Self> {
-        Self::create(core::FormControlKind::OptionButton { caption, state: parse_check_state(state)?, cell_link, first_in_group: false, no_3d }, &anchor, name, locked, printable)
+    #[pyo3(signature=(caption, *, state="unchecked", cell_link=None, no_3d=false, macro_name=None))]
+    fn option_button(caption: &Bound<'_, PyAny>, state: &str, cell_link: Option<String>, no_3d: bool, macro_name: Option<String>) -> PyResult<Self> {
+        Self::create(
+            core::FormControlKind::OptionButton {
+                caption: drawing_text_input_to_core(caption)?,
+                state: parse_check_state(state)?,
+                cell_link,
+                first_in_group: false,
+                no_3d,
+            },
+            macro_name,
+        )
     }
 
     #[staticmethod]
-    #[pyo3(signature=(caption, anchor, *, name=None, locked=true, printable=true))]
-    fn label(caption: String, anchor: PyRef<'_, PyDrawingAnchor>, name: Option<String>, locked: bool, printable: bool) -> PyResult<Self> {
-        Self::create(core::FormControlKind::Label { caption }, &anchor, name, locked, printable)
+    #[pyo3(signature=(caption, *, macro_name=None))]
+    fn label(caption: &Bound<'_, PyAny>, macro_name: Option<String>) -> PyResult<Self> {
+        Self::create(
+            core::FormControlKind::Label {
+                caption: drawing_text_input_to_core(caption)?,
+            },
+            macro_name,
+        )
     }
 
     #[staticmethod]
-    #[pyo3(signature=(caption, anchor, *, no_3d=false, name=None, locked=true, printable=true))]
-    fn group_box(caption: String, anchor: PyRef<'_, PyDrawingAnchor>, no_3d: bool, name: Option<String>, locked: bool, printable: bool) -> PyResult<Self> {
-        Self::create(core::FormControlKind::GroupBox { caption, no_3d }, &anchor, name, locked, printable)
+    #[pyo3(signature=(caption, *, no_3d=false, macro_name=None))]
+    fn group_box(caption: &Bound<'_, PyAny>, no_3d: bool, macro_name: Option<String>) -> PyResult<Self> {
+        Self::create(
+            core::FormControlKind::GroupBox {
+                caption: drawing_text_input_to_core(caption)?,
+                no_3d,
+            },
+            macro_name,
+        )
     }
 
     /// Create a list box. `selected` holds zero-based item indexes,
     /// sorted ascending; a linked cell still receives Excel's
     /// one-based value at runtime.
     #[staticmethod]
-    #[pyo3(signature=(anchor, *, input_range=None, cell_link=None, selection="single", selected=None, no_3d=false, name=None, locked=true, printable=true))]
-    fn list_box(anchor: PyRef<'_, PyDrawingAnchor>, input_range: Option<String>, cell_link: Option<String>, selection: &str, selected: Option<Vec<u16>>, no_3d: bool, name: Option<String>, locked: bool, printable: bool) -> PyResult<Self> {
-        Self::create(core::FormControlKind::ListBox { input_range, cell_link, selection: parse_list_selection(selection)?, selected: selected.unwrap_or_default(), no_3d }, &anchor, name, locked, printable)
+    #[pyo3(signature=(*, input_range=None, cell_link=None, selection="single", selected=None, no_3d=false, macro_name=None))]
+    fn list_box(input_range: Option<String>, cell_link: Option<String>, selection: &str, selected: Option<Vec<u16>>, no_3d: bool, macro_name: Option<String>) -> PyResult<Self> {
+        Self::create(
+            core::FormControlKind::ListBox {
+                input_range,
+                cell_link,
+                selection: parse_list_selection(selection)?,
+                selected: selected.unwrap_or_default(),
+                no_3d,
+            },
+            macro_name,
+        )
     }
 
     /// Create a dropdown (combo box). `selected` is a zero-based item
     /// index; a linked cell still receives Excel's one-based value at
     /// runtime.
     #[staticmethod]
-    #[pyo3(signature=(anchor, *, input_range=None, cell_link=None, selected=None, lines=8, no_3d=false, name=None, locked=true, printable=true))]
-    fn dropdown(anchor: PyRef<'_, PyDrawingAnchor>, input_range: Option<String>, cell_link: Option<String>, selected: Option<u16>, lines: u16, no_3d: bool, name: Option<String>, locked: bool, printable: bool) -> PyResult<Self> {
-        Self::create(core::FormControlKind::Dropdown { input_range, cell_link, selected, lines, no_3d }, &anchor, name, locked, printable)
+    #[pyo3(signature=(*, input_range=None, cell_link=None, selected=None, lines=8, no_3d=false, macro_name=None))]
+    fn dropdown(input_range: Option<String>, cell_link: Option<String>, selected: Option<u16>, lines: u16, no_3d: bool, macro_name: Option<String>) -> PyResult<Self> {
+        Self::create(
+            core::FormControlKind::Dropdown {
+                input_range,
+                cell_link,
+                selected,
+                lines,
+                no_3d,
+            },
+            macro_name,
+        )
     }
 
     #[staticmethod]
-    #[pyo3(signature=(anchor, *, value, min, max, increment=1, page=1, horizontal=false, cell_link=None, name=None, locked=true, printable=true))]
-    fn scrollbar(anchor: PyRef<'_, PyDrawingAnchor>, value: u16, min: u16, max: u16, increment: u16, page: u16, horizontal: bool, cell_link: Option<String>, name: Option<String>, locked: bool, printable: bool) -> PyResult<Self> {
-        Self::create(core::FormControlKind::Scrollbar { value, min, max, increment, page, horizontal, cell_link }, &anchor, name, locked, printable)
+    #[pyo3(signature=(*, value, min, max, increment=1, page=1, horizontal=false, cell_link=None, macro_name=None))]
+    fn scrollbar(value: u16, min: u16, max: u16, increment: u16, page: u16, horizontal: bool, cell_link: Option<String>, macro_name: Option<String>) -> PyResult<Self> {
+        Self::create(
+            core::FormControlKind::Scrollbar {
+                value,
+                min,
+                max,
+                increment,
+                page,
+                horizontal,
+                cell_link,
+            },
+            macro_name,
+        )
     }
 
     #[staticmethod]
-    #[pyo3(signature=(anchor, *, value, min, max, increment=1, cell_link=None, name=None, locked=true, printable=true))]
-    fn spinner(anchor: PyRef<'_, PyDrawingAnchor>, value: u16, min: u16, max: u16, increment: u16, cell_link: Option<String>, name: Option<String>, locked: bool, printable: bool) -> PyResult<Self> {
-        Self::create(core::FormControlKind::Spinner { value, min, max, increment, cell_link }, &anchor, name, locked, printable)
+    #[pyo3(signature=(*, value, min, max, increment=1, cell_link=None, macro_name=None))]
+    fn spinner(value: u16, min: u16, max: u16, increment: u16, cell_link: Option<String>, macro_name: Option<String>) -> PyResult<Self> {
+        Self::create(
+            core::FormControlKind::Spinner {
+                value,
+                min,
+                max,
+                increment,
+                cell_link,
+            },
+            macro_name,
+        )
     }
 
-    #[getter]
-    fn name(&self) -> Option<String> { self.inner.name.clone() }
-    #[getter]
-    fn anchor(&self) -> PyDrawingAnchor { PyDrawingAnchor::from(&self.inner.anchor) }
+    #[staticmethod]
+    #[pyo3(signature=(object_type, caption, *, legacy_object_type=None, macro_name=None))]
+    fn unknown(object_type: String, caption: &Bound<'_, PyAny>, legacy_object_type: Option<u16>, macro_name: Option<String>) -> PyResult<Self> {
+        Self::create(
+            core::FormControlKind::Unknown {
+                object_type,
+                legacy_object_type,
+                caption: drawing_text_input_to_core(caption)?,
+                raw_properties: Vec::new(),
+                raw_client_data: Vec::new(),
+                raw_obj: None,
+            },
+            macro_name,
+        )
+    }
+
     #[getter]
     fn kind(&self) -> &'static str { form_control_kind_name(&self.inner.kind) }
     #[getter]
-    fn locked(&self) -> bool { self.inner.locked }
+    fn macro_name(&self) -> Option<String> { self.inner.macro_name.clone() }
     #[getter]
-    fn printable(&self) -> bool { self.inner.printable }
+    fn caption(&self) -> Option<PyDrawingText> { self.inner.caption().map(PyDrawingText::from) }
     #[getter]
-    fn caption(&self) -> Option<String> { self.inner.caption().map(str::to_string) }
+    fn caption_text(&self) -> Option<String> { self.inner.caption_text() }
     #[getter]
     fn state(&self) -> Option<&'static str> { form_control_state(&self.inner.kind) }
     #[getter]
@@ -2767,6 +3121,32 @@ impl PyFormControl {
     fn page(&self) -> Option<u16> { match &self.inner.kind { core::FormControlKind::Scrollbar { page, .. } => Some(*page), _ => None } }
     #[getter]
     fn horizontal(&self) -> Option<bool> { match &self.inner.kind { core::FormControlKind::Scrollbar { horizontal, .. } => Some(*horizontal), _ => None } }
+    #[getter]
+    fn object_type(&self) -> Option<String> { match &self.inner.kind { core::FormControlKind::Unknown { object_type, .. } => Some(object_type.clone()), _ => None } }
+    #[getter]
+    fn legacy_object_type(&self) -> Option<u16> { match &self.inner.kind { core::FormControlKind::Unknown { legacy_object_type, .. } => *legacy_object_type, _ => None } }
+    /// Unmodeled XLSX `formControlPr` attributes carried by an unknown
+    /// control; read-only passthrough echoed back on write.
+    #[getter]
+    fn raw_properties(&self) -> Option<Vec<(String, String)>> { match &self.inner.kind { core::FormControlKind::Unknown { raw_properties, .. } => Some(raw_properties.clone()), _ => None } }
+    /// Unmodeled VML `ClientData` fragments carried by an unknown
+    /// control; read-only passthrough echoed back on write.
+    #[getter]
+    fn raw_client_data(&self, py: Python<'_>) -> Option<Vec<Py<PyBytes>>> { match &self.inner.kind { core::FormControlKind::Unknown { raw_client_data, .. } => Some(raw_client_data.iter().map(|bytes| PyBytes::new_bound(py, bytes).unbind()).collect()), _ => None } }
+    /// Original BIFF OBJ body carried by an unknown control, required
+    /// for XLS rewrite; read-only passthrough echoed back on write.
+    #[getter]
+    fn raw_obj(&self, py: Python<'_>) -> Option<Py<PyBytes>> { match &self.inner.kind { core::FormControlKind::Unknown { raw_obj, .. } => raw_obj.as_ref().map(|bytes| PyBytes::new_bound(py, bytes).unbind()), _ => None } }
+}
+
+fn drawing_text_input_to_core(value: &Bound<'_, PyAny>) -> PyResult<core::DrawingText> {
+    if let Ok(text) = value.extract::<String>() {
+        return Ok(core::DrawingText::plain(text));
+    }
+    value
+        .extract::<PyRef<'_, PyDrawingText>>()
+        .map(|text| text.inner.clone())
+        .map_err(|_| PyValueError::new_err("caption must be str or DrawingText"))
 }
 
 fn parse_check_state(value: &str) -> PyResult<core::CheckState> {
@@ -2798,6 +3178,7 @@ fn form_control_kind_name(kind: &core::FormControlKind) -> &'static str {
         core::FormControlKind::Dropdown { .. } => "dropdown",
         core::FormControlKind::Scrollbar { .. } => "scrollbar",
         core::FormControlKind::Spinner { .. } => "spinner",
+        core::FormControlKind::Unknown { .. } => "unknown",
     }
 }
 
@@ -3171,6 +3552,7 @@ impl From<&chart::ChartAxis> for PyChartAxis {
 #[pyclass(name = "Chart")]
 #[derive(Clone)]
 pub struct PyChart {
+    pub(crate) inner: duke_sheets::Chart,
     #[pyo3(get)]
     pub chart_type: String,
     #[pyo3(get)]
@@ -3183,8 +3565,6 @@ pub struct PyChart {
     pub value_axis: Option<PyAxis>,
     #[pyo3(get)]
     pub legend: Option<PyLegend>,
-    #[pyo3(get)]
-    pub anchor: PyDrawingAnchor,
     #[pyo3(get)]
     pub data_labels: Option<PyDataLabels>,
     #[pyo3(get)]
@@ -3246,13 +3626,13 @@ impl From<&duke_sheets::Chart> for PyChart {
             other => format!("{:?}", other),
         };
         Self {
+            inner: c.clone(),
             chart_type,
             title: c.title.clone(),
             series: c.series.iter().map(PyDataSeries::from).collect(),
             category_axis: c.category_axis.as_ref().map(PyAxis::from),
             value_axis: c.value_axis.as_ref().map(PyAxis::from),
             legend: c.legend.as_ref().map(PyLegend::from),
-            anchor: PyDrawingAnchor::from(&c.anchor),
             data_labels: c.data_labels.as_ref().map(PyDataLabels::from),
             view_3d: c.view_3d.as_ref().map(PyView3D::from),
             data_table: c.data_table.as_ref().map(PyChartDataTable::from),
@@ -3290,6 +3670,49 @@ impl From<&duke_sheets::Chart> for PyChart {
             series_lines: c.series_lines.as_ref().map(PyChartLines::from),
             up_down_bars: c.up_down_bars.as_ref().map(PyUpDownBars::from),
         }
+    }
+}
+
+fn chart_type_from_python(value: &str) -> PyResult<duke_sheets::ChartType> {
+    use duke_sheets::ChartType;
+    Ok(match value {
+        "ColumnClustered" | "column_clustered" => ChartType::ColumnClustered,
+        "ColumnStacked" | "column_stacked" => ChartType::ColumnStacked,
+        "ColumnPercentStacked" | "column_percent_stacked" => ChartType::ColumnPercentStacked,
+        "BarClustered" | "bar_clustered" => ChartType::BarClustered,
+        "BarStacked" | "bar_stacked" => ChartType::BarStacked,
+        "BarPercentStacked" | "bar_percent_stacked" => ChartType::BarPercentStacked,
+        "Line" | "line" => ChartType::Line,
+        "LineStacked" | "line_stacked" => ChartType::LineStacked,
+        "Pie" | "pie" => ChartType::Pie,
+        "PieExploded" | "pie_exploded" => ChartType::PieExploded,
+        "Doughnut" | "doughnut" => ChartType::Doughnut,
+        "Area" | "area" => ChartType::Area,
+        "AreaStacked" | "area_stacked" => ChartType::AreaStacked,
+        "AreaPercentStacked" | "area_percent_stacked" => ChartType::AreaPercentStacked,
+        "ScatterMarkers" | "scatter_markers" => ChartType::ScatterMarkers,
+        "ScatterSmooth" | "scatter_smooth" => ChartType::ScatterSmooth,
+        "ScatterLines" | "scatter_lines" => ChartType::ScatterLines,
+        "Bubble" | "bubble" => ChartType::Bubble,
+        "Radar" | "radar" => ChartType::Radar,
+        "Stock" | "stock" => ChartType::Stock,
+        "Surface" | "surface" => ChartType::Surface,
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "unsupported chart type {other:?}"
+            )))
+        }
+    })
+}
+
+#[pymethods]
+impl PyChart {
+    #[new]
+    #[pyo3(signature=(chart_type, *, title=None))]
+    fn new(chart_type: &str, title: Option<String>) -> PyResult<Self> {
+        let mut chart = duke_sheets::Chart::new(chart_type_from_python(chart_type)?);
+        chart.title = title;
+        Ok(Self::from(&chart))
     }
 }
 
@@ -4541,6 +4964,7 @@ impl From<&chart::ChartExSeries> for PyChartExSeries {
 #[pyclass(name = "ChartEx")]
 #[derive(Clone)]
 pub struct PyChartEx {
+    pub(crate) inner: chart::ChartEx,
     #[pyo3(get)]
     pub layout: String,
     #[pyo3(get)]
@@ -4557,8 +4981,6 @@ pub struct PyChartEx {
     pub plot_area: PyChartExPlotArea,
     #[pyo3(get)]
     pub legend: Option<PyChartExLegend>,
-    #[pyo3(get)]
-    pub anchor: PyDrawingAnchor,
     #[pyo3(get)]
     pub shape_properties: Option<PyChartShapeProperties>,
     #[pyo3(get)]
@@ -4578,6 +5000,7 @@ impl From<&chart::ChartEx> for PyChartEx {
             .map(|s| chart_ex_layout_to_string(&s.layout))
             .unwrap_or("unknown");
         Self {
+            inner: c.clone(),
             layout: layout.into(),
             version: c.version.clone(),
             feature_list: c.feature_list.clone(),
@@ -4586,7 +5009,6 @@ impl From<&chart::ChartEx> for PyChartEx {
             data: c.data.iter().map(PyChartExData::from).collect(),
             plot_area: PyChartExPlotArea::from(&c.plot_area),
             legend: c.legend.as_ref().map(PyChartExLegend::from),
-            anchor: PyDrawingAnchor::from(&c.anchor),
             shape_properties: c
                 .shape_properties
                 .as_ref()
@@ -4603,56 +5025,73 @@ impl From<&chart::ChartEx> for PyChartEx {
     }
 }
 
-#[pyclass(name = "EmbeddedImage")]
-#[derive(Clone)]
-pub struct PyEmbeddedImage {
-    #[pyo3(get)]
-    pub id: u32,
-    #[pyo3(get)]
-    pub name: String,
-    #[pyo3(get)]
-    pub description: Option<String>,
-    #[pyo3(get)]
-    pub anchor: PyDrawingAnchor,
-    #[pyo3(get)]
-    pub format: String,
-    #[pyo3(get)]
-    pub media_path: String,
-    #[pyo3(get)]
-    pub svg_media_path: Option<String>,
-    #[pyo3(get)]
-    pub width_emu: i64,
-    #[pyo3(get)]
-    pub height_emu: i64,
-    #[pyo3(get)]
-    pub rotation: Option<i32>,
-    #[pyo3(get)]
-    pub flip_h: bool,
-    #[pyo3(get)]
-    pub flip_v: bool,
-    #[pyo3(get)]
-    pub data: Vec<u8>,
-    #[pyo3(get)]
-    pub svg_data: Option<Vec<u8>>,
+fn chart_ex_layout_from_python(value: &str) -> PyResult<chart::ChartExLayout> {
+    Ok(match value {
+        "waterfall" => chart::ChartExLayout::Waterfall,
+        "treemap" => chart::ChartExLayout::Treemap,
+        "sunburst" => chart::ChartExLayout::Sunburst,
+        "funnel" => chart::ChartExLayout::Funnel,
+        "histogram" => chart::ChartExLayout::Histogram,
+        "box_whisker" | "boxWhisker" => chart::ChartExLayout::BoxWhisker,
+        "pareto_line" | "paretoLine" => chart::ChartExLayout::ParetoLine,
+        "region_map" | "regionMap" => chart::ChartExLayout::RegionMap,
+        "clustered_column" | "clusteredColumn" => chart::ChartExLayout::ClusteredColumn,
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "unsupported ChartEx layout {other:?}"
+            )))
+        }
+    })
 }
 
-impl From<&duke_sheets::EmbeddedImage> for PyEmbeddedImage {
-    fn from(img: &duke_sheets::EmbeddedImage) -> Self {
-        PyEmbeddedImage {
-            id: img.id,
-            name: img.name.clone(),
-            description: img.description.clone(),
-            anchor: PyDrawingAnchor::from(&img.anchor),
-            format: img.format.as_str().to_string(),
-            media_path: img.media_path.clone(),
-            svg_media_path: img.svg_media_path.clone(),
-            width_emu: img.width_emu,
-            height_emu: img.height_emu,
-            rotation: img.rotation,
-            flip_h: img.flip_h,
-            flip_v: img.flip_v,
-            data: img.data().to_vec(),
-            svg_data: img.svg_data().map(|b| b.to_vec()),
-        }
+#[pymethods]
+impl PyChartEx {
+    #[new]
+    #[pyo3(signature=(layout, *, title=None, version=None))]
+    fn new(layout: &str, title: Option<String>, version: Option<String>) -> PyResult<Self> {
+        let series = chart::ChartExSeries {
+            layout: chart_ex_layout_from_python(layout)?,
+            unique_id: None,
+            hidden: None,
+            owner_idx: None,
+            format_idx: None,
+            text: None,
+            data_id: 0,
+            data_labels: None,
+            data_points: Vec::new(),
+            layout_properties: None,
+            axis_ids: Vec::new(),
+            value_colors: None,
+            value_color_positions: None,
+            shape_properties: None,
+            extensions: None,
+        };
+        let chart = chart::ChartEx {
+            version,
+            feature_list: None,
+            fallback_img: None,
+            title: title.map(|text| chart::ChartExTitle {
+                text: Some(text),
+                ..Default::default()
+            }),
+            data: Vec::new(),
+            external_data: None,
+            plot_area: chart::ChartExPlotArea {
+                series: vec![series],
+                ..Default::default()
+            },
+            legend: None,
+            shape_properties: None,
+            text_properties: None,
+            color_map_override: None,
+            format_overrides: Vec::new(),
+            print_settings: None,
+            raw_chart_style: None,
+            raw_chart_color_style: None,
+            extensions: None,
+            raw_extensions: std::collections::HashMap::new(),
+            raw_mc_fallback: None,
+        };
+        Ok(Self::from(&chart))
     }
 }

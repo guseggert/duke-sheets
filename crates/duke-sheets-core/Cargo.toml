@@ -12,7 +12,10 @@ thiserror.workspace = true
 ahash.workspace = true
 chrono.workspace = true
 ssfmt.workspace = true
-duke-sheets-chart.workspace = true
+# parse/write expose drawing_part, which the DrawingText/Color
+# conversion helpers in src/drawing.rs need; without them the core
+# crate does not build standalone.
+duke-sheets-chart = { workspace = true, features = ["parse", "write"] }
 serde = { workspace = true, optional = true }
 
 [dev-dependencies]

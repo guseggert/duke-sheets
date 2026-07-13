@@ -166,7 +166,7 @@ fuzz_target!(|data: &[u8]| {
     }
 
     for control in fwb.controls.iter().take(6) {
-        sheet.add_form_control(control.to_control());
+        sheet.add_form_control(control.to_control(), control.anchor());
     }
     let control_count = sheet.form_control_count();
 

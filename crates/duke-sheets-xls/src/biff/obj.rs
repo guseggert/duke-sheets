@@ -31,8 +31,10 @@ pub mod ft {
     /// Terminates an Obj record ("reserved" 4 zero bytes in MS-XLS
     /// 2.4.181; absent for list/dropdown objects).
     pub const END: u16 = 0x0000;
-    /// FtMacro - macro linkage (skipped, never written).
+    /// FtMacro - macro linkage.
     pub const MACRO: u16 = 0x0004;
+    /// FtGmo - group marker (group objects only).
+    pub const GMO: u16 = 0x0006;
     /// FtCf - picture clipboard format.
     pub const CF: u16 = 0x0007;
     /// FtPioGrbit - picture option flags.
@@ -210,9 +212,8 @@ fn obj_fmla_content(rgce: &[u8]) -> XlsResult<Vec<u8>> {
 /// `FtLbsData.fmla`).
 pub fn push_obj_fmla(out: &mut Vec<u8>, rgce: &[u8]) -> XlsResult<()> {
     let content = obj_fmla_content(rgce)?;
-    let content_len = u16::try_from(content.len()).map_err(|_| {
-        XlsError::InvalidFormat("ObjFmla content exceeds u16 length".into())
-    })?;
+    let content_len = u16::try_from(content.len())
+        .map_err(|_| XlsError::InvalidFormat("ObjFmla content exceeds u16 length".into()))?;
     out.extend_from_slice(&content_len.to_le_bytes());
     out.extend_from_slice(&content);
     Ok(())
@@ -398,7 +399,8 @@ impl LbsData {
         if self.sel_type != 0 && self.multi_sel.len() != self.lines as usize {
             return Err(XlsError::InvalidFormat(format!(
                 "FtLbsData bsels has {} entries but cLines is {}",
-                self.multi_sel.len(), self.lines
+                self.multi_sel.len(),
+                self.lines
             )));
         }
         let mut content = Vec::new();
@@ -470,7 +472,9 @@ impl LbsData {
                 .checked_add(char_bytes)
                 .ok_or_else(|| XlsError::Parse("FtLbsData string offset overflow".into()))?;
             if pos > data.len() {
-                return Err(XlsError::Parse("FtLbsData dropdown string truncated".into()));
+                return Err(XlsError::Parse(
+                    "FtLbsData dropdown string truncated".into(),
+                ));
             }
             let str_bytes = 3usize
                 .checked_add(char_bytes)
@@ -480,7 +484,9 @@ impl LbsData {
                     .checked_add(1)
                     .ok_or_else(|| XlsError::Parse("FtLbsData padding overflow".into()))?;
                 if pos > data.len() {
-                    return Err(XlsError::Parse("FtLbsData dropdown padding truncated".into()));
+                    return Err(XlsError::Parse(
+                        "FtLbsData dropdown padding truncated".into(),
+                    ));
                 }
             }
             drop = Some(DropData {
@@ -515,7 +521,11 @@ impl LbsData {
                 match read_u8(data, &mut pos)? {
                     0 => multi_sel.push(false),
                     1 => multi_sel.push(true),
-                    _ => return Err(XlsError::Parse("FtLbsData bsels value is not Boolean".into())),
+                    _ => {
+                        return Err(XlsError::Parse(
+                            "FtLbsData bsels value is not Boolean".into(),
+                        ))
+                    }
                 }
             }
         }
@@ -599,12 +609,16 @@ pub struct ParsedObj {
     pub sbs: Option<SbsData>,
     /// rgce of the cell-link ObjLinkFmla.
     pub link_rgce: Option<Vec<u8>>,
+    /// rgce of the FtMacro ObjFmla.
+    pub macro_rgce: Option<Vec<u8>>,
     /// List/dropdown data from FtLbsData.
     pub lbs: Option<LbsData>,
     /// Mandatory FtLbsData existed but was malformed.
     pub lbs_malformed: bool,
     /// fNo3d from FtGboData (group box only).
     pub gbo_no_3d: Option<bool>,
+    /// Original OBJ record body for unsupported-control passthrough.
+    pub raw_body: Vec<u8>,
 }
 
 /// Walk an Obj record body into a [`ParsedObj`].
@@ -621,6 +635,7 @@ pub fn parse_obj(body: &[u8]) -> XlsResult<ParsedObj> {
         ot: cmo.ot,
         id: cmo.id,
         grbit: cmo.grbit,
+        raw_body: body.to_vec(),
         ..ParsedObj::default()
     };
 
@@ -643,10 +658,8 @@ pub fn parse_obj(body: &[u8]) -> XlsResult<ParsedObj> {
             ft::END => break,
             ft::CBLS_DATA => {
                 if payload.len() >= 8 {
-                    parsed.checked =
-                        Some(u16::from_le_bytes([payload[0], payload[1]]));
-                    parsed.cbls_no_3d =
-                        u16::from_le_bytes([payload[6], payload[7]]) & 0x0001 != 0;
+                    parsed.checked = Some(u16::from_le_bytes([payload[0], payload[1]]));
+                    parsed.cbls_no_3d = u16::from_le_bytes([payload[6], payload[7]]) & 0x0001 != 0;
                 }
             }
             ft::RBO_DATA => {
@@ -664,13 +677,14 @@ pub fn parse_obj(body: &[u8]) -> XlsResult<ParsedObj> {
             ft::CBLS_FMLA | ft::SBS_FMLA => {
                 parsed.link_rgce = rgce_from_fmla_payload(payload);
             }
+            ft::MACRO => parsed.macro_rgce = rgce_from_fmla_payload(payload),
             ft::GBO_DATA => {
                 if payload.len() >= 6 {
                     parsed.gbo_no_3d =
                         Some(u16::from_le_bytes([payload[4], payload[5]]) & 0x0001 != 0);
                 }
             }
-            // ft::MACRO, ft::CBLS, ft::RBO, pictures, unknown: skip.
+            // ft::CBLS, ft::RBO, pictures, unknown: skip.
             _ => {}
         }
         pos += cb;
@@ -959,20 +973,27 @@ mod tests {
 
     #[test]
     fn skips_macro_subrecord() {
-        // ftCmo + ftMacro (ObjFmla with PtgRef) + ftEnd: macro must be
-        // skipped via its cbFmla framing without derailing the walk.
+        // MS-XLS 2.4.181 places FtMacro after cbls/rbo/sbs; build a
+        // checkbox OBJ in that order and verify the walk crosses the
+        // macro via its cbFmla framing without derailing.
         let mut body = Vec::new();
         FtCmo {
-            ot: ot::BUTTON,
+            ot: ot::CHECKBOX,
             id: 3,
             grbit: 0x4001,
         }
         .write_to(&mut body);
-        push_fmla_subrecord(&mut body, ft::MACRO, &[0x23, 0x01, 0x00, 0x00, 0x00])
-            .unwrap();
+        push_cbls(&mut body, 1).unwrap();
+        push_fmla_subrecord(&mut body, ft::MACRO, &[0x23, 0x01, 0x00, 0x00, 0x00]).unwrap();
+        push_cbls_data(&mut body, 1, false).unwrap();
         push_end(&mut body).unwrap();
         let parsed = parse_obj(&body).unwrap();
-        assert_eq!(parsed.ot, ot::BUTTON);
+        assert_eq!(parsed.ot, ot::CHECKBOX);
+        assert_eq!(
+            parsed.macro_rgce.as_deref(),
+            Some(&[0x23, 0x01, 0x00, 0x00, 0x00][..])
+        );
+        assert_eq!(parsed.checked, Some(1), "walk continues past the macro");
         assert!(parsed.link_rgce.is_none());
     }
 
@@ -983,8 +1004,8 @@ mod tests {
         assert_eq!(
             out,
             vec![
-                0x0A, 0x00, 0x0C, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                0x00, 0x03, 0x00
+                0x0A, 0x00, 0x0C, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x03, 0x00
             ]
         );
 
@@ -1004,10 +1025,7 @@ mod tests {
 
         let mut out = Vec::new();
         push_rbo_data(&mut out, 9, true).unwrap();
-        assert_eq!(
-            out,
-            vec![0x11, 0x00, 0x04, 0x00, 0x09, 0x00, 0x01, 0x00]
-        );
+        assert_eq!(out, vec![0x11, 0x00, 0x04, 0x00, 0x09, 0x00, 0x01, 0x00]);
 
         let mut out = Vec::new();
         push_gbo_data(&mut out, true).unwrap();
@@ -1026,7 +1044,10 @@ mod tests {
 
         let err = push_obj_fmla(&mut out, &vec![0u8; 32_768]).unwrap_err();
         assert!(err.to_string().contains("maximum is 32767"));
-        assert!(out.is_empty(), "failed formula framing must not mutate output");
+        assert!(
+            out.is_empty(),
+            "failed formula framing must not mutate output"
+        );
     }
 
     #[test]

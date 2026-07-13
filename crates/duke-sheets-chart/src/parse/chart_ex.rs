@@ -6,12 +6,12 @@ use quick_xml::Writer;
 
 use crate::chart_ex::*;
 use crate::error::{ChartParseError, ChartParseResult};
-use crate::{ChartColor, ChartLine, ChartShapeProperties, DrawingAnchor, NumberFormat};
+use crate::{ChartColor, ChartLine, ChartShapeProperties, NumberFormat};
 
 /// Parse chart-ex XML from a reader and return a `ChartEx`.
 ///
-/// The anchor will be set to `DrawingAnchor::default()`; callers should
-/// override it from the drawing XML.
+/// Placement comes from the wrapping drawing object's anchor, not
+/// the chart XML.
 pub fn parse_chart_ex_xml<R: Read>(reader: R) -> ChartParseResult<ChartEx> {
     let buf_reader = BufReader::new(reader);
     let mut xml_reader = Reader::from_reader(buf_reader);
@@ -25,7 +25,6 @@ pub fn parse_chart_ex_xml<R: Read>(reader: R) -> ChartParseResult<ChartEx> {
         data: parsed.data,
         plot_area: parsed.plot_area,
         legend: parsed.legend,
-        anchor: DrawingAnchor::default(),
         shape_properties: parsed.shape_properties,
         text_properties: None,
         color_map_override: None,

@@ -52,7 +52,7 @@ fn parse_xls_variant(
 }
 
 mod types;
-mod form_controls;
+mod drawings;
 mod workbook_read;
 mod worksheet_read;
 
@@ -193,60 +193,387 @@ export class RowIterator implements IterableIterator<JsRow> {
   next(): IteratorResult<JsRow>;
 }
 
-/**
- * Flat two-cell anchor. Controls read from files with one-cell or
- * absolute anchors are flattened to from/to markers at Excel's
- * default cell metrics, with `editAs` preserving the original sizing
- * behavior.
- */
-export interface FormControlAnchor {
-  fromCol: number;
-  fromRow: number;
-  fromColOffset: number;
-  fromRowOffset: number;
-  toCol: number;
-  toRow: number;
-  toColOffset: number;
-  toRowOffset: number;
-  editAs: "twoCell" | "oneCell" | "absolute";
+export interface DrawingMeta {
+  name?: string;
+  hidden: boolean;
+  locked: boolean;
+  printable: boolean;
+  altText?: string;
+  title?: string;
 }
 
-/**
- * Kind-specific form-control data. List box and dropdown `selected`
- * item indexes are zero-based; a linked cell still receives Excel's
- * one-based value. `firstInGroup` is read-side information: writers
- * recompute radio grouping from group-box containment and mark each
- * group's first radio, so input values are ignored.
- */
+export interface DrawingMetaInput {
+  name?: string;
+  hidden?: boolean;
+  locked?: boolean;
+  printable?: boolean;
+  altText?: string;
+  title?: string;
+}
+
+export interface DrawingCellMarker {
+  col: number;
+  row: number;
+  colOffsetEmu?: number;
+  rowOffsetEmu?: number;
+}
+
+export type DrawingAnchor =
+  | { type: "twoCell"; from: DrawingCellMarker; to: DrawingCellMarker; editAs?: "twoCell" | "oneCell" | "absolute" }
+  | { type: "oneCell"; from: DrawingCellMarker; widthEmu: number; heightEmu: number }
+  | { type: "absolute"; xEmu: number; yEmu: number; widthEmu: number; heightEmu: number };
+
+export interface DrawingChildTransform {
+  xEmu?: number;
+  yEmu?: number;
+  cxEmu?: number;
+  cyEmu?: number;
+  rotation?: number;
+  flipH?: boolean;
+  flipV?: boolean;
+}
+
+export interface DrawingGroupTransform extends DrawingChildTransform {
+  childXEmu?: number;
+  childYEmu?: number;
+  childCxEmu?: number;
+  childCyEmu?: number;
+}
+
+export type DrawingPlacement =
+  | { anchor: DrawingAnchor; transform?: never }
+  | { anchor?: never; transform: DrawingChildTransform };
+
+export type DrawingColor =
+  | { colorType: "auto" }
+  | { colorType: "rgb"; r: number; g: number; b: number }
+  | { colorType: "argb"; a: number; r: number; g: number; b: number }
+  | { colorType: "theme"; index: number; tint: number }
+  | { colorType: "indexed"; index: number };
+
+export interface DrawingRunFont {
+  bold?: boolean;
+  italic?: boolean;
+  size?: number;
+  color?: DrawingColor;
+  name?: string;
+  underline?: "none" | "single" | "double" | "singleAccounting" | "doubleAccounting";
+  strikethrough?: boolean;
+  verticalAlign?: "baseline" | "superscript" | "subscript";
+  family?: number;
+  charset?: number;
+  scheme?: string;
+}
+
+export interface DrawingText {
+  runs: Array<{ text: string; font?: DrawingRunFont }>;
+  horizontalAlignment?: "general" | "left" | "center" | "right" | "fill" | "justify" | "centerContinuous" | "distributed";
+  verticalAlignment?: "top" | "center" | "bottom" | "justify" | "distributed";
+}
+
 export type FormControlKind =
-  | { kind: "button"; caption: string }
-  | { kind: "checkbox"; caption: string; state: "unchecked" | "checked" | "mixed"; cellLink?: string; no3D: boolean }
-  | { kind: "optionButton"; caption: string; state: "unchecked" | "checked"; cellLink?: string; firstInGroup: boolean; no3D: boolean }
-  | { kind: "label"; caption: string }
-  | { kind: "groupBox"; caption: string; no3D: boolean }
+  | { kind: "button"; caption: DrawingText }
+  | { kind: "checkbox"; caption: DrawingText; state: "unchecked" | "checked" | "mixed"; cellLink?: string; no3D: boolean }
+  /**
+   * `firstInGroup` reports whether this radio heads its group; writers
+   * recompute it from group-box containment, so it is read-side
+   * information. `"mixed"` never validates on write but can surface
+   * when reading hostile files.
+   */
+  | { kind: "optionButton"; caption: DrawingText; state: "unchecked" | "checked" | "mixed"; cellLink?: string; firstInGroup: boolean; no3D: boolean }
+  | { kind: "label"; caption: DrawingText }
+  | { kind: "groupBox"; caption: DrawingText; no3D: boolean }
   | { kind: "listBox"; inputRange?: string; cellLink?: string; selection: "single" | "multi" | "extend"; selected: number[]; no3D: boolean }
   | { kind: "dropdown"; inputRange?: string; cellLink?: string; selected?: number; lines: number; no3D: boolean }
   | { kind: "scrollbar"; value: number; min: number; max: number; increment: number; page: number; horizontal: boolean; cellLink?: string }
-  | { kind: "spinner"; value: number; min: number; max: number; increment: number; cellLink?: string };
+  | { kind: "spinner"; value: number; min: number; max: number; increment: number; cellLink?: string }
+  /**
+   * Unsupported legacy control. `rawProperties` (unmodeled XLSX
+   * formControlPr attributes), `rawClientData` (unmodeled VML ClientData
+   * fragments), and `rawObj` (original BIFF OBJ body) are opaque internal
+   * passthrough data; echo them back unchanged so a read -> setDrawing
+   * round trip preserves the control on rewrite.
+   */
+  | { kind: "unknown"; objectType: string; legacyObjectType?: number; caption: DrawingText; rawProperties: Array<[string, string]>; rawClientData: number[][]; rawObj?: number[] };
 
 export type FormControlKindInput =
-  | Exclude<FormControlKind, { kind: "optionButton" }>
-  | { kind: "optionButton"; caption: string; state: "unchecked" | "checked"; cellLink?: string; firstInGroup?: boolean; no3D: boolean };
+  | { kind: "button"; caption: DrawingText }
+  | { kind: "checkbox"; caption: DrawingText; state: "unchecked" | "checked" | "mixed"; cellLink?: string; no3D?: boolean }
+  /** `firstInGroup` is ignored on input; writers recompute it from group-box containment. */
+  | { kind: "optionButton"; caption: DrawingText; state: "unchecked" | "checked"; cellLink?: string; firstInGroup?: boolean; no3D?: boolean }
+  | { kind: "label"; caption: DrawingText }
+  | { kind: "groupBox"; caption: DrawingText; no3D?: boolean }
+  | { kind: "listBox"; inputRange?: string; cellLink?: string; selection: "single" | "multi" | "extend"; selected?: number[]; no3D?: boolean }
+  | { kind: "dropdown"; inputRange?: string; cellLink?: string; selected?: number; lines: number; no3D?: boolean }
+  | { kind: "scrollbar"; value: number; min: number; max: number; increment: number; page: number; horizontal?: boolean; cellLink?: string }
+  | { kind: "spinner"; value: number; min: number; max: number; increment: number; cellLink?: string }
+  /**
+   * The raw* fields are opaque internal passthrough data (see
+   * FormControlKind); omit them for hand-authored controls and echo them
+   * back unchanged when rewriting a control read from a file.
+   */
+  | { kind: "unknown"; objectType: string; legacyObjectType?: number; caption?: DrawingText; rawProperties?: Array<[string, string]>; rawClientData?: Array<Uint8Array | number[]>; rawObj?: Uint8Array | number[] };
 
-export interface FormControl {
-  name?: string;
-  anchor: FormControlAnchor;
+export interface FormControlPayload {
   kind: FormControlKind;
-  locked: boolean;
-  printable: boolean;
+  macroName?: string;
 }
 
-export interface FormControlInput {
-  name?: string;
-  anchor: FormControlAnchor;
+export interface FormControlInputPayload {
   kind: FormControlKindInput;
-  locked?: boolean;
-  printable?: boolean;
+  macroName?: string;
+}
+
+export interface DrawingImage {
+  format: "png" | "jpeg" | "gif" | "bmp" | "emf" | "wmf" | "tiff" | "svg";
+  mediaPath: string;
+  svgMediaPath?: string;
+  widthEmu: number;
+  heightEmu: number;
+  rotation?: number;
+  flipH: boolean;
+  flipV: boolean;
+}
+
+export interface DrawingImageInput extends Partial<Omit<DrawingImage, "format" | "widthEmu" | "heightEmu">> {
+  format: DrawingImage["format"];
+  widthEmu: number;
+  heightEmu: number;
+  data: Uint8Array | number[];
+  svgData?: Uint8Array | number[];
+}
+
+export type DrawingShapeFill =
+  | { kind: "none" }
+  | { kind: "solid"; color: DrawingColor };
+
+export interface DrawingShape {
+  geometry: string;
+  fill: DrawingShapeFill;
+  line: { color?: DrawingColor; widthEmu?: number; dashStyle?: string; noFill: boolean };
+  text?: DrawingText;
+  rotation: number;
+  flipH: boolean;
+  flipV: boolean;
+}
+
+export interface DrawingShapeInput extends Partial<DrawingShape> {
+  geometry?: string;
+}
+
+export interface DrawingComment {
+  row: number;
+  col: number;
+  author: string;
+  text: string;
+}
+
+export type ChartDataReference =
+  | { refType: "formula"; formula: string }
+  | { refType: "numbers"; numbers: number[] }
+  | { refType: "strings"; strings: string[] };
+
+export interface ChartShapeProperties {
+  solidFillHex?: string;
+  noFill: boolean;
+  lineWidth?: number;
+  lineColorHex?: string;
+  lineNoFill: boolean;
+  lineDashStyle?: string;
+}
+
+export interface ChartNumberFormat {
+  formatCode: string;
+  sourceLinked?: boolean;
+}
+
+export interface ChartDataLabels {
+  showLegendKey?: boolean;
+  showValue?: boolean;
+  showCategoryName?: boolean;
+  showSeriesName?: boolean;
+  showPercent?: boolean;
+  showBubbleSize?: boolean;
+  separator?: string;
+  position?: string;
+  numberFormat?: ChartNumberFormat;
+  showLeaderLines?: boolean;
+}
+
+export interface ChartDataSeries {
+  name?: string;
+  values: ChartDataReference;
+  categories?: ChartDataReference;
+  dataLabels?: ChartDataLabels;
+  trendline?: { trendlineType: string; name?: string; order?: number; period?: number; forward?: number; backward?: number; intercept?: number; displayRSquared?: boolean; displayEquation?: boolean };
+  errorBars?: { direction: string; barType: string; valueType: string; value?: number; noEndCap?: boolean };
+  marker?: { symbol?: string; size?: number };
+  dataPoints: Array<{ index: number; marker?: { symbol?: string; size?: number }; explosion?: number; shapeProperties?: ChartShapeProperties }>;
+  smooth?: boolean;
+  explosion?: number;
+  invertIfNegative?: boolean;
+  shapeProperties?: ChartShapeProperties;
+}
+
+export interface ChartAxis {
+  title?: string;
+  minimum?: number;
+  maximum?: number;
+  majorUnit?: number;
+  minorUnit?: number;
+  position: "bottom" | "top" | "left" | "right";
+  numberFormat?: ChartNumberFormat;
+  majorGridlines: boolean;
+  minorGridlines: boolean;
+  majorGridlinesShapeProperties?: ChartShapeProperties;
+  minorGridlinesShapeProperties?: ChartShapeProperties;
+  majorTickMark?: string;
+  minorTickMark?: string;
+  labelPosition?: string;
+  delete?: boolean;
+  crosses?: string;
+  crossBetween?: string;
+  shapeProperties?: ChartShapeProperties;
+}
+
+export interface Chart {
+  chartType: string;
+  title?: string;
+  series: ChartDataSeries[];
+  categoryAxis?: ChartAxis;
+  valueAxis?: ChartAxis;
+  legend?: { position: string; overlay: boolean };
+  dataLabels?: ChartDataLabels;
+  view3D?: { rotateX?: number; rotateY?: number; depthPercent?: number; heightPercent?: number; perspective?: number; rightAngleAxes?: boolean };
+  dataTable?: { showHorizontalBorder?: boolean; showVerticalBorder?: boolean; showOutline?: boolean; showKeys?: boolean };
+  displayBlanksAs?: "gap" | "span" | "zero";
+  plotVisibleOnly?: boolean;
+  layout?: { manualLayout?: { x?: number; y?: number; width?: number; height?: number } };
+  shapeProperties?: ChartShapeProperties;
+  is3D: boolean;
+  varyColors?: boolean;
+  gapWidth?: number;
+  overlap?: number;
+  firstSliceAngle?: number;
+  holeSize?: number;
+  bubbleScale?: number;
+  showNegativeBubbles?: boolean;
+  autoTitleDeleted?: boolean;
+  roundedCorners?: boolean;
+  showDlblsOverMax?: boolean;
+  wireframe?: boolean;
+  radarStyle?: string;
+  typeGroups: Array<{ chartType: string; is3D: boolean; series: ChartDataSeries[]; dataLabels?: ChartDataLabels; varyColors?: boolean; gapWidth?: number; overlap?: number; firstSliceAngle?: number; holeSize?: number; bubbleScale?: number; showNegativeBubbles?: boolean; radarStyle?: string; wireframe?: boolean; axisIds: number[] }>;
+  axes: Array<{ id: number; crossId: number; axis: ChartAxis }>;
+}
+
+export interface ChartSeriesInput {
+  name?: string;
+  values: ChartDataReference;
+  categories?: ChartDataReference;
+}
+
+/** Exactly the chart fields accepted when authoring; all other Chart fields are read-only. */
+export interface ChartInput {
+  chartType: string;
+  title?: string;
+  series?: ChartSeriesInput[];
+  is3D?: boolean;
+  varyColors?: boolean;
+  gapWidth?: number;
+  overlap?: number;
+}
+
+export interface ChartExTitle {
+  text?: string;
+  position?: string;
+  align?: string;
+  overlay?: boolean;
+  offset?: { top?: number; left?: number };
+  shapeProperties?: ChartShapeProperties;
+}
+
+export interface ChartExSeries {
+  layout: string;
+  dataId: number;
+  uniqueId?: string;
+  hidden?: boolean;
+  ownerIdx?: number;
+  formatIdx?: number;
+  text?: { formula?: string; value?: string };
+  dataLabels?: { position?: string; visibilitySeriesName?: boolean; visibilityCategoryName?: boolean; visibilityValue?: boolean; numberFormat?: ChartNumberFormat; separator?: string; shapeProperties?: ChartShapeProperties; hiddenLabels: number[] };
+  dataPoints: Array<{ idx: number; shapeProperties?: ChartShapeProperties }>;
+  axisIds: number[];
+  valueColors: boolean;
+  shapeProperties?: ChartShapeProperties;
+}
+
+export interface ChartEx {
+  layout: string;
+  version?: string;
+  featureList?: string;
+  fallbackImg?: string;
+  title?: ChartExTitle;
+  data: Array<{ id: number; dimensions: Array<{ dimType: string; formula?: string; nfFormula?: string }> }>;
+  plotArea: { plotSurface?: ChartShapeProperties; series: ChartExSeries[]; axes: Array<{ id: number; hidden?: boolean; scaling: { scalingType: string; gapWidth?: number; min?: number; max?: number; majorUnit?: number; minorUnit?: number }; tickLabels: boolean; shapeProperties?: ChartShapeProperties }>; shapeProperties?: ChartShapeProperties };
+  legend?: { position?: string; align?: string; overlay?: boolean; offset?: { top?: number; left?: number }; shapeProperties?: ChartShapeProperties };
+  shapeProperties?: ChartShapeProperties;
+  formatOverrides: Array<{ idx: number; shapeProperties?: ChartShapeProperties }>;
+  externalDataRelId?: string;
+  externalDataAutoUpdate?: boolean;
+}
+
+export interface ChartExTitleInput {
+  text?: string;
+  position?: string;
+  align?: string;
+  overlay?: boolean;
+}
+
+/** Exactly the ChartEx fields accepted when authoring; all other ChartEx fields are read-only. */
+export interface ChartExInput {
+  layout: string;
+  version?: string;
+  featureList?: string;
+  fallbackImg?: string;
+  title?: ChartExTitleInput;
+}
+
+export interface RawDrawingMetadata {
+  byteLength: number;
+  relationships: Array<{ id: string; relType: string; target: string; external: boolean; hasPart: boolean }>;
+}
+
+type DrawingNode = DrawingMeta & DrawingPlacement & { drawingPath: number[] };
+
+export type ImageDrawing = DrawingNode & { kind: "image"; image: DrawingImage };
+export type ChartDrawing = DrawingNode & { kind: "chart"; chart: Chart };
+export type ChartExDrawing = DrawingNode & { kind: "chartEx"; chartEx: ChartEx };
+export type FormControlDrawing = DrawingNode & { kind: "formControl"; formControl: FormControlPayload };
+export type CommentDrawing = DrawingNode & { kind: "comment"; comment: DrawingComment };
+export type ShapeDrawing = DrawingNode & { kind: "shape"; shape: DrawingShape };
+export type GroupDrawing = DrawingNode & { kind: "group"; group: { groupTransform: DrawingGroupTransform; children: Drawing[] } };
+export type RawDrawing = DrawingNode & { kind: "raw"; raw: RawDrawingMetadata };
+
+export type Drawing = ImageDrawing | ChartDrawing | ChartExDrawing | FormControlDrawing | CommentDrawing | ShapeDrawing | GroupDrawing | RawDrawing;
+
+type DrawingInputPlacement =
+  | { anchor: DrawingAnchor; transform?: never }
+  | { anchor?: never; transform: DrawingChildTransform };
+
+export type DrawingInput = DrawingMetaInput & DrawingInputPlacement & (
+  | { kind: "image"; image: DrawingImageInput }
+  | { kind: "chart"; chart: ChartInput }
+  | { kind: "chartEx"; chartEx: ChartExInput }
+  | { kind: "formControl"; formControl: FormControlInputPayload }
+  | { kind: "comment"; comment: DrawingComment }
+  | { kind: "shape"; shape: DrawingShapeInput }
+  | { kind: "group"; group: { groupTransform?: DrawingGroupTransform; children?: DrawingInput[] } }
+);
+
+export interface FormControlInteractionResult {
+  controlsChanged: number;
+  linkedCellsChanged: number;
 }
 
 export interface Worksheet {
@@ -254,11 +581,29 @@ export interface Worksheet {
   setCellStyle(address: string, style: StyleInput): void;
   setCellStyleAt(row: number, col: number, style: StyleInput): void;
   setRangeStyle(range: string, style: StyleInput): void;
-  readonly formControls: FormControl[];
+  readonly drawings: Drawing[];
+  readonly formControls: FormControlDrawing[];
   readonly formControlCount: number;
-  addFormControl(control: FormControlInput): number;
-  setFormControl(index: number, control: FormControlInput): void;
-  removeFormControl(index: number): void;
+  readonly images: ImageDrawing[];
+  readonly imageCount: number;
+  readonly charts: ChartDrawing[];
+  readonly chartCount: number;
+  readonly chartsEx: ChartExDrawing[];
+  readonly chartExCount: number;
+  addDrawing(drawing: DrawingInput & { anchor: DrawingAnchor }): number;
+  /** Drawing paths are positional; mutating the list invalidates previously returned paths. */
+  insertDrawing(index: number, drawing: DrawingInput & { anchor: DrawingAnchor }): void;
+  /** Drawing paths are positional; mutating the list invalidates previously returned paths. */
+  setDrawing(path: number[], drawing: DrawingInput): void;
+  /** Drawing paths are positional; mutating the list invalidates previously returned paths. */
+  removeDrawing(path: number[]): void;
+  /** Drawing paths are positional; mutating the list invalidates previously returned paths. */
+  moveDrawing(from: number, to: number): void;
+  /** Paths are positional; mutating the drawing list invalidates previously returned paths. */
+  drawingImageData(path: number[]): Uint8Array;
+  /** Paths are positional; mutating the drawing list invalidates previously returned paths. */
+  drawingSvgData(path: number[]): Uint8Array | undefined;
+  setFormControlCheckState(path: number[], state: "unchecked" | "checked" | "mixed"): FormControlInteractionResult;
 }
 "#;
 
@@ -305,7 +650,12 @@ pub(crate) fn to_js_error(e: impl std::fmt::Display) -> JsError {
 }
 
 pub(crate) fn to_js_value<T: Serialize>(value: &T) -> Result<JsValue, JsError> {
-    serde_wasm_bindgen::to_value(value).map_err(to_js_error)
+    // Emit plain objects rather than ES2015 Maps for map-shaped output
+    // (serde flattens structs, e.g. drawing nodes, through serialize_map),
+    // matching the declared TypeScript types.
+    value
+        .serialize(&serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true))
+        .map_err(to_js_error)
 }
 
 fn cell_error_to_string(e: &CellError) -> &'static str {

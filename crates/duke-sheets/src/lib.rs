@@ -47,9 +47,12 @@ pub use calculation::{CalculationOptions, CalculationStats, WorkbookCalculationE
 // Re-export core types
 pub use duke_sheets_core::auto_filter::{ColorFilter, DynamicFilter, DynamicFilterType};
 pub use duke_sheets_core::{
+    default_comment_anchor,
     hash_legacy_protection_password,
 
+    radio_groups,
     rich_text_to_plain,
+    validate_anchor,
     Alignment,
     AutoFilter,
     BorderEdge,
@@ -75,13 +78,25 @@ pub use duke_sheets_core::{
     ChartSheet,
     // Form control types
     CheckState,
+    // Drawing types
+    ChildTransform,
     Color,
     ColumnFilter,
+    CommentRef,
     ConditionalFormatRule,
+    ControlText,
     // Data validation types
     CustomFilterCondition,
     CustomFilters,
     DataValidation,
+    DrawingKind,
+    DrawingMeta,
+    DrawingNodeMut,
+    DrawingNodeRef,
+    DrawingObject,
+    DrawingPath,
+    DrawingText,
+    Drawn,
     // Error types
     Error,
     FillStyle,
@@ -89,9 +104,13 @@ pub use duke_sheets_core::{
     FilterOperator,
     FontStyle,
     FormControl,
+    FormControlInteractionResult,
     FormControlKind,
     // Sheet-level types
     FreezePanes,
+    Group,
+    GroupChild,
+    GroupTransform,
     HorizontalAlignment,
     Hyperlink,
     IconSetStyle,
@@ -104,12 +123,20 @@ pub use duke_sheets_core::{
     PageBreak,
     PageOrientation,
     PageSetup,
+    PlacedControl,
     ProtectedRange,
+    RawDrawing,
+    RawRel,
+    RectEmu,
     Result,
 
     // Rich text types
     RichTextRun,
     RunFont,
+    Shape,
+    ShapeFill,
+    ShapeGeometry,
+    ShapeLine,
     SheetProtection,
     SheetSlot,
     // Style types
@@ -150,8 +177,9 @@ pub use duke_sheets_formula::{
 
 // Re-export chart types
 pub use duke_sheets_chart::{
-    Axis, AxisPosition, CellMarker, Chart, ChartType, DataReference, DataSeries, DrawingAnchor,
-    EditAs, EmbeddedImage, ImageFormat, Legend,
+    column_width_to_emu, row_height_to_emu, Axis, AxisPosition, CellMarker, Chart, ChartEx,
+    ChartType, DataReference, DataSeries, DrawingAnchor, DrawingMetrics, EditAs, EmbeddedImage,
+    ImageFormat, Legend,
 };
 
 // Re-export I/O types

@@ -17,7 +17,8 @@
 
 use std::io::Cursor;
 
-use duke_sheets_core::{CellComment, Workbook};
+use duke_sheets_chart::{CellMarker, DrawingAnchor};
+use duke_sheets_core::{CellComment, DrawingObject, Workbook};
 use duke_sheets_xls::{XlsReader, XlsWriter};
 
 const SHARED_DIR: &str = "/tmp/duke-sheets-urp";
@@ -32,7 +33,8 @@ fn single_comment_round_trips() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "anchor").expect("set A1");
-    ws.set_comment_at(0, 0, CellComment::new("Alice", "This is a note"));
+    ws.set_comment_at(0, 0, CellComment::new("Alice", "This is a note"))
+        .expect("set comment");
 
     let parsed = write_then_read(&wb);
     let ws_in = parsed.worksheet(0).unwrap();
@@ -49,7 +51,8 @@ fn comment_without_anchor_cell_value_round_trips() {
     // cell. The OBJ/TXO/NOTE chain must still link correctly.
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
-    ws.set_comment_at(5, 3, CellComment::new("Bob", "Empty-cell note"));
+    ws.set_comment_at(5, 3, CellComment::new("Bob", "Empty-cell note"))
+        .expect("set comment");
 
     let parsed = write_then_read(&wb);
     let ws_in = parsed.worksheet(0).unwrap();
@@ -60,13 +63,51 @@ fn comment_without_anchor_cell_value_round_trips() {
     assert_eq!(c.author, "Bob");
 }
 
+// features: Comment positioning (anchor)
+#[test]
+fn custom_comment_anchor_round_trips() {
+    // A user-moved comment popup must keep its anchor instead of
+    // being reset to Excel's default placement. Offsets are exact
+    // under the ClientAnchor quantisation (multiples of 9,525 EMU for
+    // dx at the 609,600 EMU default column, 47,625 EMU for dy at the
+    // 190,500 EMU default row), so the round-trip is exact.
+    let custom = DrawingAnchor::TwoCell {
+        from: CellMarker {
+            col: 8,
+            col_offset_emu: 19_050, // 32/1024 of 609,600
+            row: 2,
+            row_offset_emu: 47_625, // 64/256 of 190,500
+        },
+        to: CellMarker {
+            col: 12,
+            col_offset_emu: 295_275, // 496/1024 of 609,600
+            row: 9,
+            row_offset_emu: 142_875, // 192/256 of 190,500
+        },
+        edit_as: None,
+    };
+    let mut wb = Workbook::new();
+    wb.worksheet_mut(0).unwrap().add_drawing(
+        DrawingObject::comment(1, 1, CellComment::new("Alice", "moved popup"))
+            .with_anchor(custom.clone()),
+    );
+
+    let parsed = write_then_read(&wb);
+    let ws_in = parsed.worksheet(0).unwrap();
+    let comment = ws_in.comments_drawn().next().expect("comment survives");
+    assert_eq!((comment.row, comment.col), (1, 1));
+    assert_eq!(comment.comment.text, "moved popup");
+    assert_eq!(comment.object.anchor, custom);
+}
+
 #[test]
 fn multiple_comments_on_same_sheet_round_trip() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
-    ws.set_comment_at(0, 0, CellComment::new("Alice", "First"));
-    ws.set_comment_at(2, 1, CellComment::new("Alice", "Second"));
-    ws.set_comment_at(10, 5, CellComment::new("Charlie", "Third"));
+    ws.set_comment_at(0, 0, CellComment::new("Alice", "First")).expect("set comment");
+    ws.set_comment_at(2, 1, CellComment::new("Alice", "Second")).expect("set comment");
+    ws.set_comment_at(10, 5, CellComment::new("Charlie", "Third"))
+        .expect("set comment");
 
     let parsed = write_then_read(&wb);
     let ws_in = parsed.worksheet(0).unwrap();
@@ -83,7 +124,8 @@ fn unicode_comment_text_round_trips() {
     // (high-byte flag in the TXO CONTINUE).
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
-    ws.set_comment_at(0, 0, CellComment::new("作者", "こんにちは 🌸"));
+    ws.set_comment_at(0, 0, CellComment::new("作者", "こんにちは 🌸"))
+        .expect("set comment");
 
     let parsed = write_then_read(&wb);
     let c = parsed.worksheet(0).unwrap().comment_at(0, 0).unwrap();
@@ -100,10 +142,10 @@ fn comments_on_multiple_sheets_round_trip() {
 
     wb.worksheet_mut(0)
         .unwrap()
-        .set_comment_at(0, 0, CellComment::new("a", "sheet 1 comment"));
+        .set_comment_at(0, 0, CellComment::new("a", "sheet 1 comment")).expect("set comment");
     wb.worksheet_mut(2)
         .unwrap()
-        .set_comment_at(4, 4, CellComment::new("c", "sheet 3 comment"));
+        .set_comment_at(4, 4, CellComment::new("c", "sheet 3 comment")).expect("set comment");
 
     let parsed = write_then_read(&wb);
     assert_eq!(
@@ -133,9 +175,11 @@ fn lo_can_open_xls_with_comments_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", 42.0).expect("A1");
-    ws.set_comment_at(0, 0, CellComment::new("Alice", "Loadable note"));
+    ws.set_comment_at(0, 0, CellComment::new("Alice", "Loadable note"))
+        .expect("set comment");
     ws.set_cell_value("B2", "hello").expect("B2");
-    ws.set_comment_at(1, 1, CellComment::new("Bob", "Second note"));
+    ws.set_comment_at(1, 1, CellComment::new("Bob", "Second note"))
+        .expect("set comment");
 
     let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
     std::fs::create_dir_all(SHARED_DIR).expect("shared dir");
@@ -172,26 +216,27 @@ fn lo_can_open_xls_with_comments_we_emit() {
 
 #[test]
 fn visible_comment_flag_round_trips() {
-    // The CellComment.visible bit must survive: writer sets NOTE
+    // The comment's popup visibility must survive: writer sets NOTE
     // flags bit 1 (0x0002), reader pulls it back out.
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "v").unwrap();
-    ws.set_comment_at(
-        0,
-        0,
-        CellComment::new("Alice", "Visible note").with_visible(true),
-    );
-    ws.set_comment_at(1, 0, CellComment::new("Alice", "Hidden note"));
+    ws.set_comment_at(0, 0, CellComment::new("Alice", "Visible note"))
+        .expect("set comment");
+    ws.set_comment_visible(0, 0, true);
+    ws.set_comment_at(1, 0, CellComment::new("Alice", "Hidden note"))
+        .expect("set comment");
 
     let parsed = write_then_read(&wb);
     let ws_in = parsed.worksheet(0).unwrap();
-    assert!(
-        ws_in.comment_at(0, 0).unwrap().visible,
+    assert_eq!(
+        ws_in.comment_visible(0, 0),
+        Some(true),
         "visible=true must round-trip"
     );
-    assert!(
-        !ws_in.comment_at(1, 0).unwrap().visible,
+    assert_eq!(
+        ws_in.comment_visible(1, 0),
+        Some(false),
         "visible=false must round-trip"
     );
 }

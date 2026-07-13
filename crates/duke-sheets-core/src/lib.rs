@@ -31,6 +31,7 @@ pub mod cell;
 pub mod column;
 pub mod comment;
 pub mod conditional_format;
+pub mod drawing;
 pub mod error;
 pub mod form_control;
 pub mod hyperlink;
@@ -61,8 +62,17 @@ pub use conditional_format::{
     CfColorValue, CfOperator, CfRuleType, CfValue, CfValueType, ConditionalFormatRule,
     IconSetStyle, TimePeriod,
 };
+pub use drawing::{
+    default_comment_anchor, validate_anchor, ChildTransform, CommentRef, DrawingKind, DrawingMeta,
+    DrawingNodeMut, DrawingNodeRef, DrawingObject, DrawingPath, DrawingText, Drawn, Group,
+    GroupChild, GroupTransform, RawDrawing, RawRel, RectEmu, Shape, ShapeFill, ShapeGeometry,
+    ShapeLine,
+};
 pub use error::{Error, Result};
-pub use form_control::{radio_groups, CheckState, FormControl, FormControlKind, ListSelection};
+pub use form_control::{
+    radio_groups, CheckState, ControlText, FormControl, FormControlInteractionResult,
+    FormControlKind, ListSelection, PlacedControl,
+};
 pub use hyperlink::Hyperlink;
 pub use locale::Locale;
 pub use protection::{hash_legacy_protection_password, ProtectedRange, WorkbookProtection};

@@ -72,6 +72,7 @@ pub(crate) fn catch_panic<T>(f: impl FnOnce() -> napi::Result<T>) -> napi::Resul
 
 mod types;
 pub use types::*;
+mod drawings;
 mod workbook_read;
 mod worksheet_read;
 
@@ -704,47 +705,6 @@ impl Worksheet {
         })
     }
 
-    /// Append a form control and return its zero-based index.
-    #[napi]
-    pub fn add_form_control(&self, control: JsFormControlInput) -> Result<u32> {
-        catch_panic(|| {
-            let control = duke_sheets_core::FormControl::try_from(control)?;
-            let mut wb = self.workbook.write().map_err(to_napi_err)?;
-            let ws = wb
-                .worksheet_mut(self.sheet_index)
-                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
-            let index = ws.try_add_form_control(control).map_err(to_napi_err)?;
-            u32::try_from(index)
-                .map_err(|_| napi::Error::from_reason("form control index exceeds u32"))
-        })
-    }
-
-    /// Replace a form control by zero-based index.
-    #[napi]
-    pub fn set_form_control(&self, index: u32, control: JsFormControlInput) -> Result<()> {
-        catch_panic(|| {
-            let control = duke_sheets_core::FormControl::try_from(control)?;
-            let mut wb = self.workbook.write().map_err(to_napi_err)?;
-            let ws = wb
-                .worksheet_mut(self.sheet_index)
-                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
-            ws.set_form_control(index as usize, control).map_err(to_napi_err)
-        })
-    }
-
-    /// Remove a form control by zero-based index.
-    #[napi]
-    pub fn remove_form_control(&self, index: u32) -> Result<()> {
-        catch_panic(|| {
-            let mut wb = self.workbook.write().map_err(to_napi_err)?;
-            let ws = wb
-                .worksheet_mut(self.sheet_index)
-                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
-            ws.remove_form_control(index as usize)
-                .map(|_| ())
-                .map_err(to_napi_err)
-        })
-    }
 }
 
 /// A workbook containing one or more worksheets.

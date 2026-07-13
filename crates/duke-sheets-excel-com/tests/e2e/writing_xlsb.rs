@@ -203,7 +203,8 @@ fn excel_preserves_external_udf_xlsb_we_emit() {
     ws.set_cell_value("A1", 7.0).unwrap();
     ws.set_cell_formula("B1", r#"=[1]!TBLink("acct",A1)"#)
         .unwrap();
-    ws.set_formula_result(0, 1, CellValue::Number(42.0)).unwrap();
+    ws.set_formula_result(0, 1, CellValue::Number(42.0))
+        .unwrap();
 
     let result = roundtrip_through_excel_xlsb(&wb);
     let ws = result.worksheet(0).unwrap();
@@ -288,7 +289,11 @@ fn excel_byte_parity_for_all_xlsb_atp_functions_we_emit() {
         rejected.len(),
         rejected
     );
-    assert_eq!(accepted.len(), formulas.len(), "all ATP formulas should be authored");
+    assert_eq!(
+        accepted.len(),
+        formulas.len(),
+        "all ATP formulas should be authored"
+    );
     assert_eq!(
         ours.len(),
         accepted.len(),
@@ -909,6 +914,215 @@ fn excel_can_read_conditional_formats_we_emit() {
 
 #[test]
 #[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xlsb_advanced_conditional_formats_we_emit() {
+    use duke_sheets_core::conditional_format::{CfValueType, IconSetStyle};
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    for row in 0..5 {
+        ws.set_cell_value_at(row, 0, (row + 1) as f64 * 10.0)
+            .unwrap();
+        ws.set_cell_value_at(row, 1, (row + 1) as f64 * 20.0)
+            .unwrap();
+        ws.set_cell_value_at(row, 2, (row + 1) as f64 * 30.0)
+            .unwrap();
+    }
+    let mut scale = ConditionalFormatRule::color_scale_3(
+        Color::rgb(255, 0, 0),
+        Color::rgb(255, 255, 0),
+        Color::rgb(0, 255, 0),
+    );
+    scale.ranges = vec![range("A1", "A5")];
+    ws.add_conditional_format(scale);
+    let mut bar = ConditionalFormatRule::data_bar(Color::rgb(99, 142, 198));
+    bar.ranges = vec![range("B1", "B5")];
+    ws.add_conditional_format(bar);
+    let mut icons = ConditionalFormatRule::icon_set(IconSetStyle::Arrows3);
+    icons.ranges = vec![range("C1", "C5")];
+    ws.add_conditional_format(icons);
+
+    let result = roundtrip_through_excel_xlsb(&wb);
+    let rules = result.worksheet(0).unwrap().conditional_formats();
+    assert_eq!(rules.len(), 3, "advanced CF rules lost");
+    let scale = rules
+        .iter()
+        .find_map(|rule| match &rule.rule_type {
+            CfRuleType::ColorScale { colors } => Some(colors),
+            _ => None,
+        })
+        .expect("3-color scale lost");
+    assert_eq!(scale.len(), 3);
+    assert_eq!(scale[0].value_type, CfValueType::Min);
+    assert_eq!(scale[1].value_type, CfValueType::Percentile);
+    assert_eq!(scale[1].value.as_deref(), Some("50"));
+    assert_eq!(scale[2].value_type, CfValueType::Max);
+    assert_eq!(scale[0].color, Color::rgb(255, 0, 0));
+    assert_eq!(scale[1].color, Color::rgb(255, 255, 0));
+    assert_eq!(scale[2].color, Color::rgb(0, 255, 0));
+
+    let data_bar = rules
+        .iter()
+        .find_map(|rule| match &rule.rule_type {
+            CfRuleType::DataBar {
+                min_value,
+                max_value,
+                color,
+                show_value,
+                ..
+            } => Some((min_value, max_value, color, show_value)),
+            _ => None,
+        })
+        .expect("data bar lost");
+    assert_eq!(data_bar.0.value_type, CfValueType::Min);
+    assert_eq!(data_bar.1.value_type, CfValueType::Max);
+    assert_eq!(*data_bar.2, Color::rgb(99, 142, 198));
+    assert!(*data_bar.3);
+
+    let icon_set = rules
+        .iter()
+        .find_map(|rule| match &rule.rule_type {
+            CfRuleType::IconSet {
+                icon_style,
+                values,
+                reverse,
+                show_value,
+            } => Some((icon_style, values, reverse, show_value)),
+            _ => None,
+        })
+        .expect("3 Arrows icon set lost");
+    assert_eq!(*icon_set.0, IconSetStyle::Arrows3);
+    assert_eq!(icon_set.1.len(), 3);
+    assert!(icon_set
+        .1
+        .iter()
+        .all(|value| value.value_type == CfValueType::Percent));
+    assert_eq!(
+        icon_set
+            .1
+            .iter()
+            .map(|value| value.value.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some("0"), Some("33"), Some("67")]
+    );
+    assert!(!icon_set.2);
+    assert!(*icon_set.3);
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xlsb_validation_messages_we_emit() {
+    use duke_sheets_core::validation::ValidationErrorStyle;
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    for (row, value) in ["Red", "Green", "Blue"].iter().enumerate() {
+        ws.set_cell_value_at(row as u32, 5, *value).unwrap();
+    }
+    let validation = DataValidation::list("=$F$1:$F$3")
+        .with_range(range("D1", "D3"))
+        .with_input_message("Pick", "Choose a listed color")
+        .with_error_message("Invalid", "Use the dropdown")
+        .with_error_style(ValidationErrorStyle::Warning);
+    ws.add_data_validation(validation);
+
+    let result = roundtrip_through_excel_xlsb(&wb);
+    let sheet = result.worksheet(0).unwrap();
+    let validation = sheet
+        .data_validations()
+        .iter()
+        .find(|validation| {
+            validation
+                .ranges
+                .iter()
+                .any(|cell_range| cell_range.start == CellAddress::parse("D1").unwrap())
+        })
+        .expect("range-list validation lost");
+    match &validation.validation_type {
+        ValidationType::List { source } => assert!(source.contains("$F$1:$F$3")),
+        other => panic!("expected range list, got {other:?}"),
+    }
+    assert_eq!(validation.input_title.as_deref(), Some("Pick"));
+    assert_eq!(
+        validation.input_message.as_deref(),
+        Some("Choose a listed color")
+    );
+    assert_eq!(validation.error_title.as_deref(), Some("Invalid"));
+    assert_eq!(
+        validation.error_message.as_deref(),
+        Some("Use the dropdown")
+    );
+    assert_eq!(validation.error_style, ValidationErrorStyle::Warning);
+    assert!(validation.show_input_message);
+    assert!(validation.show_error_alert);
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xlsb_split_panes_we_emit() {
+    use duke_sheets_core::worksheet::SplitPanes;
+
+    let mut wb = Workbook::new();
+    wb.worksheet_mut(0)
+        .unwrap()
+        .set_split_panes(Some(SplitPanes {
+            x_split: 1500.0,
+            y_split: 3000.0,
+            top_left: Some((4, 3)),
+            active_pane: Some("bottomRight".into()),
+        }));
+
+    let result = roundtrip_through_excel_xlsb(&wb);
+    let split = result
+        .worksheet(0)
+        .unwrap()
+        .split_panes()
+        .expect("split pane lost");
+    assert!((split.x_split - 1500.0).abs() < 1.0);
+    assert!((split.y_split - 3000.0).abs() < 1.0);
+    assert_eq!(split.top_left, Some((4, 3)));
+    assert_eq!(split.active_pane.as_deref(), Some("bottomRight"));
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xlsb_sheet_permission_flags_we_emit() {
+    let mut wb = Workbook::new();
+    wb.worksheet_mut(0)
+        .unwrap()
+        .set_protection(Some(SheetProtection {
+            protected: true,
+            password_hash: Some(0xCAFE),
+            select_locked_cells: true,
+            select_unlocked_cells: true,
+            format_cells: true,
+            format_columns: true,
+            sort: true,
+            auto_filter: true,
+            ..Default::default()
+        }));
+
+    let result = roundtrip_through_excel_xlsb(&wb);
+    let protection = result
+        .worksheet(0)
+        .unwrap()
+        .protection()
+        .expect("sheet protection lost");
+    assert!(protection.protected);
+    assert_eq!(protection.password_hash, Some(0xCAFE));
+    assert!(protection.select_locked_cells);
+    assert!(protection.select_unlocked_cells);
+    assert!(protection.format_cells);
+    assert!(protection.format_columns);
+    assert!(protection.sort);
+    assert!(protection.auto_filter);
+    assert!(!protection.format_rows);
+    assert!(!protection.insert_rows);
+    assert!(!protection.delete_columns);
+    assert!(!protection.pivot_tables);
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_rich_text_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
@@ -1432,10 +1646,10 @@ fn excel_can_read_table_we_emit() {
         ],
         style_info: Some(TableStyleInfo {
             name: Some("TableStyleMedium2".to_string()),
-            show_first_column: false,
-            show_last_column: false,
+            show_first_column: true,
+            show_last_column: true,
             show_row_stripes: true,
-            show_column_stripes: false,
+            show_column_stripes: true,
         }),
         header_row_count: 1,
         totals_row_count: 0,
@@ -1481,6 +1695,18 @@ fn excel_can_read_table_we_emit() {
     assert!(
         style.show_row_stripes,
         "show_row_stripes flag lost after round-trip"
+    );
+    assert!(
+        style.show_column_stripes,
+        "show_column_stripes flag lost after round-trip"
+    );
+    assert!(
+        style.show_first_column,
+        "show_first_column flag lost after round-trip"
+    );
+    assert!(
+        style.show_last_column,
+        "show_last_column flag lost after round-trip"
     );
     assert_eq!(
         tables[0].header_row_count, 1,
@@ -1545,26 +1771,26 @@ fn excel_can_read_xlsb_form_controls_we_emit() {
 
     let kinds: Vec<FormControlKind> = vec![
         FormControlKind::Button {
-            caption: "Run Report".to_string(),
+            caption: "Run Report".into(),
         },
         FormControlKind::Checkbox {
-            caption: "Enable audit".to_string(),
+            caption: "Enable audit".into(),
             state: CheckState::Checked,
             cell_link: Some("$D$2".to_string()),
             no_3d: true,
         },
         FormControlKind::OptionButton {
-            caption: "Opt A".to_string(),
+            caption: "Opt A".into(),
             state: CheckState::Checked,
             cell_link: None,
             first_in_group: false,
             no_3d: true,
         },
         FormControlKind::Label {
-            caption: "Status".to_string(),
+            caption: "Status".into(),
         },
         FormControlKind::GroupBox {
-            caption: "Choices".to_string(),
+            caption: "Choices".into(),
             no_3d: true,
         },
         FormControlKind::ListBox {
@@ -1602,7 +1828,7 @@ fn excel_can_read_xlsb_form_controls_we_emit() {
     let expected = kinds.clone();
     for (i, kind) in kinds.into_iter().enumerate() {
         let row = 1 + 2 * i as u32;
-        ws.add_form_control(FormControl::with_anchor(kind, anchor(1, row, 3, row + 1)));
+        ws.add_form_control(FormControl::new(kind), anchor(1, row, 3, row + 1));
     }
     assert_eq!(wb.sync_form_control_links(), 3);
 
@@ -1611,13 +1837,647 @@ fn excel_can_read_xlsb_form_controls_we_emit() {
     assert_eq!(sheet.get_value("D2").unwrap(), CellValue::Boolean(true));
     assert_eq!(sheet.get_value("D4").unwrap(), CellValue::Number(3.0));
     assert_eq!(sheet.get_value("D6").unwrap(), CellValue::Number(40.0));
-    let controls = sheet.form_controls();
+    let controls: Vec<_> = sheet.form_controls().collect();
     assert_eq!(controls.len(), count, "every control survives Excel");
     for (i, control) in controls.iter().enumerate() {
         let mut want = expected[i].clone();
         if let FormControlKind::OptionButton { first_in_group, .. } = &mut want {
             *first_in_group = true;
         }
-        assert_eq!(control.kind, want, "control {i} kind mismatch after Excel");
+        assert_eq!(
+            control.payload.kind, want,
+            "control {i} kind mismatch after Excel"
+        );
     }
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xlsb_custom_metric_control_anchor_we_emit() {
+    use duke_sheets_chart::{CellMarker, DrawingAnchor};
+    use duke_sheets_core::{CheckState, FormControl, FormControlKind};
+
+    let mut workbook = Workbook::new();
+    let sheet = workbook.worksheet_mut(0).unwrap();
+    sheet.set_column_width(0, 20.0);
+    sheet.set_row_height(0, 30.0);
+    sheet.add_form_control(
+        FormControl::new(FormControlKind::Checkbox {
+            caption: "metric anchor".into(),
+            state: CheckState::Unchecked,
+            cell_link: None,
+            no_3d: false,
+        }),
+        DrawingAnchor::OneCell {
+            from: CellMarker::default(),
+            width_emu: 609_600,
+            height_emu: 190_500,
+        },
+    );
+
+    let result = roundtrip_through_excel_xlsb(&workbook);
+    let drawn = result.worksheet(0).unwrap().form_controls().next().unwrap();
+    match &drawn.object.anchor {
+        DrawingAnchor::TwoCell { from, to, .. } => {
+            assert_eq!((from.col, from.col_offset_emu), (0, 0));
+            assert_eq!((from.row, from.row_offset_emu), (0, 0));
+            assert_eq!((to.col, to.col_offset_emu), (0, 609_600));
+            assert_eq!((to.row, to.row_offset_emu), (0, 190_500));
+        }
+        other => panic!("expected Excel-resaved TwoCell control anchor, got {other:?}"),
+    }
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xlsb_control_visual_metadata_we_emit() {
+    use duke_sheets_chart::{CellMarker, DrawingAnchor};
+    use duke_sheets_core::style::{HorizontalAlignment, Underline, VerticalAlignment};
+    use duke_sheets_core::{CheckState, ControlText, DrawingObject, FormControl, FormControlKind};
+
+    let text = ControlText {
+        runs: vec![
+            RichTextRun::with_font(
+                "Red ",
+                RunFont {
+                    name: Some("Segoe UI".into()),
+                    size: Some(9.0),
+                    color: Some(Color::rgb(255, 0, 0)),
+                    bold: Some(true),
+                    ..RunFont::default()
+                },
+            ),
+            RichTextRun::with_font(
+                "Blue",
+                RunFont {
+                    name: Some("Arial".into()),
+                    size: Some(12.0),
+                    color: Some(Color::rgb(0, 0, 255)),
+                    italic: Some(true),
+                    underline: Some(Underline::Single),
+                    ..RunFont::default()
+                },
+            ),
+        ],
+        horizontal_alignment: Some(HorizontalAlignment::Right),
+        vertical_alignment: Some(VerticalAlignment::Bottom),
+    };
+    let control = FormControl::new(FormControlKind::Checkbox {
+        caption: text,
+        state: CheckState::Checked,
+        cell_link: None,
+        no_3d: false,
+    })
+    .with_macro_name("RunProbe");
+    let mut object = DrawingObject::form_control(control).with_anchor(DrawingAnchor::TwoCell {
+        from: CellMarker {
+            col: 1,
+            col_offset_emu: 0,
+            row: 1,
+            row_offset_emu: 0,
+        },
+        to: CellMarker {
+            col: 4,
+            col_offset_emu: 0,
+            row: 3,
+            row_offset_emu: 0,
+        },
+        edit_as: None,
+    });
+    object.meta.name = Some("Visual Probe".into());
+    object.meta.alt_text = Some("Visual probe alternative".into());
+    object.meta.title = Some("Visual probe title".into());
+    let mut workbook = Workbook::new();
+    workbook.worksheet_mut(0).unwrap().add_drawing(object);
+
+    let result = roundtrip_through_excel_xlsb(&workbook);
+    let drawn = result.worksheet(0).unwrap().form_controls().next().unwrap();
+    assert_eq!(drawn.object.meta.name.as_deref(), Some("Visual Probe"));
+    assert_eq!(
+        drawn.object.meta.alt_text.as_deref(),
+        Some("Visual probe alternative")
+    );
+    assert_eq!(
+        drawn.object.meta.title.as_deref(),
+        Some("Visual probe title")
+    );
+    assert_eq!(drawn.payload.caption_text().as_deref(), Some("Red Blue"));
+    assert_eq!(drawn.payload.macro_name.as_deref(), Some("RunProbe"));
+    let caption = drawn.payload.caption().unwrap();
+    assert_eq!(
+        caption.horizontal_alignment,
+        Some(HorizontalAlignment::Right)
+    );
+    assert_eq!(caption.vertical_alignment, Some(VerticalAlignment::Bottom));
+    assert_eq!(caption.runs.len(), 2);
+    let red = caption.runs[0].font.as_ref().unwrap();
+    assert_eq!(red.name.as_deref(), Some("Segoe UI"));
+    assert_eq!(red.size, Some(9.0));
+    assert_eq!(red.color, Some(Color::rgb(255, 0, 0)));
+    assert_eq!(red.bold, Some(true));
+    let blue = caption.runs[1].font.as_ref().unwrap();
+    assert_eq!(blue.name.as_deref(), Some("Arial"));
+    assert_eq!(blue.size, Some(12.0));
+    assert_eq!(blue.color, Some(Color::rgb(0, 0, 255)));
+    assert_eq!(blue.italic, Some(true));
+    assert_eq!(blue.underline, Some(Underline::Single));
+}
+
+const TEST_PNG_1X1: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+    0x89, 0x00, 0x00, 0x00, 0x0B, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x60, 0x00, 0x02, 0x00,
+    0x00, 0x05, 0x00, 0x01, 0x7A, 0x5E, 0xAB, 0x3F, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44,
+    0xAE, 0x42, 0x60, 0x82,
+];
+
+/// A cell comment survives the Excel XLSB round-trip: the comments
+/// part must use the MS-XLSB record ids (the old 0x0278-based emit
+/// made Excel refuse the file outright).
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_read_xlsb_comment_we_emit() {
+    use duke_sheets_core::CellComment;
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("B2", "has note").unwrap();
+    ws.set_comment_at(1, 1, CellComment::new("Reviewer", "Check this figure"));
+
+    let result = roundtrip_through_excel_xlsb(&wb);
+    let sheet = result.worksheet(0).unwrap();
+    let comment = sheet.comment_at(1, 1).expect("comment survives at B2");
+    assert!(
+        comment.text.contains("Check this figure"),
+        "comment text lost: {:?}",
+        comment.text
+    );
+    assert!(
+        comment.author.contains("Reviewer"),
+        "comment author lost: {:?}",
+        comment.author
+    );
+    assert!(sheet.comment_at(0, 0).is_none(), "comment cell moved");
+}
+
+/// A PNG picture survives the Excel XLSB round-trip with its bytes
+/// verbatim (Excel re-packages media parts without re-encoding).
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_read_xlsb_png_image_we_emit() {
+    use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "anchor").unwrap();
+    ws.add_image(
+        EmbeddedImage {
+            format: ImageFormat::Png,
+            media_path: String::new(),
+            svg_media_path: None,
+            width_emu: 1_000_000,
+            height_emu: 2_000_000,
+            rotation: None,
+            flip_h: false,
+            flip_v: false,
+            data: TEST_PNG_1X1.to_vec(),
+            svg_data: None,
+        },
+        DrawingAnchor::TwoCell {
+            from: CellMarker {
+                col: 1,
+                col_offset_emu: 0,
+                row: 2,
+                row_offset_emu: 0,
+            },
+            to: CellMarker {
+                col: 5,
+                col_offset_emu: 0,
+                row: 10,
+                row_offset_emu: 0,
+            },
+            edit_as: None,
+        },
+    );
+
+    let result = roundtrip_through_excel_xlsb(&wb);
+    let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
+    assert_eq!(images.len(), 1, "image must survive Excel re-save");
+    let img = &images[0];
+    assert_eq!(img.payload.format, ImageFormat::Png);
+    assert_eq!(
+        img.payload.data, TEST_PNG_1X1,
+        "PNG bytes must round-trip through Excel verbatim"
+    );
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xlsb_one_cell_and_absolute_images_we_emit() {
+    use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
+    use duke_sheets_core::DrawingObject;
+
+    let image = |name: &str| {
+        DrawingObject::image(EmbeddedImage {
+            format: ImageFormat::Png,
+            media_path: String::new(),
+            svg_media_path: None,
+            width_emu: 1_200_000,
+            height_emu: 700_000,
+            rotation: None,
+            flip_h: false,
+            flip_v: false,
+            data: TEST_PNG_1X1.to_vec(),
+            svg_data: None,
+        })
+        .with_name(name)
+    };
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.add_drawing(
+        image("OneCell").with_anchor(DrawingAnchor::OneCell {
+            from: CellMarker {
+                col: 1,
+                row: 2,
+                col_offset_emu: 95_250,
+                row_offset_emu: 47_625,
+            },
+            width_emu: 1_200_000,
+            height_emu: 700_000,
+        }),
+    );
+    ws.add_drawing(
+        image("Absolute").with_anchor(DrawingAnchor::Absolute {
+            x_emu: 2_000_000,
+            y_emu: 1_000_000,
+            width_emu: 900_000,
+            height_emu: 500_000,
+        }),
+    );
+
+    let result = roundtrip_through_excel_xlsb(&wb);
+    let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
+    assert_eq!(images.len(), 2);
+    assert_eq!(
+        images[0].object.anchor,
+        DrawingAnchor::OneCell {
+            from: CellMarker {
+                col: 1,
+                row: 2,
+                col_offset_emu: 95_250,
+                row_offset_emu: 47_625,
+            },
+            width_emu: 1_200_000,
+            height_emu: 700_000,
+        }
+    );
+    assert_eq!(
+        images[1].object.anchor,
+        DrawingAnchor::Absolute {
+            x_emu: 2_000_000,
+            y_emu: 1_000_000,
+            width_emu: 900_000,
+            height_emu: 500_000,
+        }
+    );
+}
+
+/// A model-authored chart survives the Excel XLSB round-trip (the
+/// old writer never emitted model charts at all, leaving a dangling
+/// BrtDrawing pointer).
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_read_xlsb_chart_we_emit() {
+    use duke_sheets_chart::{
+        CellMarker, Chart, ChartType, DataReference, DataSeries, DrawingAnchor,
+    };
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    for (i, v) in [3.0, 1.0, 4.0, 1.0, 5.0].iter().enumerate() {
+        ws.set_cell_value_at(i as u32, 0, *v).unwrap();
+    }
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    chart.title = Some("Sales".to_string());
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    ws.add_chart(
+        chart,
+        DrawingAnchor::TwoCell {
+            from: CellMarker {
+                col: 2,
+                col_offset_emu: 0,
+                row: 2,
+                row_offset_emu: 0,
+            },
+            to: CellMarker {
+                col: 10,
+                col_offset_emu: 0,
+                row: 17,
+                row_offset_emu: 0,
+            },
+            edit_as: None,
+        },
+    );
+
+    let result = roundtrip_through_excel_xlsb(&wb);
+    let sheet = result.worksheet(0).unwrap();
+    assert_eq!(sheet.chart_count(), 1, "chart must survive Excel re-save");
+    let chart = sheet.charts().next().unwrap().payload;
+    assert_eq!(chart.chart_type, ChartType::ColumnClustered);
+    assert_eq!(chart.title.as_deref(), Some("Sales"));
+    assert_eq!(chart.series.len(), 1);
+}
+
+/// The drawing-list z-order (image below a form control below an
+/// image) survives Excel's XLSB re-save: the control's position among
+/// native shapes rides its com14:compatSp placeholder twin, which
+/// Excel keeps in the drawing part's document order.
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xlsb_drawing_z_order_we_emit() {
+    use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
+    use duke_sheets_core::{CheckState, DrawingKind, DrawingObject, FormControl, FormControlKind};
+
+    let two_cell = |fc: u16, fr: u32, tc: u16, tr: u32| DrawingAnchor::TwoCell {
+        from: CellMarker {
+            col: fc,
+            col_offset_emu: 0,
+            row: fr,
+            row_offset_emu: 0,
+        },
+        to: CellMarker {
+            col: tc,
+            col_offset_emu: 0,
+            row: tr,
+            row_offset_emu: 0,
+        },
+        edit_as: None,
+    };
+    let png = |name: &str| {
+        DrawingObject::image(EmbeddedImage {
+            format: ImageFormat::Png,
+            media_path: String::new(),
+            svg_media_path: None,
+            width_emu: 300_000,
+            height_emu: 300_000,
+            rotation: None,
+            flip_h: false,
+            flip_v: false,
+            data: TEST_PNG_1X1.to_vec(),
+            svg_data: None,
+        })
+        .with_name(name)
+    };
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "anchor").unwrap();
+    ws.add_drawing(png("Below").with_anchor(two_cell(0, 0, 2, 2)));
+    ws.add_drawing(
+        DrawingObject::form_control(FormControl::new(FormControlKind::Checkbox {
+            caption: "Middle".into(),
+            state: CheckState::Checked,
+            cell_link: None,
+            no_3d: true,
+        }))
+        .with_anchor(two_cell(1, 1, 3, 3)),
+    );
+    ws.add_drawing(png("Above").with_anchor(two_cell(2, 2, 4, 4)));
+
+    let result = roundtrip_through_excel_xlsb(&wb);
+    let sheet = result.worksheet(0).unwrap();
+    let tags: Vec<&str> = sheet
+        .drawings()
+        .iter()
+        .map(|object| match &object.kind {
+            DrawingKind::Image(_) => "image",
+            DrawingKind::FormControl(_) => "control",
+            other => panic!("unexpected drawing kind after Excel round-trip: {other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        tags,
+        vec!["image", "control", "image"],
+        "z-order must survive Excel XLSB re-save"
+    );
+    let images: Vec<_> = sheet.images().collect();
+    assert_eq!(images[0].object.meta.name.as_deref(), Some("Below"));
+    assert_eq!(images[1].object.meta.name.as_deref(), Some("Above"));
+    assert_eq!(
+        sheet
+            .form_controls()
+            .next()
+            .unwrap()
+            .payload
+            .caption_text()
+            .as_deref(),
+        Some("Middle")
+    );
+}
+
+/// Drawing-object hidden flags survive Excel's XLSB re-save: a
+/// hidden image rides its `cNvPr@hidden="1"` in the shared drawing
+/// part, a hidden form control rides the VML shape's
+/// `visibility:hidden` style, and the visible siblings stay visible.
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_hidden_drawing_flags_we_emit() {
+    use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
+    use duke_sheets_core::{CheckState, DrawingObject, FormControl, FormControlKind};
+
+    let two_cell = |fc: u16, fr: u32, tc: u16, tr: u32| DrawingAnchor::TwoCell {
+        from: CellMarker {
+            col: fc,
+            col_offset_emu: 0,
+            row: fr,
+            row_offset_emu: 0,
+        },
+        to: CellMarker {
+            col: tc,
+            col_offset_emu: 0,
+            row: tr,
+            row_offset_emu: 0,
+        },
+        edit_as: None,
+    };
+    let png = |name: &str| {
+        DrawingObject::image(EmbeddedImage {
+            format: ImageFormat::Png,
+            media_path: String::new(),
+            svg_media_path: None,
+            width_emu: 300_000,
+            height_emu: 300_000,
+            rotation: None,
+            flip_h: false,
+            flip_v: false,
+            data: TEST_PNG_1X1.to_vec(),
+            svg_data: None,
+        })
+        .with_name(name)
+    };
+    let checkbox = |caption: &str| {
+        DrawingObject::form_control(FormControl::new(FormControlKind::Checkbox {
+            caption: caption.into(),
+            state: CheckState::Checked,
+            cell_link: None,
+            no_3d: true,
+        }))
+    };
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "anchor").unwrap();
+    ws.add_drawing(png("Shown").with_anchor(two_cell(0, 0, 2, 2)));
+    ws.add_drawing(
+        png("Ghost")
+            .with_anchor(two_cell(2, 2, 4, 4))
+            .with_hidden(true),
+    );
+    ws.add_drawing(checkbox("Visible box").with_anchor(two_cell(4, 4, 6, 6)));
+    ws.add_drawing(
+        checkbox("Cloaked box")
+            .with_anchor(two_cell(6, 6, 8, 8))
+            .with_hidden(true),
+    );
+
+    let result = roundtrip_through_excel_xlsb(&wb);
+    let sheet = result.worksheet(0).unwrap();
+
+    let images: Vec<_> = sheet.images().collect();
+    assert_eq!(images.len(), 2, "both images survive Excel re-save");
+    let image_hidden = |name: &str| {
+        images
+            .iter()
+            .find(|i| i.object.meta.name.as_deref() == Some(name))
+            .unwrap_or_else(|| panic!("image {name:?} lost in Excel re-save"))
+            .object
+            .meta
+            .hidden
+    };
+    assert!(!image_hidden("Shown"), "visible image must stay visible");
+    assert!(
+        image_hidden("Ghost"),
+        "hidden image must survive Excel re-save with hidden intact"
+    );
+
+    let controls: Vec<_> = sheet.form_controls().collect();
+    assert_eq!(controls.len(), 2, "both controls survive Excel re-save");
+    let control_hidden = |caption: &str| {
+        controls
+            .iter()
+            .find(|c| c.payload.caption_text().as_deref() == Some(caption))
+            .unwrap_or_else(|| panic!("control {caption:?} lost in Excel re-save"))
+            .object
+            .meta
+            .hidden
+    };
+    assert!(
+        !control_hidden("Visible box"),
+        "visible control must stay visible"
+    );
+    assert!(
+        control_hidden("Cloaked box"),
+        "hidden control must survive Excel re-save with hidden intact"
+    );
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xlsb_basic_shape_we_emit() {
+    use duke_sheets_chart::{CellMarker, DrawingAnchor};
+    use duke_sheets_core::style::{HorizontalAlignment, VerticalAlignment};
+    use duke_sheets_core::{
+        DrawingObject, DrawingText, Shape, ShapeFill, ShapeGeometry, ShapeLine,
+    };
+
+    let text = DrawingText {
+        runs: vec![
+            RichTextRun::with_font(
+                "Bold ",
+                RunFont {
+                    name: Some("Segoe UI".into()),
+                    size: Some(10.0),
+                    bold: Some(true),
+                    ..RunFont::default()
+                },
+            ),
+            RichTextRun::with_font(
+                "Italic",
+                RunFont {
+                    name: Some("Arial".into()),
+                    size: Some(12.0),
+                    italic: Some(true),
+                    color: Some(Color::rgb(0, 0, 255)),
+                    ..RunFont::default()
+                },
+            ),
+        ],
+        horizontal_alignment: Some(HorizontalAlignment::Center),
+        vertical_alignment: Some(VerticalAlignment::Center),
+    };
+    let shape = Shape::rectangle()
+        .with_fill(ShapeFill::Solid(Color::rgb(255, 0, 0)))
+        .with_line(ShapeLine {
+            color: Some(Color::rgb(0, 0, 255)),
+            width_emu: Some(25_400),
+            dash_style: Some("dash".into()),
+            no_fill: false,
+        })
+        .with_text(text)
+        .with_rotation(900_000)
+        .with_flip_h(true);
+    let mut object = DrawingObject::shape(shape).with_anchor(DrawingAnchor::TwoCell {
+        from: CellMarker {
+            col: 1,
+            row: 2,
+            ..CellMarker::default()
+        },
+        to: CellMarker {
+            col: 5,
+            row: 8,
+            ..CellMarker::default()
+        },
+        edit_as: None,
+    });
+    object.meta.name = Some("Status panel".into());
+    object.meta.alt_text = Some("red status rectangle".into());
+    object.meta.title = Some("Status".into());
+    let mut workbook = Workbook::new();
+    workbook.worksheet_mut(0).unwrap().add_drawing(object);
+
+    let result = roundtrip_through_excel_xlsb(&workbook);
+    let drawn = result.worksheet(0).unwrap().shapes().next().expect("shape");
+    assert_eq!(drawn.object.meta.name.as_deref(), Some("Status panel"));
+    assert_eq!(
+        drawn.object.meta.alt_text.as_deref(),
+        Some("red status rectangle")
+    );
+    assert_eq!(drawn.object.meta.title.as_deref(), Some("Status"));
+    assert_eq!(drawn.payload.geometry, ShapeGeometry::Preset("rect".into()));
+    assert_eq!(drawn.payload.fill, ShapeFill::Solid(Color::rgb(255, 0, 0)));
+    assert_eq!(drawn.payload.line.color, Some(Color::rgb(0, 0, 255)));
+    assert_eq!(drawn.payload.line.width_emu, Some(25_400));
+    assert_eq!(drawn.payload.line.dash_style.as_deref(), Some("dash"));
+    assert_eq!(drawn.payload.rotation, 900_000);
+    assert!(drawn.payload.flip_h);
+    let text = drawn.payload.text.as_ref().expect("shape text");
+    assert_eq!(text.plain_text(), "Bold Italic");
+    assert_eq!(text.horizontal_alignment, Some(HorizontalAlignment::Center));
+    assert_eq!(text.vertical_alignment, Some(VerticalAlignment::Center));
+    assert_eq!(
+        text.runs[0].font.as_ref().unwrap().name.as_deref(),
+        Some("Segoe UI")
+    );
+    assert_eq!(text.runs[0].font.as_ref().unwrap().bold, Some(true));
+    assert_eq!(text.runs[0].font.as_ref().unwrap().size, Some(10.0));
+    assert_eq!(
+        text.runs[1].font.as_ref().unwrap().name.as_deref(),
+        Some("Arial")
+    );
+    assert_eq!(text.runs[1].font.as_ref().unwrap().italic, Some(true));
+    assert_eq!(text.runs[1].font.as_ref().unwrap().size, Some(12.0));
+    assert_eq!(
+        text.runs[1].font.as_ref().unwrap().color,
+        Some(Color::rgb(0, 0, 255))
+    );
 }

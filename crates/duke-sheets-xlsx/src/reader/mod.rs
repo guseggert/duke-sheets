@@ -12,7 +12,7 @@ use crate::error::{XlsxError, XlsxResult};
 use crate::styles::{
     read_styles_xml, register_roundtrip_style_data, register_roundtrip_theme_data, ParsedStyles,
 };
-use comments::read_worksheet_comments;
+use comments::read_comments_list;
 use conditional_format::{
     apply_cf_formulas, parse_cf_rule_attrs, parse_color_element, parse_sqref,
 };
@@ -168,6 +168,290 @@ fn read_chart_style_color_for_chart_ex<R: Read + Seek>(
             }
         }
     }
+}
+
+/// A `<control>` entry resolved against its ctrlProp part and VML
+/// shape, waiting to be matched to its drawing-part twin.
+struct AssembledControl {
+    shape_id: u32,
+    object: duke_sheets_core::DrawingObject,
+    /// True when neither controlPr nor VML supplied an anchor, so a
+    /// matched twin's anchor is the last-resort fallback.
+    anchor_defaulted: bool,
+    consumed: bool,
+}
+
+/// Consume the first unconsumed control matching a twin's shape id.
+fn take_control(
+    controls: &mut [AssembledControl],
+    shape_num: Option<u32>,
+) -> Option<(u32, duke_sheets_core::DrawingObject, bool)> {
+    let num = shape_num?;
+    let control = controls
+        .iter_mut()
+        .find(|control| !control.consumed && control.shape_id == num)?;
+    control.consumed = true;
+    Some((
+        control.shape_id,
+        control.object.clone(),
+        control.anchor_defaulted,
+    ))
+}
+
+/// Build an `EmbeddedImage` from a parsed pic, resolving the blip
+/// relationship to media bytes. For group children (`in_group`) the
+/// child transform carries rotation/flips, so the payload keeps none.
+fn resolve_pic_image<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    drawing_rels: &HashMap<String, SheetRelationship>,
+    pic: drawing::PicShape,
+    in_group: bool,
+) -> duke_sheets_chart::EmbeddedImage {
+    let mut image = duke_sheets_chart::EmbeddedImage {
+        format: duke_sheets_chart::ImageFormat::Png, // placeholder, resolved from media path
+        media_path: pic.blip_rel.unwrap_or_default(),
+        svg_media_path: pic.svg_rel,
+        width_emu: pic.ext_cx,
+        height_emu: pic.ext_cy,
+        rotation: if in_group { None } else { pic.rotation },
+        flip_h: !in_group && pic.flip_h,
+        flip_v: !in_group && pic.flip_v,
+        data: Vec::new(),
+        svg_data: None,
+    };
+    if let Some(rel) = drawing_rels.get(&image.media_path) {
+        let ext = rel.target.rsplit('.').next().unwrap_or("");
+        if let Some(fmt) = duke_sheets_chart::ImageFormat::from_extension(ext) {
+            image.format = fmt;
+        }
+        image.media_path = rel.target.clone();
+        if let Ok(mut f) = archive_by_name(archive, &rel.target) {
+            let mut buf = Vec::new();
+            if std::io::Read::read_to_end(&mut f, &mut buf).is_ok() {
+                image.data = buf;
+            }
+        }
+    }
+    if let Some(svg_rel_id) = &image.svg_media_path {
+        if let Some(rel) = drawing_rels.get(svg_rel_id.as_str()) {
+            image.svg_media_path = Some(rel.target.clone());
+            if let Ok(mut f) = archive_by_name(archive, &rel.target) {
+                let mut buf = Vec::new();
+                if std::io::Read::read_to_end(&mut f, &mut buf).is_ok() {
+                    image.svg_data = Some(buf);
+                }
+            }
+        }
+    }
+    image
+}
+
+fn shape_from_parsed(parsed: &drawing::ParsedShape) -> duke_sheets_core::Shape {
+    let fill = match parsed.fill {
+        duke_sheets_chart::drawing_part::ShapeFill::None => duke_sheets_core::ShapeFill::None,
+        duke_sheets_chart::drawing_part::ShapeFill::Solid(color) => {
+            duke_sheets_core::ShapeFill::Solid(duke_sheets_core::drawing::color_from_drawing_part(
+                color,
+            ))
+        }
+    };
+    let mut shape = duke_sheets_core::Shape::preset(parsed.geometry.clone());
+    shape.fill = fill;
+    shape.line = duke_sheets_core::ShapeLine {
+        color: parsed
+            .line
+            .color
+            .map(duke_sheets_core::drawing::color_from_drawing_part),
+        width_emu: parsed.line.width_emu,
+        dash_style: parsed.line.dash_style.clone(),
+        no_fill: parsed.line.no_fill,
+    };
+    shape.text = parsed
+        .text
+        .as_ref()
+        .map(duke_sheets_core::DrawingText::from_drawing_part_text);
+    shape.rotation = parsed.xfrm.rotation;
+    shape.flip_h = parsed.xfrm.flip_h;
+    shape.flip_v = parsed.xfrm.flip_v;
+    shape.set_preserved_shape_properties(parsed.raw_shape_properties.clone());
+    shape.set_preserved_text_body(parsed.raw_text_body.clone());
+    shape
+}
+
+/// Convert a parsed group into the model, resolving child images and
+/// matching control-twin children to their controls (placed in the
+/// group with the twin's child transform).
+fn build_group<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    drawing_rels: &HashMap<String, SheetRelationship>,
+    group: drawing::ParsedGroup,
+    controls: &mut [AssembledControl],
+) -> duke_sheets_core::Group {
+    use duke_sheets_core::{ChildTransform, DrawingKind, DrawingMeta, GroupChild};
+    let mut children = Vec::new();
+    for child in group.children {
+        match child {
+            drawing::ParsedChild::Pic(pic) => {
+                let transform = ChildTransform {
+                    x_emu: pic.off_x,
+                    y_emu: pic.off_y,
+                    cx_emu: pic.ext_cx,
+                    cy_emu: pic.ext_cy,
+                    rotation: pic.rotation.unwrap_or(0),
+                    flip_h: pic.flip_h,
+                    flip_v: pic.flip_v,
+                };
+                let meta = DrawingMeta {
+                    name: Some(pic.name.clone()),
+                    alt_text: pic.descr.clone(),
+                    title: pic.title.clone(),
+                    hidden: pic.hidden,
+                    ..DrawingMeta::default()
+                };
+                let image = resolve_pic_image(archive, drawing_rels, pic, true);
+                children.push(GroupChild {
+                    meta,
+                    transform,
+                    kind: DrawingKind::Image(image),
+                });
+            }
+            drawing::ParsedChild::Shape(shape) => {
+                let meta = DrawingMeta {
+                    name: Some(shape.name.clone()),
+                    alt_text: shape.descr.clone(),
+                    title: shape.title.clone(),
+                    hidden: shape.hidden,
+                    ..DrawingMeta::default()
+                };
+                children.push(GroupChild {
+                    meta,
+                    transform: shape.xfrm.clone(),
+                    kind: DrawingKind::Shape(Box::new(shape_from_parsed(&shape))),
+                });
+            }
+            drawing::ParsedChild::Group(inner) => {
+                let transform = ChildTransform {
+                    x_emu: inner.transform.x_emu,
+                    y_emu: inner.transform.y_emu,
+                    cx_emu: inner.transform.cx_emu,
+                    cy_emu: inner.transform.cy_emu,
+                    rotation: inner.transform.rotation,
+                    flip_h: inner.transform.flip_h,
+                    flip_v: inner.transform.flip_v,
+                };
+                let meta = DrawingMeta {
+                    name: Some(inner.name.clone()),
+                    alt_text: inner.descr.clone(),
+                    title: inner.title.clone(),
+                    hidden: inner.hidden,
+                    ..DrawingMeta::default()
+                };
+                let built = build_group(archive, drawing_rels, inner, controls);
+                children.push(GroupChild {
+                    meta,
+                    transform,
+                    kind: DrawingKind::Group(Box::new(built)),
+                });
+            }
+            drawing::ParsedChild::Twin(twin) => {
+                // A control-twin child becomes the matched control,
+                // positioned by the twin's child transform.
+                if let Some((_, mut object, _)) = take_control(controls, twin.shape_num) {
+                    if let Some(name) = twin.name {
+                        object.meta.name = Some(name);
+                    }
+                    if twin.descr.is_some() {
+                        object.meta.alt_text = twin.descr;
+                    }
+                    object.meta.title = twin.title;
+                    if let Some(control) = object.kind.as_form_control_mut() {
+                        // Foreign files may put a txBody on twins of
+                        // caption-less kinds; ignore the stray text.
+                        if let (Some(text), Some(caption)) =
+                            (twin.text.as_ref(), control.caption_mut())
+                        {
+                            *caption = form_controls::control_text_from_twin(text);
+                        }
+                        if control.macro_name.is_none() {
+                            control.macro_name = twin
+                                .macro_name
+                                .as_deref()
+                                .map(duke_sheets_vml::decode_macro_formula);
+                        }
+                    }
+                    children.push(GroupChild {
+                        meta: object.meta,
+                        transform: twin.xfrm,
+                        kind: object.kind,
+                    });
+                }
+            }
+        }
+    }
+    duke_sheets_core::Group {
+        transform: group.transform,
+        children,
+    }
+}
+
+/// Scan a raw anchor's bytes for relationship references and capture
+/// each referenced relationship with its original id/target plus the
+/// target part bytes when internal. References are found by value:
+/// any attribute whose value equals a rel id in the drawing's .rels
+/// counts (r:id/r:embed/r:link, SmartArt `dgm:relIds` r:dm/r:lo/r:qs/
+/// r:cs, VML `o:relid`, arbitrary prefixes).
+fn capture_raw_rels<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    bytes: &[u8],
+    verbatim_rels: &HashMap<String, workbook::VerbatimRel>,
+) -> Vec<duke_sheets_core::RawRel> {
+    let mut ids: Vec<String> = Vec::new();
+    let mut reader = quick_xml::Reader::from_reader(bytes);
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+                for attr in e.attributes().flatten() {
+                    if let Ok(value) = attr.unescape_value() {
+                        if verbatim_rels.contains_key(value.as_ref())
+                            && !ids.iter().any(|id| id == value.as_ref())
+                        {
+                            ids.push(value.to_string());
+                        }
+                    }
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    let mut rels = Vec::new();
+    for id in ids {
+        let Some(rel) = verbatim_rels.get(&id) else {
+            continue;
+        };
+        let part = if rel.external {
+            None
+        } else {
+            let path = workbook::resolve_rel_target("xl/drawings", &rel.target);
+            archive_by_name(archive, &path).ok().and_then(|mut f| {
+                let mut buf = Vec::new();
+                std::io::Read::read_to_end(&mut f, &mut buf)
+                    .ok()
+                    .map(|_| buf)
+            })
+        };
+        rels.push(duke_sheets_core::RawRel {
+            id,
+            rel_type: rel.rel_type.clone(),
+            target: rel.target.clone(),
+            external: rel.external,
+            part,
+        });
+    }
+    rels
 }
 
 /// XLSX file reader
@@ -372,7 +656,8 @@ impl XlsxReader {
                     .sheet_order_mut()
                     .push(SheetSlot::Worksheet(sheet_idx));
                 let sheet_rels = read_sheet_rels(&mut archive, path)?;
-                let pending_controls = form_controls::dedupe_pending_controls(Self::read_worksheet(
+                let pending_controls =
+                    form_controls::dedupe_pending_controls(Self::read_worksheet(
                     &mut archive,
                     path,
                     workbook.worksheet_mut(sheet_idx).unwrap(),
@@ -397,56 +682,31 @@ impl XlsxReader {
                     .map(|r| r.target.clone())
                     .unwrap_or_else(|| format!("xl/drawings/vmlDrawing{}.vml", ws_count));
 
-                // Resolve form controls: each worksheet <control>
-                // references a ctrlProp part via r:id; captions come
-                // from the legacy VML shape with the matching id.
-                if !pending_controls.is_empty() {
-                    let vml_shapes = archive_by_name(&mut archive, &vml_path)
-                        .ok()
-                        .and_then(|mut f| {
-                            let mut buf = Vec::new();
-                            std::io::Read::read_to_end(&mut f, &mut buf).ok().map(|_| buf)
-                        })
-                        .map(|bytes| duke_sheets_vml::parse_vml_controls(&bytes))
-                        .unwrap_or_default();
-                    let vml_shapes: HashMap<u32, duke_sheets_vml::VmlControl> = vml_shapes
-                        .into_iter()
-                        .map(|shape| (shape.shape_num, shape))
-                        .collect();
-
-                    let ws = workbook.worksheet_mut(sheet_idx).unwrap();
-                    for pending in &pending_controls {
-                        let Some(rel) = sheet_rels.get(&pending.rid) else {
-                            continue;
-                        };
-                        if !rel.rel_type.ends_with("/ctrlProp") {
-                            continue;
-                        }
-                        let Ok(mut f) = archive_by_name(&mut archive, &rel.target) else {
-                            continue;
-                        };
-                        let mut bytes = Vec::new();
-                        if std::io::Read::read_to_end(&mut f, &mut bytes).is_err() {
-                            continue;
-                        }
-                        let Some(pr) = form_controls::parse_ctrl_prop(&bytes) else {
-                            continue;
-                        };
-                        if let Some(control) = form_controls::assemble_with_vml(
-                            pending,
-                            &pr,
-                            vml_shapes.get(&pending.shape_id),
-                        ) {
-                            ws.add_form_control(control);
-                        }
-                    }
-                }
-                read_worksheet_comments(
+                // Assemble the sheet's drawing objects: the drawing
+                // part's document order (with control twins replaced
+                // by their controls), unmatched controls, and comments
+                // spliced by the legacy VML shape order.
+                let vml_bytes = archive_by_name(&mut archive, &vml_path)
+                    .ok()
+                    .and_then(|mut f| {
+                        let mut buf = Vec::new();
+                        std::io::Read::read_to_end(&mut f, &mut buf)
+                            .ok()
+                            .map(|_| buf)
+                    });
+                let comments = read_comments_list(&mut archive, &comments_path)?;
+                let objects = Self::merge_sheet_drawings(
                     &mut archive,
-                    &comments_path,
-                    Some(&vml_path),
-                    workbook.worksheet_mut(sheet_idx).unwrap(),
+                    &sheet_rels,
+                    &pending_controls,
+                    vml_bytes.as_deref(),
+                    comments,
                 )?;
+                workbook
+                    .worksheet_mut(sheet_idx)
+                    .unwrap()
+                    .drawings_mut()
+                    .extend(objects);
 
                 // Read tables for this worksheet (if present).
                 // Each relationship with type ending in "/table" points to
@@ -462,89 +722,6 @@ impl XlsxReader {
                         workbook.worksheet_mut(sheet_idx).unwrap().add_table(t);
                     }
                 }
-
-                // Read charts for this worksheet (if present).
-                // Sheet → drawing relationship → drawing XML → chart relationships → chart XML.
-                for drawing_rel in sheet_rels
-                    .values()
-                    .filter(|r| r.rel_type.ends_with("/drawing"))
-                {
-                    let drawing_path = &drawing_rel.target;
-                    let drawing_contents =
-                        drawing::read_drawing_contents(&mut archive, drawing_path)?;
-                    for raw in drawing_contents.raw_non_chart_anchors {
-                        workbook
-                            .worksheet_mut(sheet_idx)
-                            .unwrap()
-                            .raw_drawing_objects
-                            .push(raw);
-                    }
-                    let has_charts = !drawing_contents.chart_refs.is_empty();
-                    let has_images = !drawing_contents.images.is_empty();
-                    if !has_charts && !has_images {
-                        continue;
-                    }
-                    let drawing_rels = read_sheet_rels(&mut archive, drawing_path)?;
-                    if has_images {
-                        let mut resolved_images = drawing_contents.images;
-                        for image in &mut resolved_images {
-                            if let Some(rel) = drawing_rels.get(&image.media_path) {
-                                let ext = rel.target.rsplit('.').next().unwrap_or("");
-                                if let Some(fmt) =
-                                    duke_sheets_chart::ImageFormat::from_extension(ext)
-                                {
-                                    image.format = fmt;
-                                }
-                                image.media_path = rel.target.clone();
-                                if let Ok(mut f) = archive_by_name(&mut archive, &rel.target) {
-                                    let mut buf = Vec::new();
-                                    if std::io::Read::read_to_end(&mut f, &mut buf).is_ok() {
-                                        image.data = buf;
-                                    }
-                                }
-                            }
-                            if let Some(svg_rel_id) = &image.svg_media_path {
-                                if let Some(rel) = drawing_rels.get(svg_rel_id.as_str()) {
-                                    image.svg_media_path = Some(rel.target.clone());
-                                    if let Ok(mut f) = archive_by_name(&mut archive, &rel.target) {
-                                        let mut buf = Vec::new();
-                                        if std::io::Read::read_to_end(&mut f, &mut buf).is_ok() {
-                                            image.svg_data = Some(buf);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        let ws = workbook.worksheet_mut(sheet_idx).unwrap();
-                        for img in resolved_images {
-                            ws.add_image(img);
-                        }
-                    }
-                    for chart_ref in drawing_contents.chart_refs {
-                        if let Some(dr) = drawing_rels.get(&chart_ref.rel_id) {
-                            if chart_ref.is_chart_ex {
-                                if let Some(mut cx) = chart_ex::read_chart_ex(
-                                    &mut archive,
-                                    &dr.target,
-                                    chart_ref.anchor,
-                                )? {
-                                    cx.raw_mc_fallback = chart_ref.raw_mc_fallback;
-                                    read_chart_style_color_for_chart_ex(
-                                        &mut archive,
-                                        &dr.target,
-                                        &mut cx,
-                                    );
-                                    workbook.worksheet_mut(sheet_idx).unwrap().add_chart_ex(cx);
-                                }
-                            } else if let Some(mut c) =
-                                chart::read_chart(&mut archive, &dr.target, chart_ref.anchor)?
-                            {
-                                read_chart_style_color(&mut archive, &dr.target, &mut c);
-                                workbook.worksheet_mut(sheet_idx).unwrap().add_chart(c);
-                            }
-                        }
-                    }
-                }
             } else if let Some(cs_path) = chartsheet_paths.get(&sheet_entry.r_id) {
                 let mut chart_found = false;
                 let drawing_rid = chartsheet::read_chartsheet_drawing_rid(&mut archive, cs_path)?;
@@ -552,20 +729,47 @@ impl XlsxReader {
                     let cs_rels = read_sheet_rels(&mut archive, cs_path)?;
                     if let Some(drawing_rel) = cs_rels.get(&rid) {
                         let drawing_path = &drawing_rel.target;
-                        let drawing_contents =
-                            drawing::read_drawing_contents(&mut archive, drawing_path)?;
-                        let raw_anchors = drawing_contents.raw_non_chart_anchors;
+                        let entries = drawing::read_drawing_entries(&mut archive, drawing_path)?;
+                        // Chartsheets model only the chart; every other
+                        // anchor is preserved as raw bytes.
+                        let mut raw_anchors: Vec<Vec<u8>> = Vec::new();
+                        let mut chart_refs: Vec<drawing::DrawingChartRef> = Vec::new();
+                        for entry in entries {
+                            match entry.kind {
+                                drawing::DrawingEntryKind::Chart(chart_ref) => {
+                                    chart_refs.push(chart_ref)
+                                }
+                                _ => raw_anchors.push(entry.bytes),
+                            }
+                        }
+                        // Capture the relationships the raw anchors
+                        // reference, minus the modeled chart's.
+                        let verbatim_rels =
+                            workbook::read_rels_verbatim(&mut archive, drawing_path)?;
+                        let chart_ids: std::collections::HashSet<&str> =
+                            chart_refs.iter().map(|c| c.rel_id.as_str()).collect();
+                        let mut captured_ids: std::collections::HashSet<String> =
+                            std::collections::HashSet::new();
+                        let mut raw_rels: Vec<duke_sheets_core::RawRel> = Vec::new();
+                        for anchor in &raw_anchors {
+                            for rel in capture_raw_rels(&mut archive, anchor, &verbatim_rels) {
+                                if chart_ids.contains(rel.id.as_str())
+                                    || !captured_ids.insert(rel.id.clone())
+                                {
+                                    continue;
+                                }
+                                raw_rels.push(rel);
+                            }
+                        }
                         let drawing_rels = read_sheet_rels(&mut archive, drawing_path)?;
-                        for chart_ref in drawing_contents.chart_refs {
+                        for chart_ref in chart_refs {
                             if let Some(dr) = drawing_rels.get(&chart_ref.rel_id) {
                                 if chart_ref.is_chart_ex {
                                     // ChartEx in a chartsheet - skip for now (chartsheets
                                     // require a standard Chart). Parse it but don't embed.
                                     continue;
                                 }
-                                if let Some(mut c) =
-                                    chart::read_chart(&mut archive, &dr.target, chart_ref.anchor)?
-                                {
+                                if let Some(mut c) = chart::read_chart(&mut archive, &dr.target)? {
                                     read_chart_style_color(&mut archive, &dr.target, &mut c);
                                     let cs_idx = workbook.add_chartsheet_unchecked(
                                         duke_sheets_core::ChartSheet {
@@ -573,6 +777,7 @@ impl XlsxReader {
                                             chart: c,
                                             visibility: sheet_entry.visibility,
                                             raw_drawing_objects: raw_anchors.clone(),
+                                            raw_drawing_rels: raw_rels.clone(),
                                         },
                                     );
                                     workbook
@@ -593,6 +798,7 @@ impl XlsxReader {
                         ),
                         visibility: sheet_entry.visibility,
                         raw_drawing_objects: Vec::new(),
+                        raw_drawing_rels: Vec::new(),
                     });
                     workbook
                         .sheet_order_mut()
@@ -631,6 +837,251 @@ impl XlsxReader {
             }
         };
         read_styles_xml(file)
+    }
+
+    /// Assemble a worksheet's drawing list: drawing-part entries in
+    /// document order (control twins replaced by their matched
+    /// controls), unmatched controls appended in `<controls>` block
+    /// order, and comments spliced by the legacy VML shape sequence.
+    fn merge_sheet_drawings<R: Read + Seek>(
+        archive: &mut zip::ZipArchive<R>,
+        sheet_rels: &HashMap<String, SheetRelationship>,
+        pending_controls: &[form_controls::PendingControl],
+        vml_bytes: Option<&[u8]>,
+        comments: Vec<(u32, u16, duke_sheets_core::comment::CellComment)>,
+    ) -> XlsxResult<Vec<duke_sheets_core::DrawingObject>> {
+        use duke_sheets_core::DrawingObject;
+
+        let vml_shapes = vml_bytes
+            .map(duke_sheets_vml::parse_vml_shapes)
+            .unwrap_or_default();
+        let vml_controls: HashMap<u32, &duke_sheets_vml::VmlControl> = vml_shapes
+            .iter()
+            .filter_map(|shape| match &shape.kind {
+                duke_sheets_vml::VmlShapeKind::Control(control) => Some((shape.shape_num, control)),
+                _ => None,
+            })
+            .collect();
+
+        // Resolve form controls in <controls> block order: state from
+        // ctrlProps, caption from VML, anchor precedence controlPr >
+        // VML x:Anchor > (later) twin anchor.
+        let mut controls: Vec<AssembledControl> = Vec::new();
+        for pending in pending_controls {
+            let Some(rel) = sheet_rels.get(&pending.rid) else {
+                continue;
+            };
+            if !rel.rel_type.ends_with("/ctrlProp") {
+                continue;
+            }
+            let Ok(mut f) = archive_by_name(archive, &rel.target) else {
+                continue;
+            };
+            let mut bytes = Vec::new();
+            if std::io::Read::read_to_end(&mut f, &mut bytes).is_err() {
+                continue;
+            }
+            let Some(pr) = form_controls::parse_ctrl_prop(&bytes) else {
+                continue;
+            };
+            let vml = vml_controls.get(&pending.shape_id).copied();
+            if let Some(object) = form_controls::assemble_with_vml(pending, &pr, vml) {
+                let anchor_defaulted =
+                    pending.anchor.is_none() && vml.and_then(|shape| shape.anchor_px).is_none();
+                controls.push(AssembledControl {
+                    shape_id: pending.shape_id,
+                    object,
+                    anchor_defaulted,
+                    consumed: false,
+                });
+            }
+        }
+
+        // Older or partially-authored workbooks can carry Forms shapes
+        // only in VML. Surface any shape not represented by a ctrlProps
+        // entry, including unknown legacy Forms controls. Pict/ActiveX and
+        // Note shapes return None and remain outside the form-control model.
+        let mut represented: std::collections::HashSet<u32> =
+            controls.iter().map(|control| control.shape_id).collect();
+        for shape in &vml_shapes {
+            let duke_sheets_vml::VmlShapeKind::Control(vml) = &shape.kind else {
+                continue;
+            };
+            if represented.contains(&shape.shape_num) {
+                continue;
+            }
+            if let Some(object) = vml.to_drawing_object() {
+                represented.insert(shape.shape_num);
+                controls.push(AssembledControl {
+                    shape_id: shape.shape_num,
+                    object,
+                    anchor_defaulted: vml.anchor_px.is_none(),
+                    consumed: false,
+                });
+            }
+        }
+
+        // Drawing part entries in document order.
+        let mut natives: Vec<(DrawingObject, Option<u32>)> = Vec::new();
+        let mut drawing_targets: Vec<(String, String)> = sheet_rels
+            .iter()
+            .filter(|(_, r)| r.rel_type.ends_with("/drawing"))
+            .map(|(id, r)| (id.clone(), r.target.clone()))
+            .collect();
+        // Numeric-aware sort so rId2 precedes rId10.
+        drawing_targets.sort_by_key(|(id, _)| {
+            (
+                id.strip_prefix("rId")
+                    .and_then(|n| n.parse::<u64>().ok())
+                    .unwrap_or(u64::MAX),
+                id.clone(),
+            )
+        });
+        for (_, drawing_path) in &drawing_targets {
+            let entries = drawing::read_drawing_entries(archive, drawing_path)?;
+            if entries.is_empty() {
+                continue;
+            }
+            let drawing_rels = read_sheet_rels(archive, drawing_path)?;
+            let verbatim_rels = workbook::read_rels_verbatim(archive, drawing_path)?;
+            for entry in entries {
+                match entry.kind {
+                    drawing::DrawingEntryKind::Image(pic) => {
+                        let pic = *pic;
+                        // Preserve the cNvPr name verbatim (even when
+                        // empty) so the writer re-emits name=""
+                        // byte-identically.
+                        let name = pic.name.clone();
+                        let descr = pic.descr.clone();
+                        let title = pic.title.clone();
+                        let hidden = pic.hidden;
+                        let image = resolve_pic_image(archive, &drawing_rels, pic, false);
+                        let mut object = DrawingObject::image(image).with_anchor(entry.anchor);
+                        object.meta.name = Some(name);
+                        object.meta.alt_text = descr;
+                        object.meta.title = title;
+                        object.meta.hidden = hidden;
+                        object.meta.locked = entry.locked;
+                        object.meta.printable = entry.printable;
+                        natives.push((object, None));
+                    }
+                    drawing::DrawingEntryKind::Shape(shape) => {
+                        let mut object = DrawingObject::shape(shape_from_parsed(&shape))
+                            .with_anchor(entry.anchor);
+                        object.meta.name = Some(shape.name.clone());
+                        object.meta.alt_text = shape.descr.clone();
+                        object.meta.title = shape.title.clone();
+                        object.meta.hidden = shape.hidden;
+                        object.meta.locked = entry.locked;
+                        object.meta.printable = entry.printable;
+                        natives.push((object, None));
+                    }
+                    drawing::DrawingEntryKind::Chart(chart_ref) => {
+                        let Some(dr) = drawing_rels.get(&chart_ref.rel_id) else {
+                            continue;
+                        };
+                        if chart_ref.is_chart_ex {
+                            if let Some(mut cx) = chart_ex::read_chart_ex(archive, &dr.target)? {
+                                cx.raw_mc_fallback = chart_ref.raw_mc_fallback;
+                                read_chart_style_color_for_chart_ex(archive, &dr.target, &mut cx);
+                                let mut object =
+                                    DrawingObject::chart_ex(cx).with_anchor(chart_ref.anchor);
+                                object.meta.name = chart_ref.name;
+                                object.meta.alt_text = chart_ref.descr;
+                                object.meta.title = chart_ref.title;
+                                object.meta.hidden = chart_ref.hidden;
+                                object.meta.locked = entry.locked;
+                                object.meta.printable = entry.printable;
+                                natives.push((object, None));
+                            }
+                        } else if let Some(mut c) = chart::read_chart(archive, &dr.target)? {
+                            read_chart_style_color(archive, &dr.target, &mut c);
+                            let mut object = DrawingObject::chart(c).with_anchor(chart_ref.anchor);
+                            object.meta.name = chart_ref.name;
+                            object.meta.alt_text = chart_ref.descr;
+                            object.meta.title = chart_ref.title;
+                            object.meta.hidden = chart_ref.hidden;
+                            object.meta.locked = entry.locked;
+                            object.meta.printable = entry.printable;
+                            natives.push((object, None));
+                        }
+                    }
+                    drawing::DrawingEntryKind::Group(group) => {
+                        let name = group.name.clone();
+                        let descr = group.descr.clone();
+                        let title = group.title.clone();
+                        let hidden = group.hidden;
+                        let built = build_group(archive, &drawing_rels, group, &mut controls);
+                        let mut object = DrawingObject::group(built).with_anchor(entry.anchor);
+                        object.meta.name = Some(name);
+                        object.meta.alt_text = descr;
+                        object.meta.title = title;
+                        object.meta.hidden = hidden;
+                        object.meta.locked = entry.locked;
+                        object.meta.printable = entry.printable;
+                        natives.push((object, None));
+                    }
+                    drawing::DrawingEntryKind::ControlTwin(twin) => {
+                        // The twin is a placeholder for the matched
+                        // legacy control; unmatched twins are dropped.
+                        if let Some((shape_id, mut object, anchor_defaulted)) =
+                            take_control(&mut controls, twin.shape_num)
+                        {
+                            if anchor_defaulted {
+                                object.anchor = entry.anchor;
+                            }
+                            if let Some(name) = twin.name {
+                                object.meta.name = Some(name);
+                            }
+                            if twin.descr.is_some() {
+                                object.meta.alt_text = twin.descr;
+                            }
+                            object.meta.title = twin.title;
+                            if let Some(control) = object.kind.as_form_control_mut() {
+                                // Foreign files may put a txBody on
+                                // twins of caption-less kinds; ignore
+                                // the stray text.
+                                if let (Some(text), Some(caption)) =
+                                    (twin.text.as_ref(), control.caption_mut())
+                                {
+                                    *caption = form_controls::control_text_from_twin(text);
+                                }
+                                if control.macro_name.is_none() {
+                                    control.macro_name = twin
+                                        .macro_name
+                                        .as_deref()
+                                        .map(duke_sheets_vml::decode_macro_formula);
+                                }
+                            }
+                            natives.push((object, Some(shape_id)));
+                        }
+                    }
+                    drawing::DrawingEntryKind::Raw => {
+                        let rels = capture_raw_rels(archive, &entry.bytes, &verbatim_rels);
+                        let object = DrawingObject::raw(duke_sheets_core::RawDrawing {
+                            bytes: entry.bytes,
+                            rels,
+                        })
+                        .with_anchor(entry.anchor);
+                        natives.push((object, None));
+                    }
+                }
+            }
+        }
+
+        // Unmatched controls (no twin; legacy files) append after all
+        // native entries, in <controls> block order.
+        for control in controls {
+            if !control.consumed {
+                natives.push((control.object, Some(control.shape_id)));
+            }
+        }
+
+        Ok(duke_sheets_vml::splice_comments(
+            natives,
+            comments,
+            &vml_shapes,
+        ))
     }
 
     /// Extract _xlnm.Print_Area and _xlnm.Print_Titles from named ranges
@@ -828,6 +1279,17 @@ impl XlsxReader {
                                 match attr.key.local_name().as_ref() {
                                     b"locked" => pending.locked = truthy,
                                     b"print" => pending.printable = truthy,
+                                    b"altText" => {
+                                        pending.alt_text =
+                                            Some(String::from_utf8_lossy(&attr.value).into_owned())
+                                    }
+                                    b"macro" => {
+                                        pending.macro_name = Some(
+                                            duke_sheets_vml::decode_macro_formula(
+                                                &String::from_utf8_lossy(&attr.value),
+                                            ),
+                                        )
+                                    }
                                     _ => {}
                                 }
                             }

@@ -71,6 +71,10 @@ export declare class CellValue {
  * ```
  */
 export declare class Workbook {
+  /** Synchronize current form-control state into linked cells. */
+  syncFormControls(): number
+  /** Drive form controls from formula-backed linked cells. */
+  syncFormControlsFromLinkedCells(): number
   /** Whether the workbook has no worksheets. */
   get isEmpty(): boolean
   /** The index of the active (selected) worksheet. */
@@ -251,6 +255,60 @@ export declare class Workbook {
  * contain a value (number, text, boolean) or a formula.
  */
 export declare class Worksheet {
+  /** Recursive top-level drawings in back-to-front z-order. */
+  get drawings(): object[]
+  /** All form controls in depth-first drawing order. */
+  get formControls(): object[]
+  get formControlCount(): number
+  /** All embedded images in depth-first drawing order, without image bytes. */
+  get images(): object[]
+  get imageCount(): number
+  /** All standard charts in depth-first drawing order. */
+  get charts(): object[]
+  get chartCount(): number
+  /** All ChartEx charts in depth-first drawing order. */
+  get chartsEx(): object[]
+  get chartExCount(): number
+  /** Append a top-level drawing and return its global z-order index. */
+  addDrawing(input: object): number
+  /**
+   * Insert a top-level drawing at a global z-order index. Drawing
+   * paths are positional; mutating the list invalidates previously
+   * returned paths.
+   */
+  insertDrawing(index: number, input: object): void
+  /**
+   * Replace a top-level drawing or nested group child. Drawing
+   * paths are positional; mutating the list invalidates previously
+   * returned paths.
+   */
+  setDrawing(path: number[], input: object): void
+  /**
+   * Remove a top-level drawing or nested group child. Drawing
+   * paths are positional; mutating the list invalidates previously
+   * returned paths.
+   */
+  removeDrawing(path: Array<number>): void
+  /**
+   * Move a top-level drawing to another z-order index. Drawing
+   * paths are positional; mutating the list invalidates previously
+   * returned paths.
+   */
+  moveDrawing(from: number, to: number): void
+  /**
+   * Lazily copy the bytes for an image at a drawing path. Paths are
+   * positional; mutating the drawing list invalidates previously
+   * returned paths.
+   */
+  drawingImageData(path: Array<number>): Buffer
+  /**
+   * Lazily copy an image's SVG companion bytes, when present. Paths
+   * are positional; mutating the drawing list invalidates previously
+   * returned paths.
+   */
+  drawingSvgData(path: Array<number>): Buffer | null
+  /** Apply checkbox/radio semantics and synchronize linked cells immediately. */
+  setFormControlCheckState(path: Array<number>, state: JsCheckState): JsFormControlInteractionResult
   /** Sheet visibility: "visible", "hidden", or "veryHidden". */
   get visibility(): string
   /** Whether the worksheet is selected. */
@@ -382,22 +440,6 @@ export declare class Worksheet {
   getMergeSpan(row: number, col: number): JsMergeSpan | null
   /** Whether a cell is a non-origin member of a merged region (should be skipped when rendering). */
   isMergedSecondary(row: number, col: number): boolean
-  /** Get all charts embedded in the worksheet. */
-  get charts(): Array<JsChart>
-  /** Number of charts in the worksheet. */
-  get chartCount(): number
-  /** Get all ChartEx charts (Office 2016+ extended charts) in the worksheet. */
-  get chartsEx(): Array<JsChartEx>
-  /** Number of ChartEx charts in the worksheet. */
-  get chartExCount(): number
-  /** Get all embedded images in the worksheet. */
-  get images(): Array<JsEmbeddedImage>
-  /** Number of embedded images in the worksheet. */
-  get imageCount(): number
-  /** Get all form controls in worksheet order. */
-  get formControls(): Array<JsFormControl>
-  /** Number of form controls in the worksheet. */
-  get formControlCount(): number
   /** Get the worksheet name */
   get name(): string
   /**
@@ -464,12 +506,6 @@ export declare class Worksheet {
   mergeCells(rangeStr: string): void
   /** Unmerge cells in a range */
   unmergeCells(rangeStr: string): boolean
-  /** Append a form control and return its zero-based index. */
-  addFormControl(control: JsFormControlInput): number
-  /** Replace a form control by zero-based index. */
-  setFormControl(index: number, control: JsFormControlInput): void
-  /** Remove a form control by zero-based index. */
-  removeFormControl(index: number): void
 }
 
 /**
@@ -624,7 +660,6 @@ export interface JsChart {
   categoryAxis?: JsAxis
   valueAxis?: JsAxis
   legend?: JsLegend
-  anchor: JsDrawingAnchor
   dataLabels?: JsDataLabels
   view3D?: JsView3D
   dataTable?: JsChartDataTable
@@ -676,7 +711,6 @@ export interface JsChartEx {
   data: Array<JsChartExData>
   plotArea: JsChartExPlotArea
   legend?: JsChartExLegend
-  anchor: JsDrawingAnchor
   shapeProperties?: JsChartShapeProperties
   formatOverrides: Array<JsChartExFormatOverride>
   printSettings?: JsChartExPrintSettings
@@ -1117,42 +1151,6 @@ export interface JsDataValidation {
   formula?: string
 }
 
-/**
- * Flat two-cell drawing anchor. Objects read from files with
- * one-cell or absolute anchors are flattened to from/to markers at
- * Excel's default cell metrics, with `editAs` preserving the
- * original sizing behavior.
- */
-export interface JsDrawingAnchor {
-  fromCol: number
-  fromRow: number
-  fromColOffset: number
-  fromRowOffset: number
-  toCol: number
-  toRow: number
-  toColOffset: number
-  toRowOffset: number
-  /** One of `"twoCell"`, `"oneCell"`, or `"absolute"`. */
-  editAs: string
-}
-
-export interface JsEmbeddedImage {
-  id: number
-  name: string
-  description?: string
-  anchor: JsDrawingAnchor
-  format: string
-  mediaPath: string
-  svgMediaPath?: string
-  widthEmu: number
-  heightEmu: number
-  rotation?: number
-  flipH: boolean
-  flipV: boolean
-  data: Buffer
-  svgData?: Buffer
-}
-
 /** Error bars attached to a data series. */
 export interface JsErrorBars {
   direction: string
@@ -1241,40 +1239,10 @@ export interface JsFontStylePatch {
   scheme?: string
 }
 
-export interface JsFormControl {
-  name?: string
-  anchor: JsDrawingAnchor
-  kind: JsFormControlKind
-  locked: boolean
-  printable: boolean
+export interface JsFormControlInteractionResult {
+  controlsChanged: number
+  linkedCellsChanged: number
 }
-
-export interface JsFormControlInput {
-  name?: string
-  anchor: JsDrawingAnchor
-  kind: JsFormControlKind
-  locked?: boolean
-  printable?: boolean
-}
-
-/**
- * Kind-specific form-control data. `kind` is the TypeScript
- * discriminator. List box and dropdown `selected` item indexes are
- * zero-based; a linked cell still receives Excel's one-based value.
- * `firstInGroup` is read-side information: writers recompute radio
- * grouping from group-box containment and mark each group's first
- * radio, so input values are ignored.
- */
-export type JsFormControlKind =
-  | { kind: 'button', caption: string }
-  | { kind: 'checkbox', caption: string, state: JsCheckState, cellLink?: string, no3D: boolean }
-  | { kind: 'optionButton', caption: string, state: JsCheckState, cellLink?: string, firstInGroup?: boolean, no3D: boolean }
-  | { kind: 'label', caption: string }
-  | { kind: 'groupBox', caption: string, no3D: boolean }
-  | { kind: 'listBox', inputRange?: string, cellLink?: string, selection: JsListSelection, selected: Array<number>, no3D: boolean }
-  | { kind: 'dropdown', inputRange?: string, cellLink?: string, selected?: number, lines: number, no3D: boolean }
-  | { kind: 'scrollbar', value: number, min: number, max: number, increment: number, page: number, horizontal: boolean, cellLink?: string }
-  | { kind: 'spinner', value: number, min: number, max: number, increment: number, cellLink?: string }
 
 /** A formula cell with address. */
 export interface JsFormulaCell {

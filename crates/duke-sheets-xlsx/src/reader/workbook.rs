@@ -288,6 +288,101 @@ pub(super) fn read_workbook_rels<R: Read + Seek>(
     })
 }
 
+/// A relationship with its original (unresolved) target, as written
+/// in the .rels part. Used to preserve raw drawing relationships
+/// byte-faithfully.
+#[derive(Debug, Clone)]
+pub(super) struct VerbatimRel {
+    pub(super) rel_type: String,
+    /// Target exactly as in the rels XML (relative or absolute).
+    pub(super) target: String,
+    /// TargetMode="External".
+    pub(super) external: bool,
+}
+
+/// Read a part's .rels keeping original targets and TargetMode.
+pub(super) fn read_rels_verbatim<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    part_path: &str,
+) -> XlsxResult<HashMap<String, VerbatimRel>> {
+    let (base_dir, file_name) = match part_path.rsplit_once('/') {
+        Some((dir, file)) => (dir, file),
+        None => return Ok(HashMap::new()),
+    };
+    let rels_path = format!("{}/_rels/{}.rels", base_dir, file_name);
+
+    let file = match archive_by_name(archive, &rels_path) {
+        Ok(f) => f,
+        Err(_) => return Ok(HashMap::new()),
+    };
+
+    let reader = BufReader::new(file);
+    let mut xml_reader = Reader::from_reader(reader);
+    xml_reader.config_mut().trim_text(true);
+
+    let mut buf = Vec::new();
+    let mut rels = HashMap::new();
+
+    loop {
+        match xml_reader.read_event_into(&mut buf) {
+            Ok(Event::Empty(e)) | Ok(Event::Start(e))
+                if e.name().local_name().as_ref() == b"Relationship" =>
+            {
+                let mut id = None;
+                let mut target = None;
+                let mut rel_type = None;
+                let mut target_mode = None;
+
+                for attr in e.attributes().flatten() {
+                    match attr.key.local_name().as_ref() {
+                        b"Id" => id = attr.unescape_value().ok().map(|s| s.to_string()),
+                        b"Target" => target = attr.unescape_value().ok().map(|s| s.to_string()),
+                        b"Type" => rel_type = attr.unescape_value().ok().map(|s| s.to_string()),
+                        b"TargetMode" => {
+                            target_mode = attr.unescape_value().ok().map(|s| s.to_string())
+                        }
+                        _ => {}
+                    }
+                }
+
+                if let (Some(id), Some(target), Some(rel_type)) = (id, target, rel_type) {
+                    rels.insert(
+                        id,
+                        VerbatimRel {
+                            rel_type,
+                            target,
+                            external: target_mode.as_deref() == Some("External"),
+                        },
+                    );
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(XlsxError::Xml(e)),
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(rels)
+}
+
+/// Resolve a relationship target against a base directory (e.g.
+/// "xl/drawings"): `../media/image5.png` -> `xl/media/image5.png`.
+pub(super) fn resolve_rel_target(base_dir: &str, target: &str) -> String {
+    if let Some(stripped) = target.strip_prefix('/') {
+        return stripped.to_string();
+    }
+    let mut parts: Vec<&str> = base_dir.split('/').collect();
+    for part in target.split('/') {
+        if part == ".." {
+            parts.pop();
+        } else if part != "." && !part.is_empty() {
+            parts.push(part);
+        }
+    }
+    parts.join("/")
+}
+
 /// Read per-sheet .rels to get hyperlinks, comments, tables, etc.
 pub(super) fn read_sheet_rels<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
