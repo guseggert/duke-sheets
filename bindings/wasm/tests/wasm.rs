@@ -653,6 +653,134 @@ fn test_drawing_mutation_and_raw_rejection() {
     assert!(sheet.add_drawing(raw).is_err());
 }
 
+fn comment_drawing(anchor: JsValue, row: u32, col: u32, text: &str) -> JsValue {
+    let comment = make_options(&[
+        ("row", JsValue::from_f64(row as f64)),
+        ("col", JsValue::from_f64(col as f64)),
+        ("author", JsValue::from_str("author")),
+        ("text", JsValue::from_str(text)),
+    ]);
+    make_options(&[
+        ("anchor", anchor),
+        ("kind", JsValue::from_str("comment")),
+        ("comment", comment),
+    ])
+}
+
+fn form_control_kind(control: &JsValue) -> JsValue {
+    Reflect::get(
+        &Reflect::get(control, &"formControl".into()).unwrap(),
+        &"kind".into(),
+    )
+    .unwrap()
+}
+
+fn byte_array_to_vec(value: &JsValue) -> Vec<u8> {
+    Array::from(value)
+        .iter()
+        .map(|item| item.as_f64().unwrap() as u8)
+        .collect()
+}
+
+#[wasm_bindgen_test]
+fn test_unknown_control_passthrough_survives_set_drawing_and_save() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    let raw_properties = make_array(&[
+        make_array(&[JsValue::from_str("customFlag"), JsValue::from_str("kept")]),
+        make_array(&[JsValue::from_str("val"), JsValue::from_str("17")]),
+        make_array(&[JsValue::from_str("fmlaLink"), JsValue::from_str("$A$1")]),
+    ]);
+    let raw_client_data = make_array(&[make_array(
+        &b"<x:Val>17</x:Val>"
+            .iter()
+            .map(|byte| JsValue::from_f64(f64::from(*byte)))
+            .collect::<Vec<_>>(),
+    )]);
+    sheet
+        .add_drawing(form_control_drawing(
+            "Legacy editor",
+            drawing_anchor(1, 2, 3, 4),
+            make_options(&[
+                ("kind", JsValue::from_str("unknown")),
+                ("objectType", JsValue::from_str("EditBox")),
+                ("caption", drawing_text("Unsupported editor")),
+                ("rawProperties", raw_properties),
+                ("rawClientData", raw_client_data),
+            ]),
+        ))
+        .unwrap();
+    let bytes = wb.save_xlsx_bytes().unwrap();
+
+    let first = Workbook::from_bytes(&bytes).unwrap();
+    let sheet = first.get_sheet(0).unwrap();
+    let control = Array::from(&sheet.form_controls().unwrap()).get(0);
+    let kind = form_control_kind(&control);
+    assert_eq!(get_string_field(&kind, "kind"), "unknown");
+    assert_eq!(get_string_field(&kind, "objectType"), "EditBox");
+    let properties = Array::from(&Reflect::get(&kind, &"rawProperties".into()).unwrap());
+    let property_count = properties.length();
+    assert!(
+        property_count >= 3,
+        "expected raw properties to survive the read, got {property_count}"
+    );
+    let client_data = Array::from(&Reflect::get(&kind, &"rawClientData".into()).unwrap());
+    assert!(client_data.length() >= 1);
+
+    // Identity rewrite: the read snapshot keeps its passthrough data.
+    sheet.set_drawing(drawing_path(&[0]), control).unwrap();
+    let bytes = first.save_xlsx_bytes().unwrap();
+
+    let second = Workbook::from_bytes(&bytes).unwrap();
+    let sheet = second.get_sheet(0).unwrap();
+    let control = Array::from(&sheet.form_controls().unwrap()).get(0);
+    let kind = form_control_kind(&control);
+    assert_eq!(get_string_field(&kind, "objectType"), "EditBox");
+    let properties = Array::from(&Reflect::get(&kind, &"rawProperties".into()).unwrap());
+    assert_eq!(properties.length(), property_count);
+    let has_custom_flag = properties.iter().any(|pair| {
+        let pair = Array::from(&pair);
+        pair.get(0).as_string().as_deref() == Some("customFlag")
+            && pair.get(1).as_string().as_deref() == Some("kept")
+    });
+    assert!(has_custom_flag, "customFlag raw property must survive rewrite");
+    let client_data = Array::from(&Reflect::get(&kind, &"rawClientData".into()).unwrap());
+    let has_val_fragment = client_data.iter().any(|fragment| {
+        String::from_utf8_lossy(&byte_array_to_vec(&fragment)).contains("<x:Val>17</x:Val>")
+    });
+    assert!(has_val_fragment, "raw ClientData fragment must survive rewrite");
+}
+
+#[wasm_bindgen_test]
+fn test_set_drawing_rejects_duplicate_comment_cell() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    sheet
+        .add_drawing(comment_drawing(drawing_anchor(2, 0, 4, 2), 0, 0, "first"))
+        .unwrap();
+    sheet
+        .add_drawing(comment_drawing(drawing_anchor(2, 4, 4, 6), 4, 0, "second"))
+        .unwrap();
+
+    // Replacing the second comment with one for the first comment's
+    // cell must be rejected.
+    assert!(sheet
+        .set_drawing(
+            drawing_path(&[1]),
+            comment_drawing(drawing_anchor(2, 4, 4, 6), 0, 0, "duplicate"),
+        )
+        .is_err());
+
+    // Replacing a comment in place (same cell) stays allowed.
+    sheet
+        .set_drawing(
+            drawing_path(&[0]),
+            comment_drawing(drawing_anchor(2, 0, 4, 2), 0, 0, "updated"),
+        )
+        .unwrap();
+    assert_eq!(Array::from(&sheet.drawings().unwrap()).length(), 2);
+}
+
 #[wasm_bindgen_test]
 fn test_form_control_radio_semantics_and_linked_cell_sync() {
     let wb = Workbook::new();

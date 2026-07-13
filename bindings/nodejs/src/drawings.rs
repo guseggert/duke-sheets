@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use serde::{Deserialize, Serialize};
@@ -581,6 +583,18 @@ enum DrawingFormControlKind {
         legacy_object_type: Option<u16>,
         #[serde(default)]
         caption: DrawingText,
+        /// Internal passthrough of unmodeled XLSX `formControlPr`
+        /// attributes; echoed back unchanged on write.
+        #[serde(default)]
+        raw_properties: Vec<(String, String)>,
+        /// Internal passthrough of unmodeled VML `ClientData` children
+        /// (Buffers in JS); echoed back unchanged on write.
+        #[serde(default)]
+        raw_client_data: Vec<ByteBuf>,
+        /// Internal passthrough of the original BIFF OBJ body (Buffer
+        /// in JS), required for XLS rewrite.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        raw_obj: Option<ByteBuf>,
     },
 }
 
@@ -681,11 +695,20 @@ impl From<&core::FormControlKind> for DrawingFormControlKind {
                 object_type,
                 legacy_object_type,
                 caption,
-                ..
+                raw_properties,
+                raw_client_data,
+                raw_obj,
             } => Self::Unknown {
                 object_type: object_type.clone(),
                 legacy_object_type: *legacy_object_type,
                 caption: DrawingText::from(caption),
+                raw_properties: raw_properties.clone(),
+                raw_client_data: raw_client_data
+                    .iter()
+                    .cloned()
+                    .map(ByteBuf::from)
+                    .collect(),
+                raw_obj: raw_obj.clone().map(ByteBuf::from),
             },
         }
     }
@@ -790,13 +813,19 @@ impl TryFrom<DrawingFormControlKind> for core::FormControlKind {
                 object_type,
                 legacy_object_type,
                 caption,
+                raw_properties,
+                raw_client_data,
+                raw_obj,
             } => Self::Unknown {
                 object_type,
                 legacy_object_type,
                 caption: caption.try_into()?,
-                raw_properties: Vec::new(),
-                raw_client_data: Vec::new(),
-                raw_obj: None,
+                raw_properties,
+                raw_client_data: raw_client_data
+                    .into_iter()
+                    .map(ByteBuf::into_vec)
+                    .collect(),
+                raw_obj: raw_obj.map(ByteBuf::into_vec),
             },
         })
     }
@@ -1630,6 +1659,60 @@ fn count_drawings(sheet: &core::Worksheet, filter: DrawingFilter) -> Result<u32>
     u32::try_from(count).map_err(|_| napi::Error::from_reason("drawing count exceeds u32"))
 }
 
+fn path_starts_with(path: &[usize], prefix: &[usize]) -> bool {
+    path.len() >= prefix.len() && path[..prefix.len()] == *prefix
+}
+
+fn collect_comment_cells(
+    kind: &core::DrawingKind,
+    cells: &mut BTreeSet<(u32, u16)>,
+) -> Result<()> {
+    match kind {
+        core::DrawingKind::Comment { row, col, .. } => {
+            if !cells.insert((*row, *col)) {
+                return Err(napi::Error::from_reason(format!(
+                    "drawing input contains more than one comment for cell ({row}, {col})"
+                )));
+            }
+        }
+        core::DrawingKind::Group(group) => {
+            for child in &group.children {
+                collect_comment_cells(&child.kind, cells)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Enforce one comment per cell: reject comments in `replacement`
+/// whose cell already has a comment elsewhere on the sheet, ignoring
+/// drawings at or under `replaced_path`.
+fn ensure_comment_cells_available(
+    sheet: &core::Worksheet,
+    replacement: &core::DrawingKind,
+    replaced_path: Option<&[usize]>,
+) -> Result<()> {
+    let mut new_cells = BTreeSet::new();
+    collect_comment_cells(replacement, &mut new_cells)?;
+    if new_cells.is_empty() {
+        return Ok(());
+    }
+    for (path, node) in sheet.drawings_flat() {
+        if replaced_path.is_some_and(|prefix| path_starts_with(&path, prefix)) {
+            continue;
+        }
+        if let core::DrawingKind::Comment { row, col, .. } = node.kind {
+            if new_cells.contains(&(*row, *col)) {
+                return Err(napi::Error::from_reason(format!(
+                    "cell ({row}, {col}) already has a comment"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[napi(object)]
 pub struct JsFormControlInteractionResult {
     pub controls_changed: u32,
@@ -1765,6 +1848,7 @@ impl Worksheet {
             let sheet = workbook
                 .worksheet_mut(self.sheet_index)
                 .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            ensure_comment_cells_available(sheet, &object.kind, None)?;
             let index = sheet.try_add_drawing(object).map_err(to_napi_err)?;
             u32::try_from(index)
                 .map_err(|_| napi::Error::from_reason("drawing index exceeds u32"))
@@ -1782,6 +1866,7 @@ impl Worksheet {
             let sheet = workbook
                 .worksheet_mut(self.sheet_index)
                 .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            ensure_comment_cells_available(sheet, &object.kind, None)?;
             sheet
                 .insert_drawing(index as usize, object)
                 .map_err(to_napi_err)
@@ -1807,16 +1892,18 @@ impl Worksheet {
             if path.len() == 1 {
                 let object = input.into_object().map_err(napi::Error::from_reason)?;
                 let count = sheet.drawings().len();
-                let slot = sheet.drawings_mut().get_mut(path[0]).ok_or_else(|| {
-                    napi::Error::from_reason(format!(
+                if path[0] >= count {
+                    return Err(napi::Error::from_reason(format!(
                         "drawing path {path:?} out of bounds (count: {count})"
-                    ))
-                })?;
-                *slot = object;
+                    )));
+                }
+                ensure_comment_cells_available(sheet, &object.kind, Some(&path))?;
+                sheet.drawings_mut()[path[0]] = object;
                 return Ok(());
             }
 
             let child = input.into_child().map_err(napi::Error::from_reason)?;
+            ensure_comment_cells_available(sheet, &child.kind, Some(&path))?;
             let (&child_index, parent_path) = path
                 .split_last()
                 .ok_or_else(|| napi::Error::from_reason("drawing path cannot be empty"))?;

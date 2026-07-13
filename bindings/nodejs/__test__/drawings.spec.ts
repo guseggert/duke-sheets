@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import * as path from "node:path";
+import * as os from "node:os";
+import * as fs from "node:fs";
 import {
   Workbook,
   type DrawingAnchor,
@@ -157,6 +160,94 @@ describe("unified drawings", () => {
     expect(sheet.formControlCount).toBe(0);
     sheet.removeDrawing([2]);
     expect(sheet.drawings.map((drawing) => drawing.name)).toEqual(["three", "replaced", undefined]);
+  });
+
+  it("preserves unknown-control passthrough data through read, setDrawing, and save", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "duke-drawings-"));
+    const filePath = path.join(tmpDir, "unknown.xlsx");
+    try {
+      const wb = new Workbook();
+      wb.getSheet(0).addDrawing({
+        name: "Legacy editor",
+        anchor: anchor(1, 2, 3, 4),
+        kind: "formControl",
+        formControl: {
+          kind: {
+            kind: "unknown",
+            objectType: "EditBox",
+            caption: text("Unsupported editor"),
+            rawProperties: [
+              ["customFlag", "kept"],
+              ["val", "17"],
+              ["fmlaLink", "$A$1"],
+            ],
+            rawClientData: [Buffer.from("<x:Val>17</x:Val>")],
+          },
+        },
+      });
+      wb.save(filePath);
+
+      const readUnknown = (workbook: Workbook) => {
+        const control = workbook.getSheet(0).formControls[0];
+        const kind = control.formControl.kind;
+        if (kind.kind !== "unknown") throw new Error("expected unknown control");
+        return { control, kind };
+      };
+
+      const first = Workbook.fromBytes(fs.readFileSync(filePath));
+      const { control, kind } = readUnknown(first);
+      expect(kind.objectType).toBe("EditBox");
+      expect(kind.rawProperties).toContainEqual(["customFlag", "kept"]);
+      const propertyCount = kind.rawProperties.length;
+      expect(propertyCount).toBeGreaterThanOrEqual(3);
+      expect(kind.rawClientData.length).toBeGreaterThanOrEqual(1);
+
+      // Identity rewrite: the read snapshot keeps its passthrough data.
+      first.getSheet(0).setDrawing([0], control);
+      first.save(filePath);
+
+      const second = readUnknown(Workbook.fromBytes(fs.readFileSync(filePath)));
+      expect(second.kind.objectType).toBe("EditBox");
+      expect(second.kind.rawProperties.length).toBe(propertyCount);
+      expect(second.kind.rawProperties).toContainEqual(["customFlag", "kept"]);
+      expect(
+        second.kind.rawClientData.some((fragment) =>
+          Buffer.from(fragment).toString("utf8").includes("<x:Val>17</x:Val>"),
+        ),
+      ).toBe(true);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a setDrawing comment replacement that duplicates another cell's comment", () => {
+    const sheet = new Workbook().getSheet(0);
+    sheet.addDrawing({
+      anchor: anchor(2, 0, 4, 2),
+      kind: "comment",
+      comment: { row: 0, col: 0, author: "a", text: "first" },
+    });
+    sheet.addDrawing({
+      anchor: anchor(2, 4, 4, 6),
+      kind: "comment",
+      comment: { row: 4, col: 0, author: "a", text: "second" },
+    });
+
+    expect(() =>
+      sheet.setDrawing([1], {
+        anchor: anchor(2, 4, 4, 6),
+        kind: "comment",
+        comment: { row: 0, col: 0, author: "a", text: "duplicate" },
+      }),
+    ).toThrow(/already has a comment/);
+
+    // Replacing a comment in place (same cell) stays allowed.
+    sheet.setDrawing([0], {
+      anchor: anchor(2, 0, 4, 2),
+      kind: "comment",
+      comment: { row: 0, col: 0, author: "a", text: "updated" },
+    });
+    expect(sheet.drawings.filter((drawing) => drawing.kind === "comment")).toHaveLength(2);
   });
 
   it("applies radio semantics and updates the linked cell", () => {

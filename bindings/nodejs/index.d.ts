@@ -331,7 +331,14 @@ export type FormControlKind =
   | { kind: 'dropdown'; inputRange?: string; cellLink?: string; selected?: number; lines: number; no3D: boolean }
   | { kind: 'scrollbar'; value: number; min: number; max: number; increment: number; page: number; horizontal: boolean; cellLink?: string }
   | { kind: 'spinner'; value: number; min: number; max: number; increment: number; cellLink?: string }
-  | { kind: 'unknown'; objectType: string; legacyObjectType?: number; caption: DrawingText }
+  /**
+   * Unsupported legacy control. `rawProperties` (unmodeled XLSX
+   * formControlPr attributes), `rawClientData` (unmodeled VML ClientData
+   * fragments), and `rawObj` (original BIFF OBJ body) are opaque internal
+   * passthrough data; echo them back unchanged so a read -> setDrawing
+   * round trip preserves the control on rewrite.
+   */
+  | { kind: 'unknown'; objectType: string; legacyObjectType?: number; caption: DrawingText; rawProperties: Array<[string, string]>; rawClientData: Buffer[]; rawObj?: Buffer }
 
 export type FormControlKindInput =
   | { kind: 'button'; caption: DrawingText }
@@ -343,7 +350,12 @@ export type FormControlKindInput =
   | { kind: 'dropdown'; inputRange?: string; cellLink?: string; selected?: number; lines: number; no3D?: boolean }
   | { kind: 'scrollbar'; value: number; min: number; max: number; increment: number; page: number; horizontal?: boolean; cellLink?: string }
   | { kind: 'spinner'; value: number; min: number; max: number; increment: number; cellLink?: string }
-  | { kind: 'unknown'; objectType: string; legacyObjectType?: number; caption?: DrawingText }
+  /**
+   * The raw* fields are opaque internal passthrough data (see
+   * FormControlKind); omit them for hand-authored controls and echo them
+   * back unchanged when rewriting a control read from a file.
+   */
+  | { kind: 'unknown'; objectType: string; legacyObjectType?: number; caption?: DrawingText; rawProperties?: Array<[string, string]>; rawClientData?: Buffer[]; rawObj?: Buffer }
 
 export interface FormControlPayload {
   kind: FormControlKind

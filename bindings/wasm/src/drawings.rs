@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
@@ -687,6 +689,18 @@ enum WasmFormControlKind {
         legacy_object_type: Option<u16>,
         #[serde(default)]
         caption: WasmDrawingText,
+        /// Internal passthrough of unmodeled XLSX `formControlPr`
+        /// attributes; echoed back unchanged on write.
+        #[serde(default)]
+        raw_properties: Vec<(String, String)>,
+        /// Internal passthrough of unmodeled VML `ClientData` children
+        /// (byte arrays in JS); echoed back unchanged on write.
+        #[serde(default)]
+        raw_client_data: Vec<Vec<u8>>,
+        /// Internal passthrough of the original BIFF OBJ body (byte
+        /// array in JS), required for XLS rewrite.
+        #[serde(default)]
+        raw_obj: Option<Vec<u8>>,
     },
 }
 
@@ -787,11 +801,16 @@ impl From<&core::FormControlKind> for WasmFormControlKind {
                 object_type,
                 legacy_object_type,
                 caption,
-                ..
+                raw_properties,
+                raw_client_data,
+                raw_obj,
             } => Self::Unknown {
                 object_type: object_type.clone(),
                 legacy_object_type: *legacy_object_type,
                 caption: WasmDrawingText::from(caption),
+                raw_properties: raw_properties.clone(),
+                raw_client_data: raw_client_data.clone(),
+                raw_obj: raw_obj.clone(),
             },
         }
     }
@@ -896,13 +915,16 @@ impl TryFrom<WasmFormControlKind> for core::FormControlKind {
                 object_type,
                 legacy_object_type,
                 caption,
+                raw_properties,
+                raw_client_data,
+                raw_obj,
             } => Self::Unknown {
                 object_type,
                 legacy_object_type,
                 caption: caption.try_into()?,
-                raw_properties: Vec::new(),
-                raw_client_data: Vec::new(),
-                raw_obj: None,
+                raw_properties,
+                raw_client_data,
+                raw_obj,
             },
         })
     }
@@ -1629,6 +1651,60 @@ fn deserialize_path(value: JsValue) -> Result<Vec<usize>, JsError> {
     Ok(path)
 }
 
+fn path_starts_with(path: &[usize], prefix: &[usize]) -> bool {
+    path.len() >= prefix.len() && path[..prefix.len()] == *prefix
+}
+
+fn collect_comment_cells(
+    kind: &core::DrawingKind,
+    cells: &mut BTreeSet<(u32, u16)>,
+) -> Result<(), JsError> {
+    match kind {
+        core::DrawingKind::Comment { row, col, .. } => {
+            if !cells.insert((*row, *col)) {
+                return Err(JsError::new(&format!(
+                    "drawing input contains more than one comment for cell ({row}, {col})"
+                )));
+            }
+        }
+        core::DrawingKind::Group(group) => {
+            for child in &group.children {
+                collect_comment_cells(&child.kind, cells)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Enforce one comment per cell: reject comments in `replacement`
+/// whose cell already has a comment elsewhere on the sheet, ignoring
+/// drawings at or under `replaced_path`.
+fn ensure_comment_cells_available(
+    sheet: &core::Worksheet,
+    replacement: &core::DrawingKind,
+    replaced_path: Option<&[usize]>,
+) -> Result<(), JsError> {
+    let mut new_cells = BTreeSet::new();
+    collect_comment_cells(replacement, &mut new_cells)?;
+    if new_cells.is_empty() {
+        return Ok(());
+    }
+    for (path, node) in sheet.drawings_flat() {
+        if replaced_path.is_some_and(|prefix| path_starts_with(&path, prefix)) {
+            continue;
+        }
+        if let core::DrawingKind::Comment { row, col, .. } = node.kind {
+            if new_cells.contains(&(*row, *col)) {
+                return Err(JsError::new(&format!(
+                    "cell ({row}, {col}) already has a comment"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn drawing_tree(sheet: &core::Worksheet) -> Vec<WasmDrawing> {
     sheet
         .drawings()
@@ -1776,6 +1852,7 @@ impl Worksheet {
         let sheet = workbook
             .worksheet_mut(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        ensure_comment_cells_available(sheet, &object.kind, None)?;
         let index = sheet.try_add_drawing(object).map_err(to_js_error)?;
         u32::try_from(index).map_err(|_| JsError::new("drawing index exceeds u32"))
     }
@@ -1790,6 +1867,7 @@ impl Worksheet {
         let sheet = workbook
             .worksheet_mut(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        ensure_comment_cells_available(sheet, &object.kind, None)?;
         sheet
             .insert_drawing(index as usize, object)
             .map_err(to_js_error)
@@ -1809,18 +1887,20 @@ impl Worksheet {
                 .into_object()
                 .map_err(|error| JsError::new(&error))?;
             let count = sheet.drawings().len();
-            let Some(slot) = sheet.drawings_mut().get_mut(path[0]) else {
+            if path[0] >= count {
                 return Err(JsError::new(&format!(
                     "drawing path {path:?} out of bounds (count: {count})"
                 )));
-            };
-            *slot = object;
+            }
+            ensure_comment_cells_available(sheet, &object.kind, Some(&path))?;
+            sheet.drawings_mut()[path[0]] = object;
             return Ok(());
         }
 
         let child = input
             .into_child()
             .map_err(|error| JsError::new(&error))?;
+        ensure_comment_cells_available(sheet, &child.kind, Some(&path))?;
         let (&child_index, parent_path) = path
             .split_last()
             .ok_or_else(|| JsError::new("drawing path cannot be empty"))?;
