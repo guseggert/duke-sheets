@@ -313,40 +313,55 @@ fn metric_anchor_workbook() -> Workbook {
     workbook
 }
 
-fn assert_metric_anchors(workbook: &Workbook) {
+fn assert_metric_anchors(workbook: &Workbook, tolerance_emu: i64) {
+    let close = |actual: i64, expected: i64| {
+        assert!(
+            (actual - expected).abs() <= tolerance_emu,
+            "anchor offset {actual} differs from {expected} by more than {tolerance_emu} EMU"
+        );
+    };
     let controls: Vec<_> = workbook.worksheet(0).unwrap().form_controls().collect();
     assert_eq!(controls.len(), 2);
     match &controls[0].object.anchor {
         DrawingAnchor::TwoCell { from, to, .. } => {
             assert_eq!((from.col, from.col_offset_emu), (0, 0));
             assert_eq!((from.row, from.row_offset_emu), (0, 0));
-            assert_eq!((to.col, to.col_offset_emu), (0, 609_600));
-            assert_eq!((to.row, to.row_offset_emu), (0, 190_500));
+            assert_eq!(to.col, 0);
+            close(to.col_offset_emu, 609_600);
+            assert_eq!(to.row, 0);
+            close(to.row_offset_emu, 190_500);
         }
         other => panic!("expected flattened one-cell control anchor, got {other:?}"),
     }
     match &controls[1].object.anchor {
         DrawingAnchor::TwoCell { from, .. } => {
-            assert_eq!((from.col, from.col_offset_emu), (0, 609_600));
-            assert_eq!((from.row, from.row_offset_emu), (0, 190_500));
+            assert_eq!(from.col, 0);
+            close(from.col_offset_emu, 609_600);
+            assert_eq!(from.row, 0);
+            close(from.row_offset_emu, 190_500);
         }
         other => panic!("expected flattened absolute control anchor, got {other:?}"),
     }
 }
 
 #[test]
-fn custom_dimensions_drive_xlsx_and_xlsb_control_anchor_flattening() {
+fn custom_dimensions_drive_all_format_control_anchor_flattening() {
     let workbook = metric_anchor_workbook();
 
     let mut xlsx = Cursor::new(Vec::new());
     XlsxWriter::write(&workbook, &mut xlsx).expect("write xlsx");
     let xlsx = XlsxReader::read(Cursor::new(xlsx.into_inner())).expect("read xlsx");
-    assert_metric_anchors(&xlsx);
+    assert_metric_anchors(&xlsx, 0);
 
     let mut xlsb = Cursor::new(Vec::new());
     XlsbWriter::write(&workbook, &mut xlsb).expect("write xlsb");
     let xlsb = XlsbReader::read(Cursor::new(xlsb.into_inner())).expect("read xlsb");
-    assert_metric_anchors(&xlsb);
+    assert_metric_anchors(&xlsb, 0);
+
+    let xls = XlsWriter::write_to_bytes(&workbook).expect("write xls");
+    let xls = XlsReader::read(Cursor::new(xls)).expect("read xls");
+    // BIFF8 stores offsets in 1/1024-column and 1/256-row units.
+    assert_metric_anchors(&xls, 1_500);
 }
 
 #[test]
