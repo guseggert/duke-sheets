@@ -359,6 +359,77 @@ fn xlsx_conflicting_raw_rel_ids_are_remapped() {
     );
 }
 
+/// A foreign file whose control twin carries a txBody for a
+/// caption-less control kind (scrollbars, spinners, list boxes) must
+/// not crash the reader; the stray text is ignored.
+#[test]
+fn xlsx_twin_text_on_captionless_control_is_ignored() {
+    let mut workbook = Workbook::new();
+    let sheet = workbook.worksheet_mut(0).unwrap();
+    sheet.add_drawing(
+        DrawingObject::form_control(FormControl::new(FormControlKind::Scrollbar {
+            value: 5,
+            min: 0,
+            max: 100,
+            increment: 1,
+            page: 10,
+            horizontal: false,
+            cell_link: None,
+        }))
+        .with_anchor(two_cell(1, 1, 2, 4)),
+    );
+    let mut output = Cursor::new(Vec::new());
+    XlsxWriter::write(&workbook, &mut output).expect("write");
+    let bytes = output.into_inner();
+
+    // Splice a txBody into the scrollbar's twin sp, as a third-party
+    // producer might.
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+    let mut drawing = String::new();
+    {
+        use std::io::Read;
+        archive
+            .by_name("xl/drawings/drawing1.xml")
+            .unwrap()
+            .read_to_string(&mut drawing)
+            .unwrap();
+    }
+    let patched = drawing.replace(
+        "</xdr:sp>",
+        "<xdr:txBody><a:bodyPr/><a:p><a:r><a:t>stray</a:t></a:r></a:p></xdr:txBody></xdr:sp>",
+    );
+    assert_ne!(patched, drawing, "twin sp must be present to patch");
+
+    let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for i in 0..archive.len() {
+        use std::io::Read;
+        let mut file = archive.by_index(i).unwrap();
+        let name = file.name().to_string();
+        let options = zip::write::SimpleFileOptions::default();
+        out.start_file(name.clone(), options).unwrap();
+        if name == "xl/drawings/drawing1.xml" {
+            out.write_all(patched.as_bytes()).unwrap();
+        } else {
+            let mut content = Vec::new();
+            file.read_to_end(&mut content).unwrap();
+            out.write_all(&content).unwrap();
+        }
+    }
+    let patched_bytes = out.finish().unwrap().into_inner();
+
+    let read = XlsxReader::read(Cursor::new(patched_bytes)).expect("read patched");
+    let sheet = read.worksheet(0).unwrap();
+    let controls = sheet.placed_form_controls();
+    assert_eq!(controls.len(), 1);
+    assert!(
+        matches!(
+            controls[0].control.kind,
+            FormControlKind::Scrollbar { value: 5, .. }
+        ),
+        "scrollbar survives with its state"
+    );
+}
+
 /// Raw (unmodeled) drawing anchors keep their position in the z-order
 /// and expose a parsed anchor for placeholder rendering.
 #[test]

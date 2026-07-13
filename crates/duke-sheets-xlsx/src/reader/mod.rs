@@ -365,9 +365,12 @@ fn build_group<R: Read + Seek>(
                     }
                     object.meta.title = twin.title;
                     if let Some(control) = object.kind.as_form_control_mut() {
-                        if let Some(text) = twin.text.as_ref() {
-                            *control.caption_mut().expect("control twin is captioned") =
-                                form_controls::control_text_from_twin(text);
+                        // Foreign files may put a txBody on twins of
+                        // caption-less kinds; ignore the stray text.
+                        if let (Some(text), Some(caption)) =
+                            (twin.text.as_ref(), control.caption_mut())
+                        {
+                            *caption = form_controls::control_text_from_twin(text);
                         }
                         if control.macro_name.is_none() {
                             control.macro_name = twin
@@ -1012,9 +1015,13 @@ impl XlsxReader {
                             }
                             object.meta.title = twin.title;
                             if let Some(control) = object.kind.as_form_control_mut() {
-                                if let Some(text) = twin.text.as_ref() {
-                                    *control.caption_mut().expect("control twin is captioned") =
-                                        form_controls::control_text_from_twin(text);
+                                // Foreign files may put a txBody on
+                                // twins of caption-less kinds; ignore
+                                // the stray text.
+                                if let (Some(text), Some(caption)) =
+                                    (twin.text.as_ref(), control.caption_mut())
+                                {
+                                    *caption = form_controls::control_text_from_twin(text);
                                 }
                                 if control.macro_name.is_none() {
                                     control.macro_name = twin
