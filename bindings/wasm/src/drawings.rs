@@ -695,11 +695,11 @@ enum WasmFormControlKind {
         raw_properties: Vec<(String, String)>,
         /// Internal passthrough of unmodeled VML `ClientData` children
         /// (byte arrays in JS); echoed back unchanged on write.
-        #[serde(default)]
+        #[serde(default, deserialize_with = "de_bytes_vec")]
         raw_client_data: Vec<Vec<u8>>,
         /// Internal passthrough of the original BIFF OBJ body (byte
         /// array in JS), required for XLS rewrite.
-        #[serde(default)]
+        #[serde(default, deserialize_with = "de_opt_bytes")]
         raw_obj: Option<Vec<u8>>,
     },
 }
@@ -993,6 +993,66 @@ impl From<&EmbeddedImage> for WasmImageMetadata {
     }
 }
 
+/// Deserialize a JS byte payload as either bytes or a sequence.
+///
+/// Drawing inputs pass through serde's internal buffering (tagged
+/// enums and flatten), which captures a `Uint8Array` as bytes; plain
+/// `Vec<u8>` only accepts sequences and would reject it.
+fn de_bytes<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
+    struct BytesVisitor;
+    impl<'de> serde::de::Visitor<'de> for BytesVisitor {
+        type Value = Vec<u8>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("bytes or a sequence of byte values")
+        }
+
+        fn visit_bytes<E: serde::de::Error>(self, v: &[u8]) -> Result<Self::Value, E> {
+            Ok(v.to_vec())
+        }
+
+        fn visit_byte_buf<E: serde::de::Error>(self, v: Vec<u8>) -> Result<Self::Value, E> {
+            Ok(v)
+        }
+
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(
+            self,
+            mut seq: A,
+        ) -> Result<Self::Value, A::Error> {
+            let mut out = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+            while let Some(byte) = seq.next_element::<u8>()? {
+                out.push(byte);
+            }
+            Ok(out)
+        }
+    }
+    deserializer.deserialize_any(BytesVisitor)
+}
+
+/// A byte payload wrapper deserializing through [`de_bytes`].
+#[derive(Debug, Clone)]
+struct JsBytes(Vec<u8>);
+
+impl<'de> Deserialize<'de> for JsBytes {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        de_bytes(deserializer).map(JsBytes)
+    }
+}
+
+fn de_opt_bytes<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<u8>>, D::Error> {
+    let value = Option::<JsBytes>::deserialize(deserializer)?;
+    Ok(value.map(|bytes| bytes.0))
+}
+
+fn de_bytes_vec<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<Vec<u8>>, D::Error> {
+    let value = Vec::<JsBytes>::deserialize(deserializer)?;
+    Ok(value.into_iter().map(|bytes| bytes.0).collect())
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WasmImageInput {
@@ -1009,8 +1069,9 @@ struct WasmImageInput {
     flip_h: bool,
     #[serde(default)]
     flip_v: bool,
+    #[serde(deserialize_with = "de_bytes")]
     data: Vec<u8>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_opt_bytes")]
     svg_data: Option<Vec<u8>>,
 }
 
