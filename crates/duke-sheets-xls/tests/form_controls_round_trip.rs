@@ -116,13 +116,13 @@ fn option_buttons_round_trip_as_group() {
         ("Opt B", CheckState::Unchecked),
         ("Opt C", CheckState::Unchecked),
     ]
-    .iter()
+    .into_iter()
     .enumerate()
     {
         ws.add_drawing(control_at(
             FormControlKind::OptionButton {
                 caption: caption.into(),
-                state: *state,
+                state,
                 cell_link: Some("$E$1".to_string()),
                 first_in_group: false,
                 no_3d: false,
