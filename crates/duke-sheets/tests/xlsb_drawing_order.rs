@@ -476,6 +476,147 @@ fn xlsb_comments_part_uses_spec_record_ids() {
     );
 }
 
+/// Parse a BIFF12 part into (record id, payload) pairs.
+fn biff12_records(part: &[u8]) -> Vec<(u32, Vec<u8>)> {
+    let mut records = Vec::new();
+    let mut i = 0usize;
+    while i < part.len() {
+        let mut id = u32::from(part[i]) & 0x7F;
+        if part[i] & 0x80 != 0 {
+            id |= (u32::from(part[i + 1]) & 0x7F) << 7;
+            i += 2;
+        } else {
+            i += 1;
+        }
+        let mut size = 0u32;
+        let mut shift = 0;
+        loop {
+            let byte = part[i];
+            i += 1;
+            size |= (u32::from(byte) & 0x7F) << shift;
+            if byte & 0x80 == 0 {
+                break;
+            }
+            shift += 7;
+        }
+        records.push((id, part[i..i + size as usize].to_vec()));
+        i += size as usize;
+    }
+    records
+}
+
+/// Decode an XLWideString payload (u32 char count + UTF-16LE).
+fn wide_str(payload: &[u8]) -> String {
+    let n = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
+    let units: Vec<u16> = payload[4..4 + 2 * n]
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect();
+    String::from_utf16(&units).unwrap()
+}
+
+/// A sheet whose only form control lives inside a group must still
+/// emit the legacy VML part, its relationship, and a BrtDrawing that
+/// points at the drawing relationship (not the VML one). The reader
+/// resolves parts by relationship type, so only a bytes-level check
+/// of the rid pairing catches a misaligned BrtDrawing pointer.
+// features: Grouped drawing objects
+#[test]
+fn xlsb_group_nested_control_keeps_drawing_and_vml_rels_aligned() {
+    let mut workbook = Workbook::new();
+    let sheet = workbook.worksheet_mut(0).unwrap();
+    sheet.add_drawing(
+        DrawingObject::group(Group {
+            transform: GroupTransform {
+                cx_emu: 400_000,
+                cy_emu: 400_000,
+                child_cx_emu: 400_000,
+                child_cy_emu: 400_000,
+                ..GroupTransform::default()
+            },
+            children: vec![GroupChild {
+                meta: DrawingMeta::default(),
+                transform: ChildTransform {
+                    cx_emu: 200_000,
+                    cy_emu: 200_000,
+                    ..ChildTransform::default()
+                },
+                kind: DrawingKind::FormControl(FormControl::new(FormControlKind::Checkbox {
+                    caption: "In group".into(),
+                    state: duke_sheets::CheckState::Checked,
+                    cell_link: None,
+                    no_3d: false,
+                })),
+            }],
+        })
+        .with_anchor(two_cell(0, 0, 3, 3)),
+    );
+    let bytes = write_bytes(&workbook);
+
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes.clone())).unwrap();
+    let read_part = |archive: &mut zip::ZipArchive<Cursor<Vec<u8>>>, name: &str| -> Vec<u8> {
+        use std::io::Read;
+        let mut part = Vec::new();
+        archive
+            .by_name(name)
+            .unwrap_or_else(|_| panic!("part {name} missing"))
+            .read_to_end(&mut part)
+            .unwrap();
+        part
+    };
+
+    let rels = String::from_utf8(read_part(
+        &mut archive,
+        "xl/worksheets/_rels/sheet1.bin.rels",
+    ))
+    .unwrap();
+    let rel_type_of = |rid: &str| -> String {
+        let marker = format!("Id=\"{rid}\"");
+        let entry = rels
+            .split("<Relationship ")
+            .find(|chunk| chunk.contains(&marker))
+            .unwrap_or_else(|| panic!("relationship {rid} missing in {rels}"));
+        entry
+            .split("Type=\"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap()
+            .to_string()
+    };
+
+    let sheet_part = read_part(&mut archive, "xl/worksheets/sheet1.bin");
+    let records = biff12_records(&sheet_part);
+    let drawing_rid = records
+        .iter()
+        .find(|(id, _)| *id == 0x0226)
+        .map(|(_, payload)| wide_str(payload))
+        .expect("BrtDrawing record");
+    let legacy_rid = records
+        .iter()
+        .find(|(id, _)| *id == 0x0227)
+        .map(|(_, payload)| wide_str(payload))
+        .expect("BrtLegacyDrawing record");
+
+    assert!(
+        rel_type_of(&drawing_rid).ends_with("/drawing"),
+        "BrtDrawing must point at the drawing relationship"
+    );
+    assert!(
+        rel_type_of(&legacy_rid).ends_with("/vmlDrawing"),
+        "BrtLegacyDrawing must point at the vmlDrawing relationship"
+    );
+    // And the VML part itself carries the control shape.
+    let vml = String::from_utf8(read_part(&mut archive, "xl/drawings/vmlDrawing1.vml")).unwrap();
+    assert!(vml.contains("Checkbox"), "control shape emitted in VML");
+
+    let read = XlsbReader::read(Cursor::new(bytes)).expect("read");
+    let sheet = read.worksheet(0).unwrap();
+    let controls = sheet.placed_form_controls();
+    assert_eq!(controls.len(), 1, "group-nested control survives");
+}
+
 /// An anonymous (empty-author) comment keeps its own author slot
 /// instead of being attributed to the first named author.
 #[test]
