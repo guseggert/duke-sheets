@@ -93,6 +93,7 @@ fn kind_tags(workbook: &Workbook) -> Vec<&'static str> {
             DrawingKind::FormControl(_) => "control",
             DrawingKind::Comment { .. } => "comment",
             DrawingKind::Group(_) => "group",
+            DrawingKind::Shape(_) => "shape",
             DrawingKind::Raw(_) => "raw",
         })
         .collect()
@@ -116,6 +117,58 @@ fn xlsb_model_image_round_trips() {
     assert_eq!(image.payload.data, PNG_1PX);
     assert_eq!(image.object.meta.name.as_deref(), Some("Pic"));
     assert_eq!(image.object.anchor, two_cell(1, 1, 3, 3));
+}
+
+#[test]
+fn xlsb_one_cell_and_absolute_image_anchors_round_trip() {
+    let mut workbook = Workbook::new();
+    let sheet = workbook.worksheet_mut(0).unwrap();
+    sheet.add_drawing(
+        png("OneCell").with_anchor(DrawingAnchor::OneCell {
+            from: CellMarker {
+                col: 1,
+                row: 2,
+                col_offset_emu: 95_250,
+                row_offset_emu: 47_625,
+            },
+            width_emu: 1_200_000,
+            height_emu: 700_000,
+        }),
+    );
+    sheet.add_drawing(
+        png("Absolute").with_anchor(DrawingAnchor::Absolute {
+            x_emu: 2_000_000,
+            y_emu: 1_000_000,
+            width_emu: 900_000,
+            height_emu: 500_000,
+        }),
+    );
+
+    let read = round_trip(&workbook);
+    let images: Vec<_> = read.worksheet(0).unwrap().images().collect();
+    assert_eq!(images.len(), 2);
+    assert_eq!(
+        images[0].object.anchor,
+        DrawingAnchor::OneCell {
+            from: CellMarker {
+                col: 1,
+                row: 2,
+                col_offset_emu: 95_250,
+                row_offset_emu: 47_625,
+            },
+            width_emu: 1_200_000,
+            height_emu: 700_000,
+        }
+    );
+    assert_eq!(
+        images[1].object.anchor,
+        DrawingAnchor::Absolute {
+            x_emu: 2_000_000,
+            y_emu: 1_000_000,
+            width_emu: 900_000,
+            height_emu: 500_000,
+        }
+    );
 }
 
 /// A model-added chart survives an XLSB round trip, and chart edits

@@ -86,6 +86,7 @@ fn kind_tags(workbook: &Workbook) -> Vec<&'static str> {
             DrawingKind::FormControl(_) => "control",
             DrawingKind::Comment { .. } => "comment",
             DrawingKind::Group(_) => "group",
+            DrawingKind::Shape(_) => "shape",
             DrawingKind::Raw(_) => "raw",
         })
         .collect()

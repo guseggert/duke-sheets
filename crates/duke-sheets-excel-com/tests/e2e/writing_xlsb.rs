@@ -1850,6 +1850,77 @@ fn excel_can_read_xlsb_png_image_we_emit() {
     );
 }
 
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xlsb_one_cell_and_absolute_images_we_emit() {
+    use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
+    use duke_sheets_core::DrawingObject;
+
+    let image = |name: &str| {
+        DrawingObject::image(EmbeddedImage {
+            format: ImageFormat::Png,
+            media_path: String::new(),
+            svg_media_path: None,
+            width_emu: 1_200_000,
+            height_emu: 700_000,
+            rotation: None,
+            flip_h: false,
+            flip_v: false,
+            data: TEST_PNG_1X1.to_vec(),
+            svg_data: None,
+        })
+        .with_name(name)
+    };
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.add_drawing(
+        image("OneCell").with_anchor(DrawingAnchor::OneCell {
+            from: CellMarker {
+                col: 1,
+                row: 2,
+                col_offset_emu: 95_250,
+                row_offset_emu: 47_625,
+            },
+            width_emu: 1_200_000,
+            height_emu: 700_000,
+        }),
+    );
+    ws.add_drawing(
+        image("Absolute").with_anchor(DrawingAnchor::Absolute {
+            x_emu: 2_000_000,
+            y_emu: 1_000_000,
+            width_emu: 900_000,
+            height_emu: 500_000,
+        }),
+    );
+
+    let result = roundtrip_through_excel_xlsb(&wb);
+    let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
+    assert_eq!(images.len(), 2);
+    assert_eq!(
+        images[0].object.anchor,
+        DrawingAnchor::OneCell {
+            from: CellMarker {
+                col: 1,
+                row: 2,
+                col_offset_emu: 95_250,
+                row_offset_emu: 47_625,
+            },
+            width_emu: 1_200_000,
+            height_emu: 700_000,
+        }
+    );
+    assert_eq!(
+        images[1].object.anchor,
+        DrawingAnchor::Absolute {
+            x_emu: 2_000_000,
+            y_emu: 1_000_000,
+            width_emu: 900_000,
+            height_emu: 500_000,
+        }
+    );
+}
+
 /// A model-authored chart survives the Excel XLSB round-trip (the
 /// old writer never emitted model charts at all, leaving a dangling
 /// BrtDrawing pointer).
