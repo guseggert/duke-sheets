@@ -378,6 +378,35 @@ fn drawing_metric_helpers_match_excel_compatible_units() {
     assert_eq!(sheet.row_height_emu(0), 381_000);
 }
 
+/// Hidden rows and columns render at zero extent in Excel, so drawing
+/// metrics must give them zero width/height and exclude them from
+/// positions when flattening anchors.
+#[test]
+fn hidden_rows_and_columns_have_zero_drawing_extent() {
+    let mut sheet = Worksheet::new("Hidden");
+    sheet.set_column_width(1, 20.0);
+    sheet.set_column_hidden(1, true);
+    sheet.set_column_hidden(2, true);
+    sheet.set_column_hidden(2, false);
+    sheet.set_row_hidden(0, true);
+
+    assert_eq!(sheet.column_width_emu(1), 0, "hidden column has no width");
+    assert_eq!(sheet.row_height_emu(0), 0, "hidden row has no height");
+    assert_eq!(
+        sheet.column_width_emu(2),
+        column_width_to_emu(sheet.default_column_width()),
+        "re-shown column recovers its width"
+    );
+
+    // Column 3 starts after two visible default columns: the hidden
+    // custom column contributes nothing.
+    let default_col = i128::from(column_width_to_emu(sheet.default_column_width()));
+    assert_eq!(sheet.column_position_emu(3), 2 * default_col);
+    // Row 2 starts after one visible default row.
+    let default_row = i128::from(row_height_to_emu(sheet.default_row_height()));
+    assert_eq!(sheet.row_position_emu(2), default_row);
+}
+
 fn radio(caption: &str, anchor: DrawingAnchor) -> DrawingObject {
     DrawingObject::form_control(FormControl::new(FormControlKind::OptionButton {
         caption: caption.into(),

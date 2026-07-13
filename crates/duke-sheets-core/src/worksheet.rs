@@ -2244,20 +2244,35 @@ impl Worksheet {
     }
 }
 
+/// Hidden rows and columns render at zero extent, so they contribute
+/// no width/height and no position advance.
 impl duke_sheets_chart::DrawingMetrics for Worksheet {
     fn column_width_emu(&self, col: u16) -> i64 {
+        if self.is_column_hidden(col) {
+            return 0;
+        }
         duke_sheets_chart::column_width_to_emu(self.column_width(col))
     }
 
     fn row_height_emu(&self, row: u32) -> i64 {
+        if self.is_row_hidden(row) {
+            return 0;
+        }
         duke_sheets_chart::row_height_to_emu(self.row_height(row))
     }
 
     fn column_position_emu(&self, col: u16) -> i128 {
         let default = duke_sheets_chart::column_width_to_emu(self.default_column_width());
         let mut position = i128::from(col) * i128::from(default);
-        for (_, width) in self.custom_column_widths().range(..col) {
-            position += i128::from(duke_sheets_chart::column_width_to_emu(*width) - default);
+        for (_, hidden) in self.hidden_columns().range(..col) {
+            if *hidden {
+                position -= i128::from(default);
+            }
+        }
+        for (index, width) in self.custom_column_widths().range(..col) {
+            if !self.is_column_hidden(*index) {
+                position += i128::from(duke_sheets_chart::column_width_to_emu(*width) - default);
+            }
         }
         position
     }
@@ -2265,8 +2280,15 @@ impl duke_sheets_chart::DrawingMetrics for Worksheet {
     fn row_position_emu(&self, row: u32) -> i128 {
         let default = duke_sheets_chart::row_height_to_emu(self.default_row_height());
         let mut position = i128::from(row) * i128::from(default);
-        for (_, height) in self.custom_row_heights().range(..row) {
-            position += i128::from(duke_sheets_chart::row_height_to_emu(*height) - default);
+        for (_, hidden) in self.hidden_rows().range(..row) {
+            if *hidden {
+                position -= i128::from(default);
+            }
+        }
+        for (index, height) in self.custom_row_heights().range(..row) {
+            if !self.is_row_hidden(*index) {
+                position += i128::from(duke_sheets_chart::row_height_to_emu(*height) - default);
+            }
         }
         position
     }
