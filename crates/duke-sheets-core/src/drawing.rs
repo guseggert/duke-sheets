@@ -52,8 +52,16 @@ pub struct DrawingText {
 impl DrawingText {
     /// Create text containing one unformatted run.
     pub fn plain(text: impl Into<String>) -> Self {
+        let text = text.into();
+        // Empty text is no runs, matching what readers produce for
+        // absent captions, so empty round-trips compare equal.
+        let runs = if text.is_empty() {
+            Vec::new()
+        } else {
+            vec![RichTextRun::plain(text)]
+        };
         Self {
-            runs: vec![RichTextRun::plain(text)],
+            runs,
             horizontal_alignment: None,
             vertical_alignment: None,
         }

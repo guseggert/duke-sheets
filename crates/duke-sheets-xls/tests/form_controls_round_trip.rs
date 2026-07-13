@@ -881,7 +881,11 @@ fn mixed_option_button_returns_a_clean_error() {
             anchor(0, 0, 2, 2),
         ));
     let err = XlsWriter::write_to_bytes(&wb).expect_err("Mixed is checkbox-only");
-    assert!(err.to_string().contains("cannot use the Mixed state"));
+    assert!(
+        err.to_string()
+            .contains("option buttons cannot use the mixed state"),
+        "unexpected error: {err}"
+    );
 }
 
 /// LibreOffice envelope check: write an XLS carrying one of every
