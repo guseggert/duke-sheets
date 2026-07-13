@@ -323,6 +323,135 @@ fn xls_unknown_control_embedded_macro_is_replaced_not_replayed() {
     );
 }
 
+/// Old-Excel autofilter dropdown button: `x:UIObj` + `PrintObject=False`,
+/// no `x:LCT` (ECMA-376 Part 4 §14.4.2.62). Modern Excel emits no legacy
+/// VML for these; the shape survives only in files from older producers.
+const AUX_UI_DROPDOWN_VML: &str = r##" <v:shape id="_x0000_s2001" type="#_x0000_t201" style="position:absolute">
+  <x:ClientData ObjectType="Drop">
+   <x:SizeWithCells/>
+   <x:Anchor>0, 0, 0, 0, 1, 16, 1, 0</x:Anchor>
+   <x:AutoFill>False</x:AutoFill>
+   <x:AutoLine>False</x:AutoLine>
+   <x:DropStyle>Combo</x:DropStyle>
+   <x:DropLines>8</x:DropLines>
+   <x:Sel>0</x:Sel>
+   <x:NoThreeD/>
+   <x:PrintObject>False</x:PrintObject>
+   <x:UIObj/>
+  </x:ClientData>
+ </v:shape>
+"##;
+
+/// Insert an extra `<v:shape>` before `</xml>` in every vmlDrawing part.
+fn splice_vml_shape(bytes: Vec<u8>, extra_shape: &str) -> Vec<u8> {
+    let mut input = zip::ZipArchive::new(Cursor::new(bytes)).expect("open zip");
+    let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let mut spliced = false;
+    for index in 0..input.len() {
+        let mut file = input.by_index(index).expect("zip entry");
+        let name = file.name().to_string();
+        let is_dir = file.is_dir();
+        let mut data = Vec::new();
+        file.read_to_end(&mut data).expect("read zip entry");
+        drop(file);
+
+        if is_dir {
+            output
+                .add_directory(name, zip::write::SimpleFileOptions::default())
+                .expect("copy directory");
+            continue;
+        }
+        if name.contains("vmlDrawing") {
+            let xml = String::from_utf8(data).expect("VML is UTF-8");
+            assert!(xml.contains("</xml>"), "VML part must close with </xml>");
+            data = xml
+                .replace("</xml>", &format!("{extra_shape}</xml>"))
+                .into_bytes();
+            spliced = true;
+        }
+        output
+            .start_file(name, zip::write::SimpleFileOptions::default())
+            .expect("copy file");
+        output.write_all(&data).expect("write zip entry");
+    }
+    assert!(spliced, "no vmlDrawing part found to splice into");
+    output.finish().expect("finish zip").into_inner()
+}
+
+fn checkbox_and_comment_workbook() -> Workbook {
+    let mut workbook = Workbook::new();
+    let sheet = workbook.worksheet_mut(0).unwrap();
+    sheet.add_form_control(
+        FormControl::new(FormControlKind::Checkbox {
+            caption: "Real control".into(),
+            state: CheckState::Checked,
+            cell_link: None,
+            no_3d: true,
+        }),
+        DrawingAnchor::TwoCell {
+            from: CellMarker {
+                col: 0,
+                col_offset_emu: 0,
+                row: 0,
+                row_offset_emu: 0,
+            },
+            to: CellMarker {
+                col: 2,
+                col_offset_emu: 0,
+                row: 2,
+                row_offset_emu: 0,
+            },
+            edit_as: None,
+        },
+    );
+    sheet
+        .set_comment_at(
+            4,
+            4,
+            duke_sheets::CellComment::new("Reviewer", "still here"),
+        )
+        .unwrap();
+    workbook
+}
+
+fn assert_aux_ui_shape_skipped(workbook: &Workbook) {
+    let sheet = workbook.worksheet(0).unwrap();
+    assert_eq!(
+        sheet.form_control_count(),
+        1,
+        "UIObj auxiliary shape must not surface as a control"
+    );
+    let control = sheet.form_controls().next().unwrap();
+    assert!(matches!(
+        control.payload.kind,
+        FormControlKind::Checkbox { .. }
+    ));
+    let comment = sheet.comment_at(4, 4).expect("comment survives");
+    assert_eq!(comment.text, "still here");
+}
+
+// features: Form control: dropdown (combo box)
+#[test]
+fn excel_uiobj_aux_shape_is_not_a_control_xlsx() {
+    let workbook = checkbox_and_comment_workbook();
+    let mut bytes = Cursor::new(Vec::new());
+    XlsxWriter::write(&workbook, &mut bytes).expect("write xlsx");
+    let spliced = splice_vml_shape(bytes.into_inner(), AUX_UI_DROPDOWN_VML);
+    let reopened = XlsxReader::read(Cursor::new(spliced)).expect("read spliced xlsx");
+    assert_aux_ui_shape_skipped(&reopened);
+}
+
+// features: Form control: dropdown (combo box)
+#[test]
+fn excel_uiobj_aux_shape_is_not_a_control_xlsb() {
+    let workbook = checkbox_and_comment_workbook();
+    let mut bytes = Cursor::new(Vec::new());
+    XlsbWriter::write(&workbook, &mut bytes).expect("write xlsb");
+    let spliced = splice_vml_shape(bytes.into_inner(), AUX_UI_DROPDOWN_VML);
+    let reopened = XlsbReader::read(Cursor::new(spliced)).expect("read spliced xlsb");
+    assert_aux_ui_shape_skipped(&reopened);
+}
+
 fn patch_vml_object_type(bytes: Vec<u8>, replacement: &str) -> Vec<u8> {
     let mut input = zip::ZipArchive::new(Cursor::new(bytes)).expect("open zip");
     let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
