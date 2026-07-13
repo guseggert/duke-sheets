@@ -338,7 +338,7 @@ impl XlsReader {
         // Workbook-globals blip store, populated from MSODRAWINGGROUP
         // records. Indexed 1-based by the FOPT `pib` (picture blip id)
         // property referenced from picture SP_CONTAINERs.
-        let mut blip_store: Vec<BlipData> = Vec::new();
+        let mut blip_store: Vec<Option<BlipData>> = Vec::new();
         // Excel splits a large drawing group across multiple
         // MSODRAWINGGROUP records, each holding a fragment of one
         // logical DggContainer stream, so bodies are concatenated
@@ -669,7 +669,7 @@ impl XlsReader {
         style_ctx: &StyleContext,
         formula_ctx: &FormulaContext,
         auto_filter_range: Option<&CellRange>,
-        blip_store: &[BlipData],
+        blip_store: &[Option<BlipData>],
     ) -> XlsResult<()> {
         // We need to track the last FORMULA record to associate a STRING record
         let mut pending_formula_cell: Option<(u32, u16)> = None;
@@ -2889,7 +2889,7 @@ impl XlsReader {
         obj_bodies: &[Vec<u8>],
         obj_texts: &std::collections::HashMap<u16, duke_sheets_core::ControlText>,
         notes: &[NoteData],
-        blip_store: &[BlipData],
+        blip_store: &[Option<BlipData>],
         formula_ctx: &FormulaContext,
         ws: &mut duke_sheets_core::Worksheet,
     ) {
@@ -3011,7 +3011,7 @@ impl XlsReader {
         obj_texts: &std::collections::HashMap<u16, duke_sheets_core::ControlText>,
         notes: &[NoteData],
         note_used: &mut [bool],
-        blip_store: &[BlipData],
+        blip_store: &[Option<BlipData>],
         formula_ctx: &FormulaContext,
         hoisted: &mut Vec<duke_sheets_core::DrawingObject>,
         metrics: &dyn duke_sheets_chart::DrawingMetrics,
@@ -3114,7 +3114,7 @@ impl XlsReader {
         obj_texts: &std::collections::HashMap<u16, duke_sheets_core::ControlText>,
         notes: &[NoteData],
         note_used: &mut [bool],
-        blip_store: &[BlipData],
+        blip_store: &[Option<BlipData>],
         formula_ctx: &FormulaContext,
         hoisted: &mut Vec<duke_sheets_core::DrawingObject>,
         metrics: &dyn duke_sheets_chart::DrawingMetrics,
@@ -3372,14 +3372,14 @@ impl XlsReader {
     /// shape and a zero extent for the caller to fill.
     fn image_payload_from_node(
         node: &EscherShapeNode,
-        blip_store: &[BlipData],
+        blip_store: &[Option<BlipData>],
     ) -> Option<duke_sheets_chart::EmbeddedImage> {
         use crate::biff::escher::shape_type;
         if node.shape_type != shape_type::PICTURE_FRAME {
             return None;
         }
         let idx = node.blip_id?.saturating_sub(1) as usize;
-        let blip = blip_store.get(idx)?;
+        let blip = blip_store.get(idx)?.as_ref()?;
         Some(duke_sheets_chart::EmbeddedImage {
             format: blip.format,
             media_path: String::new(),
@@ -3660,7 +3660,7 @@ impl XlsReader {
     /// Failures inside the Escher tree are swallowed and skipped —
     /// the reader is intentionally permissive so a malformed drawing
     /// group cannot prevent reading the rest of the workbook.
-    fn parse_msodrawinggroup(data: &[u8], blip_store: &mut Vec<BlipData>) {
+    fn parse_msodrawinggroup(data: &[u8], blip_store: &mut Vec<Option<BlipData>>) {
         use crate::biff::escher::rec_type as er;
         Self::walk_escher_records(data, |h, body| {
             if h.rec_type == er::BSTORE_CONTAINER {
@@ -3674,7 +3674,7 @@ impl XlsReader {
 
     /// Walk a `BSTORE_CONTAINER` body, decoding each `FBSE` child to
     /// extract its embedded blip's image bytes + format.
-    fn parse_bstore_container(body: &[u8], blip_store: &mut Vec<BlipData>) {
+    fn parse_bstore_container(body: &[u8], blip_store: &mut Vec<Option<BlipData>>) {
         use crate::biff::escher::{rec_type as er, OfficeArtRecordHeader, HEADER_LEN};
         let mut cursor = 0;
         while cursor + HEADER_LEN <= body.len() {
@@ -3687,9 +3687,11 @@ impl XlsReader {
                 return;
             };
             if h.rec_type == er::FBSE {
-                if let Some(blip) = Self::parse_fbse_entry(&body[entry_start..entry_end]) {
-                    blip_store.push(blip);
-                }
+                // Placeholder entries (no embedded blip) must keep
+                // their slot: pib references are 1-based positional
+                // indices over every FBSE, and Excel emits header-only
+                // entries when it rasterizes transforms on save.
+                blip_store.push(Self::parse_fbse_entry(&body[entry_start..entry_end]));
             }
             cursor = entry_end;
         }
@@ -4629,6 +4631,45 @@ fn decode_utf16le_null_terminated(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Excel emits header-only FBSE placeholders (e.g. when it
+    /// rasterizes picture transforms on save); pib blip ids are
+    /// 1-based positions over every FBSE, so a skipped placeholder
+    /// must still occupy its slot or every later picture resolves to
+    /// the wrong blip (or none).
+    #[test]
+    fn bstore_placeholder_entries_keep_their_blip_slot() {
+        // Placeholder FBSE: 36-byte body, no embedded blip record.
+        let mut bstore = Vec::new();
+        let fbse_placeholder_body = [0u8; 36];
+        bstore.extend_from_slice(&[0x02, 0x00, 0x07, 0xF0]); // ver=2, FBSE
+        bstore.extend_from_slice(&(fbse_placeholder_body.len() as u32).to_le_bytes());
+        bstore.extend_from_slice(&fbse_placeholder_body);
+
+        // Real FBSE: 36-byte header followed by an embedded PNG blip
+        // (rh: ver=0, inst=0x6E0, type=0xF01E; payload = 16-byte UID +
+        // tag byte + png bytes).
+        let png = [0x89u8, b'P', b'N', b'G'];
+        let mut blip = Vec::new();
+        blip.extend_from_slice(&[0x00, 0x6E, 0x1E, 0xF0]);
+        blip.extend_from_slice(&((16 + 1 + png.len()) as u32).to_le_bytes());
+        blip.extend_from_slice(&[0u8; 16]);
+        blip.push(0xFF);
+        blip.extend_from_slice(&png);
+        let mut fbse_real_body = vec![0u8; 36];
+        fbse_real_body[0] = 6; // btWin32 = PNG
+        fbse_real_body.extend_from_slice(&blip);
+        bstore.extend_from_slice(&[0x02, 0x00, 0x07, 0xF0]);
+        bstore.extend_from_slice(&(fbse_real_body.len() as u32).to_le_bytes());
+        bstore.extend_from_slice(&fbse_real_body);
+
+        let mut store: Vec<Option<BlipData>> = Vec::new();
+        XlsReader::parse_bstore_container(&bstore, &mut store);
+        assert_eq!(store.len(), 2, "placeholder keeps its slot");
+        assert!(store[0].is_none());
+        let real = store[1].as_ref().expect("second slot holds the PNG");
+        assert_eq!(real.data, png);
+    }
 
     #[test]
     fn resolve_workbook_stream_prefers_workbook() {

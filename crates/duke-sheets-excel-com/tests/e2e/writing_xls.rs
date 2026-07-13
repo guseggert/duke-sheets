@@ -1878,62 +1878,84 @@ const TEST_JPEG_1X1: &[u8] = &[
 ];
 
 /// Picture rotation and flip flags: writer must encode rotation in
-/// the FOPT `0x0004` property and flip H/V in the FSP grfPersistence
-/// flag bits. Excel must accept the file and the rotation +
-/// flip flags must round-trip.
+/// the FOPT `0x0004` property (FixedPoint 16.16 degrees) and flip H/V
+/// in the FSP grfPersistence flag bits. Excel keeps non-quarter-turn
+/// rotations (and their flips) as live transform properties; the
+/// rotation and flip must round-trip.
+///
+/// Excel rasterizes exact 90-degree-multiple rotations and pure flips
+/// into the bitmap when saving XLS (the transform properties are
+/// dropped and the blip is re-encoded), so a second workbook pins
+/// that boundary: the picture survives, its transform reads back as
+/// identity.
 #[test]
 #[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_xls_picture_rotation_and_flip_we_emit() {
     use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
 
+    let image = |rotation: Option<i32>, flip_h: bool| EmbeddedImage {
+        format: ImageFormat::Png,
+        media_path: String::new(),
+        svg_media_path: None,
+        width_emu: 1_000_000,
+        height_emu: 1_000_000,
+        rotation,
+        flip_h,
+        flip_v: false,
+        data: TEST_PNG_1X1.to_vec(),
+        svg_data: None,
+    };
+    let anchor = || DrawingAnchor::TwoCell {
+        from: CellMarker {
+            col: 1,
+            col_offset_emu: 0,
+            row: 1,
+            row_offset_emu: 0,
+        },
+        to: CellMarker {
+            col: 4,
+            col_offset_emu: 0,
+            row: 5,
+            row_offset_emu: 0,
+        },
+        edit_as: None,
+    };
+
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "rotated").unwrap();
-    ws.add_image(
-        EmbeddedImage {
-            format: ImageFormat::Png,
-            media_path: String::new(),
-            svg_media_path: None,
-            width_emu: 1_000_000,
-            height_emu: 1_000_000,
-            rotation: Some(5_400_000), // 90 degrees clockwise
-            flip_h: true,
-            flip_v: false,
-            data: TEST_PNG_1X1.to_vec(),
-            svg_data: None,
-        },
-        DrawingAnchor::TwoCell {
-            from: CellMarker {
-                col: 1,
-                col_offset_emu: 0,
-                row: 1,
-                row_offset_emu: 0,
-            },
-            to: CellMarker {
-                col: 4,
-                col_offset_emu: 0,
-                row: 5,
-                row_offset_emu: 0,
-            },
-            edit_as: None,
-        },
-    );
+    // 45 degrees clockwise: outside Excel's rasterization cases.
+    ws.add_image(image(Some(2_700_000), true), anchor());
 
     let result = roundtrip_through_excel_xls(&wb);
     let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
-    assert_eq!(
-        images.len(),
-        1,
-        "rotated picture must survive Excel re-save"
-    );
+    assert_eq!(images.len(), 1, "rotated picture must survive Excel");
     let img = images[0].payload;
     assert_eq!(
         img.rotation,
-        Some(5_400_000),
+        Some(2_700_000),
         "rotation must round-trip through Excel"
     );
     assert!(img.flip_h, "flip_h must round-trip through Excel");
     assert!(!img.flip_v, "flip_v=false must round-trip through Excel");
+
+    // Boundary: a quarter-turn rotation gets baked into the pixels.
+    // The picture must still read back (Excel emits a header-only
+    // placeholder FBSE, which must keep its blip-id slot).
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "quarter-turn").unwrap();
+    ws.add_image(image(Some(5_400_000), false), anchor());
+
+    let result = roundtrip_through_excel_xls(&wb);
+    let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
+    assert_eq!(images.len(), 1, "rasterized picture must survive Excel");
+    let img = images[0].payload;
+    assert_eq!(
+        img.rotation, None,
+        "Excel bakes quarter-turn rotations into the bitmap on XLS save"
+    );
+    assert!(!img.flip_h);
 }
 
 /// OneCell anchor variant: input has only a `from` cell + width/height
