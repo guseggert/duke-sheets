@@ -215,6 +215,114 @@ fn xls_unknown_edit_box_obj_body_survives_rewrite() {
     );
 }
 
+/// Count ftMacro (0x0004) subrecords in an OBJ record body by
+/// walking the ft/cb framing after the 22-byte ftCmo.
+fn count_macro_subrecords(body: &[u8]) -> usize {
+    let mut count = 0usize;
+    let mut pos = 22usize;
+    while pos + 4 <= body.len() {
+        let ft = u16::from_le_bytes([body[pos], body[pos + 1]]);
+        let cb = u16::from_le_bytes([body[pos + 2], body[pos + 3]]) as usize;
+        if ft == 0x0004 {
+            count += 1;
+        }
+        pos += 4 + cb;
+    }
+    count
+}
+
+fn raw_edit_box_obj_with_macro() -> Vec<u8> {
+    let mut body = Vec::new();
+    // ftCmo ot=EditBox id=42 grbit=0x0011.
+    body.extend_from_slice(&0x0015u16.to_le_bytes());
+    body.extend_from_slice(&0x0012u16.to_le_bytes());
+    body.extend_from_slice(&0x000Du16.to_le_bytes());
+    body.extend_from_slice(&42u16.to_le_bytes());
+    body.extend_from_slice(&0x0011u16.to_le_bytes());
+    body.extend_from_slice(&[0; 12]);
+    // Embedded ftMacro: ObjFmla whose PtgName points at the SOURCE
+    // workbook's Lbl #7, a stale index in any rewritten file.
+    body.extend_from_slice(&0x0004u16.to_le_bytes());
+    body.extend_from_slice(&12u16.to_le_bytes()); // cbFmla
+    body.extend_from_slice(&5u16.to_le_bytes()); // cce
+    body.extend_from_slice(&[0; 4]); // unused
+    body.extend_from_slice(&[0x23, 0x07, 0x00, 0x00, 0x00]); // PtgName 7
+    body.push(0); // pad to even
+    // FtEdoData payload (opaque here).
+    body.extend_from_slice(&0x0010u16.to_le_bytes());
+    body.extend_from_slice(&8u16.to_le_bytes());
+    body.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+    // ftEnd.
+    body.extend_from_slice(&0u16.to_le_bytes());
+    body.extend_from_slice(&0u16.to_le_bytes());
+    body
+}
+
+// features: Unknown legacy Forms controls
+// features: Unknown legacy Forms controls
+#[test]
+fn xls_unknown_control_embedded_macro_is_replaced_not_replayed() {
+    let control = FormControl::new(FormControlKind::Unknown {
+        object_type: "EditBox".to_string(),
+        legacy_object_type: Some(0x000D),
+        caption: "Macro edit box".into(),
+        raw_properties: Vec::new(),
+        raw_client_data: Vec::new(),
+        raw_obj: Some(raw_edit_box_obj_with_macro()),
+    })
+    .with_macro_name("RunEdit");
+    let object = DrawingObject::form_control(control).with_anchor(DrawingAnchor::TwoCell {
+        from: CellMarker {
+            col: 0,
+            col_offset_emu: 0,
+            row: 0,
+            row_offset_emu: 0,
+        },
+        to: CellMarker {
+            col: 2,
+            col_offset_emu: 0,
+            row: 2,
+            row_offset_emu: 0,
+        },
+        edit_as: None,
+    });
+    let mut workbook = Workbook::new();
+    workbook.worksheet_mut(0).unwrap().add_drawing(object);
+
+    let bytes = XlsWriter::write_to_bytes(&workbook).expect("write xls");
+    let reread = XlsReader::read(Cursor::new(bytes)).expect("read xls");
+    let drawn = reread
+        .worksheet(0)
+        .unwrap()
+        .form_controls()
+        .next()
+        .expect("unknown control survives");
+    assert_eq!(
+        drawn.payload.macro_name.as_deref(),
+        Some("RunEdit"),
+        "macro must reference this file's Lbl, not the source workbook's stale index"
+    );
+    let FormControlKind::Unknown {
+        raw_obj: Some(raw_obj),
+        ..
+    } = &drawn.payload.kind
+    else {
+        panic!("expected raw-backed XLS unknown control");
+    };
+    assert_eq!(
+        count_macro_subrecords(raw_obj),
+        1,
+        "exactly one ftMacro subrecord in the emitted OBJ"
+    );
+    let edo_payload: &[u8] = &[1, 2, 3, 4, 5, 6, 7, 8];
+    assert!(
+        raw_obj
+            .windows(edo_payload.len())
+            .any(|window| window == edo_payload),
+        "FtEdoData payload replays untouched"
+    );
+}
+
 fn patch_vml_object_type(bytes: Vec<u8>, replacement: &str) -> Vec<u8> {
     let mut input = zip::ZipArchive::new(Cursor::new(bytes)).expect("open zip");
     let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));

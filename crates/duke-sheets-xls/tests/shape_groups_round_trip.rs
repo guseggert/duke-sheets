@@ -182,6 +182,49 @@ fn nested_group_round_trips() {
     );
 }
 
+// features: Grouped drawing objects
+#[test]
+fn group_and_grouped_picture_rotation_round_trip_in_model_units() {
+    // FOPT 0x0004 is FixedPoint 16.16 degrees on the wire (MS-ODRAW
+    // 2.3.18.5); the model stays in 60,000ths of a degree. 90 degrees
+    // = 5,400,000 model units must survive for the group transform,
+    // a grouped picture's child transform, and a grouped shape.
+    let mut rotated_shape = duke_sheets_core::Shape::preset("rect");
+    rotated_shape.rotation = 2_700_000; // 45 degrees
+    let mut group = Group {
+        transform: group_transform(1_219_200, 190_500),
+        children: vec![
+            child("Pic", 0, 0, DrawingKind::Image(png_image())),
+            child(
+                "Rect",
+                609_600,
+                0,
+                DrawingKind::Shape(Box::new(rotated_shape)),
+            ),
+        ],
+    };
+    group.transform.rotation = 5_400_000;
+    group.children[0].transform.rotation = 5_400_000;
+    let mut wb = Workbook::new();
+    wb.worksheet_mut(0)
+        .unwrap()
+        .add_drawing(DrawingObject::group(group).with_anchor(anchor(1, 1, 4, 2)));
+
+    let parsed = write_then_read(&wb);
+    let sheet = parsed.worksheet(0).unwrap();
+    let group = sheet.drawings()[0].kind.as_group().expect("group");
+    assert_eq!(group.transform.rotation, 5_400_000, "group rotation");
+    assert_eq!(
+        group.children[0].transform.rotation, 5_400_000,
+        "grouped picture child rotation"
+    );
+    let shape = match &group.children[1].kind {
+        DrawingKind::Shape(shape) => shape,
+        other => panic!("expected grouped shape, got {other:?}"),
+    };
+    assert_eq!(shape.rotation, 2_700_000, "grouped shape rotation");
+}
+
 #[test]
 fn group_locked_printable_flags_round_trip() {
     let group = Group {
@@ -253,6 +296,33 @@ fn radio_chain_spans_grouped_and_top_level_radios() {
 }
 
 #[test]
+fn shape_text_default_alignment_round_trips_to_none() {
+    // Shape text with no explicit alignment is written with the
+    // Left/Top TXO defaults; the reader must strip those back to
+    // None the way the control caption path does.
+    let mut shape = duke_sheets_core::Shape::preset("rect");
+    shape.text = Some("hello".into());
+    let mut wb = Workbook::new();
+    wb.worksheet_mut(0)
+        .unwrap()
+        .add_shape(shape, anchor(1, 1, 3, 3));
+
+    let parsed = write_then_read(&wb);
+    let sheet = parsed.worksheet(0).unwrap();
+    let drawn = sheet.shapes().next().expect("shape survives");
+    let text = drawn.payload.text.as_ref().expect("shape text");
+    assert_eq!(text.plain_text(), "hello");
+    assert_eq!(
+        text.horizontal_alignment, None,
+        "default horizontal alignment must strip to None"
+    );
+    assert_eq!(
+        text.vertical_alignment, None,
+        "default vertical alignment must strip to None"
+    );
+}
+
+#[test]
 fn unmodelable_group_children_are_dropped_not_the_group() {
     // Comments cannot live inside an XLS shape group; the writer
     // drops the comment child and keeps the rest of the group.
@@ -315,7 +385,8 @@ fn lo_can_open_xls_with_shape_group_we_emit() {
             .with_anchor(anchor(1, 1, 4, 2))
             .with_name("Group 1"),
     );
-    ws.set_comment_at(3, 3, duke_sheets_core::CellComment::new("a", "note"));
+    ws.set_comment_at(3, 3, duke_sheets_core::CellComment::new("a", "note"))
+        .expect("set comment");
     ws.add_drawing(
         DrawingObject::form_control(FormControl::new(checkbox("Top level")))
             .with_anchor(anchor(5, 5, 7, 7)),

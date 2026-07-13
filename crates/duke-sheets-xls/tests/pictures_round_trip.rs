@@ -452,6 +452,94 @@ fn picture_anchor_within_cell_offsets_round_trip() {
     assert_eq!(img.height_emu, expected_height);
 }
 
+#[test]
+fn picture_anchor_over_hidden_rows_and_columns_survives() {
+    // Hidden rows/columns render at zero extent, so their quantised
+    // within-cell fractions degenerate to 0. The anchor's cells must
+    // survive the round-trip and stay ordered (to >= from) even when
+    // both endpoints touch zero-extent cells.
+    let custom = DrawingAnchor::TwoCell {
+        from: CellMarker {
+            col: 2,
+            col_offset_emu: 0,
+            row: 3,
+            row_offset_emu: 0,
+        },
+        to: CellMarker {
+            col: 5,
+            col_offset_emu: 0,
+            row: 8,
+            row_offset_emu: 0,
+        },
+        edit_as: None,
+    };
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    for col in 2..=3 {
+        ws.set_column_hidden(col, true);
+    }
+    for row in 3..=5 {
+        ws.set_row_hidden(row, true);
+    }
+    ws.add_drawing(test_image("Picture 1", 0, 0).with_anchor(custom.clone()));
+
+    let parsed = write_then_read(&wb);
+    let images = images_of(parsed.worksheet(0).unwrap());
+    assert_eq!(images.len(), 1);
+    let DrawingAnchor::TwoCell { from, to, .. } = &images[0].object.anchor else {
+        panic!("expected TwoCell anchor");
+    };
+    assert_eq!(images[0].object.anchor, custom, "anchor survives verbatim");
+    assert!(
+        (to.col, to.col_offset_emu) >= (from.col, from.col_offset_emu),
+        "column endpoints stay ordered"
+    );
+    assert!(
+        (to.row, to.row_offset_emu) >= (from.row, from.row_offset_emu),
+        "row endpoints stay ordered"
+    );
+}
+
+#[test]
+fn negative_anchor_offsets_clamp_to_zero() {
+    // MS-XLS ClientAnchor fractions are 0..=1024 (dx) and 0..=256
+    // (dy); a negative within-cell offset must clamp to 0 on the
+    // wire, not emit an out-of-range negative fraction.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.add_drawing(test_image("Picture 1", 1, 2).with_anchor(DrawingAnchor::TwoCell {
+        from: CellMarker {
+            col: 1,
+            col_offset_emu: -9_525,
+            row: 2,
+            row_offset_emu: -47_625,
+        },
+        to: CellMarker {
+            col: 4,
+            col_offset_emu: 0,
+            row: 7,
+            row_offset_emu: 0,
+        },
+        edit_as: None,
+    }));
+
+    let parsed = write_then_read(&wb);
+    let images = images_of(parsed.worksheet(0).unwrap());
+    let DrawingAnchor::TwoCell { from, .. } = &images[0].object.anchor else {
+        panic!("expected TwoCell anchor");
+    };
+    assert_eq!(
+        (from.col, from.col_offset_emu),
+        (1, 0),
+        "negative dx clamps to fraction 0"
+    );
+    assert_eq!(
+        (from.row, from.row_offset_emu),
+        (2, 0),
+        "negative dy clamps to fraction 0"
+    );
+}
+
 /// 58-byte 1x1 24-bit BMP (white pixel). Has the standard 14-byte
 /// BITMAPFILEHEADER + 40-byte BITMAPINFOHEADER + 4-byte pixel row.
 const TEST_BMP_1X1: &[u8] = &[
@@ -751,7 +839,8 @@ fn picture_and_comment_coexist_on_same_sheet() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.add_drawing(test_image("Picture 1", 1, 1));
-    ws.set_comment_at(3, 3, CellComment::new("Alice", "A note"));
+    ws.set_comment_at(3, 3, CellComment::new("Alice", "A note"))
+        .expect("set comment");
 
     let parsed = write_then_read(&wb);
     let ws_in = parsed.worksheet(0).unwrap();

@@ -8,8 +8,8 @@ use std::io::Cursor;
 
 use duke_sheets_chart::{CellMarker, DrawingAnchor};
 use duke_sheets_core::{
-    CheckState, DrawingObject, Drawn, FormControl, FormControlKind, ListSelection, Workbook,
-    Worksheet,
+    CheckState, ControlText, DrawingObject, Drawn, FormControl, FormControlKind, ListSelection,
+    RichTextRun, RunFont, Workbook, Worksheet,
 };
 use duke_sheets_xls::{XlsReader, XlsWriter};
 
@@ -414,7 +414,8 @@ fn controls_coexist_with_comments_and_pictures() {
         .with_anchor(anchor(6, 1, 8, 4))
         .with_name("Pic"),
     );
-    ws.set_comment_at(0, 0, duke_sheets_core::CellComment::new("Author", "note"));
+    ws.set_comment_at(0, 0, duke_sheets_core::CellComment::new("Author", "note"))
+        .expect("set comment");
     ws.add_drawing(control_at(
         FormControlKind::Checkbox {
             caption: "check".into(),
@@ -623,7 +624,10 @@ fn empty_caption_round_trips() {
 
 #[test]
 fn oversized_caption_round_trips_via_multiple_continue_records() {
-    let long: String = "xy".repeat(3000); // 6000 chars
+    // A narrow-encoded text CONTINUE holds at most 8,223 chars (8,224
+    // byte body minus the encoding grbit); 8,400 chars forces the
+    // text to split across two CONTINUE records.
+    let long: String = "xy".repeat(4_200);
     let kind = single_control_round_trip(FormControlKind::Label {
         caption: long.clone().into(),
     });
@@ -633,6 +637,107 @@ fn oversized_caption_round_trips_via_multiple_continue_records() {
         }
         other => panic!("expected Label, got {other:?}"),
     }
+}
+
+#[test]
+fn mixed_caption_plain_run_keeps_font_none() {
+    // The plain run of a [plain, styled] caption is written with TXO
+    // ifnt=0 (workbook default font) and must read back as
+    // font: None, not an explicit copy of the default font.
+    let caption = ControlText {
+        runs: vec![
+            RichTextRun::plain("plain "),
+            RichTextRun::with_font(
+                "styled",
+                RunFont {
+                    bold: Some(true),
+                    ..RunFont::default()
+                },
+            ),
+        ],
+        horizontal_alignment: None,
+        vertical_alignment: None,
+    };
+    let kind = single_control_round_trip(FormControlKind::Label { caption });
+    let FormControlKind::Label { caption } = kind else {
+        panic!("expected Label, got {kind:?}");
+    };
+    assert_eq!(caption.plain_text(), "plain styled");
+    assert_eq!(caption.runs.len(), 2, "runs: {:?}", caption.runs);
+    assert_eq!(
+        caption.runs[0].font, None,
+        "plain run must stay font-less; got {:?}",
+        caption.runs[0].font
+    );
+    let styled = caption.runs[1].font.as_ref().expect("styled run font");
+    assert_eq!(styled.bold, Some(true));
+}
+
+#[test]
+fn oversized_macro_name_returns_a_clean_error() {
+    // Lbl cch is a u8, so a macro name over 255 UTF-16 units cannot
+    // be emitted. Silently skipping its Lbl would shift every later
+    // macro's PtgName index onto the wrong name; the write must fail
+    // instead.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.add_drawing(
+        DrawingObject::form_control(
+            FormControl::new(FormControlKind::Button {
+                caption: "First".into(),
+            })
+            .with_macro_name("A".repeat(300)),
+        )
+        .with_anchor(anchor(1, 1, 3, 3)),
+    );
+    ws.add_drawing(
+        DrawingObject::form_control(
+            FormControl::new(FormControlKind::Button {
+                caption: "Second".into(),
+            })
+            .with_macro_name("RunSecond"),
+        )
+        .with_anchor(anchor(1, 5, 3, 7)),
+    );
+    let err = XlsWriter::write_to_bytes(&wb).expect_err("oversized macro name must fail");
+    assert!(
+        err.to_string().contains("procedure name"),
+        "unexpected error: {err}"
+    );
+}
+
+// features: Form-control macro assignment
+#[test]
+fn multiple_macro_names_round_trip_pointing_at_their_own_lbls() {
+    // Sorted Lbl order (Alpha before Zulu) differs from insertion
+    // order, so each control's PtgName index must land on its own
+    // Lbl, not its positional neighbour.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.add_drawing(
+        DrawingObject::form_control(
+            FormControl::new(FormControlKind::Button {
+                caption: "Z".into(),
+            })
+            .with_macro_name("Zulu"),
+        )
+        .with_anchor(anchor(1, 1, 3, 3)),
+    );
+    ws.add_drawing(
+        DrawingObject::form_control(
+            FormControl::new(FormControlKind::Button {
+                caption: "A".into(),
+            })
+            .with_macro_name("Alpha"),
+        )
+        .with_anchor(anchor(1, 5, 3, 7)),
+    );
+
+    let parsed = write_then_read(&wb);
+    let controls = controls_of(parsed.worksheet(0).unwrap());
+    assert_eq!(controls.len(), 2);
+    assert_eq!(controls[0].payload.macro_name.as_deref(), Some("Zulu"));
+    assert_eq!(controls[1].payload.macro_name.as_deref(), Some("Alpha"));
 }
 
 #[test]

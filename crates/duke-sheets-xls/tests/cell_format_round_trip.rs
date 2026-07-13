@@ -272,6 +272,70 @@ fn solid_fill_with_indexed_color_round_trips() {
     );
 }
 
+// features: Fill: solid color
+#[test]
+fn fill_color_palette_exact_rgb_round_trips() {
+    // Palette-exact RGB must map to its default-palette icv the way
+    // the font path does (violet = palette slot 12 = icv 20), not
+    // drop to the 0x40 system default that reads back as black.
+    let violet = Color::Rgb {
+        r: 128,
+        g: 0,
+        b: 128,
+    };
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 1.0).expect("set A1");
+    let mut style = Style::new();
+    style.fill = FillStyle::Solid { color: violet };
+    ws.set_cell_style("A1", &style).expect("set style");
+
+    let parsed = write_then_read(&wb);
+    let sheet = parsed.worksheet(0).unwrap();
+    let fill = &style_at(sheet, "A1").fill;
+    let color = match fill {
+        FillStyle::Solid { color } => *color,
+        FillStyle::Pattern { foreground, .. } => *foreground,
+        other => panic!("expected a solid-equivalent fill, got {other:?}"),
+    };
+    assert_eq!(
+        color.to_rgb(),
+        (128, 0, 128),
+        "palette-exact fill RGB survives; got {color:?}"
+    );
+}
+
+// features: Border: color
+#[test]
+fn border_color_palette_exact_rgb_round_trips() {
+    // Light Orange (255,153,0) = default palette slot 44 = icv 52.
+    let light_orange = Color::Rgb {
+        r: 255,
+        g: 153,
+        b: 0,
+    };
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 1.0).expect("set A1");
+    let mut style = Style::new();
+    style.border.left = Some(BorderEdge::new(BorderLineStyle::Thin, light_orange));
+    ws.set_cell_style("A1", &style).expect("set style");
+
+    let parsed = write_then_read(&wb);
+    let sheet = parsed.worksheet(0).unwrap();
+    let edge = style_at(sheet, "A1")
+        .border
+        .left
+        .clone()
+        .expect("left edge present");
+    assert_eq!(
+        edge.color.to_rgb(),
+        (255, 153, 0),
+        "palette-exact border RGB survives; got {:?}",
+        edge.color
+    );
+}
+
 #[test]
 fn pattern_fill_round_trips() {
     let mut wb = Workbook::new();

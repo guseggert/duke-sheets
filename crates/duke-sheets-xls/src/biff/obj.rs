@@ -973,19 +973,27 @@ mod tests {
 
     #[test]
     fn skips_macro_subrecord() {
-        // ftCmo + ftMacro (ObjFmla with PtgRef) + ftEnd: macro must be
-        // skipped via its cbFmla framing without derailing the walk.
+        // MS-XLS 2.4.181 places FtMacro after cbls/rbo/sbs; build a
+        // checkbox OBJ in that order and verify the walk crosses the
+        // macro via its cbFmla framing without derailing.
         let mut body = Vec::new();
         FtCmo {
-            ot: ot::BUTTON,
+            ot: ot::CHECKBOX,
             id: 3,
             grbit: 0x4001,
         }
         .write_to(&mut body);
+        push_cbls(&mut body, 1).unwrap();
         push_fmla_subrecord(&mut body, ft::MACRO, &[0x23, 0x01, 0x00, 0x00, 0x00]).unwrap();
+        push_cbls_data(&mut body, 1, false).unwrap();
         push_end(&mut body).unwrap();
         let parsed = parse_obj(&body).unwrap();
-        assert_eq!(parsed.ot, ot::BUTTON);
+        assert_eq!(parsed.ot, ot::CHECKBOX);
+        assert_eq!(
+            parsed.macro_rgce.as_deref(),
+            Some(&[0x23, 0x01, 0x00, 0x00, 0x00][..])
+        );
+        assert_eq!(parsed.checked, Some(1), "walk continues past the macro");
         assert!(parsed.link_rgce.is_none());
     }
 

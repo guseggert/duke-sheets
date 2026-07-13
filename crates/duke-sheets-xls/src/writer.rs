@@ -903,15 +903,25 @@ fn encode_fill_colors(fill: &FillStyle) -> (u8, u8) {
 
 /// Encode a [`Color`] as a 7-bit `icv` value (the on-disk encoding
 /// used in border/fill XF fields). The font-side encoding uses 16
-/// bits and a different sentinel — see `write_font_record`.
+/// bits and a different auto sentinel (see `write_font_record`), but
+/// both sides share the raw-icv `Indexed` semantic and the
+/// palette-position mapping for RGB so a color means the same thing
+/// on every XF axis.
 fn color_to_icv7(color: &Color) -> u8 {
     match color {
         Color::Auto => 0x40,
-        Color::Indexed(i) => 0x08u8.saturating_add(i.min(&55).clone()),
-        // BIFF8 has no first-class RGB without a PALETTE record. Pick
-        // 0x40 (system foreground) as the closest no-op default; a
-        // future PALETTE-emission slice can express arbitrary RGB.
-        _ => 0x40,
+        // Model Indexed(i) is the raw icv (the OOXML indexed-colors
+        // table matches BIFF icv 0..=63; 0x40/0x41 are the system
+        // defaults), same as the font path and the reader.
+        Color::Indexed(i) => (*i).min(0x41),
+        Color::Rgb { r, g, b } | Color::Argb { r, g, b, .. } => crate::styles::DEFAULT_PALETTE
+            .iter()
+            .position(|&(pr, pg, pb)| (pr, pg, pb) == (*r, *g, *b))
+            .map(|index| index as u8 + 8)
+            // Off-palette RGB has no BIFF8 encoding without a PALETTE
+            // record; 0x40 (system foreground) is the no-op default.
+            .unwrap_or(0x40),
+        Color::Theme { .. } => 0x40,
     }
 }
 
@@ -1854,7 +1864,13 @@ impl NameTable {
 
 fn build_name_table(workbook: &Workbook) -> NameTable {
     let mut by_name = HashMap::new();
-    let user_names = user_names_in_xls_emit_order(workbook);
+    // Positional indices must be built from exactly the set of Lbl
+    // records write_user_name_records emits: an indexed-but-skipped
+    // name would shift every later PtgName onto the wrong Lbl.
+    let user_names: Vec<_> = user_names_in_xls_emit_order(workbook)
+        .into_iter()
+        .filter(|nr| xls_lbl_name_fits(&nr.name))
+        .collect();
     for (i, nr) in user_names.iter().copied().enumerate() {
         if i >= u16::MAX as usize {
             break;
@@ -1873,6 +1889,9 @@ fn build_name_table(workbook: &Workbook) -> NameTable {
         );
     }
     let mut macro_by_name = HashMap::new();
+    // Macro Lbls follow the user Lbls; unemittable macro names stay
+    // indexed because write_macro_name_records fails the whole write
+    // for them, so no emitted file can carry a skewed index.
     for (offset, name) in macro_names_in_xls_emit_order(workbook).iter().enumerate() {
         let index = user_names.len().saturating_add(offset).saturating_add(1);
         if index > u16::MAX as usize {
@@ -1913,10 +1932,12 @@ fn write_user_name_records(
     use duke_sheets_core::named_range::NameScope;
 
     for nr in user_names_in_xls_emit_order(workbook) {
-        let name_units: Vec<u16> = nr.name.encode_utf16().collect();
-        if name_units.is_empty() || name_units.len() > u8::MAX as usize {
+        // Must stay in lockstep with build_name_table's filter: the
+        // PtgName indices are positions in this emitted sequence.
+        if !xls_lbl_name_fits(&nr.name) {
             continue;
         }
+        let name_units: Vec<u16> = nr.name.encode_utf16().collect();
 
         let formula_body: Vec<u8> = {
             if let Some(expr) = parse_name_body(&nr.refers_to) {
@@ -2000,9 +2021,6 @@ fn write_macro_name_records(stream: &mut Vec<u8>, workbook: &Workbook) -> XlsRes
             )));
         }
         let name_units: Vec<u16> = name.encode_utf16().collect();
-        if name_units.is_empty() || name_units.len() > u8::MAX as usize {
-            continue;
-        }
         let high_byte = name_units.iter().any(|&unit| unit > 0xFF);
         let mut body = Vec::with_capacity(17 + name_units.len() * 2);
         // fOB + fProc identify a VBA procedure name (MS-XLS 2.4.150).
@@ -2030,6 +2048,11 @@ fn write_macro_name_records(stream: &mut Vec<u8>, workbook: &Workbook) -> XlsRes
 }
 
 fn is_xls_macro_procedure_name(name: &str) -> bool {
+    // Lbl cch is a u8; an oversized name cannot be emitted, and
+    // skipping its Lbl would shift every later macro's PtgName index.
+    if !xls_lbl_name_fits(name) {
+        return false;
+    }
     name.split('.').all(|part| {
         let mut chars = part.chars();
         chars
@@ -2037,6 +2060,13 @@ fn is_xls_macro_procedure_name(name: &str) -> bool {
             .is_some_and(|ch| ch == '_' || ch == '\\' || ch.is_alphabetic())
             && chars.all(|ch| ch == '_' || ch.is_alphanumeric())
     })
+}
+
+/// Whether a defined name fits an XLS Lbl record (cch is a u8).
+/// PtgName indices are positional over the emitted Lbl sequence, so
+/// the name table and the NAME emitters must apply this same filter.
+fn xls_lbl_name_fits(name: &str) -> bool {
+    (1..=usize::from(u8::MAX)).contains(&name.encode_utf16().count())
 }
 
 fn parse_name_body(refers_to: &str) -> Option<duke_sheets_formula::FormulaExpr> {
@@ -4730,6 +4760,10 @@ struct CommentShape {
     /// Whether the comment box is visible by default (sets `NOTE.flags`
     /// bit 1).
     visible: bool,
+    /// Popup placement from the wrapping drawing object. Emitted as
+    /// the shape's ClientAnchor unless it is the synthesized default
+    /// placement (then Excel's canonical default bytes are written).
+    anchor: duke_sheets_chart::DrawingAnchor,
 }
 
 /// A form control queued for drawing emission.
@@ -4965,7 +4999,7 @@ impl ShapeBuilder<'_> {
                 shape.flip_v,
             )?),
             DrawingKind::Comment { row, col, comment } => {
-                Some(self.build_comment(*row, *col, comment, !meta.hidden)?)
+                Some(self.build_comment(*row, *col, comment, !meta.hidden, &object.anchor)?)
             }
             DrawingKind::FormControl(control) => Some(self.build_control(meta, anchor, control)?),
             DrawingKind::Group(group) => Some(self.build_group(
@@ -5166,6 +5200,7 @@ impl ShapeBuilder<'_> {
         col: u16,
         comment: &duke_sheets_core::CellComment,
         visible: bool,
+        anchor: &duke_sheets_chart::DrawingAnchor,
     ) -> XlsResult<SheetShape> {
         let spid = self.alloc_spid()?;
         let obj_id = self.alloc_obj_id()?;
@@ -5179,6 +5214,7 @@ impl ShapeBuilder<'_> {
             author: comment.author.clone(),
             text: comment.text.clone(),
             visible,
+            anchor: anchor.clone(),
         }))
     }
 
@@ -5275,7 +5311,15 @@ fn chain_option_buttons(shapes: &mut [SheetShape], sheet: &Worksheet) {
     let mut controls: Vec<&mut ControlShape> = Vec::new();
     collect(shapes, &mut controls);
     let placed = sheet.placed_form_controls();
+    debug_assert_eq!(
+        placed.len(),
+        controls.len(),
+        "placed_form_controls() must walk the same control set as the built shapes"
+    );
     if placed.len() != controls.len() {
+        // Positional pairing is broken; in release, degrade to
+        // unchained (self-grouped) radios rather than cross-linking
+        // the wrong controls.
         return;
     }
     for members in duke_sheets_core::radio_groups(&placed) {
@@ -5580,7 +5624,7 @@ fn flatten_shape(
             picture_fopt_with(
                 picture.blip_id,
                 &picture.shape_name,
-                picture.rotation,
+                picture.rotation.map(rotation_to_officeart_fixed),
                 picture.alt_text.as_deref(),
                 picture.hidden,
             )
@@ -5636,7 +5680,20 @@ fn flatten_shape(
             }
             .write_to(shape_type::TEXT_BOX, &mut pre);
             comment_fopt(comment.text_id).write_to(&mut pre);
-            OfficeArtClientAnchor::comment_default(comment.row, comment.col).write_to(&mut pre);
+            // A user-placed popup keeps its model anchor; the
+            // synthesized default placement (and anchors the metrics
+            // conversion rejects) emit Excel's canonical default
+            // bytes instead.
+            let is_default_anchor = comment.anchor
+                == duke_sheets_core::default_comment_anchor(comment.row, comment.col);
+            let converted = (!is_default_anchor)
+                .then(|| client_anchor_from_drawing_anchor_with_metrics(&comment.anchor, metrics))
+                .and_then(Result::ok);
+            converted
+                .unwrap_or_else(|| {
+                    OfficeArtClientAnchor::comment_default(comment.row, comment.col)
+                })
+                .write_to(&mut pre);
             write_client_data(&mut pre);
 
             let mut post = Vec::new();
@@ -5731,7 +5788,10 @@ fn flatten_shape(
             .write_to(shape_type::NOT_PRIMITIVE, &mut sp_payload);
             let mut fopt = FoptTable::new();
             if group.rotation != 0 {
-                fopt.push(FoptEntry::simple(0x0004, group.rotation as u32));
+                fopt.push(FoptEntry::simple(
+                    0x0004,
+                    rotation_to_officeart_fixed(group.rotation),
+                ));
             }
             if let Some(name) = group.shape_name.as_deref() {
                 fopt.push(complex_string_entry(0x0380, name));
@@ -5856,6 +5916,8 @@ fn basic_shape_fopt(shape: &BasicShape) -> crate::biff::escher::FoptTable {
     table
 }
 
+/// Convert a model rotation (60,000ths of a degree) to the FOPT
+/// 0x0004 wire value: FixedPoint 16.16 degrees ([MS-ODRAW] 2.3.18.5).
 fn rotation_to_officeart_fixed(rotation: i32) -> u32 {
     let numerator = i64::from(rotation) * 65_536;
     let fixed = if numerator >= 0 {
@@ -5898,7 +5960,9 @@ fn emu_to_fraction_units(emu: i64, extent_emu: i64, denominator: i128, max: i128
     } else {
         (numerator - divisor / 2) / divisor
     };
-    rounded.clamp(i128::from(i16::MIN), max) as i16
+    // MS-XLS 2.5.193: ClientAnchor fractions are 0..=1024 (dx) and
+    // 0..=256 (dy); negative offsets clamp to the cell edge.
+    rounded.clamp(0, max) as i16
 }
 
 /// Translate a `duke_sheets_chart::DrawingAnchor` to the
@@ -6469,7 +6533,19 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
                 "XLS unknown control raw OBJ body is truncated".into(),
             ));
         }
-        let mut body = raw_obj.clone();
+        // Rebuild the body instead of replaying it verbatim: an
+        // embedded FtMacro's PtgName indexes the SOURCE workbook's
+        // Lbl table and is stale in this file, so it is stripped and
+        // a fresh FtMacro is emitted when the model names a macro.
+        // Everything else replays untouched — in particular
+        // FtEdoData.id (MS-XLS 2.5.144) still references another
+        // object by its source-sheet id and is NOT renumbered, so a
+        // control relying on that link may point at the wrong object
+        // after a rewrite.
+        let cmo_end = 4usize
+            .saturating_add(u16::from_le_bytes([raw_obj[2], raw_obj[3]]) as usize)
+            .min(raw_obj.len());
+        let mut body = raw_obj[..cmo_end].to_vec();
         body[6..8].copy_from_slice(&control.obj_id.to_le_bytes());
         let mut grbit = u16::from_le_bytes([body[8], body[9]]);
         grbit &= !(obj::cmo_flags::LOCKED | obj::cmo_flags::PRINT);
@@ -6480,6 +6556,32 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
             grbit |= obj::cmo_flags::PRINT;
         }
         body[8..10].copy_from_slice(&grbit.to_le_bytes());
+        if control.control.macro_name.is_some() {
+            if control.macro_rgce.is_empty() {
+                return Err(XlsError::InvalidFormat(
+                    "XLS control macro could not be resolved to a procedure name".into(),
+                ));
+            }
+            // Edit and dialog boxes carry none of cbls/rbo/sbs, so
+            // directly after ftCmo is the MS-XLS 2.4.181 FtMacro
+            // position.
+            obj::push_fmla_subrecord(&mut body, obj::ft::MACRO, &control.macro_rgce)?;
+        }
+        let mut pos = cmo_end;
+        while pos + 4 <= raw_obj.len() {
+            let ft_id = u16::from_le_bytes([raw_obj[pos], raw_obj[pos + 1]]);
+            let cb = u16::from_le_bytes([raw_obj[pos + 2], raw_obj[pos + 3]]) as usize;
+            let end = pos.saturating_add(4).saturating_add(cb);
+            if end > raw_obj.len() {
+                break;
+            }
+            if ft_id != obj::ft::MACRO {
+                body.extend_from_slice(&raw_obj[pos..end]);
+            }
+            pos = end;
+        }
+        // A malformed tail replays verbatim rather than being dropped.
+        body.extend_from_slice(&raw_obj[pos..]);
         return write_control_obj_records(out, &mut body, None);
     }
     let ot_code = match kind {
@@ -6520,6 +6622,23 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
         }
     };
 
+    // MS-XLS 2.4.181 subrecord order: cmo, cbls, rbo, sbs, macro,
+    // linkFmla, checkBox, radioButton, list, gbo. FtMacro therefore
+    // follows the state mirrors, not ftCmo. MS-XLS 2.5.148: the
+    // ObjFmla holds a single PtgName referencing an fProc Lbl in the
+    // Globals Substream.
+    let push_macro = |body: &mut Vec<u8>| -> XlsResult<()> {
+        if control.control.macro_name.is_none() {
+            return Ok(());
+        }
+        if control.macro_rgce.is_empty() {
+            return Err(XlsError::InvalidFormat(
+                "XLS control macro could not be resolved to a procedure name".into(),
+            ));
+        }
+        obj::push_fmla_subrecord(body, obj::ft::MACRO, &control.macro_rgce)
+    };
+
     let mut body = Vec::new();
     obj::FtCmo {
         ot: ot_code,
@@ -6527,24 +6646,17 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
         grbit,
     }
     .write_to(&mut body);
-    if control.control.macro_name.is_some() {
-        if control.macro_rgce.is_empty() {
-            return Err(XlsError::InvalidFormat(
-                "XLS control macro could not be resolved to a procedure name".into(),
-            ));
-        }
-        // MS-XLS 2.5.148: FtMacro is an ObjFmla whose single PtgName
-        // references an fProc Lbl in the Globals Substream.
-        obj::push_fmla_subrecord(&mut body, obj::ft::MACRO, &control.macro_rgce)?;
-    }
 
     let mut needs_end = true;
     let mut lbs_start = None;
     match kind {
-        FormControlKind::Button { .. } | FormControlKind::Label { .. } => {}
+        FormControlKind::Button { .. } | FormControlKind::Label { .. } => {
+            push_macro(&mut body)?;
+        }
         FormControlKind::Checkbox { state, no_3d, .. } => {
             let s = state_u16(state);
             obj::push_cbls(&mut body, s)?;
+            push_macro(&mut body)?;
             if !control.link_rgce.is_empty() {
                 obj::push_fmla_subrecord(&mut body, obj::ft::CBLS_FMLA, &control.link_rgce)?;
             }
@@ -6559,6 +6671,7 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
             let s = state_u16(state);
             obj::push_cbls(&mut body, s)?;
             obj::push_rbo(&mut body, s)?;
+            push_macro(&mut body)?;
             if !control.link_rgce.is_empty() {
                 obj::push_fmla_subrecord(&mut body, obj::ft::CBLS_FMLA, &control.link_rgce)?;
             }
@@ -6566,6 +6679,7 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
             obj::push_rbo_data(&mut body, control.radio_next_id, control.radio_first)?;
         }
         FormControlKind::GroupBox { no_3d, .. } => {
+            push_macro(&mut body)?;
             obj::push_gbo_data(&mut body, *no_3d)?;
         }
         FormControlKind::Scrollbar {
@@ -6590,6 +6704,7 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
                 flags: 0x0001, // fDraw
             }
             .write_to(&mut body)?;
+            push_macro(&mut body)?;
             if !control.link_rgce.is_empty() {
                 obj::push_fmla_subrecord(&mut body, obj::ft::SBS_FMLA, &control.link_rgce)?;
             }
@@ -6613,6 +6728,7 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
                 flags: 0x0001, // fDraw
             }
             .write_to(&mut body)?;
+            push_macro(&mut body)?;
             if !control.link_rgce.is_empty() {
                 obj::push_fmla_subrecord(&mut body, obj::ft::SBS_FMLA, &control.link_rgce)?;
             }
@@ -6635,6 +6751,7 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
                 flags: 0x0001,
             }
             .write_to(&mut body)?;
+            push_macro(&mut body)?;
             if !control.link_rgce.is_empty() {
                 obj::push_fmla_subrecord(&mut body, obj::ft::SBS_FMLA, &control.link_rgce)?;
             }
@@ -6693,6 +6810,7 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
                 flags: 0x0000,
             }
             .write_to(&mut body)?;
+            push_macro(&mut body)?;
             if !control.link_rgce.is_empty() {
                 obj::push_fmla_subrecord(&mut body, obj::ft::SBS_FMLA, &control.link_rgce)?;
             }
@@ -7059,6 +7177,201 @@ mod tests {
             radio_next_id: 0,
             radio_first: false,
         })
+    }
+
+    /// Return the first FOPT 0x0004 value found in an emitted escher
+    /// byte run, walking record headers.
+    fn fopt_rotation_in(bytes: &[u8]) -> Option<u32> {
+        use crate::biff::escher::{
+            rec_type as er, FoptTable, FoptValue, OfficeArtRecordHeader, HEADER_LEN,
+        };
+        let mut cursor = 0usize;
+        while cursor + HEADER_LEN <= bytes.len() {
+            let h = OfficeArtRecordHeader::read_from(&bytes[cursor..]).ok()?;
+            if h.rec_type == er::FOPT {
+                let (table, _) = FoptTable::read_from(&bytes[cursor..]).ok()?;
+                return table.entries().find(|entry| entry.id == 0x0004).map(
+                    |entry| match entry.value {
+                        FoptValue::Simple(v) => v,
+                        FoptValue::Complex(_) => panic!("rotation is a simple property"),
+                    },
+                );
+            }
+            cursor += HEADER_LEN
+                + if h.is_container() {
+                    0
+                } else {
+                    h.rec_len as usize
+                };
+        }
+        None
+    }
+
+    /// [MS-ODRAW] 2.3.18.5: FOPT rotation (0x0004) is a FixedPoint
+    /// 16.16 value in degrees. 90 degrees is 5,400,000 model units
+    /// (60,000ths of a degree) and 90 * 65,536 = 5,898,240 on the
+    /// wire. Groups and pictures must use the same conversion basic
+    /// shapes already do.
+    #[test]
+    fn group_fopt_rotation_is_16_16_fixed_point_degrees() {
+        let group = GroupShape {
+            spid: 1025,
+            obj_id: 1,
+            shape_name: None,
+            alt_text: None,
+            locked: true,
+            printable: true,
+            hidden: false,
+            rotation: 5_400_000,
+            flip_h: false,
+            flip_v: false,
+            anchor: EmitAnchor::Sheet(duke_sheets_chart::DrawingAnchor::default()),
+            child_rect: (0, 0, 1000, 1000),
+            children: Vec::new(),
+        };
+        let metrics = duke_sheets_core::Worksheet::new("m");
+        let mut flats = Vec::new();
+        flatten_shape(&SheetShape::Group(group), &mut flats, &metrics).expect("flatten");
+        assert_eq!(
+            fopt_rotation_in(&flats[0].pre),
+            Some(5_898_240),
+            "group FOPT 0x0004 must be 16.16 fixed-point degrees"
+        );
+    }
+
+    #[test]
+    fn picture_fopt_rotation_is_16_16_fixed_point_degrees() {
+        let picture = PictureShape {
+            spid: 1025,
+            obj_id: 1,
+            blip_id: 1,
+            shape_name: "Picture 1".to_string(),
+            alt_text: None,
+            locked: true,
+            printable: true,
+            hidden: false,
+            anchor: EmitAnchor::Sheet(duke_sheets_chart::DrawingAnchor::default()),
+            rotation: Some(5_400_000),
+            flip_h: false,
+            flip_v: false,
+        };
+        let metrics = duke_sheets_core::Worksheet::new("m");
+        let mut flats = Vec::new();
+        flatten_shape(&SheetShape::Picture(picture), &mut flats, &metrics).expect("flatten");
+        assert_eq!(
+            fopt_rotation_in(&flats[0].pre),
+            Some(5_898_240),
+            "picture FOPT 0x0004 must be 16.16 fixed-point degrees"
+        );
+    }
+
+    /// Walk an OBJ record's body and collect the subrecord ids in
+    /// order. `record` is the full BIFF record (type + len + body).
+    fn obj_subrecord_ids(record: &[u8]) -> Vec<u16> {
+        assert_eq!(
+            u16::from_le_bytes([record[0], record[1]]),
+            OBJ_RECORD,
+            "expected an OBJ record"
+        );
+        let body = &record[4..];
+        let mut ids = Vec::new();
+        let mut pos = 0usize;
+        while pos + 4 <= body.len() {
+            let ft = u16::from_le_bytes([body[pos], body[pos + 1]]);
+            let cb = u16::from_le_bytes([body[pos + 2], body[pos + 3]]) as usize;
+            ids.push(ft);
+            pos += 4 + cb;
+            if ft == crate::biff::obj::ft::END {
+                break;
+            }
+        }
+        ids
+    }
+
+    /// MS-XLS 2.4.181 orders OBJ subrecords cmo, cbls, rbo, sbs,
+    /// macro, linkFmla, checkBox, radioButton, ...: FtMacro follows
+    /// the state mirrors, it does not sit directly after ftCmo.
+    #[test]
+    fn checkbox_obj_places_ftmacro_after_ftcbls() {
+        use crate::biff::obj::ft;
+        let control = ControlShape {
+            spid: 1025,
+            obj_id: 1,
+            text_id: Some(1),
+            shape_name: None,
+            alt_text: None,
+            control: FormControl::new(FormControlKind::Checkbox {
+                caption: "boxed".into(),
+                state: duke_sheets_core::CheckState::Checked,
+                cell_link: None,
+                no_3d: false,
+            })
+            .with_macro_name("RunMe"),
+            anchor: EmitAnchor::Sheet(duke_sheets_chart::DrawingAnchor::default()),
+            locked: true,
+            printable: true,
+            hidden: false,
+            link_rgce: Vec::new(),
+            input_rgce: Vec::new(),
+            txo_runs: Vec::new(),
+            macro_rgce: vec![0x23, 0x01, 0x00, 0x00, 0x00],
+            radio_next_id: 0,
+            radio_first: false,
+        };
+        let mut out = Vec::new();
+        write_control_obj_to_vec(&mut out, &control).expect("emit OBJ");
+        assert_eq!(
+            obj_subrecord_ids(&out),
+            vec![ft::CMO, ft::CBLS, ft::MACRO, ft::CBLS_DATA, ft::END],
+            "FtMacro must follow FtCbls (MS-XLS 2.4.181)"
+        );
+    }
+
+    /// Same ordering rule for option buttons: macro follows cbls+rbo
+    /// and precedes checkBox/radioButton data.
+    #[test]
+    fn option_button_obj_places_ftmacro_after_ftrbo() {
+        use crate::biff::obj::ft;
+        let control = ControlShape {
+            spid: 1025,
+            obj_id: 1,
+            text_id: Some(1),
+            shape_name: None,
+            alt_text: None,
+            control: FormControl::new(FormControlKind::OptionButton {
+                caption: "radio".into(),
+                state: duke_sheets_core::CheckState::Unchecked,
+                cell_link: None,
+                first_in_group: true,
+                no_3d: false,
+            })
+            .with_macro_name("RunMe"),
+            anchor: EmitAnchor::Sheet(duke_sheets_chart::DrawingAnchor::default()),
+            locked: true,
+            printable: true,
+            hidden: false,
+            link_rgce: Vec::new(),
+            input_rgce: Vec::new(),
+            txo_runs: Vec::new(),
+            macro_rgce: vec![0x23, 0x01, 0x00, 0x00, 0x00],
+            radio_next_id: 1,
+            radio_first: true,
+        };
+        let mut out = Vec::new();
+        write_control_obj_to_vec(&mut out, &control).expect("emit OBJ");
+        assert_eq!(
+            obj_subrecord_ids(&out),
+            vec![
+                ft::CMO,
+                ft::CBLS,
+                ft::RBO,
+                ft::MACRO,
+                ft::CBLS_DATA,
+                ft::RBO_DATA,
+                ft::END
+            ],
+            "FtMacro must follow FtCbls/FtRbo (MS-XLS 2.4.181)"
+        );
     }
 
     #[test]

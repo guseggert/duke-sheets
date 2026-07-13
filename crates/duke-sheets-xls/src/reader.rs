@@ -59,7 +59,9 @@ struct EscherShapeNode {
     /// FSP flip flags.
     flip_h: bool,
     flip_v: bool,
-    /// FOPT rotation (0x0004), in 60,000ths of a degree.
+    /// FOPT rotation (0x0004) wire value: FixedPoint 16.16 degrees
+    /// ([MS-ODRAW] 2.3.18.5). Model conversion (to 60,000ths of a
+    /// degree) happens via `officeart_fixed_to_rotation`.
     rotation: Option<i32>,
     /// FOPT pib (0x0104): 1-based blip-store index.
     blip_id: Option<u32>,
@@ -2981,12 +2983,18 @@ impl XlsReader {
             .get(&note.obj_id)
             .map(duke_sheets_core::ControlText::plain_text)
             .unwrap_or_default();
-        ws.set_comment_at(
-            note.row,
-            note.col,
-            CellComment::new(note.author.clone(), text),
-        );
-        ws.set_comment_visible(note.row, note.col, note.visible);
+        // Permissive read: a NOTE pointing outside the model grid is
+        // dropped rather than failing the sheet load.
+        if ws
+            .set_comment_at(
+                note.row,
+                note.col,
+                CellComment::new(note.author.clone(), text),
+            )
+            .is_ok()
+        {
+            ws.set_comment_visible(note.row, note.col, note.visible);
+        }
     }
 
     /// Build the drawing object for one top-level shape node,
@@ -3139,7 +3147,7 @@ impl XlsReader {
             child_y_emu: i64::from(fspgr.y_top),
             child_cx_emu: i64::from(fspgr.x_right - fspgr.x_left),
             child_cy_emu: i64::from(fspgr.y_bottom - fspgr.y_top),
-            rotation: node.rotation.unwrap_or(0),
+            rotation: node.rotation.map(officeart_fixed_to_rotation).unwrap_or(0),
             flip_h: node.flip_h,
             flip_v: node.flip_v,
         };
@@ -3298,7 +3306,18 @@ impl XlsReader {
             dash_style: node.line_dashing.map(officeart_dash_to_drawing),
             no_fill: node.line_no_fill.unwrap_or(false),
         };
-        shape.text = obj_texts.get(&parsed.id).cloned();
+        // The writer emits Left/Top TXO flags for alignment-less
+        // shape text; strip those defaults back to None (mirroring
+        // the control caption path) so defaults round-trip as None.
+        shape.text = obj_texts.get(&parsed.id).cloned().map(|mut text| {
+            if text.horizontal_alignment == Some(duke_sheets_core::HorizontalAlignment::Left) {
+                text.horizontal_alignment = None;
+            }
+            if text.vertical_alignment == Some(duke_sheets_core::VerticalAlignment::Top) {
+                text.vertical_alignment = None;
+            }
+            text
+        });
         shape.rotation = node.rotation.map(officeart_fixed_to_rotation).unwrap_or(0);
         shape.flip_h = node.flip_h;
         shape.flip_v = node.flip_v;
@@ -3342,7 +3361,7 @@ impl XlsReader {
             y_emu: i64::from(anchor.y_top),
             cx_emu: i64::from(anchor.x_right - anchor.x_left).max(0),
             cy_emu: i64::from(anchor.y_bottom - anchor.y_top).max(0),
-            rotation: node.rotation.unwrap_or(0),
+            rotation: node.rotation.map(officeart_fixed_to_rotation).unwrap_or(0),
             flip_h: node.flip_h,
             flip_v: node.flip_v,
         }
@@ -3367,7 +3386,7 @@ impl XlsReader {
             svg_media_path: None,
             width_emu: 0,
             height_emu: 0,
-            rotation: node.rotation,
+            rotation: node.rotation.map(officeart_fixed_to_rotation),
             flip_h: node.flip_h,
             flip_v: node.flip_v,
             data: blip.data.clone(),
@@ -3900,7 +3919,12 @@ impl XlsReader {
                 }
                 runs.push(RichTextRun {
                     text: String::from_utf16_lossy(&chars[start..end]),
-                    font: style_ctx.resolve_run_font(font_index),
+                    // ifnt 0 is the workbook default font (what the
+                    // writer emits for font-less runs); resolving it
+                    // would pin an explicit default onto plain runs.
+                    font: (font_index != 0)
+                        .then(|| style_ctx.resolve_run_font(font_index))
+                        .flatten(),
                 });
             }
             if runs.is_empty() {

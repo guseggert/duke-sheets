@@ -1285,7 +1285,8 @@ pub fn complex_string_entry(id: u16, value: &str) -> FoptEntry {
 }
 
 /// Picture FOPT with an optional rotation and alt text. `rotation`
-/// is in 60,000ths of a degree (the OOXML / OfficeArt unit). `None`
+/// is the raw FOPT 0x0004 wire value: FixedPoint 16.16 degrees
+/// ([MS-ODRAW] 2.3.18.5); callers convert from model units. `None`
 /// omits the `0x0004` rotation property entirely (matching Excel's
 /// emit for pictures with no rotation). `alt_text` fills the
 /// `wzDescription` (0x0381) complex property when set.
@@ -1296,17 +1297,17 @@ pub fn complex_string_entry(id: u16, value: &str) -> FoptEntry {
 pub fn picture_fopt_with(
     blip_id: u32,
     shape_name: &str,
-    rotation: Option<i32>,
+    rotation: Option<u32>,
     alt_text: Option<&str>,
     hidden: bool,
 ) -> FoptTable {
     let mut t = FoptTable::new();
 
-    // 0x0004: rotation (60,000ths of a degree). Goes first because
-    // FOPT requires ascending opid order. We only emit this entry
-    // if rotation is set; absence means "no rotation".
+    // 0x0004: rotation, FixedPoint 16.16 degrees (MS-ODRAW 2.3.18.5).
+    // Goes first because FOPT requires ascending opid order. We only
+    // emit this entry if rotation is set; absence means "no rotation".
     if let Some(rot) = rotation {
-        t.push(FoptEntry::simple(0x0004, rot as u32));
+        t.push(FoptEntry::simple(0x0004, rot));
     }
 
     // 0x007F: protection booleans (lockAspectRatio etc.).
