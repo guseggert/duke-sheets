@@ -699,6 +699,261 @@ pub fn write_control_shape_with_metrics(
     xml.push_str(" </v:shape>\n");
 }
 
+/// One control in a sheet's emission sequence: every form control in
+/// the drawing tree, in [`Worksheet::placed_form_controls`]
+/// (depth-first) order. This order drives shape ids, VML shapes, the
+/// drawing-part twins, and (in XLSX) ctrlProp part numbering and
+/// `<controls>` entries.
+///
+/// [`Worksheet::placed_form_controls`]: duke_sheets_core::Worksheet::placed_form_controls
+pub struct SheetControl<'a> {
+    pub payload: &'a FormControl,
+    pub meta: &'a DrawingMeta,
+    /// Top-level controls keep their wrapper anchor; group children
+    /// get an absolute anchor from their resolved on-sheet rectangle.
+    pub anchor: DrawingAnchor,
+}
+
+/// The sheet's control sequence in placed (depth-first) order.
+pub fn sheet_controls(sheet: &duke_sheets_core::Worksheet) -> Vec<SheetControl<'_>> {
+    sheet
+        .placed_form_controls()
+        .into_iter()
+        .map(|placed| {
+            let meta = sheet
+                .drawing_at_path(&placed.path)
+                .map(|node| node.meta)
+                .expect("placed control path is valid");
+            let anchor = if let [index] = placed.path.as_slice() {
+                sheet.drawings()[*index].anchor.clone()
+            } else {
+                let (x1, y1, x2, y2) = placed.rect_emu;
+                let clamp = |v: i128| v.clamp(0, i64::MAX as i128) as i64;
+                DrawingAnchor::Absolute {
+                    x_emu: clamp(x1),
+                    y_emu: clamp(y1),
+                    width_emu: clamp((x2 - x1).max(0)),
+                    height_emu: clamp((y2 - y1).max(0)),
+                }
+            };
+            SheetControl {
+                payload: placed.control,
+                meta,
+                anchor,
+            }
+        })
+        .collect()
+}
+
+/// Per-control radio-group-head flags, aligned with the placed
+/// (depth-first) control order, derived from the spatial grouping in
+/// [`duke_sheets_core::radio_groups`].
+pub fn radio_head_flags(sheet: &duke_sheets_core::Worksheet) -> Vec<bool> {
+    let placed = sheet.placed_form_controls();
+    let mut flags = vec![false; placed.len()];
+    for group in duke_sheets_core::radio_groups(&placed) {
+        if let Some(&head) = group.first() {
+            flags[head] = true;
+        }
+    }
+    flags
+}
+
+/// Build the sheet's legacy VML drawing part body carrying comment
+/// Note shapes and form control shapes, in drawing-list order (the
+/// shared VML sequence carries their relative z-order). Comment shape
+/// ids are assigned in (row, col) order and control shape ids follow
+/// the comments in the per-sheet 1024 block, in placed order,
+/// matching the drawing-part twins (and, in XLSX, the worksheet
+/// `<control shapeId>` values). Returns `None` when the sheet has no
+/// comments and no controls. `sheet_index` is zero-based.
+pub fn build_legacy_vml(
+    sheet: &duke_sheets_core::Worksheet,
+    sheet_index: usize,
+) -> Option<String> {
+    use duke_sheets_core::DrawingKind;
+
+    let controls = sheet_controls(sheet);
+    if sheet.comment_count() == 0 && controls.is_empty() {
+        return None;
+    }
+
+    let sheet_idx = sheet_index + 1;
+    // Comment shape ids are assigned in (row, col) order; emission
+    // order (and z-index) follows the drawing list.
+    let mut comment_cells: Vec<(u32, u16)> = sheet
+        .comments_drawn()
+        .map(|cr| (cr.row, cr.col))
+        .collect();
+    comment_cells.sort();
+    let comment_count = comment_cells.len();
+    let comment_id = |row: u32, col: u16| -> usize {
+        let index = comment_cells
+            .iter()
+            .position(|&(r, c)| (r, c) == (row, col))
+            .unwrap_or(0);
+        sheet_idx * 1024 + 1 + index
+    };
+
+    let mut xml = String::new();
+    xml.push_str("<xml xmlns:v=\"urn:schemas-microsoft-com:vml\"\n");
+    xml.push_str(" xmlns:o=\"urn:schemas-microsoft-com:office:office\"\n");
+    xml.push_str(" xmlns:x=\"urn:schemas-microsoft-com:office:excel\">\n");
+    xml.push_str(" <o:shapelayout v:ext=\"edit\">\n");
+    xml.push_str(&format!(
+        "  <o:idmap v:ext=\"edit\" data=\"{}\"/>\n",
+        sheet_idx
+    ));
+    xml.push_str(" </o:shapelayout>\n");
+    if comment_count > 0 {
+        xml.push_str(" <v:shapetype id=\"_x0000_t202\" coordsize=\"21600,21600\" o:spt=\"202\"\n");
+        xml.push_str("  path=\"m,l,21600r21600,l21600,xe\">\n");
+        xml.push_str("  <v:stroke joinstyle=\"miter\"/>\n");
+        xml.push_str("  <v:path gradientshapeok=\"t\" o:connecttype=\"rect\"/>\n");
+        xml.push_str(" </v:shapetype>\n");
+    }
+    if !controls.is_empty() {
+        xml.push_str(CONTROL_SHAPETYPE);
+    }
+
+    let heads = radio_head_flags(sheet);
+    let control_base = sheet_idx * 1024 + 1 + comment_count;
+    let mut z_index = 0usize;
+    let mut ordinal = 0usize;
+
+    fn walk_controls(
+        kind: &duke_sheets_core::DrawingKind,
+        xml: &mut String,
+        controls: &[SheetControl<'_>],
+        heads: &[bool],
+        control_base: usize,
+        z_index: &mut usize,
+        ordinal: &mut usize,
+        metrics: &duke_sheets_core::Worksheet,
+    ) {
+        match kind {
+            duke_sheets_core::DrawingKind::FormControl(_) => {
+                let control = &controls[*ordinal];
+                *z_index += 1;
+                write_control_shape_with_metrics(
+                    xml,
+                    control_base + *ordinal,
+                    *z_index,
+                    control.meta,
+                    &control.anchor,
+                    control.payload,
+                    heads[*ordinal],
+                    metrics,
+                );
+                *ordinal += 1;
+            }
+            duke_sheets_core::DrawingKind::Group(group) => {
+                for child in &group.children {
+                    walk_controls(
+                        &child.kind,
+                        xml,
+                        controls,
+                        heads,
+                        control_base,
+                        z_index,
+                        ordinal,
+                        metrics,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
+    for object in sheet.drawings() {
+        match &object.kind {
+            DrawingKind::Comment { row, col, .. } => {
+                z_index += 1;
+                write_note_shape(
+                    &mut xml,
+                    comment_id(*row, *col),
+                    z_index,
+                    *row,
+                    *col,
+                    &object.anchor,
+                    !object.meta.hidden,
+                    sheet,
+                );
+            }
+            kind => walk_controls(
+                kind,
+                &mut xml,
+                &controls,
+                &heads,
+                control_base,
+                &mut z_index,
+                &mut ordinal,
+                sheet,
+            ),
+        }
+    }
+
+    xml.push_str("</xml>");
+    Some(xml)
+}
+
+/// One comment Note shape. The `x:Anchor` (and the style box) derive
+/// from the wrapper anchor instead of being re-synthesized from the
+/// cell position.
+fn write_note_shape(
+    xml: &mut String,
+    shape_id: usize,
+    z_index: usize,
+    row: u32,
+    col: u16,
+    anchor: &DrawingAnchor,
+    visible: bool,
+    metrics: &duke_sheets_core::Worksheet,
+) {
+    let a = anchor_to_px_with_metrics(anchor, metrics);
+    let (from, to) = anchor_cell_markers_with_metrics(anchor, metrics);
+    let (left_emu, top_emu) = marker_position_emu(&from, metrics);
+    let (right_emu, bottom_emu) = marker_position_emu(&to, metrics);
+    let left = (left_emu / i128::from(EMU_PER_PX)) as i64;
+    let top = (top_emu / i128::from(EMU_PER_PX)) as i64;
+    let width = ((right_emu - left_emu).max(0) / i128::from(EMU_PER_PX)) as i64;
+    let height = ((bottom_emu - top_emu).max(0) / i128::from(EMU_PER_PX)) as i64;
+    let visibility = if visible { "visible" } else { "hidden" };
+
+    xml.push_str(&format!(
+        " <v:shape id=\"_x0000_s{}\" type=\"#_x0000_t202\"\n",
+        shape_id
+    ));
+    xml.push_str(&format!(
+        "  style='position:absolute;margin-left:{}pt;margin-top:{}pt;width:{}pt;height:{}pt;z-index:{};visibility:{}'\n",
+        px_to_pt_string(left),
+        px_to_pt_string(top),
+        px_to_pt_string(width.max(0)),
+        px_to_pt_string(height.max(0)),
+        z_index,
+        visibility
+    ));
+    xml.push_str("  fillcolor=\"#ffffe1\" o:insetmode=\"auto\">\n");
+    xml.push_str("  <v:fill color2=\"#ffffe1\"/>\n");
+    xml.push_str("  <v:shadow on=\"t\" color=\"black\" obscured=\"t\"/>\n");
+    xml.push_str("  <v:path o:connecttype=\"none\"/>\n");
+    xml.push_str("  <v:textbox style='mso-direction-alt:auto'>\n");
+    xml.push_str("   <div style='text-align:left'></div>\n");
+    xml.push_str("  </v:textbox>\n");
+    xml.push_str("  <x:ClientData ObjectType=\"Note\">\n");
+    xml.push_str("   <x:MoveWithCells/>\n");
+    xml.push_str("   <x:SizeWithCells/>\n");
+    xml.push_str(&format!(
+        "   <x:Anchor>{}, {}, {}, {}, {}, {}, {}, {}</x:Anchor>\n",
+        a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]
+    ));
+    xml.push_str("   <x:AutoFill>False</x:AutoFill>\n");
+    xml.push_str(&format!("   <x:Row>{}</x:Row>\n", row));
+    xml.push_str(&format!("   <x:Column>{}</x:Column>\n", col));
+    xml.push_str("  </x:ClientData>\n");
+    xml.push_str(" </v:shape>\n");
+}
+
 /// Splice comments into an assembled native drawing list by the
 /// legacy VML shape order: a comment goes immediately after the
 /// nearest control shape preceding its Note in the VML sequence;
