@@ -396,16 +396,15 @@ fn absolute_anchor_round_trips_with_visual_area_preserved() {
 
 #[test]
 fn picture_anchor_within_cell_offsets_round_trip() {
-    // Within-cell EMU offsets quantise to ClientAnchor 1024ths/256ths.
-    // Use offsets that are exact multiples of the writer's per-unit
-    // constants (595 EMU / dx unit, 744 EMU / dy unit) so the
-    // round-trip is exact.
-    let dx_unit = 595i64;
-    let dy_unit = 744i64;
-    let from_col_off = 10 * dx_unit; // 5,950 EMU
-    let from_row_off = 4 * dy_unit; // 2,976 EMU
-    let to_col_off = 50 * dx_unit; // 29,750 EMU
-    let to_row_off = 12 * dy_unit; // 8,928 EMU
+    // Within-cell EMU offsets quantise to ClientAnchor 1024ths of the
+    // column width (609,600 EMU) and 256ths of the row height
+    // (190,500 EMU) using exact rational math. Use offsets that are
+    // exact under that quantisation (multiples of 9,525 EMU for dx,
+    // 47,625 EMU for dy) so the round-trip is exact.
+    let from_col_off = 19_050i64; // 32/1024 of 609,600
+    let from_row_off = 47_625i64; // 64/256 of 190,500
+    let to_col_off = 295_275i64; // 496/1024 of 609,600
+    let to_row_off = 142_875i64; // 192/256 of 190,500
 
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();

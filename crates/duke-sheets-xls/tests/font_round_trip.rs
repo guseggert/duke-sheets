@@ -187,10 +187,10 @@ fn indexed_color_round_trips() {
 }
 
 #[test]
-fn rgb_color_falls_back_to_auto() {
-    // BIFF8 has no first-class RGB without a PALETTE record; the
-    // writer falls back to Auto for arbitrary RGB. Document that
-    // behavior so a future PALETTE-emission slice has a red test.
+fn rgb_color_maps_through_the_default_palette() {
+    // Palette-exact RGB maps to its default-palette slot and
+    // round-trips exactly; off-palette RGB still falls back to Auto
+    // (no custom PALETTE record emission yet).
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "purple").expect("set A1");
@@ -200,13 +200,26 @@ fn rgb_color_falls_back_to_auto() {
         b: 128,
     });
     ws.set_cell_style("A1", &purple).expect("set A1 style");
+    ws.set_cell_value("A2", "odd").expect("set A2");
+    let odd = Style::new().font_color(Color::Rgb {
+        r: 123,
+        g: 45,
+        b: 67,
+    });
+    ws.set_cell_style("A2", &odd).expect("set A2 style");
 
     let parsed = write_then_read(&wb);
     let sheet = parsed.worksheet(0).unwrap();
     let color = font_at(sheet, "A1").color;
+    assert_eq!(
+        color.to_rgb(),
+        (128, 0, 128),
+        "palette-exact RGB survives; got {color:?}"
+    );
+    let color = font_at(sheet, "A2").color;
     assert!(
-        matches!(color, Color::Auto | Color::Indexed(_)),
-        "RGB falls back to Auto/Indexed in current writer; got {color:?}"
+        matches!(color, Color::Auto),
+        "off-palette RGB falls back to Auto; got {color:?}"
     );
 }
 
