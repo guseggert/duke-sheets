@@ -5,14 +5,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 const anchor = {
-  fromCol: 1,
-  fromRow: 1,
-  fromColOffset: 0,
-  fromRowOffset: 0,
-  toCol: 3,
-  toRow: 2,
-  toColOffset: 0,
-  toRowOffset: 0,
+  type: "twoCell",
+  from: { col: 1, row: 1 },
+  to: { col: 3, row: 2 },
   editAs: "twoCell",
 } as const;
 

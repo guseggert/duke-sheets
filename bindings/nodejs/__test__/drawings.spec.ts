@@ -11,14 +11,9 @@ import {
 
 function anchor(fromCol: number, fromRow: number, toCol: number, toRow: number): DrawingAnchor {
   return {
-    fromCol,
-    fromRow,
-    fromColOffset: 0,
-    fromRowOffset: 0,
-    toCol,
-    toRow,
-    toColOffset: 0,
-    toRowOffset: 0,
+    type: "twoCell",
+    from: { col: fromCol, row: fromRow },
+    to: { col: toCol, row: toRow },
     editAs: "twoCell",
   };
 }
@@ -162,6 +157,89 @@ describe("unified drawings", () => {
     expect(sheet.drawings.map((drawing) => drawing.name)).toEqual(["three", "replaced", undefined]);
   });
 
+  it("round-trips a oneCell anchor through save, setDrawing, and save again", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "duke-anchors-"));
+    const filePath = path.join(tmpDir, "one-cell.xlsx");
+    try {
+      const wb = new Workbook();
+      wb.getSheet(0).addDrawing({
+        name: "Pinned",
+        anchor: {
+          type: "oneCell",
+          from: { col: 1, row: 2, colOffsetEmu: 9_525, rowOffsetEmu: 19_050 },
+          widthEmu: 300_000,
+          heightEmu: 200_000,
+        },
+        kind: "shape",
+        shape: { geometry: "rect" },
+      });
+      wb.save(filePath);
+
+      const first = Workbook.fromBytes(fs.readFileSync(filePath));
+      const drawing = first.getSheet(0).drawings[0];
+      if (drawing.kind !== "shape") throw new Error("expected shape");
+      const expected = {
+        type: "oneCell",
+        from: { col: 1, row: 2, colOffsetEmu: 9_525, rowOffsetEmu: 19_050 },
+        widthEmu: 300_000,
+        heightEmu: 200_000,
+      };
+      expect(drawing.anchor).toEqual(expected);
+
+      // Identity rewrite must not rewrite the anchor variant or extent.
+      first.getSheet(0).setDrawing([0], drawing);
+      expect(first.getSheet(0).drawings[0].anchor).toEqual(expected);
+      first.save(filePath);
+
+      const second = Workbook.fromBytes(fs.readFileSync(filePath));
+      expect(second.getSheet(0).drawings[0].anchor).toEqual(expected);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("round-trips absolute anchors and keeps twoCell markers tagged", () => {
+    const sheet = new Workbook().getSheet(0);
+    sheet.addDrawing({
+      anchor: { type: "absolute", xEmu: 100, yEmu: 200, widthEmu: 300_000, heightEmu: 400_000 },
+      kind: "shape",
+      shape: { geometry: "rect" },
+    });
+    sheet.addDrawing(shape("plain", anchor(1, 1, 3, 4)));
+
+    expect(sheet.drawings[0].anchor).toEqual({
+      type: "absolute",
+      xEmu: 100,
+      yEmu: 200,
+      widthEmu: 300_000,
+      heightEmu: 400_000,
+    });
+    expect(sheet.drawings[1].anchor).toEqual({
+      type: "twoCell",
+      from: { col: 1, row: 1, colOffsetEmu: 0, rowOffsetEmu: 0 },
+      to: { col: 3, row: 4, colOffsetEmu: 0, rowOffsetEmu: 0 },
+      editAs: "twoCell",
+    });
+  });
+
+  it("rejects comments as group children in setDrawing", () => {
+    const sheet = new Workbook().getSheet(0);
+    sheet.addDrawing({
+      anchor: anchor(0, 0, 2, 2),
+      kind: "group",
+      group: {
+        children: [{ transform: transform(), kind: "shape", shape: { geometry: "rect" } }],
+      },
+    });
+    expect(() =>
+      sheet.setDrawing([0, 0], {
+        transform: transform(),
+        kind: "comment",
+        comment: { row: 0, col: 0, author: "a", text: "nested" },
+      }),
+    ).toThrow(/comments cannot be group children/);
+  });
+
   it("preserves unknown-control passthrough data through read, setDrawing, and save", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "duke-drawings-"));
     const filePath = path.join(tmpDir, "unknown.xlsx");
@@ -203,7 +281,11 @@ describe("unified drawings", () => {
       expect(kind.rawClientData.length).toBeGreaterThanOrEqual(1);
 
       // Identity rewrite: the read snapshot keeps its passthrough data.
-      first.getSheet(0).setDrawing([0], control);
+      // The narrowed `kind` rebuilds the payload because output states
+      // (e.g. optionButton "mixed") are wider than accepted inputs.
+      first
+        .getSheet(0)
+        .setDrawing([0], { ...control, formControl: { ...control.formControl, kind } });
       first.save(filePath);
 
       const second = readUnknown(Workbook.fromBytes(fs.readFileSync(filePath)));

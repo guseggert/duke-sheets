@@ -118,6 +118,147 @@ def test_top_level_and_nested_mutation():
     assert sheet.drawings[3].group.children == []
 
 
+def test_one_cell_anchor_round_trip(tmp_path):
+    workbook = duke_sheets.Workbook()
+    sheet = workbook.get_sheet(0)
+    one_cell = duke_sheets.DrawingAnchor.one_cell(
+        2,
+        1,
+        width_emu=300_000,
+        height_emu=200_000,
+        from_row_offset=19_050,
+        from_col_offset=9_525,
+    )
+    sheet.add_drawing(duke_sheets.Drawing(duke_sheets.Shape("rect"), anchor=one_cell))
+    first_path = tmp_path / "one_cell.xlsx"
+    workbook.save(str(first_path))
+
+    def check(read_anchor):
+        assert read_anchor.anchor_type == "one_cell"
+        assert read_anchor.from_row == 2
+        assert read_anchor.from_col == 1
+        assert read_anchor.from_row_offset == 19_050
+        assert read_anchor.from_col_offset == 9_525
+        assert read_anchor.width_emu == 300_000
+        assert read_anchor.height_emu == 200_000
+        assert read_anchor.to_row is None
+        assert read_anchor.edit_as is None
+
+    reread = duke_sheets.Workbook.open(str(first_path))
+    sheet = reread.get_sheet(0)
+    drawing = sheet.drawings[0]
+    check(drawing.anchor)
+
+    # Identity rewrite must not rewrite the anchor variant or extent.
+    sheet.set_drawing([0], drawing)
+    second_path = tmp_path / "one_cell_rewritten.xlsx"
+    reread.save(str(second_path))
+    final = duke_sheets.Workbook.open(str(second_path))
+    check(final.get_sheet(0).drawings[0].anchor)
+
+
+def test_absolute_and_two_cell_anchor_variants():
+    workbook = duke_sheets.Workbook()
+    sheet = workbook.get_sheet(0)
+    sheet.add_drawing(
+        duke_sheets.Drawing(
+            duke_sheets.Shape("rect"),
+            anchor=duke_sheets.DrawingAnchor.absolute(100, 200, 300_000, 400_000),
+        )
+    )
+    sheet.add_drawing(top(duke_sheets.Shape("rect"), name="plain"))
+
+    absolute = sheet.drawings[0].anchor
+    assert absolute.anchor_type == "absolute"
+    assert (absolute.x_emu, absolute.y_emu) == (100, 200)
+    assert (absolute.width_emu, absolute.height_emu) == (300_000, 400_000)
+    assert absolute.from_col is None
+    assert absolute.edit_as is None
+
+    two_cell = sheet.drawings[1].anchor
+    assert two_cell.anchor_type == "two_cell"
+    assert (two_cell.from_row, two_cell.from_col) == (0, 0)
+    assert (two_cell.to_row, two_cell.to_col) == (2, 2)
+    assert two_cell.edit_as == "two_cell"
+    assert two_cell.width_emu is None
+
+
+def test_meta_hidden_defaults_by_drawing_kind():
+    comment = duke_sheets.Drawing(
+        duke_sheets.DrawingComment(0, 0, "note"),
+        anchor=anchor(),
+        meta=duke_sheets.DrawingMeta(name="c"),
+    )
+    assert comment.hidden is True
+
+    shape = duke_sheets.Drawing(
+        duke_sheets.Shape("rect"),
+        anchor=anchor(),
+        meta=duke_sheets.DrawingMeta(name="s"),
+    )
+    assert shape.hidden is False
+
+    visible = duke_sheets.Drawing(
+        duke_sheets.DrawingComment(1, 1, "shown"),
+        anchor=anchor(),
+        meta=duke_sheets.DrawingMeta(hidden=False),
+    )
+    assert visible.hidden is False
+
+
+def test_comment_hidden_default_survives_save(tmp_path):
+    workbook = duke_sheets.Workbook()
+    sheet = workbook.get_sheet(0)
+    sheet.add_drawing(
+        duke_sheets.Drawing(
+            duke_sheets.DrawingComment(0, 0, "note", author="a"),
+            anchor=anchor(),
+            meta=duke_sheets.DrawingMeta(name="c"),
+        )
+    )
+    file_path = tmp_path / "comment.xlsx"
+    workbook.save(str(file_path))
+    reread = duke_sheets.Workbook.open(str(file_path))
+    drawing = reread.get_sheet(0).drawings[0]
+    assert drawing.kind == "comment"
+    assert drawing.hidden is True
+    assert drawing.meta.hidden is True
+
+
+def test_unknown_control_raw_getters():
+    unknown = duke_sheets.FormControl.unknown("EditBox", "legacy")
+    assert unknown.raw_properties == []
+    assert unknown.raw_client_data == []
+    assert unknown.raw_obj is None
+
+    checkbox = duke_sheets.FormControl.checkbox("check")
+    assert checkbox.raw_properties is None
+    assert checkbox.raw_client_data is None
+    assert checkbox.raw_obj is None
+
+
+def test_unknown_control_raw_getters_return_bytes_after_reload(tmp_path):
+    workbook = duke_sheets.Workbook()
+    sheet = workbook.get_sheet(0)
+    sheet.add_drawing(
+        top(duke_sheets.FormControl.unknown("EditBox", "legacy"), name="u")
+    )
+    file_path = tmp_path / "unknown.xlsx"
+    workbook.save(str(file_path))
+    control = (
+        duke_sheets.Workbook.open(str(file_path)).get_sheet(0).form_controls[0].form_control
+    )
+    assert control.kind == "unknown"
+    assert isinstance(control.raw_properties, list)
+    assert all(
+        isinstance(name, str) and isinstance(value, str)
+        for name, value in control.raw_properties
+    )
+    assert isinstance(control.raw_client_data, list)
+    assert all(isinstance(fragment, bytes) for fragment in control.raw_client_data)
+    assert control.raw_obj is None or isinstance(control.raw_obj, bytes)
+
+
 def test_chart_getters_return_drawing_wrappers():
     workbook = duke_sheets.Workbook()
     sheet = workbook.get_sheet(0)

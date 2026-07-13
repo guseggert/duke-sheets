@@ -1,5 +1,3 @@
-use std::collections::BTreeSet;
-
 use duke_sheets_chart as chart;
 use duke_sheets_core as core;
 use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
@@ -110,13 +108,51 @@ impl PyDrawingText {
 #[pyclass(name = "DrawingMeta")]
 #[derive(Clone)]
 pub struct PyDrawingMeta {
-    pub(crate) inner: core::DrawingMeta,
+    pub(crate) name: Option<String>,
+    pub(crate) hidden: Option<bool>,
+    pub(crate) locked: bool,
+    pub(crate) printable: bool,
+    pub(crate) alt_text: Option<String>,
+    pub(crate) title: Option<String>,
 }
 
 impl From<&core::DrawingMeta> for PyDrawingMeta {
     fn from(meta: &core::DrawingMeta) -> Self {
         Self {
-            inner: meta.clone(),
+            name: meta.name.clone(),
+            hidden: Some(meta.hidden),
+            locked: meta.locked,
+            printable: meta.printable,
+            alt_text: meta.alt_text.clone(),
+            title: meta.title.clone(),
+        }
+    }
+}
+
+impl Default for PyDrawingMeta {
+    fn default() -> Self {
+        Self {
+            name: None,
+            hidden: None,
+            locked: true,
+            printable: true,
+            alt_text: None,
+            title: None,
+        }
+    }
+}
+
+impl PyDrawingMeta {
+    /// Resolve to the core meta, applying the kind-specific hidden
+    /// default (comments hide by default) when unset.
+    fn to_core(&self, hidden_default: bool) -> core::DrawingMeta {
+        core::DrawingMeta {
+            name: self.name.clone(),
+            hidden: self.hidden.unwrap_or(hidden_default),
+            locked: self.locked,
+            printable: self.printable,
+            alt_text: self.alt_text.clone(),
+            title: self.title.clone(),
         }
     }
 }
@@ -124,55 +160,55 @@ impl From<&core::DrawingMeta> for PyDrawingMeta {
 #[pymethods]
 impl PyDrawingMeta {
     #[new]
-    #[pyo3(signature=(*, name=None, hidden=false, locked=true, printable=true, alt_text=None, title=None))]
+    #[pyo3(signature=(*, name=None, hidden=None, locked=true, printable=true, alt_text=None, title=None))]
     fn new(
         name: Option<String>,
-        hidden: bool,
+        hidden: Option<bool>,
         locked: bool,
         printable: bool,
         alt_text: Option<String>,
         title: Option<String>,
     ) -> Self {
         Self {
-            inner: core::DrawingMeta {
-                name,
-                hidden,
-                locked,
-                printable,
-                alt_text,
-                title,
-            },
+            name,
+            hidden,
+            locked,
+            printable,
+            alt_text,
+            title,
         }
     }
 
     #[getter]
     fn name(&self) -> Option<String> {
-        self.inner.name.clone()
+        self.name.clone()
     }
 
+    /// None means the default for the drawing kind is applied when the
+    /// meta is attached (True for comments, False otherwise).
     #[getter]
-    fn hidden(&self) -> bool {
-        self.inner.hidden
+    fn hidden(&self) -> Option<bool> {
+        self.hidden
     }
 
     #[getter]
     fn locked(&self) -> bool {
-        self.inner.locked
+        self.locked
     }
 
     #[getter]
     fn printable(&self) -> bool {
-        self.inner.printable
+        self.printable
     }
 
     #[getter]
     fn alt_text(&self) -> Option<String> {
-        self.inner.alt_text.clone()
+        self.alt_text.clone()
     }
 
     #[getter]
     fn title(&self) -> Option<String> {
-        self.inner.title.clone()
+        self.title.clone()
     }
 }
 
@@ -973,7 +1009,7 @@ impl PyDrawing {
             ));
         }
         let object = core::DrawingObject {
-            meta: self.meta.inner.clone(),
+            meta: self.meta.to_core(self.comment.is_some()),
             anchor: anchor.to_core()?,
             kind: self.kind_to_core()?,
         };
@@ -993,7 +1029,7 @@ impl PyDrawing {
             ));
         }
         let child = core::GroupChild {
-            meta: self.meta.inner.clone(),
+            meta: self.meta.to_core(self.comment.is_some()),
             transform: transform.inner.clone(),
             kind: self.kind_to_core()?,
         };
@@ -1047,20 +1083,8 @@ impl PyDrawing {
         }
 
         let comment_payload = payload.extract::<PyRef<'_, PyDrawingComment>>().ok();
-        let default_meta = if comment_payload.is_some() {
-            core::DrawingMeta {
-                hidden: true,
-                ..core::DrawingMeta::default()
-            }
-        } else {
-            core::DrawingMeta::default()
-        };
         let mut drawing = Self::empty(
-            PyDrawingMeta {
-                inner: meta
-                    .map(|meta| meta.inner.clone())
-                    .unwrap_or(default_meta),
-            },
+            meta.map(|meta| meta.clone()).unwrap_or_default(),
             anchor.map(|anchor| anchor.clone()),
             transform.map(|transform| transform.clone()),
         );
@@ -1114,32 +1138,34 @@ impl PyDrawing {
 
     #[getter]
     fn name(&self) -> Option<String> {
-        self.meta.inner.name.clone()
+        self.meta.name.clone()
     }
 
+    /// Resolved visibility: unset meta defaults by kind (comments
+    /// hide by default).
     #[getter]
     fn hidden(&self) -> bool {
-        self.meta.inner.hidden
+        self.meta.hidden.unwrap_or(self.comment.is_some())
     }
 
     #[getter]
     fn locked(&self) -> bool {
-        self.meta.inner.locked
+        self.meta.locked
     }
 
     #[getter]
     fn printable(&self) -> bool {
-        self.meta.inner.printable
+        self.meta.printable
     }
 
     #[getter]
     fn alt_text(&self) -> Option<String> {
-        self.meta.inner.alt_text.clone()
+        self.meta.alt_text.clone()
     }
 
     #[getter]
     fn title(&self) -> Option<String> {
-        self.meta.inner.title.clone()
+        self.meta.title.clone()
     }
 
     #[getter]
@@ -1219,44 +1245,35 @@ fn path_starts_with(path: &[usize], prefix: &[usize]) -> bool {
     path.len() >= prefix.len() && path[..prefix.len()] == *prefix
 }
 
-fn collect_comment_cells(
-    kind: &core::DrawingKind,
-    cells: &mut BTreeSet<(u32, u16)>,
-) -> PyResult<()> {
+/// The cell keyed by `replacement` when it is a comment. Validation
+/// already rejected comments nested in groups, so only a top-level
+/// comment kind can claim a cell.
+// core candidate: comment-cell uniqueness belongs in core's worksheet
+// drawing mutation APIs; this check is triplicated across bindings.
+fn replacement_comment_cell(kind: &core::DrawingKind) -> Option<(u32, u16)> {
     match kind {
-        core::DrawingKind::Comment { row, col, .. } => {
-            if !cells.insert((*row, *col)) {
-                return Err(PyValueError::new_err(format!(
-                    "drawing input contains more than one comment for cell ({row}, {col})"
-                )));
-            }
-        }
-        core::DrawingKind::Group(group) => {
-            for child in &group.children {
-                collect_comment_cells(&child.kind, cells)?;
-            }
-        }
-        _ => {}
+        core::DrawingKind::Comment { row, col, .. } => Some((*row, *col)),
+        _ => None,
     }
-    Ok(())
 }
 
+/// Enforce one comment per cell: reject a comment `replacement` whose
+/// cell already has a comment elsewhere on the sheet, ignoring
+/// drawings at or under `replaced_path`.
 fn ensure_comment_cells_available(
     worksheet: &core::Worksheet,
     replacement: &core::DrawingKind,
     replaced_path: Option<&[usize]>,
 ) -> PyResult<()> {
-    let mut new_cells = BTreeSet::new();
-    collect_comment_cells(replacement, &mut new_cells)?;
-    if new_cells.is_empty() {
+    let Some(new_cell) = replacement_comment_cell(replacement) else {
         return Ok(());
-    }
+    };
     for (path, node) in worksheet.drawings_flat() {
         if replaced_path.is_some_and(|prefix| path_starts_with(&path, prefix)) {
             continue;
         }
         if let core::DrawingKind::Comment { row, col, .. } = node.kind {
-            if new_cells.contains(&(*row, *col)) {
+            if (*row, *col) == new_cell {
                 return Err(PyValueError::new_err(format!(
                     "cell ({row}, {col}) already has a comment"
                 )));
@@ -1555,7 +1572,9 @@ impl PyWorksheet {
             .map_err(|error| PyValueError::new_err(error.to_string()))
     }
 
-    /// Insert a top-level drawing at a z-order index.
+    /// Insert a top-level drawing at a z-order index. Drawing paths
+    /// are positional; mutating the list invalidates previously
+    /// returned paths.
     fn insert_drawing(&self, index: usize, drawing: PyRef<'_, PyDrawing>) -> PyResult<()> {
         let object = drawing.to_top_level()?;
         let mut workbook = self.workbook.write().map_err(to_py_err)?;
@@ -1569,6 +1588,8 @@ impl PyWorksheet {
     }
 
     /// Replace a top-level drawing or nested group child by path.
+    /// Drawing paths are positional; mutating the list invalidates
+    /// previously returned paths.
     fn set_drawing(&self, path: Vec<usize>, drawing: PyRef<'_, PyDrawing>) -> PyResult<()> {
         let (&top_index, rest) = path
             .split_first()
@@ -1607,6 +1628,8 @@ impl PyWorksheet {
     }
 
     /// Remove a top-level drawing or nested group child by path.
+    /// Drawing paths are positional; mutating the list invalidates
+    /// previously returned paths.
     fn remove_drawing(&self, path: Vec<usize>) -> PyResult<()> {
         let (&top_index, rest) = path
             .split_first()
@@ -1630,7 +1653,9 @@ impl PyWorksheet {
         remove_group_child(&mut object.kind, rest)
     }
 
-    /// Move a top-level drawing within the z-order list.
+    /// Move a top-level drawing within the z-order list. Drawing
+    /// paths are positional; mutating the list invalidates previously
+    /// returned paths.
     fn move_drawing(&self, from_index: usize, to_index: usize) -> PyResult<()> {
         let mut workbook = self.workbook.write().map_err(to_py_err)?;
         let worksheet = workbook
@@ -1641,7 +1666,9 @@ impl PyWorksheet {
             .map_err(|error| PyIndexError::new_err(error.to_string()))
     }
 
-    /// Copy an image's encoded bytes into a Python bytes object on demand.
+    /// Copy an image's encoded bytes into a Python bytes object on
+    /// demand. Paths are positional; mutating the drawing list
+    /// invalidates previously returned paths.
     fn drawing_image_data(
         &self,
         py: Python<'_>,
@@ -1662,7 +1689,9 @@ impl PyWorksheet {
         Ok(PyBytes::new_bound(py, image.data()).unbind())
     }
 
-    /// Copy an image's SVG variant on demand, if present.
+    /// Copy an image's SVG variant on demand, if present. Paths are
+    /// positional; mutating the drawing list invalidates previously
+    /// returned paths.
     fn drawing_svg_data(
         &self,
         py: Python<'_>,

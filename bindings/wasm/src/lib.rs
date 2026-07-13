@@ -274,7 +274,13 @@ export interface DrawingText {
 export type FormControlKind =
   | { kind: "button"; caption: DrawingText }
   | { kind: "checkbox"; caption: DrawingText; state: "unchecked" | "checked" | "mixed"; cellLink?: string; no3D: boolean }
-  | { kind: "optionButton"; caption: DrawingText; state: "unchecked" | "checked"; cellLink?: string; firstInGroup: boolean; no3D: boolean }
+  /**
+   * `firstInGroup` reports whether this radio heads its group; writers
+   * recompute it from group-box containment, so it is read-side
+   * information. `"mixed"` never validates on write but can surface
+   * when reading hostile files.
+   */
+  | { kind: "optionButton"; caption: DrawingText; state: "unchecked" | "checked" | "mixed"; cellLink?: string; firstInGroup: boolean; no3D: boolean }
   | { kind: "label"; caption: DrawingText }
   | { kind: "groupBox"; caption: DrawingText; no3D: boolean }
   | { kind: "listBox"; inputRange?: string; cellLink?: string; selection: "single" | "multi" | "extend"; selected: number[]; no3D: boolean }
@@ -293,6 +299,7 @@ export type FormControlKind =
 export type FormControlKindInput =
   | { kind: "button"; caption: DrawingText }
   | { kind: "checkbox"; caption: DrawingText; state: "unchecked" | "checked" | "mixed"; cellLink?: string; no3D?: boolean }
+  /** `firstInGroup` is ignored on input; writers recompute it from group-box containment. */
   | { kind: "optionButton"; caption: DrawingText; state: "unchecked" | "checked"; cellLink?: string; firstInGroup?: boolean; no3D?: boolean }
   | { kind: "label"; caption: DrawingText }
   | { kind: "groupBox"; caption: DrawingText; no3D?: boolean }
@@ -305,7 +312,7 @@ export type FormControlKindInput =
    * FormControlKind); omit them for hand-authored controls and echo them
    * back unchanged when rewriting a control read from a file.
    */
-  | { kind: "unknown"; objectType: string; legacyObjectType?: number; caption?: DrawingText; rawProperties?: Array<[string, string]>; rawClientData?: number[][]; rawObj?: number[] };
+  | { kind: "unknown"; objectType: string; legacyObjectType?: number; caption?: DrawingText; rawProperties?: Array<[string, string]>; rawClientData?: Array<Uint8Array | number[]>; rawObj?: Uint8Array | number[] };
 
 export interface FormControlPayload {
   kind: FormControlKind;
@@ -466,10 +473,16 @@ export interface ChartSeriesInput {
   categories?: ChartDataReference;
 }
 
-export type ChartInput = Partial<Omit<Chart, "chartType" | "series">> & {
+/** Exactly the chart fields accepted when authoring; all other Chart fields are read-only. */
+export interface ChartInput {
   chartType: string;
+  title?: string;
   series?: ChartSeriesInput[];
-};
+  is3D?: boolean;
+  varyColors?: boolean;
+  gapWidth?: number;
+  overlap?: number;
+}
 
 export interface ChartExTitle {
   text?: string;
@@ -510,7 +523,21 @@ export interface ChartEx {
   externalDataAutoUpdate?: boolean;
 }
 
-export type ChartExInput = Partial<ChartEx> & { layout: string };
+export interface ChartExTitleInput {
+  text?: string;
+  position?: string;
+  align?: string;
+  overlay?: boolean;
+}
+
+/** Exactly the ChartEx fields accepted when authoring; all other ChartEx fields are read-only. */
+export interface ChartExInput {
+  layout: string;
+  version?: string;
+  featureList?: string;
+  fallbackImg?: string;
+  title?: ChartExTitleInput;
+}
 
 export interface RawDrawingMetadata {
   byteLength: number;
@@ -564,11 +591,17 @@ export interface Worksheet {
   readonly chartsEx: ChartExDrawing[];
   readonly chartExCount: number;
   addDrawing(drawing: DrawingInput & { anchor: DrawingAnchor }): number;
+  /** Drawing paths are positional; mutating the list invalidates previously returned paths. */
   insertDrawing(index: number, drawing: DrawingInput & { anchor: DrawingAnchor }): void;
+  /** Drawing paths are positional; mutating the list invalidates previously returned paths. */
   setDrawing(path: number[], drawing: DrawingInput): void;
+  /** Drawing paths are positional; mutating the list invalidates previously returned paths. */
   removeDrawing(path: number[]): void;
+  /** Drawing paths are positional; mutating the list invalidates previously returned paths. */
   moveDrawing(from: number, to: number): void;
+  /** Paths are positional; mutating the drawing list invalidates previously returned paths. */
   drawingImageData(path: number[]): Uint8Array;
+  /** Paths are positional; mutating the drawing list invalidates previously returned paths. */
   drawingSvgData(path: number[]): Uint8Array | undefined;
   setFormControlCheckState(path: number[], state: "unchecked" | "checked" | "mixed"): FormControlInteractionResult;
 }

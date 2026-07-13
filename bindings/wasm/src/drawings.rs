@@ -1,5 +1,3 @@
-use std::collections::BTreeSet;
-
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
@@ -1637,19 +1635,20 @@ impl WasmDrawingInput {
         if self.anchor.is_some() {
             return Err("group child input cannot contain anchor".to_string());
         }
-        let transform: ChildTransform = transform.into();
-        if transform.cx_emu < 0 || transform.cy_emu < 0 {
-            return Err("group child extents cannot be negative".to_string());
-        }
         let (kind, comment) = drawing_kind_from_input(self.kind)?;
         let child = core::GroupChild {
             meta: self.meta.into_core(comment),
-            transform,
+            transform: transform.into(),
             kind,
         };
-        core::DrawingObject::new(child.kind.clone())
-            .validate()
-            .map_err(|error| error.to_string())?;
+        // Validate in group-child position so kinds that cannot nest
+        // (comments, raw) are rejected here, not at write time.
+        core::DrawingObject::group(core::Group {
+            transform: GroupTransform::default(),
+            children: vec![child.clone()],
+        })
+        .validate()
+        .map_err(|error| error.to_string())?;
         Ok(child)
     }
 }
@@ -1716,47 +1715,35 @@ fn path_starts_with(path: &[usize], prefix: &[usize]) -> bool {
     path.len() >= prefix.len() && path[..prefix.len()] == *prefix
 }
 
-fn collect_comment_cells(
-    kind: &core::DrawingKind,
-    cells: &mut BTreeSet<(u32, u16)>,
-) -> Result<(), JsError> {
+/// The cell keyed by `replacement` when it is a comment. Validation
+/// already rejected comments nested in groups, so only a top-level
+/// comment kind can claim a cell.
+// core candidate: comment-cell uniqueness belongs in core's worksheet
+// drawing mutation APIs; this check is triplicated across bindings.
+fn replacement_comment_cell(kind: &core::DrawingKind) -> Option<(u32, u16)> {
     match kind {
-        core::DrawingKind::Comment { row, col, .. } => {
-            if !cells.insert((*row, *col)) {
-                return Err(JsError::new(&format!(
-                    "drawing input contains more than one comment for cell ({row}, {col})"
-                )));
-            }
-        }
-        core::DrawingKind::Group(group) => {
-            for child in &group.children {
-                collect_comment_cells(&child.kind, cells)?;
-            }
-        }
-        _ => {}
+        core::DrawingKind::Comment { row, col, .. } => Some((*row, *col)),
+        _ => None,
     }
-    Ok(())
 }
 
-/// Enforce one comment per cell: reject comments in `replacement`
-/// whose cell already has a comment elsewhere on the sheet, ignoring
+/// Enforce one comment per cell: reject a comment `replacement` whose
+/// cell already has a comment elsewhere on the sheet, ignoring
 /// drawings at or under `replaced_path`.
 fn ensure_comment_cells_available(
     sheet: &core::Worksheet,
     replacement: &core::DrawingKind,
     replaced_path: Option<&[usize]>,
 ) -> Result<(), JsError> {
-    let mut new_cells = BTreeSet::new();
-    collect_comment_cells(replacement, &mut new_cells)?;
-    if new_cells.is_empty() {
+    let Some(new_cell) = replacement_comment_cell(replacement) else {
         return Ok(());
-    }
+    };
     for (path, node) in sheet.drawings_flat() {
         if replaced_path.is_some_and(|prefix| path_starts_with(&path, prefix)) {
             continue;
         }
         if let core::DrawingKind::Comment { row, col, .. } = node.kind {
-            if new_cells.contains(&(*row, *col)) {
+            if (*row, *col) == new_cell {
                 return Err(JsError::new(&format!(
                     "cell ({row}, {col}) already has a comment"
                 )));

@@ -270,8 +270,41 @@ export interface DrawingMetaInput {
   title?: string
 }
 
-/** Flat two-cell anchor used by the existing Node.js chart/drawing API. */
-export type DrawingAnchor = Generated.JsDrawingAnchor
+/** A cell-relative anchor marker. Offsets are EMU within the cell and always present on output. */
+export interface DrawingCellMarker {
+  col: number
+  row: number
+  colOffsetEmu?: number
+  rowOffsetEmu?: number
+}
+
+/** Anchor spanning two cell markers; `editAs` records the sizing behavior Excel applies on edit. */
+export interface TwoCellAnchor {
+  type: 'twoCell'
+  from: DrawingCellMarker
+  to: DrawingCellMarker
+  editAs?: 'twoCell' | 'oneCell' | 'absolute'
+}
+
+/** Anchor pinned to one cell with a fixed EMU extent. */
+export interface OneCellAnchor {
+  type: 'oneCell'
+  from: DrawingCellMarker
+  widthEmu: number
+  heightEmu: number
+}
+
+/** Anchor at a fixed EMU position and extent, independent of cells. */
+export interface AbsoluteAnchor {
+  type: 'absolute'
+  xEmu: number
+  yEmu: number
+  widthEmu: number
+  heightEmu: number
+}
+
+/** Drawing anchors preserve their file variant on read and accept any variant on write. */
+export type DrawingAnchor = TwoCellAnchor | OneCellAnchor | AbsoluteAnchor
 
 export interface DrawingChildTransform {
   xEmu?: number
@@ -324,7 +357,13 @@ export interface DrawingText {
 export type FormControlKind =
   | { kind: 'button'; caption: DrawingText }
   | { kind: 'checkbox'; caption: DrawingText; state: 'unchecked' | 'checked' | 'mixed'; cellLink?: string; no3D: boolean }
-  | { kind: 'optionButton'; caption: DrawingText; state: 'unchecked' | 'checked'; cellLink?: string; firstInGroup: boolean; no3D: boolean }
+  /**
+   * `firstInGroup` reports whether this radio heads its group; writers
+   * recompute it from group-box containment, so it is read-side
+   * information. `'mixed'` never validates on write but can surface
+   * when reading hostile files.
+   */
+  | { kind: 'optionButton'; caption: DrawingText; state: 'unchecked' | 'checked' | 'mixed'; cellLink?: string; firstInGroup: boolean; no3D: boolean }
   | { kind: 'label'; caption: DrawingText }
   | { kind: 'groupBox'; caption: DrawingText; no3D: boolean }
   | { kind: 'listBox'; inputRange?: string; cellLink?: string; selection: 'single' | 'multi' | 'extend'; selected: number[]; no3D: boolean }
@@ -343,6 +382,7 @@ export type FormControlKind =
 export type FormControlKindInput =
   | { kind: 'button'; caption: DrawingText }
   | { kind: 'checkbox'; caption: DrawingText; state: 'unchecked' | 'checked' | 'mixed'; cellLink?: string; no3D?: boolean }
+  /** `firstInGroup` is ignored on input; writers recompute it from group-box containment. */
   | { kind: 'optionButton'; caption: DrawingText; state: 'unchecked' | 'checked'; cellLink?: string; firstInGroup?: boolean; no3D?: boolean }
   | { kind: 'label'; caption: DrawingText }
   | { kind: 'groupBox'; caption: DrawingText; no3D?: boolean }
@@ -422,16 +462,44 @@ export interface ChartSeriesInput {
   categories?: ChartDataReferenceInput
 }
 
-export type ChartInput = Partial<Omit<JsChart, 'chartType' | 'series'>> & {
+/** Exactly the chart fields accepted when authoring; all other JsChart fields are read-only. */
+export interface ChartInput {
   chartType: string
+  title?: string
   series?: ChartSeriesInput[]
+  is3D?: boolean
+  varyColors?: boolean
+  gapWidth?: number
+  overlap?: number
 }
 
-export type ChartExInput = Partial<JsChartEx> & { layout: string }
+export interface ChartExTitleInput {
+  text?: string
+  position?: string
+  align?: string
+  overlay?: boolean
+}
+
+/** Exactly the ChartEx fields accepted when authoring; all other JsChartEx fields are read-only. */
+export interface ChartExInput {
+  layout: string
+  version?: string
+  featureList?: string
+  fallbackImg?: string
+  title?: ChartExTitleInput
+}
+
+export interface RawDrawingRelationshipMetadata {
+  id: string
+  relType: string
+  target: string
+  external: boolean
+  hasPart: boolean
+}
 
 export interface RawDrawingMetadata {
   byteLength: number
-  relationshipCount: number
+  relationships: RawDrawingRelationshipMetadata[]
 }
 
 type DrawingNode = DrawingMeta & DrawingPlacement & { drawingPath: number[] }
@@ -508,11 +576,17 @@ export type Worksheet = Omit<Generated.Worksheet, ReplacedWorksheetMembers> & {
   readonly chartsEx: DrawnChartEx[]
   readonly chartExCount: number
   addDrawing(input: TopLevelDrawingInput): number
+  /** Drawing paths are positional; mutating the list invalidates previously returned paths. */
   insertDrawing(index: number, input: TopLevelDrawingInput): void
+  /** Drawing paths are positional; mutating the list invalidates previously returned paths. */
   setDrawing(path: number[], input: DrawingInput): void
+  /** Drawing paths are positional; mutating the list invalidates previously returned paths. */
   removeDrawing(path: number[]): void
+  /** Drawing paths are positional; mutating the list invalidates previously returned paths. */
   moveDrawing(from: number, to: number): void
+  /** Paths are positional; mutating the drawing list invalidates previously returned paths. */
   drawingImageData(path: number[]): Buffer
+  /** Paths are positional; mutating the drawing list invalidates previously returned paths. */
   drawingSvgData(path: number[]): Buffer | null
   setFormControlCheckState(path: number[], state: Generated.JsCheckState): FormControlInteractionResult
 }

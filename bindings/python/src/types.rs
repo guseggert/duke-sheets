@@ -11,7 +11,7 @@ use duke_sheets_core::{
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::{PyBytes, PyDict, PyList};
 
 use crate::{PyCalculationImage, PyDrawingText};
 
@@ -2630,91 +2630,56 @@ pub struct PyMergeSpan {
     pub col_span: u32,
 }
 
-/// Flat two-cell drawing anchor. Objects read from files with
-/// one-cell or absolute anchors are flattened to from/to markers at
-/// Excel's default cell metrics, with `edit_as` preserving the
-/// original sizing behavior.
+/// A drawing anchor in its native variant: two-cell, one-cell, or
+/// absolute. Anchors read from files keep their variant; writers
+/// flatten only when a target format requires it.
 #[pyclass(name = "DrawingAnchor")]
 #[derive(Clone)]
 pub struct PyDrawingAnchor {
-    #[pyo3(get)]
-    pub from_col: u16,
-    #[pyo3(get)]
-    pub from_row: u32,
-    #[pyo3(get)]
-    pub from_col_offset: i64,
-    #[pyo3(get)]
-    pub from_row_offset: i64,
-    #[pyo3(get)]
-    pub to_col: u16,
-    #[pyo3(get)]
-    pub to_row: u32,
-    #[pyo3(get)]
-    pub to_col_offset: i64,
-    #[pyo3(get)]
-    pub to_row_offset: i64,
-    /// "two_cell", "one_cell", or "absolute".
-    #[pyo3(get)]
-    pub edit_as: String,
+    pub(crate) inner: duke_sheets::DrawingAnchor,
 }
 
 impl From<&duke_sheets::DrawingAnchor> for PyDrawingAnchor {
     fn from(a: &duke_sheets::DrawingAnchor) -> Self {
-        match a {
-            duke_sheets::DrawingAnchor::TwoCell { from, to, edit_as } => Self {
-                from_col: from.col,
-                from_row: from.row,
-                from_col_offset: from.col_offset_emu,
-                from_row_offset: from.row_offset_emu,
-                to_col: to.col,
-                to_row: to.row,
-                to_col_offset: to.col_offset_emu,
-                to_row_offset: to.row_offset_emu,
-                edit_as: match edit_as.clone().unwrap_or(duke_sheets::EditAs::TwoCell) {
-                    duke_sheets::EditAs::TwoCell => "two_cell",
-                    duke_sheets::EditAs::OneCell => "one_cell",
-                    duke_sheets::EditAs::Absolute => "absolute",
-                }
-                .to_string(),
-            },
-            _ => Self::from(&a.to_two_cell()),
-        }
+        Self { inner: a.clone() }
     }
 }
 
 impl PyDrawingAnchor {
     pub(crate) fn to_core(&self) -> PyResult<duke_sheets::DrawingAnchor> {
-        use duke_sheets::{CellMarker, DrawingAnchor, EditAs};
-        let edit_as = match self.edit_as.as_str() {
-            "two_cell" => EditAs::TwoCell,
-            "one_cell" => EditAs::OneCell,
-            "absolute" => EditAs::Absolute,
-            other => {
-                return Err(PyValueError::new_err(format!(
-                    "invalid edit_as {other:?}; expected two_cell, one_cell, or absolute"
-                )))
-            }
-        };
-        Ok(DrawingAnchor::TwoCell {
-            from: CellMarker {
-                col: self.from_col,
-                col_offset_emu: self.from_col_offset,
-                row: self.from_row,
-                row_offset_emu: self.from_row_offset,
-            },
-            to: CellMarker {
-                col: self.to_col,
-                col_offset_emu: self.to_col_offset,
-                row: self.to_row,
-                row_offset_emu: self.to_row_offset,
-            },
-            edit_as: Some(edit_as),
-        })
+        Ok(self.inner.clone())
+    }
+
+    fn from_marker(&self) -> Option<&duke_sheets::CellMarker> {
+        match &self.inner {
+            duke_sheets::DrawingAnchor::TwoCell { from, .. }
+            | duke_sheets::DrawingAnchor::OneCell { from, .. } => Some(from),
+            duke_sheets::DrawingAnchor::Absolute { .. } => None,
+        }
+    }
+
+    fn to_marker(&self) -> Option<&duke_sheets::CellMarker> {
+        match &self.inner {
+            duke_sheets::DrawingAnchor::TwoCell { to, .. } => Some(to),
+            _ => None,
+        }
+    }
+}
+
+fn parse_edit_as(value: &str) -> PyResult<duke_sheets::EditAs> {
+    match value {
+        "two_cell" => Ok(duke_sheets::EditAs::TwoCell),
+        "one_cell" => Ok(duke_sheets::EditAs::OneCell),
+        "absolute" => Ok(duke_sheets::EditAs::Absolute),
+        other => Err(PyValueError::new_err(format!(
+            "invalid edit_as {other:?}; expected two_cell, one_cell, or absolute"
+        ))),
     }
 }
 
 #[pymethods]
 impl PyDrawingAnchor {
+    /// Two-cell anchor (the default Excel drawing placement).
     #[new]
     #[pyo3(signature=(from_row, from_col, to_row, to_col, *, from_row_offset=0, from_col_offset=0, to_row_offset=0, to_col_offset=0, edit_as="two_cell"))]
     fn new(
@@ -2728,19 +2693,212 @@ impl PyDrawingAnchor {
         to_col_offset: i64,
         edit_as: &str,
     ) -> PyResult<Self> {
-        let anchor = Self {
-            from_col,
+        Self::two_cell(
             from_row,
-            from_col_offset,
-            from_row_offset,
-            to_col,
+            from_col,
             to_row,
-            to_col_offset,
+            to_col,
+            from_row_offset,
+            from_col_offset,
             to_row_offset,
-            edit_as: edit_as.to_string(),
-        };
-        anchor.to_core()?;
-        Ok(anchor)
+            to_col_offset,
+            edit_as,
+        )
+    }
+
+    /// Anchor spanning two cell markers; `edit_as` records the sizing
+    /// behavior Excel applies when cells move or resize.
+    #[staticmethod]
+    #[pyo3(signature=(from_row, from_col, to_row, to_col, *, from_row_offset=0, from_col_offset=0, to_row_offset=0, to_col_offset=0, edit_as="two_cell"))]
+    fn two_cell(
+        from_row: u32,
+        from_col: u16,
+        to_row: u32,
+        to_col: u16,
+        from_row_offset: i64,
+        from_col_offset: i64,
+        to_row_offset: i64,
+        to_col_offset: i64,
+        edit_as: &str,
+    ) -> PyResult<Self> {
+        let edit_as = parse_edit_as(edit_as)?;
+        Ok(Self {
+            inner: duke_sheets::DrawingAnchor::TwoCell {
+                from: duke_sheets::CellMarker {
+                    col: from_col,
+                    col_offset_emu: from_col_offset,
+                    row: from_row,
+                    row_offset_emu: from_row_offset,
+                },
+                to: duke_sheets::CellMarker {
+                    col: to_col,
+                    col_offset_emu: to_col_offset,
+                    row: to_row,
+                    row_offset_emu: to_row_offset,
+                },
+                edit_as: Some(edit_as),
+            },
+        })
+    }
+
+    /// Anchor pinned to one cell with a fixed EMU extent.
+    #[staticmethod]
+    #[pyo3(signature=(from_row, from_col, *, width_emu, height_emu, from_row_offset=0, from_col_offset=0))]
+    fn one_cell(
+        from_row: u32,
+        from_col: u16,
+        width_emu: i64,
+        height_emu: i64,
+        from_row_offset: i64,
+        from_col_offset: i64,
+    ) -> PyResult<Self> {
+        if width_emu < 0 || height_emu < 0 {
+            return Err(PyValueError::new_err(
+                "drawing anchor dimensions cannot be negative",
+            ));
+        }
+        Ok(Self {
+            inner: duke_sheets::DrawingAnchor::OneCell {
+                from: duke_sheets::CellMarker {
+                    col: from_col,
+                    col_offset_emu: from_col_offset,
+                    row: from_row,
+                    row_offset_emu: from_row_offset,
+                },
+                width_emu,
+                height_emu,
+            },
+        })
+    }
+
+    /// Anchor at a fixed EMU position and extent, independent of cells.
+    #[staticmethod]
+    fn absolute(x_emu: i64, y_emu: i64, width_emu: i64, height_emu: i64) -> PyResult<Self> {
+        if x_emu < 0 || y_emu < 0 || width_emu < 0 || height_emu < 0 {
+            return Err(PyValueError::new_err(
+                "absolute drawing anchor values cannot be negative",
+            ));
+        }
+        Ok(Self {
+            inner: duke_sheets::DrawingAnchor::Absolute {
+                x_emu,
+                y_emu,
+                width_emu,
+                height_emu,
+            },
+        })
+    }
+
+    /// "two_cell", "one_cell", or "absolute".
+    #[getter]
+    fn anchor_type(&self) -> &'static str {
+        match &self.inner {
+            duke_sheets::DrawingAnchor::TwoCell { .. } => "two_cell",
+            duke_sheets::DrawingAnchor::OneCell { .. } => "one_cell",
+            duke_sheets::DrawingAnchor::Absolute { .. } => "absolute",
+        }
+    }
+
+    /// From-marker row (two-cell and one-cell anchors).
+    #[getter]
+    fn from_row(&self) -> Option<u32> {
+        self.from_marker().map(|marker| marker.row)
+    }
+
+    /// From-marker column (two-cell and one-cell anchors).
+    #[getter]
+    fn from_col(&self) -> Option<u16> {
+        self.from_marker().map(|marker| marker.col)
+    }
+
+    #[getter]
+    fn from_row_offset(&self) -> Option<i64> {
+        self.from_marker().map(|marker| marker.row_offset_emu)
+    }
+
+    #[getter]
+    fn from_col_offset(&self) -> Option<i64> {
+        self.from_marker().map(|marker| marker.col_offset_emu)
+    }
+
+    /// To-marker row (two-cell anchors only).
+    #[getter]
+    fn to_row(&self) -> Option<u32> {
+        self.to_marker().map(|marker| marker.row)
+    }
+
+    /// To-marker column (two-cell anchors only).
+    #[getter]
+    fn to_col(&self) -> Option<u16> {
+        self.to_marker().map(|marker| marker.col)
+    }
+
+    #[getter]
+    fn to_row_offset(&self) -> Option<i64> {
+        self.to_marker().map(|marker| marker.row_offset_emu)
+    }
+
+    #[getter]
+    fn to_col_offset(&self) -> Option<i64> {
+        self.to_marker().map(|marker| marker.col_offset_emu)
+    }
+
+    /// "two_cell", "one_cell", or "absolute" when the two-cell anchor
+    /// carries an explicit editing behavior; None otherwise.
+    #[getter]
+    fn edit_as(&self) -> Option<&'static str> {
+        match &self.inner {
+            duke_sheets::DrawingAnchor::TwoCell { edit_as, .. } => {
+                edit_as.as_ref().map(|edit_as| match edit_as {
+                    duke_sheets::EditAs::TwoCell => "two_cell",
+                    duke_sheets::EditAs::OneCell => "one_cell",
+                    duke_sheets::EditAs::Absolute => "absolute",
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// Fixed EMU width (one-cell and absolute anchors).
+    #[getter]
+    fn width_emu(&self) -> Option<i64> {
+        match &self.inner {
+            duke_sheets::DrawingAnchor::OneCell { width_emu, .. }
+            | duke_sheets::DrawingAnchor::Absolute { width_emu, .. } => Some(*width_emu),
+            _ => None,
+        }
+    }
+
+    /// Fixed EMU height (one-cell and absolute anchors).
+    #[getter]
+    fn height_emu(&self) -> Option<i64> {
+        match &self.inner {
+            duke_sheets::DrawingAnchor::OneCell { height_emu, .. }
+            | duke_sheets::DrawingAnchor::Absolute { height_emu, .. } => Some(*height_emu),
+            _ => None,
+        }
+    }
+
+    /// Absolute EMU x position (absolute anchors only).
+    #[getter]
+    fn x_emu(&self) -> Option<i64> {
+        match &self.inner {
+            duke_sheets::DrawingAnchor::Absolute { x_emu, .. } => Some(*x_emu),
+            _ => None,
+        }
+    }
+
+    /// Absolute EMU y position (absolute anchors only).
+    #[getter]
+    fn y_emu(&self) -> Option<i64> {
+        match &self.inner {
+            duke_sheets::DrawingAnchor::Absolute { y_emu, .. } => Some(*y_emu),
+            _ => None,
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("DrawingAnchor(anchor_type={:?})", self.anchor_type())
     }
 }
 
@@ -2967,6 +3125,18 @@ impl PyFormControl {
     fn object_type(&self) -> Option<String> { match &self.inner.kind { core::FormControlKind::Unknown { object_type, .. } => Some(object_type.clone()), _ => None } }
     #[getter]
     fn legacy_object_type(&self) -> Option<u16> { match &self.inner.kind { core::FormControlKind::Unknown { legacy_object_type, .. } => *legacy_object_type, _ => None } }
+    /// Unmodeled XLSX `formControlPr` attributes carried by an unknown
+    /// control; read-only passthrough echoed back on write.
+    #[getter]
+    fn raw_properties(&self) -> Option<Vec<(String, String)>> { match &self.inner.kind { core::FormControlKind::Unknown { raw_properties, .. } => Some(raw_properties.clone()), _ => None } }
+    /// Unmodeled VML `ClientData` fragments carried by an unknown
+    /// control; read-only passthrough echoed back on write.
+    #[getter]
+    fn raw_client_data(&self, py: Python<'_>) -> Option<Vec<Py<PyBytes>>> { match &self.inner.kind { core::FormControlKind::Unknown { raw_client_data, .. } => Some(raw_client_data.iter().map(|bytes| PyBytes::new_bound(py, bytes).unbind()).collect()), _ => None } }
+    /// Original BIFF OBJ body carried by an unknown control, required
+    /// for XLS rewrite; read-only passthrough echoed back on write.
+    #[getter]
+    fn raw_obj(&self, py: Python<'_>) -> Option<Py<PyBytes>> { match &self.inner.kind { core::FormControlKind::Unknown { raw_obj, .. } => raw_obj.as_ref().map(|bytes| PyBytes::new_bound(py, bytes).unbind()), _ => None } }
 }
 
 fn drawing_text_input_to_core(value: &Bound<'_, PyAny>) -> PyResult<core::DrawingText> {

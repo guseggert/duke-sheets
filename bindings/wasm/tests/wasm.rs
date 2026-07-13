@@ -752,6 +752,112 @@ fn test_unknown_control_passthrough_survives_set_drawing_and_save() {
 }
 
 #[wasm_bindgen_test]
+fn test_uint8array_payloads_survive_add_and_set_drawing() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+
+    // Image svgData as Uint8Array.
+    let svg = b"<svg xmlns='http://www.w3.org/2000/svg'/>";
+    let image = make_options(&[
+        ("format", JsValue::from_str("png")),
+        ("widthEmu", JsValue::from_f64(200_000.0)),
+        ("heightEmu", JsValue::from_f64(100_000.0)),
+        (
+            "data",
+            js_sys::Uint8Array::from(&[137u8, 80, 78, 71][..]).into(),
+        ),
+        ("svgData", js_sys::Uint8Array::from(&svg[..]).into()),
+    ]);
+    sheet
+        .add_drawing(make_options(&[
+            ("anchor", drawing_anchor(0, 0, 2, 2)),
+            ("kind", JsValue::from_str("image")),
+            ("image", image),
+        ]))
+        .unwrap();
+    assert_eq!(
+        sheet
+            .drawing_svg_data(drawing_path(&[0]))
+            .unwrap()
+            .as_deref(),
+        Some(&svg[..])
+    );
+
+    // Unknown-control rawClientData elements and rawObj as Uint8Array,
+    // exercised through both addDrawing and setDrawing (both pass the
+    // payload through serde's tagged-enum buffering).
+    let fragment = b"<x:Val>17</x:Val>";
+    let obj_body = [0x15u8, 0x00, 0x12, 0x00];
+    let unknown_control = |name: &str| {
+        form_control_drawing(
+            name,
+            drawing_anchor(1, 2, 3, 4),
+            make_options(&[
+                ("kind", JsValue::from_str("unknown")),
+                ("objectType", JsValue::from_str("EditBox")),
+                ("caption", drawing_text("editor")),
+                (
+                    "rawClientData",
+                    make_array(&[js_sys::Uint8Array::from(&fragment[..]).into()]),
+                ),
+                ("rawObj", js_sys::Uint8Array::from(&obj_body[..]).into()),
+            ]),
+        )
+    };
+    sheet.add_drawing(unknown_control("added")).unwrap();
+    sheet
+        .set_drawing(drawing_path(&[1]), unknown_control("replaced"))
+        .unwrap();
+
+    let control = Array::from(&sheet.form_controls().unwrap()).get(0);
+    assert_eq!(get_string_field(&control, "name"), "replaced");
+    let kind = form_control_kind(&control);
+    let client_data = Array::from(&Reflect::get(&kind, &"rawClientData".into()).unwrap());
+    assert_eq!(byte_array_to_vec(&client_data.get(0)), fragment.to_vec());
+    let raw_obj = Reflect::get(&kind, &"rawObj".into()).unwrap();
+    assert_eq!(byte_array_to_vec(&raw_obj), obj_body.to_vec());
+}
+
+#[wasm_bindgen_test]
+fn test_set_drawing_rejects_comment_group_children() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    let child = make_options(&[
+        ("transform", child_transform(0, 0)),
+        ("kind", JsValue::from_str("shape")),
+        (
+            "shape",
+            make_options(&[("geometry", JsValue::from_str("rect"))]),
+        ),
+    ]);
+    let group = make_options(&[
+        ("anchor", drawing_anchor(0, 0, 2, 2)),
+        ("kind", JsValue::from_str("group")),
+        (
+            "group",
+            make_options(&[("children", make_array(&[child]))]),
+        ),
+    ]);
+    sheet.add_drawing(group).unwrap();
+    let comment_child = make_options(&[
+        ("transform", child_transform(0, 0)),
+        ("kind", JsValue::from_str("comment")),
+        (
+            "comment",
+            make_options(&[
+                ("row", JsValue::from_f64(0.0)),
+                ("col", JsValue::from_f64(0.0)),
+                ("author", JsValue::from_str("a")),
+                ("text", JsValue::from_str("nested")),
+            ]),
+        ),
+    ]);
+    assert!(sheet
+        .set_drawing(drawing_path(&[0, 0]), comment_child)
+        .is_err());
+}
+
+#[wasm_bindgen_test]
 fn test_set_drawing_rejects_duplicate_comment_cell() {
     let wb = Workbook::new();
     let sheet = wb.get_sheet(0).unwrap();

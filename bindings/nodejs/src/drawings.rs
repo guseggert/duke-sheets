@@ -1,5 +1,3 @@
-use std::collections::BTreeSet;
-
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use serde::{Deserialize, Serialize};
@@ -10,10 +8,7 @@ use duke_sheets_chart::{
 };
 use duke_sheets_core as core;
 
-use super::{
-    catch_panic, to_napi_err, JsChart, JsChartEx, JsCheckState, JsDrawingAnchor, Workbook,
-    Worksheet,
-};
+use super::{catch_panic, to_napi_err, JsChart, JsChartEx, JsCheckState, Workbook, Worksheet};
 
 type JsObject<'env> = Object<'env>;
 
@@ -47,56 +42,134 @@ impl DrawingMetaInput {
     }
 }
 
-fn default_edit_as() -> String {
-    "twoCell".to_string()
-}
-
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct DrawingAnchorInput {
-    from_col: u32,
-    from_row: u32,
+struct DrawingCellMarker {
+    col: u16,
+    row: u32,
     #[serde(default)]
-    from_col_offset: i64,
+    col_offset_emu: i64,
     #[serde(default)]
-    from_row_offset: i64,
-    to_col: u32,
-    to_row: u32,
-    #[serde(default)]
-    to_col_offset: i64,
-    #[serde(default)]
-    to_row_offset: i64,
-    #[serde(default = "default_edit_as")]
-    edit_as: String,
+    row_offset_emu: i64,
 }
 
-impl TryFrom<DrawingAnchorInput> for DrawingAnchor {
+impl From<&CellMarker> for DrawingCellMarker {
+    fn from(marker: &CellMarker) -> Self {
+        Self {
+            col: marker.col,
+            row: marker.row,
+            col_offset_emu: marker.col_offset_emu,
+            row_offset_emu: marker.row_offset_emu,
+        }
+    }
+}
+
+impl From<DrawingCellMarker> for CellMarker {
+    fn from(marker: DrawingCellMarker) -> Self {
+        Self {
+            col: marker.col,
+            row: marker.row,
+            col_offset_emu: marker.col_offset_emu,
+            row_offset_emu: marker.row_offset_emu,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
+enum DrawingAnchorDto {
+    TwoCell {
+        from: DrawingCellMarker,
+        to: DrawingCellMarker,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        edit_as: Option<String>,
+    },
+    OneCell {
+        from: DrawingCellMarker,
+        width_emu: i64,
+        height_emu: i64,
+    },
+    Absolute {
+        x_emu: i64,
+        y_emu: i64,
+        width_emu: i64,
+        height_emu: i64,
+    },
+}
+
+impl From<&DrawingAnchor> for DrawingAnchorDto {
+    fn from(anchor: &DrawingAnchor) -> Self {
+        match anchor {
+            DrawingAnchor::TwoCell { from, to, edit_as } => Self::TwoCell {
+                from: DrawingCellMarker::from(from),
+                to: DrawingCellMarker::from(to),
+                edit_as: edit_as.as_ref().map(|edit_as| match edit_as {
+                    EditAs::TwoCell => "twoCell".to_string(),
+                    EditAs::OneCell => "oneCell".to_string(),
+                    EditAs::Absolute => "absolute".to_string(),
+                }),
+            },
+            DrawingAnchor::OneCell {
+                from,
+                width_emu,
+                height_emu,
+            } => Self::OneCell {
+                from: DrawingCellMarker::from(from),
+                width_emu: *width_emu,
+                height_emu: *height_emu,
+            },
+            DrawingAnchor::Absolute {
+                x_emu,
+                y_emu,
+                width_emu,
+                height_emu,
+            } => Self::Absolute {
+                x_emu: *x_emu,
+                y_emu: *y_emu,
+                width_emu: *width_emu,
+                height_emu: *height_emu,
+            },
+        }
+    }
+}
+
+impl TryFrom<DrawingAnchorDto> for DrawingAnchor {
     type Error = String;
 
-    fn try_from(anchor: DrawingAnchorInput) -> std::result::Result<Self, Self::Error> {
-        let col = |value: u32| {
-            u16::try_from(value).map_err(|_| format!("drawing column {value} exceeds 65535"))
-        };
-        let edit_as = match anchor.edit_as.as_str() {
-            "twoCell" => EditAs::TwoCell,
-            "oneCell" => EditAs::OneCell,
-            "absolute" => EditAs::Absolute,
-            other => return Err(format!("invalid drawing editAs {other:?}")),
-        };
-        Ok(Self::TwoCell {
-            from: CellMarker {
-                col: col(anchor.from_col)?,
-                row: anchor.from_row,
-                col_offset_emu: anchor.from_col_offset,
-                row_offset_emu: anchor.from_row_offset,
+    fn try_from(anchor: DrawingAnchorDto) -> std::result::Result<Self, Self::Error> {
+        Ok(match anchor {
+            DrawingAnchorDto::TwoCell { from, to, edit_as } => DrawingAnchor::TwoCell {
+                from: from.into(),
+                to: to.into(),
+                edit_as: edit_as
+                    .map(|edit_as| match edit_as.as_str() {
+                        "twoCell" => Ok(EditAs::TwoCell),
+                        "oneCell" => Ok(EditAs::OneCell),
+                        "absolute" => Ok(EditAs::Absolute),
+                        other => Err(format!("invalid drawing editAs {other:?}")),
+                    })
+                    .transpose()?,
             },
-            to: CellMarker {
-                col: col(anchor.to_col)?,
-                row: anchor.to_row,
-                col_offset_emu: anchor.to_col_offset,
-                row_offset_emu: anchor.to_row_offset,
+            DrawingAnchorDto::OneCell {
+                from,
+                width_emu,
+                height_emu,
+            } => DrawingAnchor::OneCell {
+                from: from.into(),
+                width_emu,
+                height_emu,
             },
-            edit_as: Some(edit_as),
+            DrawingAnchorDto::Absolute {
+                x_emu,
+                y_emu,
+                width_emu,
+                height_emu,
+            } => DrawingAnchor::Absolute {
+                x_emu,
+                y_emu,
+                width_emu,
+                height_emu,
+            },
         })
     }
 }
@@ -1288,7 +1361,7 @@ struct DrawingInput {
     #[serde(flatten)]
     meta: DrawingMetaInput,
     #[serde(default)]
-    anchor: Option<DrawingAnchorInput>,
+    anchor: Option<DrawingAnchorDto>,
     #[serde(default)]
     transform: Option<DrawingChildTransform>,
     #[serde(flatten)]
@@ -1320,19 +1393,20 @@ impl DrawingInput {
         if self.anchor.is_some() {
             return Err("group child input cannot contain anchor".to_string());
         }
-        let transform: ChildTransform = transform.into();
-        if transform.cx_emu < 0 || transform.cy_emu < 0 {
-            return Err("group child extents cannot be negative".to_string());
-        }
         let (kind, comment) = drawing_kind_from_input(self.kind)?;
         let child = core::GroupChild {
             meta: self.meta.into_core(comment),
-            transform,
+            transform: transform.into(),
             kind,
         };
-        core::DrawingObject::new(child.kind.clone())
-            .validate()
-            .map_err(|error| error.to_string())?;
+        // Validate in group-child position so kinds that cannot nest
+        // (comments, raw) are rejected here, not at write time.
+        core::DrawingObject::group(core::Group {
+            transform: GroupTransform::default(),
+            children: vec![child.clone()],
+        })
+        .validate()
+        .map_err(|error| error.to_string())?;
         Ok(child)
     }
 }
@@ -1385,9 +1459,19 @@ fn drawing_kind_from_input(
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct RawDrawingRelationshipMetadata {
+    id: String,
+    rel_type: String,
+    target: String,
+    external: bool,
+    has_part: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct RawDrawingMetadata {
     byte_length: usize,
-    relationship_count: usize,
+    relationships: Vec<RawDrawingRelationshipMetadata>,
 }
 
 enum DrawingPlacement<'a> {
@@ -1447,7 +1531,7 @@ fn drawing_node_to_js<'env>(
     }
     match placement {
         DrawingPlacement::TopLevel(anchor) => {
-            drawing.set("anchor", JsDrawingAnchor::from(anchor))?;
+            set_serialized(env, &mut drawing, "anchor", &DrawingAnchorDto::from(anchor))?;
         }
         DrawingPlacement::Child(transform) => {
             set_serialized(
@@ -1541,7 +1625,17 @@ fn drawing_node_to_js<'env>(
                 "raw",
                 &RawDrawingMetadata {
                     byte_length: raw.bytes.len(),
-                    relationship_count: raw.rels.len(),
+                    relationships: raw
+                        .rels
+                        .iter()
+                        .map(|rel| RawDrawingRelationshipMetadata {
+                            id: rel.id.clone(),
+                            rel_type: rel.rel_type.clone(),
+                            target: rel.target.clone(),
+                            external: rel.external,
+                            has_part: rel.part.is_some(),
+                        })
+                        .collect(),
                 },
             )?;
         }
@@ -1663,47 +1757,35 @@ fn path_starts_with(path: &[usize], prefix: &[usize]) -> bool {
     path.len() >= prefix.len() && path[..prefix.len()] == *prefix
 }
 
-fn collect_comment_cells(
-    kind: &core::DrawingKind,
-    cells: &mut BTreeSet<(u32, u16)>,
-) -> Result<()> {
+/// The cell keyed by `replacement` when it is a comment. Validation
+/// already rejected comments nested in groups, so only a top-level
+/// comment kind can claim a cell.
+// core candidate: comment-cell uniqueness belongs in core's worksheet
+// drawing mutation APIs; this check is triplicated across bindings.
+fn replacement_comment_cell(kind: &core::DrawingKind) -> Option<(u32, u16)> {
     match kind {
-        core::DrawingKind::Comment { row, col, .. } => {
-            if !cells.insert((*row, *col)) {
-                return Err(napi::Error::from_reason(format!(
-                    "drawing input contains more than one comment for cell ({row}, {col})"
-                )));
-            }
-        }
-        core::DrawingKind::Group(group) => {
-            for child in &group.children {
-                collect_comment_cells(&child.kind, cells)?;
-            }
-        }
-        _ => {}
+        core::DrawingKind::Comment { row, col, .. } => Some((*row, *col)),
+        _ => None,
     }
-    Ok(())
 }
 
-/// Enforce one comment per cell: reject comments in `replacement`
-/// whose cell already has a comment elsewhere on the sheet, ignoring
+/// Enforce one comment per cell: reject a comment `replacement` whose
+/// cell already has a comment elsewhere on the sheet, ignoring
 /// drawings at or under `replaced_path`.
 fn ensure_comment_cells_available(
     sheet: &core::Worksheet,
     replacement: &core::DrawingKind,
     replaced_path: Option<&[usize]>,
 ) -> Result<()> {
-    let mut new_cells = BTreeSet::new();
-    collect_comment_cells(replacement, &mut new_cells)?;
-    if new_cells.is_empty() {
+    let Some(new_cell) = replacement_comment_cell(replacement) else {
         return Ok(());
-    }
+    };
     for (path, node) in sheet.drawings_flat() {
         if replaced_path.is_some_and(|prefix| path_starts_with(&path, prefix)) {
             continue;
         }
         if let core::DrawingKind::Comment { row, col, .. } = node.kind {
-            if new_cells.contains(&(*row, *col)) {
+            if (*row, *col) == new_cell {
                 return Err(napi::Error::from_reason(format!(
                     "cell ({row}, {col}) already has a comment"
                 )));
@@ -1855,7 +1937,9 @@ impl Worksheet {
         })
     }
 
-    /// Insert a top-level drawing at a global z-order index.
+    /// Insert a top-level drawing at a global z-order index. Drawing
+    /// paths are positional; mutating the list invalidates previously
+    /// returned paths.
     #[napi(ts_args_type = "index: number, input: object")]
     pub fn insert_drawing(&self, env: &Env, index: u32, input: Unknown<'_>) -> Result<()> {
         catch_panic(|| {
@@ -1873,7 +1957,9 @@ impl Worksheet {
         })
     }
 
-    /// Replace a top-level drawing or nested group child.
+    /// Replace a top-level drawing or nested group child. Drawing
+    /// paths are positional; mutating the list invalidates previously
+    /// returned paths.
     #[napi(ts_args_type = "path: number[], input: object")]
     pub fn set_drawing(
         &self,
@@ -1926,7 +2012,9 @@ impl Worksheet {
         })
     }
 
-    /// Remove a top-level drawing or nested group child.
+    /// Remove a top-level drawing or nested group child. Drawing
+    /// paths are positional; mutating the list invalidates previously
+    /// returned paths.
     #[napi]
     pub fn remove_drawing(&self, path: Vec<u32>) -> Result<()> {
         catch_panic(|| {
@@ -1964,7 +2052,9 @@ impl Worksheet {
         })
     }
 
-    /// Move a top-level drawing to another z-order index.
+    /// Move a top-level drawing to another z-order index. Drawing
+    /// paths are positional; mutating the list invalidates previously
+    /// returned paths.
     #[napi]
     pub fn move_drawing(&self, from: u32, to: u32) -> Result<()> {
         catch_panic(|| {
@@ -1978,7 +2068,9 @@ impl Worksheet {
         })
     }
 
-    /// Lazily copy the bytes for an image at a drawing path.
+    /// Lazily copy the bytes for an image at a drawing path. Paths are
+    /// positional; mutating the drawing list invalidates previously
+    /// returned paths.
     #[napi]
     pub fn drawing_image_data(&self, path: Vec<u32>) -> Result<Buffer> {
         catch_panic(|| {
@@ -1999,7 +2091,9 @@ impl Worksheet {
         })
     }
 
-    /// Lazily copy an image's SVG companion bytes, when present.
+    /// Lazily copy an image's SVG companion bytes, when present. Paths
+    /// are positional; mutating the drawing list invalidates previously
+    /// returned paths.
     #[napi]
     pub fn drawing_svg_data(&self, path: Vec<u32>) -> Result<Option<Buffer>> {
         catch_panic(|| {

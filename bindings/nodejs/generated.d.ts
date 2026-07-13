@@ -271,17 +271,41 @@ export declare class Worksheet {
   get chartExCount(): number
   /** Append a top-level drawing and return its global z-order index. */
   addDrawing(input: object): number
-  /** Insert a top-level drawing at a global z-order index. */
+  /**
+   * Insert a top-level drawing at a global z-order index. Drawing
+   * paths are positional; mutating the list invalidates previously
+   * returned paths.
+   */
   insertDrawing(index: number, input: object): void
-  /** Replace a top-level drawing or nested group child. */
+  /**
+   * Replace a top-level drawing or nested group child. Drawing
+   * paths are positional; mutating the list invalidates previously
+   * returned paths.
+   */
   setDrawing(path: number[], input: object): void
-  /** Remove a top-level drawing or nested group child. */
+  /**
+   * Remove a top-level drawing or nested group child. Drawing
+   * paths are positional; mutating the list invalidates previously
+   * returned paths.
+   */
   removeDrawing(path: Array<number>): void
-  /** Move a top-level drawing to another z-order index. */
+  /**
+   * Move a top-level drawing to another z-order index. Drawing
+   * paths are positional; mutating the list invalidates previously
+   * returned paths.
+   */
   moveDrawing(from: number, to: number): void
-  /** Lazily copy the bytes for an image at a drawing path. */
+  /**
+   * Lazily copy the bytes for an image at a drawing path. Paths are
+   * positional; mutating the drawing list invalidates previously
+   * returned paths.
+   */
   drawingImageData(path: Array<number>): Buffer
-  /** Lazily copy an image's SVG companion bytes, when present. */
+  /**
+   * Lazily copy an image's SVG companion bytes, when present. Paths
+   * are positional; mutating the drawing list invalidates previously
+   * returned paths.
+   */
   drawingSvgData(path: Array<number>): Buffer | null
   /** Apply checkbox/radio semantics and synchronize linked cells immediately. */
   setFormControlCheckState(path: Array<number>, state: JsCheckState): JsFormControlInteractionResult
@@ -1125,25 +1149,6 @@ export interface JsDataValidation {
   listSource?: string
   /** Custom formula (present when `validationType === "custom"`). */
   formula?: string
-}
-
-/**
- * Flat two-cell drawing anchor. Objects read from files with
- * one-cell or absolute anchors are flattened to from/to markers at
- * Excel's default cell metrics, with `editAs` preserving the
- * original sizing behavior.
- */
-export interface JsDrawingAnchor {
-  fromCol: number
-  fromRow: number
-  fromColOffset: number
-  fromRowOffset: number
-  toCol: number
-  toRow: number
-  toColOffset: number
-  toRowOffset: number
-  /** One of `"twoCell"`, `"oneCell"`, or `"absolute"`. */
-  editAs: string
 }
 
 /** Error bars attached to a data series. */
