@@ -6,7 +6,7 @@
 //! this module owns the XML shape, relationship-id planning, and the
 //! control-twin flavor.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Write};
 
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
@@ -147,6 +147,11 @@ pub struct DrawingPlan {
     pub image_rids: Vec<String>,
     /// All relationships to write in the drawing's .rels part.
     pub rels: Vec<PlannedRel>,
+    /// Per raw fragment, depth-first in drawing-list order: rel-id
+    /// rewrites to apply to that fragment's bytes. A fragment needs a
+    /// rewrite when it reuses another fragment's rel id for a
+    /// different target.
+    pub raw_remaps: Vec<Vec<(String, String)>>,
 }
 
 /// Assign relationship ids for the sheet's drawing part. Raw entries
@@ -159,16 +164,32 @@ pub fn plan_drawing_rels(
 ) -> DrawingPlan {
     let mut taken_ids: HashSet<String> = HashSet::new();
     let mut taken_nums: HashSet<usize> = HashSet::new();
-    for object in objects {
-        if let PartKind::Raw { rels, .. } = &object.kind {
-            for rel in rels {
-                if taken_ids.insert(rel.id.to_string()) {
-                    if let Some(num) = rel.id.strip_prefix("rId").and_then(|n| n.parse().ok()) {
-                        taken_nums.insert(num);
+    fn reserve_raw_ids(
+        kind: &PartKind<'_>,
+        taken_ids: &mut HashSet<String>,
+        taken_nums: &mut HashSet<usize>,
+    ) {
+        match kind {
+            PartKind::Raw { rels, .. } => {
+                for rel in rels {
+                    if taken_ids.insert(rel.id.to_string()) {
+                        if let Some(num) = rel.id.strip_prefix("rId").and_then(|n| n.parse().ok())
+                        {
+                            taken_nums.insert(num);
+                        }
                     }
                 }
             }
+            PartKind::Group { children, .. } => {
+                for child in children {
+                    reserve_raw_ids(&child.kind, taken_ids, taken_nums);
+                }
+            }
+            _ => {}
         }
+    }
+    for object in objects {
+        reserve_raw_ids(&object.kind, &mut taken_ids, &mut taken_nums);
     }
 
     let mut next = 1usize;
@@ -185,11 +206,12 @@ pub fn plan_drawing_rels(
         chartex_rids: Vec::new(),
         image_rids: Vec::new(),
         rels: Vec::new(),
+        raw_remaps: Vec::new(),
     };
     let mut chart_i = 0usize;
     let mut chartex_i = 0usize;
     let mut image_i = 0usize;
-    let mut seen_raw: HashSet<String> = HashSet::new();
+    let mut seen_raw: HashMap<String, (String, String, bool)> = HashMap::new();
 
     fn plan_image(
         plan: &mut DrawingPlan,
@@ -209,19 +231,57 @@ pub fn plan_drawing_rels(
         plan.image_rids.push(rid);
     }
 
+    fn plan_raw(
+        rels: &[PartRel<'_>],
+        plan: &mut DrawingPlan,
+        alloc: &mut impl FnMut() -> String,
+        seen_raw: &mut HashMap<String, (String, String, bool)>,
+    ) {
+        let mut remap = Vec::new();
+        for rel in rels {
+            let payload = (rel.rel_type.to_string(), rel.target.to_string(), rel.external);
+            match seen_raw.get(rel.id) {
+                Some(existing) if *existing == payload => {}
+                Some(_) => {
+                    let fresh = alloc();
+                    plan.rels.push(PlannedRel {
+                        id: fresh.clone(),
+                        rel_type: payload.0.clone(),
+                        target: payload.1.clone(),
+                        external: rel.external,
+                    });
+                    seen_raw.insert(fresh.clone(), payload);
+                    remap.push((rel.id.to_string(), fresh));
+                }
+                None => {
+                    plan.rels.push(PlannedRel {
+                        id: rel.id.to_string(),
+                        rel_type: payload.0.clone(),
+                        target: payload.1.clone(),
+                        external: rel.external,
+                    });
+                    seen_raw.insert(rel.id.to_string(), payload);
+                }
+            }
+        }
+        plan.raw_remaps.push(remap);
+    }
+
     fn plan_children(
         children: &[PartChild<'_>],
         plan: &mut DrawingPlan,
         alloc: &mut impl FnMut() -> String,
         image_parts: &[(usize, &'static str)],
         image_i: &mut usize,
+        seen_raw: &mut HashMap<String, (String, String, bool)>,
     ) {
         for child in children {
             match &child.kind {
                 PartKind::Image(_) => plan_image(plan, alloc, image_parts, image_i),
                 PartKind::Group { children, .. } => {
-                    plan_children(children, plan, alloc, image_parts, image_i)
+                    plan_children(children, plan, alloc, image_parts, image_i, seen_raw)
                 }
+                PartKind::Raw { rels, .. } => plan_raw(rels, plan, alloc, seen_raw),
                 _ => {}
             }
         }
@@ -252,21 +312,15 @@ pub fn plan_drawing_rels(
                 plan.chartex_rids.push(rid);
             }
             PartKind::Image(_) => plan_image(&mut plan, &mut alloc, image_parts, &mut image_i),
-            PartKind::Group { children, .. } => {
-                plan_children(children, &mut plan, &mut alloc, image_parts, &mut image_i)
-            }
-            PartKind::Raw { rels, .. } => {
-                for rel in rels {
-                    if seen_raw.insert(rel.id.to_string()) {
-                        plan.rels.push(PlannedRel {
-                            id: rel.id.to_string(),
-                            rel_type: rel.rel_type.to_string(),
-                            target: rel.target.to_string(),
-                            external: rel.external,
-                        });
-                    }
-                }
-            }
+            PartKind::Group { children, .. } => plan_children(
+                children,
+                &mut plan,
+                &mut alloc,
+                image_parts,
+                &mut image_i,
+                &mut seen_raw,
+            ),
+            PartKind::Raw { rels, .. } => plan_raw(rels, &mut plan, &mut alloc, &mut seen_raw),
             PartKind::Control { .. } | PartKind::Shape(_) => {}
         }
     }
@@ -288,6 +342,8 @@ struct EmitCtx<'a> {
     /// Placed-control ordinal (drives twin shape ids).
     control_ordinal: usize,
     shape_base: usize,
+    /// Raw fragments emitted so far, indexing [`DrawingPlan::raw_remaps`].
+    raw_i: usize,
 }
 
 impl EmitCtx<'_> {
@@ -336,6 +392,7 @@ pub fn write_drawing_part_with_metrics(
         frame_seq: 0,
         control_ordinal: 0,
         shape_base,
+        raw_i: 0,
     };
 
     for object in objects {
@@ -463,7 +520,7 @@ pub fn write_drawing_part_with_metrics(
                 )?;
             }
             PartKind::Raw { bytes, .. } => {
-                w.get_mut().write_all(bytes)?;
+                write_raw_bytes(&mut w, bytes, &mut ctx)?;
             }
         }
     }
@@ -679,6 +736,52 @@ fn raw_has_any(raw: &[u8], names: &[&str]) -> bool {
         }
         buf.clear();
     }
+}
+
+/// Emit one raw fragment's bytes, applying the rel-id rewrites the
+/// plan assigned to it (when its original ids collided with another
+/// fragment's ids for different targets).
+fn write_raw_bytes(w: &mut XmlWriter, bytes: &[u8], ctx: &mut EmitCtx<'_>) -> WriteResult<()> {
+    let remap = &ctx.plan.raw_remaps[ctx.raw_i];
+    ctx.raw_i += 1;
+    if remap.is_empty() {
+        w.get_mut().write_all(bytes)?;
+    } else {
+        let rewritten = rewrite_rel_ids(bytes, remap);
+        w.get_mut().write_all(&rewritten)?;
+    }
+    Ok(())
+}
+
+/// Replace quote-delimited relationship-id attribute values in raw
+/// XML bytes. Quote delimiters keep `rId1` from matching inside
+/// `rId10`; fresh ids are allocator-issued and never collide with
+/// any old id, so passes cannot chain.
+fn rewrite_rel_ids(bytes: &[u8], remap: &[(String, String)]) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    for (old, new) in remap {
+        for quote in [b'"', b'\''] {
+            let mut pattern = vec![quote];
+            pattern.extend_from_slice(old.as_bytes());
+            pattern.push(quote);
+            let mut replacement = vec![quote];
+            replacement.extend_from_slice(new.as_bytes());
+            replacement.push(quote);
+            let mut result = Vec::with_capacity(out.len());
+            let mut rest: &[u8] = &out;
+            while let Some(pos) = rest
+                .windows(pattern.len())
+                .position(|window| window == pattern.as_slice())
+            {
+                result.extend_from_slice(&rest[..pos]);
+                result.extend_from_slice(&replacement);
+                rest = &rest[pos + pattern.len()..];
+            }
+            result.extend_from_slice(rest);
+            out = result;
+        }
+    }
+    out
 }
 
 /// Generated `cNvPr@id`s must be unique across the whole drawing
@@ -1047,7 +1150,7 @@ fn write_group_child(
             )?;
         }
         PartKind::Raw { bytes, .. } => {
-            w.get_mut().write_all(bytes)?;
+            write_raw_bytes(w, bytes, ctx)?;
         }
         // No group representation for these kinds.
         PartKind::Chart | PartKind::ChartEx { .. } => {}

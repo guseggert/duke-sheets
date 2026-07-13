@@ -284,6 +284,78 @@ fn xlsx_comment_anchor_round_trips() {
     assert_eq!(comment.object.anchor, custom);
 }
 
+const RT_HYPERLINK: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink";
+
+/// A raw connector anchor whose cNvPr carries a hyperlink relationship
+/// reference, plus the captured relationship it resolves through.
+fn raw_link(col: u16, cnv_id: u32, rel_id: &str, url: &str) -> DrawingObject {
+    let bytes = format!(
+        r#"<xdr:twoCellAnchor><xdr:from><xdr:col>{col}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>{to}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>2</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:cxnSp macro=""><xdr:nvCxnSpPr><xdr:cNvPr id="{cnv_id}" name="Connector {cnv_id}"><a:hlinkClick r:id="{rel_id}"/></xdr:cNvPr><xdr:cNvCxnSpPr/></xdr:nvCxnSpPr><xdr:spPr><a:prstGeom prst="line"><a:avLst/></a:prstGeom></xdr:spPr></xdr:cxnSp><xdr:clientData/></xdr:twoCellAnchor>"#,
+        to = col + 1,
+    );
+    DrawingObject::raw(duke_sheets::RawDrawing {
+        bytes: bytes.into_bytes(),
+        rels: vec![duke_sheets::RawRel {
+            id: rel_id.to_string(),
+            rel_type: RT_HYPERLINK.to_string(),
+            target: url.to_string(),
+            external: true,
+            part: None,
+        }],
+    })
+    .with_anchor(two_cell(col, 1, col + 1, 2))
+}
+
+/// Raw fragments that reuse the same relationship id for different
+/// targets get the colliding references remapped (in the .rels part
+/// and inside the fragment bytes), while fragments sharing an id for
+/// the same target keep sharing it.
+#[test]
+fn xlsx_conflicting_raw_rel_ids_are_remapped() {
+    let mut workbook = Workbook::new();
+    let sheet = workbook.worksheet_mut(0).unwrap();
+    sheet.add_drawing(png("Pic").with_anchor(two_cell(8, 8, 9, 9)));
+    sheet.add_drawing(raw_link(0, 11, "rId1", "https://one.example/"));
+    sheet.add_drawing(raw_link(2, 12, "rId1", "https://two.example/"));
+    sheet.add_drawing(raw_link(4, 13, "rId1", "https://one.example/"));
+
+    let read = round_trip(&workbook);
+    assert_eq!(kind_tags(&read), vec!["image", "raw", "raw", "raw"]);
+    let sheet = read.worksheet(0).unwrap();
+    let raws: Vec<&duke_sheets::RawDrawing> = sheet
+        .drawings()
+        .iter()
+        .filter_map(|object| match &object.kind {
+            DrawingKind::Raw(raw) => Some(raw),
+            _ => None,
+        })
+        .collect();
+
+    for (raw, url) in raws.iter().zip([
+        "https://one.example/",
+        "https://two.example/",
+        "https://one.example/",
+    ]) {
+        assert_eq!(raw.rels.len(), 1, "one captured rel per fragment");
+        assert_eq!(raw.rels[0].target, url, "fragment resolves its own target");
+        let bytes = std::str::from_utf8(&raw.bytes).unwrap();
+        assert!(
+            bytes.contains(&format!("r:id=\"{}\"", raw.rels[0].id)),
+            "fragment bytes reference the captured rel id"
+        );
+    }
+    assert_eq!(raws[0].rels[0].id, "rId1", "first claimant keeps its id");
+    assert_ne!(
+        raws[1].rels[0].id, "rId1",
+        "conflicting reuse is remapped to a fresh id"
+    );
+    assert_eq!(
+        raws[2].rels[0].id, "rId1",
+        "same-target reuse keeps sharing the id"
+    );
+}
+
 /// Raw (unmodeled) drawing anchors keep their position in the z-order
 /// and expose a parsed anchor for placeholder rendering.
 #[test]

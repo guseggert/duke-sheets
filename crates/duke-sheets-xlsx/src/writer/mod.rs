@@ -449,21 +449,39 @@ pub(super) fn sheet_image_payloads(
     out
 }
 
-/// Raw relationships preserved on a worksheet's raw drawing entries,
-/// in list order, deduplicated by relationship id.
+/// Raw relationships preserved on a worksheet's raw drawing entries
+/// (including raw group children), in list order, deduplicated by
+/// target. Conflicting reuses of one relationship id across fragments
+/// get distinct ids at plan time, so every distinct target's part
+/// must be collected.
 pub(super) fn sheet_raw_rels(
     sheet: &duke_sheets_core::Worksheet,
 ) -> Vec<&duke_sheets_core::RawRel> {
+    fn collect<'a>(
+        kind: &'a duke_sheets_core::DrawingKind,
+        seen: &mut HashSet<&'a str>,
+        out: &mut Vec<&'a duke_sheets_core::RawRel>,
+    ) {
+        match kind {
+            duke_sheets_core::DrawingKind::Raw(raw) => {
+                for rel in &raw.rels {
+                    if seen.insert(rel.target.as_str()) {
+                        out.push(rel);
+                    }
+                }
+            }
+            duke_sheets_core::DrawingKind::Group(group) => {
+                for child in &group.children {
+                    collect(&child.kind, seen, out);
+                }
+            }
+            _ => {}
+        }
+    }
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for object in sheet.drawings() {
-        if let duke_sheets_core::DrawingKind::Raw(raw) = &object.kind {
-            for rel in &raw.rels {
-                if seen.insert(rel.id.as_str()) {
-                    out.push(rel);
-                }
-            }
-        }
+        collect(&object.kind, &mut seen, &mut out);
     }
     out
 }
