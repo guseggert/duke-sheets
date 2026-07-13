@@ -948,6 +948,11 @@ fn write_note_shape(
         a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]
     ));
     xml.push_str("   <x:AutoFill>False</x:AutoFill>\n");
+    // Excel keys the shown-state on the x:Visible element; the style
+    // visibility alone is not enough.
+    if visible {
+        xml.push_str("   <x:Visible/>\n");
+    }
     xml.push_str(&format!("   <x:Row>{}</x:Row>\n", row));
     xml.push_str(&format!("   <x:Column>{}</x:Column>\n", col));
     xml.push_str("  </x:ClientData>\n");
@@ -2040,6 +2045,46 @@ mod tests {
 
         let parsed = parse_vml_controls(wrap(&xml).as_bytes());
         assert_eq!(parsed[0].text.plain_text(), "Line one\nLine two\n");
+    }
+
+    /// A shown comment's Note ClientData must carry `<x:Visible/>`:
+    /// Excel keys the shown-state on the element (the style
+    /// `visibility` alone is not honored). Hidden comments omit it.
+    #[test]
+    fn note_shape_emits_visible_element_only_when_shown() {
+        use duke_sheets_core::comment::CellComment;
+
+        let mut sheet = duke_sheets_core::Worksheet::new("Sheet1");
+        sheet.add_drawing(DrawingObject::comment(
+            0,
+            0,
+            CellComment::new("a", "hidden note"),
+        ));
+        sheet.add_drawing(
+            DrawingObject::comment(5, 2, CellComment::new("a", "shown note")).with_hidden(false),
+        );
+
+        let xml = build_legacy_vml(&sheet, 0).expect("vml part");
+        let shapes: Vec<&str> = xml.split("<v:shape ").skip(1).collect();
+        assert_eq!(shapes.len(), 2);
+        let hidden = shapes
+            .iter()
+            .find(|s| s.contains("<x:Row>0</x:Row>"))
+            .expect("hidden note shape");
+        let shown = shapes
+            .iter()
+            .find(|s| s.contains("<x:Row>5</x:Row>"))
+            .expect("shown note shape");
+        assert!(
+            shown.contains("<x:Visible/>"),
+            "shown note carries x:Visible: {shown}"
+        );
+        assert!(shown.contains("visibility:visible"));
+        assert!(
+            !hidden.contains("<x:Visible/>"),
+            "hidden note omits x:Visible: {hidden}"
+        );
+        assert!(hidden.contains("visibility:hidden"));
     }
 
     #[test]

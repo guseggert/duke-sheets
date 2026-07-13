@@ -75,13 +75,15 @@ pub(crate) fn write_comments<W: Write + Seek>(
 }
 
 /// Deterministic per-comment GUID (any stable value is acceptable;
-/// version/variant bits set for a well-formed v4 layout).
+/// version/variant bits set for a well-formed v4 layout). Data3 is
+/// little-endian, so byte 7 (its high byte) carries the version in
+/// its high nibble; the variant lives in byte 8's high bits.
 fn comment_guid(row: u32, col: u16, seq: u32) -> [u8; 16] {
     let mut guid = [0u8; 16];
     guid[0..4].copy_from_slice(&row.to_le_bytes());
     guid[4..6].copy_from_slice(&col.to_le_bytes());
-    guid[6] = 0x40; // version 4
-    guid[7] = 0x5D;
+    guid[6] = 0x40;
+    guid[7] = 0x4D; // version 4 (high nibble of LE Data3)
     guid[8] = 0x80; // RFC 4122 variant
     guid[9] = 0x75;
     guid[10..14].copy_from_slice(&seq.to_le_bytes());

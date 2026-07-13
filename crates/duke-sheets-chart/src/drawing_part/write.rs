@@ -170,7 +170,7 @@ pub fn plan_drawing_rels(
         taken_nums: &mut HashSet<usize>,
     ) {
         match kind {
-            PartKind::Raw { rels, .. } => {
+            PartKind::Raw { bytes, rels } => {
                 for rel in rels {
                     if taken_ids.insert(rel.id.to_string()) {
                         if let Some(num) = rel.id.strip_prefix("rId").and_then(|n| n.parse().ok())
@@ -178,6 +178,12 @@ pub fn plan_drawing_rels(
                             taken_nums.insert(num);
                         }
                     }
+                }
+                // Ids the bytes reference but the captured rels miss
+                // (dangling references) must never be reallocated to a
+                // generated part.
+                for num in quoted_rel_id_nums(bytes) {
+                    taken_nums.insert(num);
                 }
             }
             PartKind::Group { children, .. } => {
@@ -753,18 +759,49 @@ fn write_raw_bytes(w: &mut XmlWriter, bytes: &[u8], ctx: &mut EmitCtx<'_>) -> Wr
     Ok(())
 }
 
-/// Replace quote-delimited relationship-id attribute values in raw
-/// XML bytes. Quote delimiters keep `rId1` from matching inside
-/// `rId10`; fresh ids are allocator-issued and never collide with
-/// any old id, so passes cannot chain.
+/// Numeric suffixes of quote-delimited `rId<N>` references in raw XML
+/// bytes (`"rId3"` / `'rId3'`). Over-matching (e.g. inside text
+/// nodes) only wastes id numbers, never corrupts.
+pub fn quoted_rel_id_nums(bytes: &[u8]) -> Vec<usize> {
+    let mut nums = Vec::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let quote = bytes[i];
+        if (quote == b'"' || quote == b'\'') && bytes[i + 1..].starts_with(b"rId") {
+            let digits_start = i + 4;
+            let mut j = digits_start;
+            while j < bytes.len() && bytes[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j > digits_start && j < bytes.len() && bytes[j] == quote {
+                if let Some(num) = std::str::from_utf8(&bytes[digits_start..j])
+                    .ok()
+                    .and_then(|digits| digits.parse().ok())
+                {
+                    nums.push(num);
+                }
+                i = j + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    nums
+}
+
+/// Replace relationship-id attribute values in raw XML bytes. Only
+/// equals-prefixed quote-delimited matches (`="rId1"` / `='rId1'`)
+/// rewrite, so quoted look-alikes in text nodes stay put and `rId1`
+/// never matches inside `rId10`; fresh ids are allocator-issued and
+/// never collide with any old id, so passes cannot chain.
 fn rewrite_rel_ids(bytes: &[u8], remap: &[(String, String)]) -> Vec<u8> {
     let mut out = bytes.to_vec();
     for (old, new) in remap {
         for quote in [b'"', b'\''] {
-            let mut pattern = vec![quote];
+            let mut pattern = vec![b'=', quote];
             pattern.extend_from_slice(old.as_bytes());
             pattern.push(quote);
-            let mut replacement = vec![quote];
+            let mut replacement = vec![b'=', quote];
             replacement.extend_from_slice(new.as_bytes());
             replacement.push(quote);
             let mut result = Vec::with_capacity(out.len());
@@ -1903,8 +1940,13 @@ fn write_chartex_frame(
 }
 
 /// Serialize a chartsheet drawing part: one absolute-anchored chart
-/// frame (rId1) followed by preserved raw anchors.
-pub fn write_chartsheet_drawing_part(raw_drawing_objects: &[Vec<u8>]) -> WriteResult<Vec<u8>> {
+/// frame referencing `chart_rid` (when present) followed by preserved
+/// raw anchors. The caller allocates `chart_rid` around the ids the
+/// raw anchors keep.
+pub fn write_chartsheet_drawing_part(
+    chart_rid: Option<&str>,
+    raw_drawing_objects: &[Vec<u8>],
+) -> WriteResult<Vec<u8>> {
     let mut w = Writer::new(Cursor::new(Vec::new()));
     w.write_event(Event::Decl(BytesDecl::new(
         "1.0",
@@ -1917,12 +1959,14 @@ pub fn write_chartsheet_drawing_part(raw_drawing_objects: &[Vec<u8>]) -> WriteRe
     tag.push_attribute(("xmlns:r", NS_DOC_RELS));
     w.write_event(Event::Start(tag))?;
 
-    w.write_event(Event::Start(BytesStart::new("xdr:absoluteAnchor")))?;
-    write_point(&mut w, "xdr:pos", 0, 0)?;
-    write_extent(&mut w, "xdr:ext", 9144000, 6858000)?;
-    write_chart_frame(&mut w, "rId1", 2, "Chart 1", None, None, false)?;
-    w.write_event(Event::Empty(BytesStart::new("xdr:clientData")))?;
-    w.write_event(Event::End(BytesEnd::new("xdr:absoluteAnchor")))?;
+    if let Some(chart_rid) = chart_rid {
+        w.write_event(Event::Start(BytesStart::new("xdr:absoluteAnchor")))?;
+        write_point(&mut w, "xdr:pos", 0, 0)?;
+        write_extent(&mut w, "xdr:ext", 9144000, 6858000)?;
+        write_chart_frame(&mut w, chart_rid, 2, "Chart 1", None, None, false)?;
+        w.write_event(Event::Empty(BytesStart::new("xdr:clientData")))?;
+        w.write_event(Event::End(BytesEnd::new("xdr:absoluteAnchor")))?;
+    }
 
     for raw in raw_drawing_objects {
         w.get_mut().write_all(raw)?;
@@ -1946,6 +1990,100 @@ fn write_cell_marker(w: &mut XmlWriter, marker: &CellMarker) -> WriteResult<()> 
     w.create_element("xdr:rowOff")
         .write_text_content(BytesText::new(&row_off_s))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn raw_object<'a>(bytes: &'a [u8], anchor: &'a DrawingAnchor) -> PartObject<'a> {
+        PartObject {
+            name: None,
+            alt_text: None,
+            title: None,
+            macro_name: None,
+            control_text: None,
+            locked: true,
+            printable: true,
+            hidden: false,
+            anchor,
+            kind: PartKind::Raw {
+                bytes,
+                rels: Vec::new(),
+            },
+        }
+    }
+
+    /// Rel-id rewriting must only touch attribute values (`="rIdN"`),
+    /// never quoted look-alikes inside text nodes.
+    #[test]
+    fn rewrite_rel_ids_leaves_text_nodes_alone() {
+        let bytes: &[u8] = br#"<xdr:cxnSp><xdr:cNvPr id="9" name="c"><a:hlinkClick r:id="rId1"/></xdr:cNvPr><a:t>see "rId1" and 'rId1' in the docs</a:t><a:foo bar='rId1'/></xdr:cxnSp>"#;
+        let rewritten = rewrite_rel_ids(bytes, &[("rId1".to_string(), "rId9".to_string())]);
+        let text = std::str::from_utf8(&rewritten).unwrap();
+        assert!(text.contains(r#"r:id="rId9""#), "attribute rewritten: {text}");
+        assert!(text.contains("bar='rId9'"), "single-quoted attribute rewritten: {text}");
+        assert!(
+            text.contains(r#"see "rId1" and 'rId1' in the docs"#),
+            "text node untouched: {text}"
+        );
+    }
+
+    /// Captured anchors carrying injected wrapper xmlns declarations
+    /// (see the reader's mc:AlternateContent handling) pass raw
+    /// validation and can be spliced verbatim.
+    #[test]
+    fn validate_raw_fragment_accepts_injected_ns_decls() {
+        let bytes: &[u8] = br#"<xdr:twoCellAnchor xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:cx9="http://schemas.microsoft.com/office/drawing/2016/9/9/chartex"><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>3</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>3</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:graphicFrame macro=""><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/drawing/2017/model3d"><am3d:mdl3d/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor>"#;
+        validate_raw_fragment(bytes, "captured anchor").expect("well-formed fragment accepted");
+    }
+
+    /// An id referenced by a raw fragment's bytes but absent from its
+    /// captured rels must never be handed out by the allocator: the
+    /// dangling reference would silently bind to the new part.
+    #[test]
+    fn plan_reserves_rel_ids_referenced_only_in_raw_bytes() {
+        let image = EmbeddedImage {
+            format: crate::ImageFormat::Png,
+            media_path: String::new(),
+            svg_media_path: None,
+            width_emu: 1,
+            height_emu: 1,
+            rotation: None,
+            flip_h: false,
+            flip_v: false,
+            data: Vec::new(),
+            svg_data: None,
+        };
+        let anchor = DrawingAnchor::default();
+        let raw_bytes: &[u8] = br#"<xdr:twoCellAnchor><xdr:cxnSp><xdr:nvCxnSpPr><xdr:cNvPr id="9" name="c"><a:hlinkClick r:id="rId1"/></xdr:cNvPr></xdr:nvCxnSpPr></xdr:cxnSp><xdr:clientData/></xdr:twoCellAnchor>"#;
+        let objects = vec![
+            raw_object(raw_bytes, &anchor),
+            PartObject {
+                name: None,
+                alt_text: None,
+                title: None,
+                macro_name: None,
+                control_text: None,
+                locked: true,
+                printable: true,
+                hidden: false,
+                anchor: &anchor,
+                kind: PartKind::Image(&image),
+            },
+        ];
+
+        let plan = plan_drawing_rels(&objects, &[], &[], &[(1, "png")]);
+        assert_eq!(
+            plan.image_rids,
+            vec!["rId2".to_string()],
+            "rId1 is reserved by the raw fragment's dangling reference"
+        );
+        assert!(
+            plan.rels.iter().all(|rel| rel.id != "rId1"),
+            "no generated rel claims the reserved id"
+        );
+    }
 }
 
 /// Serialize a relationships part from planned rels.

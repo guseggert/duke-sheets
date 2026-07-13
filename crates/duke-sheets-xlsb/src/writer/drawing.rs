@@ -21,7 +21,7 @@ use crate::error::XlsbResult;
 
 const CT_DRAWING: &str = "application/vnd.openxmlformats-officedocument.drawing+xml";
 const CT_CHART: &str = "application/vnd.openxmlformats-officedocument.drawingml.chart+xml";
-const CT_CHART_EX: &str = "application/vnd.ms-office.chartEx+xml";
+const CT_CHART_EX: &str = "application/vnd.ms-office.chartex+xml";
 const CT_CHART_STYLE: &str = "application/vnd.ms-office.chartstyle+xml";
 const CT_CHART_COLOR_STYLE: &str = "application/vnd.ms-office.chartcolorstyle+xml";
 const RT_CHART_STYLE: &str = "http://schemas.microsoft.com/office/2011/relationships/chartStyle";

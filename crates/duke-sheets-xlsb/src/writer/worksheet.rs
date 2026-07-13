@@ -1386,15 +1386,22 @@ fn write_conditional_formats<W: Write>(
         }
         rw.write_record(records::BRT_BEGIN_COND_FMT, &cond_fmt_payload)?;
 
+        // (iType, iTemplate) pairs per the MS-XLSB 2.4.23 BrtBeginCFRule
+        // combination table: CFType (2.5.18) has only values 1..6, and
+        // every non-visual predicate rides CF_TYPE_EXPRIS (2) with a
+        // CFTemp (2.5.16) template. iParam is a CFOper (2.5.15) for
+        // CELLIS, a CFTextOper (2.5.17) for CONTAINSTEXT, a CFDateOper
+        // (2.5.12) for TIMEPERIOD*, and stddev count for ABOVE/BELOW
+        // AVERAGE.
         let (i_type, i_template, i_param, flags_extra): (u32, u32, u32, u16) = match &rule.rule_type
         {
             CfRuleType::CellIs { operator, .. } => {
-                (1, 0, cf_op_code(operator), 0) // CF_TEMPLATE_EXPR
+                (1, 0x00, cf_op_code(operator), 0) // CF_TEMPLATE_EXPR
             }
-            CfRuleType::Expression { .. } => (2, 2, 0, 0), // CF_TEMPLATE_FMLA
-            CfRuleType::ColorScale { .. } => (3, 2, 0, 0), // CF_TEMPLATE_GRADIENT
-            CfRuleType::DataBar { .. } => (4, 3, 0, 0),    // CF_TEMPLATE_DATABAR
-            CfRuleType::IconSet { .. } => (6, 4, 0, 0),    // CF_TEMPLATE_MULTISTATE
+            CfRuleType::Expression { .. } => (2, 0x01, 0, 0), // CF_TEMPLATE_FMLA
+            CfRuleType::ColorScale { .. } => (3, 0x02, 0, 0), // CF_TEMPLATE_GRADIENT
+            CfRuleType::DataBar { .. } => (4, 0x03, 0, 0),    // CF_TEMPLATE_DATABAR
+            CfRuleType::IconSet { .. } => (6, 0x04, 0, 0),    // CF_TEMPLATE_MULTISTATE
             CfRuleType::Top10 {
                 rank,
                 percent,
@@ -1407,26 +1414,47 @@ fn write_conditional_formats<W: Write>(
                 if *percent {
                     f |= 0x10; // fPercent = bit4
                 }
-                (5, 5, *rank, f) // CF_TEMPLATE_FILTER
+                (5, 0x05, *rank, f) // CF_TEMPLATE_FILTER
             }
-            CfRuleType::UniqueValues => (7, 11, 0, 0), // CF_TEMPLATE_UNIQUEVALUES
-            CfRuleType::DuplicateValues => (8, 12, 0, 0), // CF_TEMPLATE_DUPLICATEVALUES
-            CfRuleType::ContainsText { .. } => (9, 8, 0, 0), // CF_TEMPLATE_CONTAINSTEXT
-            CfRuleType::ContainsBlanks => (10, 13, 0, 0), // CF_TEMPLATE_CONTAINSBLANKS
-            CfRuleType::NotContainsBlanks => (11, 14, 0, 0), // CF_TEMPLATE_CONTAINSNOBLANKS
-            CfRuleType::ContainsErrors => (12, 15, 0, 0), // CF_TEMPLATE_CONTAINSERRORS
-            CfRuleType::NotContainsErrors => (13, 16, 0, 0), // CF_TEMPLATE_CONTAINSNOERRORS
-            CfRuleType::AboveAverage { above, .. } => {
+            CfRuleType::UniqueValues => (2, 0x07, 0, 0), // CF_TEMPLATE_UNIQUEVALUES
+            CfRuleType::DuplicateValues => (2, 0x1B, 0, 0), // CF_TEMPLATE_DUPLICATEVALUES
+            CfRuleType::ContainsText { .. } => (2, 0x08, 0, 0), // CONTAINSTEXT + CF_TEXTOPER_CONTAINS
+            CfRuleType::BeginsWith { .. } => (2, 0x08, 2, 0), // CONTAINSTEXT + CF_TEXTOPER_BEGINSWITH
+            CfRuleType::EndsWith { .. } => (2, 0x08, 3, 0), // CONTAINSTEXT + CF_TEXTOPER_ENDSWITH
+            CfRuleType::ContainsBlanks => (2, 0x09, 0, 0), // CF_TEMPLATE_CONTAINSBLANKS
+            CfRuleType::NotContainsBlanks => (2, 0x0A, 0, 0), // CF_TEMPLATE_CONTAINSNOBLANKS
+            CfRuleType::ContainsErrors => (2, 0x0B, 0, 0), // CF_TEMPLATE_CONTAINSERRORS
+            CfRuleType::NotContainsErrors => (2, 0x0C, 0, 0), // CF_TEMPLATE_CONTAINSNOERRORS
+            CfRuleType::AboveAverage {
+                above,
+                equal_average,
+                std_dev,
+            } => {
                 let mut f: u16 = 0;
                 if *above {
-                    f |= 0x04; // fAbove = bit2
+                    f |= 0x04; // fAbove = bit2 (MUST be 1 for *ABOVEAVERAGE)
                 }
-                let tmpl = if *above { 25 } else { 26 };
-                (14, tmpl, 0, f)
+                let tmpl = match (*above, *equal_average) {
+                    (true, false) => 0x19,  // CF_TEMPLATE_ABOVEAVERAGE
+                    (false, false) => 0x1A, // CF_TEMPLATE_BELOWAVERAGE
+                    (true, true) => 0x1D,   // CF_TEMPLATE_EQUALABOVEAVERAGE
+                    (false, true) => 0x1E,  // CF_TEMPLATE_EQUALBELOWAVERAGE
+                };
+                // iParam is the stddev count only for the non-EQUAL
+                // templates and MUST be 0..3 (2.4.23).
+                let param = if *equal_average {
+                    0
+                } else {
+                    std_dev.unwrap_or(0).min(3)
+                };
+                (2, tmpl, param, f)
             }
-            CfRuleType::BeginsWith { .. } => (15, 8, 0, 0),
-            CfRuleType::EndsWith { .. } => (16, 8, 0, 0),
-            CfRuleType::TimePeriod { period } => (17, 9, time_period_param(*period), 0),
+            CfRuleType::TimePeriod { period } => (
+                2,
+                time_period_template(*period),
+                time_period_date_oper(*period),
+                0,
+            ),
         };
 
         let dxf_id: u32 = match &rule.rule_type {
@@ -1651,18 +1679,35 @@ fn cf_op_code(op: &CfOperator) -> u32 {
     }
 }
 
-fn time_period_param(period: TimePeriod) -> u32 {
+/// CFTemp (MS-XLSB 2.5.16) TIMEPERIOD* template for a period.
+fn time_period_template(period: TimePeriod) -> u32 {
+    match period {
+        TimePeriod::Today => 0x0F,
+        TimePeriod::Tomorrow => 0x10,
+        TimePeriod::Yesterday => 0x11,
+        TimePeriod::Last7Days => 0x12,
+        TimePeriod::LastMonth => 0x13,
+        TimePeriod::NextMonth => 0x14,
+        TimePeriod::ThisWeek => 0x15,
+        TimePeriod::NextWeek => 0x16,
+        TimePeriod::LastWeek => 0x17,
+        TimePeriod::ThisMonth => 0x18,
+    }
+}
+
+/// CFDateOper (MS-XLSB 2.5.12) iParam value for a period.
+fn time_period_date_oper(period: TimePeriod) -> u32 {
     match period {
         TimePeriod::Today => 0,
         TimePeriod::Yesterday => 1,
-        TimePeriod::Tomorrow => 2,
-        TimePeriod::Last7Days => 3,
-        TimePeriod::ThisWeek => 4,
-        TimePeriod::LastWeek => 5,
-        TimePeriod::NextWeek => 6,
-        TimePeriod::ThisMonth => 7,
-        TimePeriod::LastMonth => 8,
-        TimePeriod::NextMonth => 9,
+        TimePeriod::Last7Days => 2,
+        TimePeriod::ThisWeek => 3,
+        TimePeriod::LastWeek => 4,
+        TimePeriod::LastMonth => 5,
+        TimePeriod::Tomorrow => 6,
+        TimePeriod::NextWeek => 7,
+        TimePeriod::NextMonth => 8,
+        TimePeriod::ThisMonth => 9,
     }
 }
 

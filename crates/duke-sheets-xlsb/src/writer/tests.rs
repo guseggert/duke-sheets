@@ -3183,4 +3183,146 @@ mod tests {
         }
         assert_eq!(legacy_rid.as_deref(), Some("rId2"));
     }
+
+    /// The chartEx content type must use Excel's lowercase spelling
+    /// (`application/vnd.ms-office.chartex+xml`), matching the XLSX
+    /// writer.
+    #[test]
+    fn chart_ex_content_type_is_lowercase() {
+        use std::io::Read;
+
+        let chart_ex = duke_sheets_chart::ChartEx {
+            version: None,
+            feature_list: None,
+            fallback_img: None,
+            title: None,
+            data: Vec::new(),
+            external_data: None,
+            plot_area: Default::default(),
+            legend: None,
+            shape_properties: None,
+            text_properties: None,
+            color_map_override: None,
+            format_overrides: Vec::new(),
+            print_settings: None,
+            raw_chart_style: None,
+            raw_chart_color_style: None,
+            extensions: None,
+            raw_extensions: Default::default(),
+            raw_mc_fallback: None,
+        };
+        let mut wb = Workbook::new();
+        wb.worksheet_mut(0)
+            .unwrap()
+            .add_chart_ex(chart_ex, duke_sheets_chart::DrawingAnchor::default());
+
+        let mut bytes = Vec::new();
+        XlsbWriter::write(&wb, Cursor::new(&mut bytes)).unwrap();
+        let mut zip = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let mut content_types = String::new();
+        zip.by_name("[Content_Types].xml")
+            .unwrap()
+            .read_to_string(&mut content_types)
+            .unwrap();
+        assert!(
+            content_types.contains("application/vnd.ms-office.chartex+xml"),
+            "lowercase chartex content type: {content_types}"
+        );
+        assert!(
+            !content_types.contains("chartEx+xml"),
+            "no camel-case chartEx content type: {content_types}"
+        );
+    }
+
+    /// Non-visual CF rules must encode as CF_TYPE_EXPRIS (2) with the
+    /// matching CFTemp template. MS-XLSB 2.5.18 CFType defines only
+    /// values 1..6; 2.4.23 BrtBeginCFRule pins the allowed
+    /// iType/iTemplate pairs and the iParam semantics (CFTextOper
+    /// 2.5.17 for CONTAINSTEXT, CFDateOper 2.5.12 for TIMEPERIOD*).
+    #[test]
+    fn cf_rule_records_use_spec_type_template_pairs() {
+        use duke_sheets_core::conditional_format::{
+            CfRuleType, ConditionalFormatRule, TimePeriod,
+        };
+        use std::io::Read;
+
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        let range = CellRange::parse("A1:A10").unwrap();
+        let rules = [
+            CfRuleType::Expression {
+                formula: "MOD(A1,2)=0".into(),
+            },
+            CfRuleType::ContainsText { text: "x".into() },
+            CfRuleType::BeginsWith { text: "x".into() },
+            CfRuleType::EndsWith { text: "x".into() },
+            CfRuleType::UniqueValues,
+            CfRuleType::DuplicateValues,
+            CfRuleType::ContainsBlanks,
+            CfRuleType::NotContainsBlanks,
+            CfRuleType::ContainsErrors,
+            CfRuleType::NotContainsErrors,
+            CfRuleType::TimePeriod {
+                period: TimePeriod::LastWeek,
+            },
+            CfRuleType::AboveAverage {
+                above: true,
+                equal_average: false,
+                std_dev: None,
+            },
+            CfRuleType::AboveAverage {
+                above: false,
+                equal_average: true,
+                std_dev: None,
+            },
+        ];
+        for (i, rule_type) in rules.into_iter().enumerate() {
+            ws.add_conditional_format(
+                ConditionalFormatRule::new(rule_type)
+                    .with_range(range.clone())
+                    .with_priority((i + 1) as u32),
+            );
+        }
+
+        let mut bytes = Vec::new();
+        XlsbWriter::write(&wb, Cursor::new(&mut bytes)).unwrap();
+        let mut zip = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let mut sheet = Vec::new();
+        zip.by_name("xl/worksheets/sheet1.bin")
+            .unwrap()
+            .read_to_end(&mut sheet)
+            .unwrap();
+
+        let mut iter = crate::biff12::RecordIter::new(Cursor::new(sheet));
+        let mut payload = Vec::new();
+        let mut triples = Vec::new();
+        while let Ok((typ, len)) = iter.next_record(&mut payload) {
+            if typ == crate::biff12::records::BRT_BEGIN_CF_RULE && len >= 20 {
+                triples.push((
+                    crate::biff12::parser::read_u32(&payload, 0),
+                    crate::biff12::parser::read_u32(&payload, 4),
+                    crate::biff12::parser::read_u32(&payload, 16),
+                ));
+            }
+        }
+        assert_eq!(
+            triples,
+            vec![
+                (2, 0x01, 0), // Expression: FMLA
+                (2, 0x08, 0), // ContainsText: CONTAINSTEXT + CF_TEXTOPER_CONTAINS
+                (2, 0x08, 2), // BeginsWith: CONTAINSTEXT + CF_TEXTOPER_BEGINSWITH
+                (2, 0x08, 3), // EndsWith: CONTAINSTEXT + CF_TEXTOPER_ENDSWITH
+                (2, 0x07, 0), // UniqueValues
+                (2, 0x1B, 0), // DuplicateValues
+                (2, 0x09, 0), // ContainsBlanks
+                (2, 0x0A, 0), // NotContainsBlanks
+                (2, 0x0B, 0), // ContainsErrors
+                (2, 0x0C, 0), // NotContainsErrors
+                (2, 0x17, 4), // TimePeriod LastWeek + CF_TIMEPERIOD_LASTWEEK
+                (2, 0x19, 0), // AboveAverage
+                (2, 0x1E, 0), // EqualBelowAverage
+            ],
+            "BrtBeginCFRule (iType, iTemplate, iParam) triples"
+        );
+    }
 }

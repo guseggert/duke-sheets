@@ -67,6 +67,15 @@ fn read_comments_bin<R: Read>(reader: R) -> XlsbResult<Vec<(u32, u16, CellCommen
             Ok(r) => r,
             Err(_) => break,
         };
+        // Latch on the first comment record: BrtACBegin/BrtACEnd
+        // future-record wrappers (and their wrapped version payloads)
+        // may precede BrtBeginComments and must not decide the
+        // dialect.
+        if dialect.is_none()
+            && matches!(typ, records::BRT_AC_BEGIN | records::BRT_AC_END)
+        {
+            continue;
+        }
         let dialect = *dialect.get_or_insert(if typ == records::BRT_BEGIN_COMMENTS {
             CommentDialect::Spec
         } else {
@@ -135,6 +144,56 @@ fn read_comments_bin<R: Read>(reader: R) -> XlsbResult<Vec<(u32, u16, CellCommen
     }
 
     Ok(comments)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::biff12::{encode_wide_str, RecordWriter};
+
+    /// A spec-id comments part prefixed by a BrtACBegin/BrtACEnd
+    /// future-record wrapper must still latch the Spec dialect: the
+    /// wrapper ids are not comment records and must not decide the
+    /// dialect.
+    #[test]
+    fn dialect_latch_skips_ac_wrapper_records() {
+        let mut part = Vec::new();
+        let mut rw = RecordWriter::new(&mut part);
+        // BrtACBegin wrapper around the whole part.
+        rw.write_record(records::BRT_AC_BEGIN, &[0x01, 0x00, 0x00, 0x00])
+            .unwrap();
+        rw.write_record(records::BRT_BEGIN_COMMENTS, &[]).unwrap();
+        rw.write_record(records::BRT_BEGIN_COMMENT_AUTHORS, &[])
+            .unwrap();
+        rw.write_record(records::BRT_COMMENT_AUTHOR, &encode_wide_str("probe"))
+            .unwrap();
+        rw.write_record(records::BRT_END_COMMENT_AUTHORS, &[])
+            .unwrap();
+        rw.write_record(records::BRT_BEGIN_COMMENT_LIST, &[]).unwrap();
+        let mut begin = Vec::new();
+        begin.extend_from_slice(&0u32.to_le_bytes()); // iauthor
+        begin.extend_from_slice(&5u32.to_le_bytes()); // rwFirst
+        begin.extend_from_slice(&5u32.to_le_bytes()); // rwLast
+        begin.extend_from_slice(&3u32.to_le_bytes()); // colFirst
+        begin.extend_from_slice(&3u32.to_le_bytes()); // colLast
+        begin.extend_from_slice(&[0u8; 16]); // guid
+        rw.write_record(records::BRT_BEGIN_COMMENT, &begin).unwrap();
+        let mut text = vec![0x00];
+        text.extend_from_slice(&encode_wide_str("a note"));
+        rw.write_record(records::BRT_COMMENT_TEXT, &text).unwrap();
+        rw.write_record(records::BRT_END_COMMENT, &[]).unwrap();
+        rw.write_record(records::BRT_END_COMMENT_LIST, &[]).unwrap();
+        rw.write_record(records::BRT_END_COMMENTS, &[]).unwrap();
+        rw.write_record(records::BRT_AC_END, &[]).unwrap();
+        drop(rw);
+
+        let comments = read_comments_bin(std::io::Cursor::new(part)).unwrap();
+        assert_eq!(comments.len(), 1, "spec dialect latched past the AC wrapper");
+        let (row, col, comment) = &comments[0];
+        assert_eq!((*row, *col), (5, 3));
+        assert_eq!(comment.author, "probe");
+        assert_eq!(comment.text, "a note");
+    }
 }
 
 fn parse_comment_text(data: &[u8]) -> String {

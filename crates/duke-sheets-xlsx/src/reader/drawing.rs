@@ -1,7 +1,7 @@
 use std::io::{Read, Seek};
 
 use super::archive_by_name;
-use crate::error::{XlsxError, XlsxResult};
+use crate::error::XlsxResult;
 
 pub(crate) use duke_sheets_chart::drawing_part::read::{
     DrawingChartRef, DrawingEntry, DrawingEntryKind, ParsedChild, ParsedGroup, ParsedShape,
@@ -10,7 +10,9 @@ pub(crate) use duke_sheets_chart::drawing_part::read::{
 
 /// Parse a SpreadsheetML drawing part into its top-level entries in
 /// document order (see [`duke_sheets_chart::drawing_part::read`]).
-/// A missing part yields an empty list.
+/// A missing part yields an empty list; a malformed part is skipped
+/// with a warning (matching the XLSB reader) so the workbook stays
+/// readable.
 pub(crate) fn read_drawing_entries<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     drawing_path: &str,
@@ -21,8 +23,13 @@ pub(crate) fn read_drawing_entries<R: Read + Seek>(
     };
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)?;
-    duke_sheets_chart::drawing_part::read::parse_drawing_part(&bytes)
-        .map_err(|e| XlsxError::InvalidFormat(format!("drawing part: {e}")))
+    match duke_sheets_chart::drawing_part::read::parse_drawing_part(&bytes) {
+        Ok(entries) => Ok(entries),
+        Err(e) => {
+            log::warn!("failed to parse drawing part {drawing_path}: {e}");
+            Ok(Vec::new())
+        }
+    }
 }
 
 /// Backward-compatible view returning only chart refs.
@@ -138,15 +145,20 @@ mod tests {
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].rel_id, "rId2");
         assert!(!refs[0].is_chart_ex);
-        if let DrawingAnchor::TwoCell { from, to, .. } = &refs[0].anchor {
+        if let DrawingAnchor::OneCell {
+            from,
+            width_emu,
+            height_emu,
+        } = &refs[0].anchor
+        {
             assert_eq!(from.col, 1);
             assert_eq!(from.col_offset_emu, 100);
             assert_eq!(from.row, 2);
             assert_eq!(from.row_offset_emu, 200);
-            assert_eq!(to.col, 0);
-            assert_eq!(to.row, 0);
+            assert_eq!(*width_emu, 5000000);
+            assert_eq!(*height_emu, 3000000);
         } else {
-            panic!("expected TwoCell anchor");
+            panic!("expected OneCell anchor, got {:?}", refs[0].anchor);
         }
     }
 
@@ -207,15 +219,16 @@ mod tests {
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].rel_id, "rId1");
         assert!(!refs[0].is_chart_ex);
-        // absoluteAnchor defaults all anchor values to zero
-        if let DrawingAnchor::TwoCell { from, to, .. } = &refs[0].anchor {
-            assert_eq!(from.col, 0);
-            assert_eq!(from.row, 0);
-            assert_eq!(to.col, 0);
-            assert_eq!(to.row, 0);
-        } else {
-            panic!("expected TwoCell anchor");
-        }
+        assert_eq!(
+            refs[0].anchor,
+            DrawingAnchor::Absolute {
+                x_emu: 0,
+                y_emu: 0,
+                width_emu: 9144000,
+                height_emu: 6858000,
+            },
+            "absoluteAnchor keeps its position and extent"
+        );
     }
 
     #[test]

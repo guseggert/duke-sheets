@@ -617,6 +617,132 @@ fn xlsb_group_nested_control_keeps_drawing_and_vml_rels_aligned() {
     assert_eq!(controls.len(), 1, "group-nested control survives");
 }
 
+/// A raw SmartArt anchor references its four parts through
+/// `dgm:relIds` attributes (r:dm/r:lo/r:qs/r:cs) rather than
+/// r:id/r:embed/r:link. Every attribute whose value matches a rel id
+/// in the drawing's .rels must be captured, with target parts, and
+/// survive a round trip resolvable.
+#[test]
+fn xlsb_smartart_rel_ids_attributes_are_captured_and_round_trip() {
+    use std::io::{Read, Write};
+
+    const RT_DIAGRAM: [(&str, &str, &str); 4] = [
+        (
+            "rId2",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramData",
+            "../diagrams/data1.xml",
+        ),
+        (
+            "rId3",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramLayout",
+            "../diagrams/layout1.xml",
+        ),
+        (
+            "rId4",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramQuickStyle",
+            "../diagrams/quickStyle1.xml",
+        ),
+        (
+            "rId5",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramColors",
+            "../diagrams/colors1.xml",
+        ),
+    ];
+    const PARTS: [(&str, &str); 4] = [
+        ("xl/diagrams/data1.xml", "<dataModelRoot/>"),
+        ("xl/diagrams/layout1.xml", "<layoutDefRoot/>"),
+        ("xl/diagrams/quickStyle1.xml", "<styleDefRoot/>"),
+        ("xl/diagrams/colors1.xml", "<colorsDefRoot/>"),
+    ];
+    let anchor = r#"<xdr:twoCellAnchor><xdr:from><xdr:col>3</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>3</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>9</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>12</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="7" name="Diagram 1"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/diagram"><dgm:relIds xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:dm="rId2" r:lo="rId3" r:qs="rId4" r:cs="rId5"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor>"#;
+
+    let mut workbook = Workbook::new();
+    workbook
+        .worksheet_mut(0)
+        .unwrap()
+        .add_drawing(png("Pic").with_anchor(two_cell(0, 0, 2, 2)));
+    let bytes = write_bytes(&workbook);
+
+    // Rebuild the package with the anchor spliced into drawing1.xml,
+    // the diagram rels appended, and the dummy parts added.
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+    let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i).unwrap();
+        let name = file.name().to_string();
+        let mut content = Vec::new();
+        file.read_to_end(&mut content).unwrap();
+        let options = zip::write::SimpleFileOptions::default();
+        out.start_file(name.clone(), options).unwrap();
+        if name == "xl/drawings/drawing1.xml" {
+            let text = String::from_utf8(content).unwrap();
+            let insert_at = text.find("</xdr:wsDr>").expect("wsDr end");
+            let mut patched = text.clone();
+            patched.insert_str(insert_at, anchor);
+            out.write_all(patched.as_bytes()).unwrap();
+        } else if name == "xl/drawings/_rels/drawing1.xml.rels" {
+            let text = String::from_utf8(content).unwrap();
+            let mut appended = String::new();
+            for (id, rel_type, target) in RT_DIAGRAM {
+                appended.push_str(&format!(
+                    r#"<Relationship Id="{id}" Type="{rel_type}" Target="{target}"/>"#
+                ));
+            }
+            let patched = text.replace(
+                "</Relationships>",
+                &format!("{appended}</Relationships>"),
+            );
+            out.write_all(patched.as_bytes()).unwrap();
+        } else {
+            out.write_all(&content).unwrap();
+        }
+    }
+    for (path, content) in PARTS {
+        let options = zip::write::SimpleFileOptions::default();
+        out.start_file(path, options).unwrap();
+        out.write_all(content.as_bytes()).unwrap();
+    }
+    let patched = out.finish().unwrap().into_inner();
+
+    let assert_diagram_rels = |workbook: &Workbook, phase: &str| {
+        let sheet = workbook.worksheet(0).unwrap();
+        let raw = sheet
+            .drawings()
+            .iter()
+            .find_map(|object| match &object.kind {
+                DrawingKind::Raw(raw) => Some(raw),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{phase}: raw diagram anchor"));
+        assert_eq!(raw.rels.len(), 4, "{phase}: all four diagram rels captured");
+        let bytes = std::str::from_utf8(&raw.bytes).unwrap();
+        for ((_, rel_type, _), (_, part_body)) in RT_DIAGRAM.iter().zip(PARTS.iter()) {
+            let rel = raw
+                .rels
+                .iter()
+                .find(|rel| rel.rel_type == *rel_type)
+                .unwrap_or_else(|| panic!("{phase}: rel {rel_type} captured"));
+            assert!(!rel.external, "{phase}: diagram rels are internal");
+            assert!(
+                bytes.contains(&format!("\"{}\"", rel.id)),
+                "{phase}: anchor bytes reference {} ({bytes})",
+                rel.id
+            );
+            assert_eq!(
+                rel.part.as_deref(),
+                Some(part_body.as_bytes()),
+                "{phase}: part bytes captured for {rel_type}"
+            );
+        }
+    };
+
+    let read = XlsbReader::read(Cursor::new(patched)).expect("read patched");
+    assert_diagram_rels(&read, "first read");
+
+    let again = round_trip(&read);
+    assert_diagram_rels(&again, "round trip");
+}
+
 /// An anonymous (empty-author) comment keeps its own author slot
 /// instead of being attributed to the first named author.
 #[test]

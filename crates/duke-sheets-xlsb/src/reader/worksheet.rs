@@ -1597,7 +1597,7 @@ fn parse_cf_rule_base(
         return None;
     }
     let i_type = parser::read_u32(data, 0);
-    let _i_template = parser::read_u32(data, 4);
+    let i_template = parser::read_u32(data, 4);
     let dxf_id_raw = parser::read_u32(data, 8);
     let priority = parser::read_u32(data, 12);
     let i_param = parser::read_u32(data, 16);
@@ -1656,14 +1656,19 @@ fn parse_cf_rule_base(
     match i_type {
         3 | 4 | 6 => Some(base),
         _ => {
+            // CFType (MS-XLSB 2.5.18) has only values 1..6; predicate
+            // rules are CF_TYPE_EXPRIS (2) discriminated by the CFTemp
+            // (2.5.16) iTemplate. Values 7..17 are the off-spec ids an
+            // older writer emitted; keep decoding them for those files.
             let rule_type = match i_type {
                 1 => CfRuleType::CellIs {
                     operator,
                     formula1: formula1.unwrap_or_default(),
                     formula2,
                 },
-                2 => CfRuleType::Expression {
-                    formula: formula1.unwrap_or_default(),
+                2 => match cf_rule_from_template(i_template, i_param, text, formula1) {
+                    Some(rule_type) => rule_type,
+                    None => return None,
                 },
                 5 => CfRuleType::Top10 {
                     rank: i_param,
@@ -1685,7 +1690,7 @@ fn parse_cf_rule_base(
                 15 => CfRuleType::BeginsWith { text },
                 16 => CfRuleType::EndsWith { text },
                 17 => CfRuleType::TimePeriod {
-                    period: time_period_from_param(i_param),
+                    period: legacy_time_period_from_param(i_param),
                 },
                 _ => {
                     log::warn!("unsupported CF rule type {i_type}");
@@ -1696,6 +1701,53 @@ fn parse_cf_rule_base(
             None
         }
     }
+}
+
+/// Decode a CF_TYPE_EXPRIS rule from its CFTemp (MS-XLSB 2.5.16)
+/// template. iParam is a CFTextOper (2.5.17) for CONTAINSTEXT and the
+/// stddev count for ABOVE/BELOWAVERAGE (2.4.23).
+fn cf_rule_from_template(
+    i_template: u32,
+    i_param: u32,
+    text: String,
+    formula1: Option<String>,
+) -> Option<CfRuleType> {
+    Some(match i_template {
+        0x01 => CfRuleType::Expression {
+            formula: formula1.unwrap_or_default(),
+        },
+        0x07 => CfRuleType::UniqueValues,
+        0x08 => match i_param {
+            0 => CfRuleType::ContainsText { text },
+            2 => CfRuleType::BeginsWith { text },
+            3 => CfRuleType::EndsWith { text },
+            other => {
+                // CF_TEXTOPER_NOTCONTAINS (1) has no model variant.
+                log::warn!("unsupported CF text operator {other}");
+                return None;
+            }
+        },
+        0x09 => CfRuleType::ContainsBlanks,
+        0x0A => CfRuleType::NotContainsBlanks,
+        0x0B => CfRuleType::ContainsErrors,
+        0x0C => CfRuleType::NotContainsErrors,
+        0x0F..=0x18 => CfRuleType::TimePeriod {
+            period: time_period_from_template(i_template),
+        },
+        0x1B => CfRuleType::DuplicateValues,
+        0x19 | 0x1A | 0x1D | 0x1E => CfRuleType::AboveAverage {
+            above: matches!(i_template, 0x19 | 0x1D),
+            equal_average: matches!(i_template, 0x1D | 0x1E),
+            std_dev: match i_template {
+                0x19 | 0x1A if i_param > 0 => Some(i_param),
+                _ => None,
+            },
+        },
+        other => {
+            log::warn!("unsupported CF rule template {other}");
+            return None;
+        }
+    })
 }
 
 /// Read an XLNullableWideString. Returns None for a NULL string
@@ -1761,7 +1813,25 @@ fn read_cf_parsed_formula(data: &[u8], pos: &mut usize) -> Option<String> {
     }
 }
 
-fn time_period_from_param(v: u32) -> TimePeriod {
+/// CFTemp (MS-XLSB 2.5.16) TIMEPERIOD* template to period.
+fn time_period_from_template(v: u32) -> TimePeriod {
+    match v {
+        0x0F => TimePeriod::Today,
+        0x10 => TimePeriod::Tomorrow,
+        0x11 => TimePeriod::Yesterday,
+        0x12 => TimePeriod::Last7Days,
+        0x13 => TimePeriod::LastMonth,
+        0x14 => TimePeriod::NextMonth,
+        0x15 => TimePeriod::ThisWeek,
+        0x16 => TimePeriod::NextWeek,
+        0x17 => TimePeriod::LastWeek,
+        0x18 => TimePeriod::ThisMonth,
+        _ => TimePeriod::Today,
+    }
+}
+
+/// iParam ordering used by the retired off-spec writer (iType 17).
+fn legacy_time_period_from_param(v: u32) -> TimePeriod {
     match v {
         0 => TimePeriod::Today,
         1 => TimePeriod::Yesterday,

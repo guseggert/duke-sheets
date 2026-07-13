@@ -394,9 +394,12 @@ fn build_group<R: Read + Seek>(
     }
 }
 
-/// Scan a raw anchor's bytes for relationship references (r:id,
-/// r:embed, r:link) and capture each referenced relationship with its
-/// original id/target plus the target part bytes when internal.
+/// Scan a raw anchor's bytes for relationship references and capture
+/// each referenced relationship with its original id/target plus the
+/// target part bytes when internal. References are found by value:
+/// any attribute whose value equals a rel id in the drawing's .rels
+/// counts (r:id/r:embed/r:link, SmartArt `dgm:relIds` r:dm/r:lo/r:qs/
+/// r:cs, VML `o:relid`, arbitrary prefixes).
 fn capture_raw_rels<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     bytes: &[u8],
@@ -409,12 +412,11 @@ fn capture_raw_rels<R: Read + Seek>(
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
                 for attr in e.attributes().flatten() {
-                    if matches!(attr.key.as_ref(), b"r:id" | b"r:embed" | b"r:link") {
-                        if let Ok(value) = attr.unescape_value() {
-                            let value = value.to_string();
-                            if !ids.contains(&value) {
-                                ids.push(value);
-                            }
+                    if let Ok(value) = attr.unescape_value() {
+                        if verbatim_rels.contains_key(value.as_ref())
+                            && !ids.iter().any(|id| id == value.as_ref())
+                        {
+                            ids.push(value.to_string());
                         }
                     }
                 }
@@ -740,6 +742,25 @@ impl XlsxReader {
                                 _ => raw_anchors.push(entry.bytes),
                             }
                         }
+                        // Capture the relationships the raw anchors
+                        // reference, minus the modeled chart's.
+                        let verbatim_rels =
+                            workbook::read_rels_verbatim(&mut archive, drawing_path)?;
+                        let chart_ids: std::collections::HashSet<&str> =
+                            chart_refs.iter().map(|c| c.rel_id.as_str()).collect();
+                        let mut captured_ids: std::collections::HashSet<String> =
+                            std::collections::HashSet::new();
+                        let mut raw_rels: Vec<duke_sheets_core::RawRel> = Vec::new();
+                        for anchor in &raw_anchors {
+                            for rel in capture_raw_rels(&mut archive, anchor, &verbatim_rels) {
+                                if chart_ids.contains(rel.id.as_str())
+                                    || !captured_ids.insert(rel.id.clone())
+                                {
+                                    continue;
+                                }
+                                raw_rels.push(rel);
+                            }
+                        }
                         let drawing_rels = read_sheet_rels(&mut archive, drawing_path)?;
                         for chart_ref in chart_refs {
                             if let Some(dr) = drawing_rels.get(&chart_ref.rel_id) {
@@ -756,6 +777,7 @@ impl XlsxReader {
                                             chart: c,
                                             visibility: sheet_entry.visibility,
                                             raw_drawing_objects: raw_anchors.clone(),
+                                            raw_drawing_rels: raw_rels.clone(),
                                         },
                                     );
                                     workbook
@@ -776,6 +798,7 @@ impl XlsxReader {
                         ),
                         visibility: sheet_entry.visibility,
                         raw_drawing_objects: Vec::new(),
+                        raw_drawing_rels: Vec::new(),
                     });
                     workbook
                         .sheet_order_mut()

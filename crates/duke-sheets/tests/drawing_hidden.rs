@@ -165,6 +165,50 @@ fn xls_hidden_image_and_control_round_trip() {
     assert_mixed_hidden_flags(read.worksheet(0).unwrap(), "xls");
 }
 
+/// Comment popup shown-state (meta.hidden == false) survives XLSX and
+/// XLSB round trips via the VML Note shape (`<x:Visible/>` + style
+/// visibility); the default-hidden comment stays hidden.
+// features: Drawing visibility / hidden flag
+#[test]
+fn comment_shown_state_round_trips() {
+    use duke_sheets::CellComment;
+
+    let mut workbook = Workbook::new();
+    let sheet = workbook.worksheet_mut(0).unwrap();
+    sheet.add_drawing(DrawingObject::comment(
+        0,
+        0,
+        CellComment::new("a", "hidden popup"),
+    ));
+    sheet.add_drawing(
+        DrawingObject::comment(5, 2, CellComment::new("a", "shown popup")).with_hidden(false),
+    );
+
+    for (format, read) in [
+        ("xlsx", round_trip_xlsx(&workbook)),
+        ("xlsb", round_trip_xlsb(&workbook)),
+    ] {
+        let sheet = read.worksheet(0).unwrap();
+        let comment_hidden = |row: u32, col: u16| {
+            sheet
+                .comments_drawn()
+                .find(|c| (c.row, c.col) == (row, col))
+                .unwrap_or_else(|| panic!("{format}: comment at ({row},{col})"))
+                .object
+                .meta
+                .hidden
+        };
+        assert!(
+            comment_hidden(0, 0),
+            "{format}: default comment stays hidden"
+        );
+        assert!(
+            !comment_hidden(5, 2),
+            "{format}: shown comment reads back shown"
+        );
+    }
+}
+
 /// A hidden image inside a group keeps its child meta.hidden through
 /// an XLSX round trip; the sibling stays visible.
 #[test]

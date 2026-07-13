@@ -18,7 +18,8 @@ use crate::{CellMarker, ChildTransform, DrawingAnchor, EditAs, GroupTransform};
 pub struct DrawingChartRef {
     /// The relationship id (e.g. "rId1") pointing to the chart part.
     pub rel_id: String,
-    /// The two-cell anchor positioning the chart in the worksheet.
+    /// The anchor positioning the chart in the worksheet (variant
+    /// preserved: TwoCell keeps editAs, OneCell/Absolute keep extents).
     pub anchor: DrawingAnchor,
     /// Whether this references a ChartEx part (`cx:chart`) rather than a standard chart.
     pub is_chart_ex: bool,
@@ -151,13 +152,46 @@ const URI_CHART_EX: &str = "http://schemas.microsoft.com/office/drawing/2014/cha
 /// Fallback) and inside an anchor (a Choice wrapping the chartEx
 /// graphicFrame or a control-twin shape of either flavor).
 pub fn parse_drawing_part(bytes: &[u8]) -> ChartParseResult<Vec<DrawingEntry>> {
-    parse_wsdr_fragment(bytes)
+    parse_wsdr_fragment(bytes, &[])
+}
+
+/// `xmlns` / `xmlns:*` declarations in scope from sliced-away wrapper
+/// elements (mc:AlternateContent, mc:Choice, mc:Fallback), as raw
+/// (attribute key, escaped value) pairs.
+type NsDecls = Vec<(Vec<u8>, Vec<u8>)>;
+
+fn collect_ns_decls(e: &BytesStart<'_>) -> NsDecls {
+    e.attributes()
+        .flatten()
+        .filter(|attr| {
+            attr.key.as_ref() == b"xmlns" || attr.key.as_ref().starts_with(b"xmlns:")
+        })
+        .map(|attr| (attr.key.as_ref().to_vec(), attr.value.into_owned()))
+        .collect()
+}
+
+/// Merge wrapper declarations, the inner element's shadowing the
+/// outer's.
+fn merge_ns_decls(outer: &[(Vec<u8>, Vec<u8>)], inner: NsDecls) -> NsDecls {
+    let mut merged = outer.to_vec();
+    for (key, value) in inner {
+        match merged.iter_mut().find(|(k, _)| *k == key) {
+            Some(slot) => slot.1 = value,
+            None => merged.push((key, value)),
+        }
+    }
+    merged
 }
 
 /// Parse a sequence of anchors / wsDr-level `mc:AlternateContent`
 /// elements. Used for the whole part and, recursively, for the inner
-/// content of an `mc:Choice`/`mc:Fallback`.
-fn parse_wsdr_fragment(bytes: &[u8]) -> ChartParseResult<Vec<DrawingEntry>> {
+/// content of an `mc:Choice`/`mc:Fallback`; `ambient` carries the
+/// xmlns declarations of the sliced-away wrappers so captured anchor
+/// bytes stay namespace-complete.
+fn parse_wsdr_fragment(
+    bytes: &[u8],
+    ambient: &[(Vec<u8>, Vec<u8>)],
+) -> ChartParseResult<Vec<DrawingEntry>> {
     let mut reader = new_reader(bytes);
     let mut buf = Vec::new();
     let mut entries = Vec::new();
@@ -166,7 +200,7 @@ fn parse_wsdr_fragment(bytes: &[u8]) -> ChartParseResult<Vec<DrawingEntry>> {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => match e.local_name().as_ref() {
                 b"twoCellAnchor" | b"oneCellAnchor" | b"absoluteAnchor" => {
-                    let captured = capture_element(&mut reader, e)?;
+                    let captured = capture_element(&mut reader, e, ambient)?;
                     entries.push(parse_anchor(&captured).unwrap_or_else(|| DrawingEntry {
                         bytes: captured,
                         anchor: DrawingAnchor::default(),
@@ -176,7 +210,8 @@ fn parse_wsdr_fragment(bytes: &[u8]) -> ChartParseResult<Vec<DrawingEntry>> {
                     }));
                 }
                 b"AlternateContent" => {
-                    entries.extend(parse_wsdr_alternate(&mut reader)?);
+                    let scope = merge_ns_decls(ambient, collect_ns_decls(e));
+                    entries.extend(parse_wsdr_alternate(&mut reader, &scope)?);
                 }
                 _ => {}
             },
@@ -194,24 +229,27 @@ fn parse_wsdr_fragment(bytes: &[u8]) -> ChartParseResult<Vec<DrawingEntry>> {
 /// used. Never both.
 fn parse_wsdr_alternate<R: std::io::BufRead>(
     reader: &mut Reader<R>,
+    ambient: &[(Vec<u8>, Vec<u8>)],
 ) -> ChartParseResult<Vec<DrawingEntry>> {
     let mut buf = Vec::new();
     let mut chosen: Option<Vec<DrawingEntry>> = None;
-    let mut fallback_bytes: Option<Vec<u8>> = None;
+    let mut fallback: Option<(Vec<u8>, NsDecls)> = None;
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => match e.local_name().as_ref() {
                 b"Choice" => {
+                    let scope = merge_ns_decls(ambient, collect_ns_decls(e));
                     let inner = capture_inner(reader)?;
                     if chosen.is_none() {
-                        let parsed = parse_wsdr_fragment(&inner)?;
+                        let parsed = parse_wsdr_fragment(&inner, &scope)?;
                         if !parsed.is_empty() {
                             chosen = Some(parsed);
                         }
                     }
                 }
                 b"Fallback" => {
-                    fallback_bytes = Some(capture_inner(reader)?);
+                    let scope = merge_ns_decls(ambient, collect_ns_decls(e));
+                    fallback = Some((capture_inner(reader)?, scope));
                 }
                 _ => skip_element(reader)?,
             },
@@ -225,8 +263,8 @@ fn parse_wsdr_alternate<R: std::io::BufRead>(
     if let Some(entries) = chosen {
         return Ok(entries);
     }
-    match fallback_bytes {
-        Some(bytes) => parse_wsdr_fragment(&bytes),
+    match fallback {
+        Some((bytes, scope)) => parse_wsdr_fragment(&bytes, &scope),
         None => Ok(Vec::new()),
     }
 }
@@ -238,13 +276,26 @@ fn new_reader(bytes: &[u8]) -> Reader<&[u8]> {
 }
 
 /// Capture a whole element (start tag already consumed and passed in)
-/// as serialized XML bytes, including the wrapper tags.
+/// as serialized XML bytes, including the wrapper tags. Ambient xmlns
+/// declarations from sliced-away wrappers are injected into the root
+/// start tag unless it already declares the same prefix.
 fn capture_element<R: std::io::BufRead>(
     reader: &mut Reader<R>,
     start: &BytesStart<'_>,
+    ambient: &[(Vec<u8>, Vec<u8>)],
 ) -> ChartParseResult<Vec<u8>> {
+    let mut root = start.to_owned();
+    for (key, value) in ambient {
+        let declared = start
+            .attributes()
+            .flatten()
+            .any(|attr| attr.key.as_ref() == key.as_slice());
+        if !declared {
+            root.push_attribute((key.as_slice(), value.as_slice()));
+        }
+    }
     let mut w = Writer::new(Cursor::new(Vec::new()));
-    w.write_event(Event::Start(start.to_owned()))
+    w.write_event(Event::Start(root))
         .map_err(std::io::Error::other)?;
     capture_until_end(reader, &mut w, 1)?;
     Ok(w.into_inner().into_inner())
@@ -512,13 +563,7 @@ fn parse_anchor(bytes: &[u8]) -> Option<DrawingEntry> {
             hidden,
         } => DrawingEntryKind::Chart(DrawingChartRef {
             rel_id,
-            // Chart anchors normalize to two-cell markers (legacy
-            // behavior kept for chartsheet/absolute variants).
-            anchor: DrawingAnchor::TwoCell {
-                from,
-                to,
-                edit_as: None,
-            },
+            anchor: anchor.clone(),
             is_chart_ex,
             raw_mc_fallback,
             name,
@@ -1084,7 +1129,7 @@ fn parse_sp<R: std::io::BufRead>(
     reader: &mut Reader<R>,
     start: &BytesStart<'_>,
 ) -> ChartParseResult<ParsedSp> {
-    let bytes = capture_element(reader, start)?;
+    let bytes = capture_element(reader, start, &[])?;
     parse_sp_xml(&bytes)
 }
 
@@ -1115,11 +1160,11 @@ fn parse_sp_xml(bytes: &[u8]) -> ChartParseResult<ParsedSp> {
         buf.clear();
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) if depth == 1 && e.local_name().as_ref() == b"spPr" => {
-                let fragment = capture_element(&mut reader, e)?;
+                let fragment = capture_element(&mut reader, e, &[])?;
                 parse_shape_properties(&fragment, &mut shape)?;
             }
             Ok(Event::Start(ref e)) if depth == 1 && e.local_name().as_ref() == b"txBody" => {
-                let fragment = capture_element(&mut reader, e)?;
+                let fragment = capture_element(&mut reader, e, &[])?;
                 let (text, raw) = parse_shape_text_body(&fragment)?;
                 shape.text = Some(text.clone());
                 shape.raw_text_body = raw;
@@ -1200,15 +1245,15 @@ fn parse_shape_properties(bytes: &[u8], shape: &mut ParsedShape) -> ChartParseRe
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => match e.local_name().as_ref() {
                 b"xfrm" => {
-                    let fragment = capture_element(&mut reader, e)?;
+                    let fragment = capture_element(&mut reader, e, &[])?;
                     shape.xfrm = parse_shape_xfrm(&fragment)?;
                 }
                 b"prstGeom" => {
                     shape.geometry = attr_string(e, b"prst").unwrap_or_else(|| "rect".into());
-                    raw.extend_from_slice(&capture_element(&mut reader, e)?);
+                    raw.extend_from_slice(&capture_element(&mut reader, e, &[])?);
                 }
                 b"solidFill" => {
-                    let fragment = capture_element(&mut reader, e)?;
+                    let fragment = capture_element(&mut reader, e, &[])?;
                     if let Some(color) = parse_drawing_color(&fragment) {
                         shape.fill = ShapeFill::Solid(color);
                     }
@@ -1219,11 +1264,11 @@ fn parse_shape_properties(bytes: &[u8], shape: &mut ParsedShape) -> ChartParseRe
                     skip_element(&mut reader)?;
                 }
                 b"ln" => {
-                    let fragment = capture_element(&mut reader, e)?;
+                    let fragment = capture_element(&mut reader, e, &[])?;
                     shape.line = parse_shape_line(&fragment)?;
                     raw.extend_from_slice(&fragment);
                 }
-                _ => raw.extend_from_slice(&capture_element(&mut reader, e)?),
+                _ => raw.extend_from_slice(&capture_element(&mut reader, e, &[])?),
             },
             Ok(Event::Empty(ref e)) => match e.local_name().as_ref() {
                 b"xfrm" => shape.xfrm = parse_xfrm_attrs(e),
@@ -1298,7 +1343,7 @@ fn parse_shape_line(bytes: &[u8]) -> ChartParseResult<ShapeLine> {
             Ok(Event::Start(ref e)) => match e.local_name().as_ref() {
                 b"ln" => line.width_emu = attr_i64(e, b"w"),
                 b"solidFill" => {
-                    let fragment = capture_element(&mut reader, e)?;
+                    let fragment = capture_element(&mut reader, e, &[])?;
                     line.color = parse_drawing_color(&fragment);
                 }
                 b"noFill" => {
@@ -1653,6 +1698,54 @@ mod tests {
         };
         assert_eq!(twin.shape_num, Some(1031));
         assert_eq!(twin.name.as_deref(), Some("Check Box 7"));
+    }
+
+    /// An anchor captured from inside a wsDr-level mc:Choice must
+    /// inherit the xmlns declarations carried by the
+    /// mc:AlternateContent / mc:Choice wrappers, or the captured raw
+    /// bytes reference undeclared prefixes and are not well formed
+    /// when re-spliced on write.
+    #[test]
+    fn wsdr_alternate_choice_ns_decls_are_injected_into_captured_anchor() {
+        let xml = r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d"><mc:Choice xmlns:cx9="http://schemas.microsoft.com/office/drawing/2016/9/9/chartex" Requires="am3d"><xdr:twoCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>3</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>3</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="3D Model 1"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/drawing/2017/model3d"><am3d:mdl3d><am3d:spPr/></am3d:mdl3d></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor></mc:Choice><mc:Fallback/></mc:AlternateContent></xdr:wsDr>"#;
+        let entries = parse_drawing_part(xml.as_bytes()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(matches!(entries[0].kind, DrawingEntryKind::Raw));
+        let bytes = std::str::from_utf8(&entries[0].bytes).unwrap();
+        assert!(
+            bytes.starts_with("<xdr:twoCellAnchor"),
+            "anchor root captured: {bytes}"
+        );
+        assert!(
+            bytes.contains(
+                r#"xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d""#
+            ),
+            "AlternateContent xmlns:am3d injected into the captured root: {bytes}"
+        );
+        assert!(
+            bytes.contains(
+                r#"xmlns:cx9="http://schemas.microsoft.com/office/drawing/2016/9/9/chartex""#
+            ),
+            "Choice xmlns:cx9 injected into the captured root: {bytes}"
+        );
+        // The anchor's payload is intact.
+        assert!(bytes.contains("<am3d:mdl3d>"), "{bytes}");
+    }
+
+    /// A root element that already declares a prefix must not have it
+    /// re-injected (the duplicate attribute would be malformed).
+    #[test]
+    fn wsdr_alternate_ns_injection_skips_already_declared_prefixes() {
+        let xml = r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:am3d="urn:outer"><mc:Choice Requires="am3d"><xdr:twoCellAnchor xmlns:am3d="urn:inner"><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>3</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>3</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:cxnSp macro=""><xdr:nvCxnSpPr><xdr:cNvPr id="5" name="c"/><xdr:cNvCxnSpPr/></xdr:nvCxnSpPr><xdr:spPr><am3d:x/></xdr:spPr></xdr:cxnSp><xdr:clientData/></xdr:twoCellAnchor></mc:Choice><mc:Fallback/></mc:AlternateContent></xdr:wsDr>"#;
+        let entries = parse_drawing_part(xml.as_bytes()).unwrap();
+        assert_eq!(entries.len(), 1);
+        let bytes = std::str::from_utf8(&entries[0].bytes).unwrap();
+        assert_eq!(
+            bytes.matches("xmlns:am3d").count(),
+            1,
+            "root's own declaration wins, no duplicate: {bytes}"
+        );
+        assert!(bytes.contains(r#"xmlns:am3d="urn:inner""#), "{bytes}");
     }
 
     /// compatSp twins inside a group parse as twin children.

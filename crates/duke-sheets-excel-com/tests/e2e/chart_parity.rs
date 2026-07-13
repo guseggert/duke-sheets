@@ -416,6 +416,7 @@ fn build_chart_parity_workbook() -> Workbook {
         chart: cs_chart,
         visibility: SheetVisibility::Visible,
         raw_drawing_objects: Vec::new(),
+        raw_drawing_rels: Vec::new(),
     })
     .unwrap();
 

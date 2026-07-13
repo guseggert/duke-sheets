@@ -227,34 +227,80 @@ pub(super) fn write_drawing_rels<W: Write + Seek>(
     Ok(())
 }
 
+/// A chartsheet's drawing emission plan: anchor fragments in order,
+/// the relationships captured for them, and a chart rel id allocated
+/// around every id the anchors keep.
+pub(super) struct ChartsheetDrawingPlan {
+    pub anchors: Vec<Vec<u8>>,
+    pub raw_rels: Vec<duke_sheets_core::RawRel>,
+    pub chart_rid: String,
+}
+
+pub(super) fn plan_chartsheet_drawing(
+    raw_drawing_objects: &[Vec<u8>],
+    raw_drawing_rels: &[duke_sheets_core::RawRel],
+) -> ChartsheetDrawingPlan {
+    let anchors: Vec<Vec<u8>> = raw_drawing_objects.to_vec();
+    let raw_rels: Vec<duke_sheets_core::RawRel> = raw_drawing_rels.to_vec();
+    let mut taken: std::collections::HashSet<usize> = raw_rels
+        .iter()
+        .filter_map(|rel| rel.id.strip_prefix("rId").and_then(|n| n.parse().ok()))
+        .collect();
+    for anchor in &anchors {
+        taken.extend(part_write::quoted_rel_id_nums(anchor));
+    }
+    let mut next = 1usize;
+    while taken.contains(&next) {
+        next += 1;
+    }
+    ChartsheetDrawingPlan {
+        anchors,
+        raw_rels,
+        chart_rid: format!("rId{next}"),
+    }
+}
+
 pub(super) fn write_chartsheet_drawing<W: Write + Seek>(
     zip: &mut zip::ZipWriter<W>,
-    _chart: &Chart,
-    raw_drawing_objects: &[Vec<u8>],
+    plan: &ChartsheetDrawingPlan,
+    has_chart: bool,
     drawing_num: usize,
 ) -> XlsxResult<()> {
     let path = format!("xl/drawings/drawing{}.xml", drawing_num);
-    let bytes = part_write::write_chartsheet_drawing_part(raw_drawing_objects)?;
+    let bytes = part_write::write_chartsheet_drawing_part(
+        has_chart.then_some(plan.chart_rid.as_str()),
+        &plan.anchors,
+    )?;
     zip.start_file(&path, zip::write::SimpleFileOptions::default())?;
     zip.write_all(&bytes)?;
     Ok(())
 }
 
-/// Chartsheet drawing rels: at most one chart.
+/// Chartsheet drawing rels: the chart (when present) plus every
+/// relationship preserved for raw anchors.
 pub(super) fn write_chartsheet_drawing_rels<W: Write + Seek>(
     zip: &mut zip::ZipWriter<W>,
     drawing_num: usize,
-    chart_num: Option<usize>,
+    chart: Option<(&str, usize)>,
+    raw_rels: &[duke_sheets_core::RawRel],
 ) -> XlsxResult<()> {
-    let rels: Vec<PlannedRel> = chart_num
-        .map(|cn| PlannedRel {
-            id: "rId1".to_string(),
+    let mut rels: Vec<PlannedRel> = Vec::new();
+    if let Some((rid, cn)) = chart {
+        rels.push(PlannedRel {
+            id: rid.to_string(),
             rel_type: RT_CHART.to_string(),
             target: format!("../charts/chart{}.xml", cn),
             external: false,
-        })
-        .into_iter()
-        .collect();
+        });
+    }
+    for rel in raw_rels {
+        rels.push(PlannedRel {
+            id: rel.id.clone(),
+            rel_type: rel.rel_type.clone(),
+            target: rel.target.clone(),
+            external: rel.external,
+        });
+    }
     write_drawing_rels(zip, drawing_num, &rels)
 }
 

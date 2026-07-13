@@ -4755,6 +4755,7 @@ fn test_roundtrip_chartsheet() {
         chart,
         visibility: SheetVisibility::Visible,
         raw_drawing_objects: Vec::new(),
+        raw_drawing_rels: Vec::new(),
     })
     .unwrap();
 
@@ -4785,6 +4786,7 @@ fn test_roundtrip_chartsheet_only() {
         chart,
         visibility: SheetVisibility::Visible,
         raw_drawing_objects: Vec::new(),
+        raw_drawing_rels: Vec::new(),
     })
     .unwrap();
 
@@ -4827,6 +4829,7 @@ fn test_roundtrip_chartsheet_with_worksheet_charts() {
         chart: cs_chart,
         visibility: SheetVisibility::Visible,
         raw_drawing_objects: Vec::new(),
+        raw_drawing_rels: Vec::new(),
     })
     .unwrap();
 
@@ -4866,6 +4869,7 @@ fn test_roundtrip_interleaved_tab_order() {
         },
         visibility: duke_sheets_core::SheetVisibility::Visible,
         raw_drawing_objects: Vec::new(),
+        raw_drawing_rels: Vec::new(),
     };
     wb.add_chartsheet(cs).unwrap();
     wb.add_worksheet_with_name("Sheet2").unwrap();
@@ -4911,6 +4915,7 @@ fn test_roundtrip_empty_sheet_order_uses_default() {
         },
         visibility: duke_sheets_core::SheetVisibility::Visible,
         raw_drawing_objects: Vec::new(),
+        raw_drawing_rels: Vec::new(),
     };
     wb.add_chartsheet(cs).unwrap();
 
@@ -4950,6 +4955,7 @@ fn test_add_worksheet_after_read_appears_in_sheet_order() {
         chart,
         visibility: SheetVisibility::Visible,
         raw_drawing_objects: Vec::new(),
+        raw_drawing_rels: Vec::new(),
     })
     .unwrap();
 
@@ -5578,6 +5584,7 @@ fn test_roundtrip_chartsheet_hidden() {
         chart,
         visibility: SheetVisibility::Hidden,
         raw_drawing_objects: Vec::new(),
+        raw_drawing_rels: Vec::new(),
     })
     .unwrap();
 
@@ -5612,6 +5619,7 @@ fn test_roundtrip_multiple_chartsheets() {
             chart,
             visibility: SheetVisibility::Visible,
             raw_drawing_objects: Vec::new(),
+        raw_drawing_rels: Vec::new(),
         })
         .unwrap();
     }

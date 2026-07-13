@@ -787,6 +787,26 @@ impl XlsxWriter {
                 }
             }
         }
+        // Chartsheet raw anchors' captured rels: internal targets
+        // contribute media parts too.
+        for cs in workbook.chartsheets() {
+            for rel in &cs.raw_drawing_rels {
+                if rel.external || rel.part.is_none() {
+                    continue;
+                }
+                let path = resolve_rel_target("xl/drawings", &rel.target);
+                if let Some(rest) = path.strip_prefix("xl/media/image") {
+                    if let Some((num, _ext)) = rest.split_once('.') {
+                        if let Ok(num) = num.parse::<usize>() {
+                            max_claimed_image_num = max_claimed_image_num.max(num);
+                        }
+                    }
+                }
+                if !raw_media_parts.iter().any(|(p, _)| p == &path) {
+                    raw_media_parts.push((path, 0));
+                }
+            }
+        }
 
         // Build chart/drawing numbering:
         // chart_numbering: (sheet_idx, chart_in_sheet_idx, global_chart_num)
@@ -1044,27 +1064,36 @@ impl XlsxWriter {
 
             Self::write_chartsheet_xml(&mut zip, i, cs_dn)?;
 
-            if let (Some(dn), Some(cn)) = (cs_dn, cs_cn) {
-                Self::write_chartsheet_rels(&mut zip, i, dn)?;
-                drawing::write_chartsheet_drawing(
-                    &mut zip,
-                    &cs.chart,
-                    &cs.raw_drawing_objects,
-                    dn,
-                )?;
-                drawing::write_chartsheet_drawing_rels(&mut zip, dn, Some(cn))?;
+            let Some(dn) = cs_dn else { continue };
+            let plan =
+                drawing::plan_chartsheet_drawing(&cs.raw_drawing_objects, &cs.raw_drawing_rels);
+            Self::write_chartsheet_rels(&mut zip, i, dn)?;
+            drawing::write_chartsheet_drawing(&mut zip, &plan, cs_cn.is_some(), dn)?;
+            drawing::write_chartsheet_drawing_rels(
+                &mut zip,
+                dn,
+                cs_cn.map(|cn| (plan.chart_rid.as_str(), cn)),
+                &plan.raw_rels,
+            )?;
+            // Captured internal parts land back at their original
+            // paths (deduplicated against worksheet raw parts).
+            for rel in &plan.raw_rels {
+                let Some(part) = rel.part.as_deref() else {
+                    continue;
+                };
+                if rel.external {
+                    continue;
+                }
+                let path = resolve_rel_target("xl/drawings", &rel.target);
+                if !written_media.insert(path.clone()) {
+                    continue;
+                }
+                zip.start_file(&path, zip::write::SimpleFileOptions::default())?;
+                zip.write_all(part)?;
+            }
+            if let Some(cn) = cs_cn {
                 chart::write_chart_part(&mut zip, &cs.chart, cn)?;
                 Self::write_chart_style_color_parts(&mut zip, &cs.chart, cn)?;
-            } else if let Some(dn) = cs_dn {
-                // Drawing-only (raw objects, no chart)
-                Self::write_chartsheet_rels(&mut zip, i, dn)?;
-                drawing::write_chartsheet_drawing(
-                    &mut zip,
-                    &cs.chart,
-                    &cs.raw_drawing_objects,
-                    dn,
-                )?;
-                drawing::write_chartsheet_drawing_rels(&mut zip, dn, None)?;
             }
         }
         zip.finish()?;

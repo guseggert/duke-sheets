@@ -445,9 +445,12 @@ fn build_group<R: Read + Seek>(
     }
 }
 
-/// Scan a raw anchor's bytes for relationship references (r:id,
-/// r:embed, r:link) and capture each referenced relationship with its
-/// original id/target plus the target part bytes when internal.
+/// Scan a raw anchor's bytes for relationship references and capture
+/// each referenced relationship with its original id/target plus the
+/// target part bytes when internal. References are found by value:
+/// any attribute whose value equals a rel id in the drawing's .rels
+/// counts (r:id/r:embed/r:link, SmartArt `dgm:relIds` r:dm/r:lo/r:qs/
+/// r:cs, VML `o:relid`, arbitrary prefixes).
 fn capture_raw_rels<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     drawing_path: &str,
@@ -461,12 +464,11 @@ fn capture_raw_rels<R: Read + Seek>(
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
                 for attr in e.attributes().flatten() {
-                    if matches!(attr.key.as_ref(), b"r:id" | b"r:embed" | b"r:link") {
-                        if let Ok(value) = attr.unescape_value() {
-                            let value = value.to_string();
-                            if !ids.contains(&value) {
-                                ids.push(value);
-                            }
+                    if let Ok(value) = attr.unescape_value() {
+                        if drawing_rels.contains_key(value.as_ref())
+                            && !ids.iter().any(|id| id == value.as_ref())
+                        {
+                            ids.push(value.to_string());
                         }
                     }
                 }
