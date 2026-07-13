@@ -32,6 +32,7 @@ fn radio(caption: &str, checked: bool, link: Option<&str>) -> DrawingObject {
     }))
 }
 
+// features: Form control: option (radio) button
 #[test]
 fn checking_radio_updates_group_and_linked_cell() {
     let mut workbook = Workbook::new();

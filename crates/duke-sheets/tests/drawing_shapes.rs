@@ -150,24 +150,28 @@ fn round_trip_xls(workbook: &Workbook) -> Workbook {
     XlsReader::read(Cursor::new(bytes)).expect("read xls")
 }
 
+// features: Shapes (rectangles, arrows, ...); Text boxes; Drawing name / alternative text / title
 #[test]
 fn xlsx_basic_shape_round_trips() {
     let (parsed, _) = round_trip_xlsx(&basic_workbook());
     assert_basic_shape(parsed.worksheet(0).unwrap(), "xlsx", true);
 }
 
+// features: Shapes (rectangles, arrows, ...); Text boxes; Drawing name / alternative text / title
 #[test]
 fn xlsb_basic_shape_round_trips() {
     let parsed = round_trip_xlsb(&basic_workbook());
     assert_basic_shape(parsed.worksheet(0).unwrap(), "xlsb", true);
 }
 
+// features: Shapes (rectangles, arrows, ...); Text boxes; Drawing name / alternative text / title
 #[test]
 fn xls_basic_shape_round_trips() {
     let parsed = round_trip_xls(&basic_workbook());
     assert_basic_shape(parsed.worksheet(0).unwrap(), "xls", false);
 }
 
+// features: Grouped drawing objects
 #[test]
 fn xlsx_grouped_shape_child_round_trips() {
     let child = GroupChild {

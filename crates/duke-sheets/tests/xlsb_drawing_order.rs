@@ -175,6 +175,7 @@ fn xlsb_conflicting_raw_rel_ids_are_remapped() {
 /// writer only replayed bundles captured at read time, so
 /// model-authored drawings vanished and the dangling BrtDrawing
 /// pointer made Excel refuse the file).
+// features: Image parsing (PNG/JPEG); Image positioning (two-cell anchor)
 #[test]
 fn xlsb_model_image_round_trips() {
     let mut workbook = Workbook::new();
@@ -191,6 +192,7 @@ fn xlsb_model_image_round_trips() {
     assert_eq!(image.object.anchor, two_cell(1, 1, 3, 3));
 }
 
+// features: Image positioning (one-cell anchor); Image positioning (absolute anchor); Image editAs (move/size with cells)
 #[test]
 fn xlsb_one_cell_and_absolute_image_anchors_round_trip() {
     let mut workbook = Workbook::new();
@@ -272,6 +274,7 @@ fn xlsb_chart_edits_persist() {
 
 /// Control z-position among native objects survives via the
 /// com14:compatSp placeholder twin.
+// features: Drawing z-order across kinds
 #[test]
 fn xlsb_control_z_order_between_images_round_trips() {
     let mut workbook = Workbook::new();
@@ -340,6 +343,7 @@ fn xlsb_comment_control_relative_order_round_trips() {
 
 /// Groups round-trip as a modeled tree through the shared drawing
 /// part XML.
+// features: Grouped drawing objects
 #[test]
 fn xlsb_group_of_images_round_trips() {
     let mut workbook = Workbook::new();
@@ -394,6 +398,7 @@ fn xlsb_group_of_images_round_trips() {
 }
 
 /// A customized comment popup anchor survives the round trip.
+// features: Comment positioning (anchor)
 #[test]
 fn xlsb_comment_anchor_round_trips() {
     let mut workbook = Workbook::new();
@@ -418,6 +423,7 @@ fn xlsb_comment_anchor_round_trips() {
 /// (BrtBeginComments = 0x0274 per MS-XLSB 2.4.33; the worked example
 /// in MS-XLSB 2.1.4 shows record type 637 = BrtCommentText). The
 /// legacy emit was 0x0278-based, which Excel refuses to open.
+// features: Plain-text comments with author
 #[test]
 fn xlsb_comments_part_uses_spec_record_ids() {
     let mut workbook = Workbook::new();

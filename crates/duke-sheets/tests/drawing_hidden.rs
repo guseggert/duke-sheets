@@ -144,18 +144,21 @@ fn assert_mixed_hidden_flags(sheet: &Worksheet, format: &str) {
     );
 }
 
+// features: Drawing visibility / hidden flag
 #[test]
 fn xlsx_hidden_image_and_control_round_trip() {
     let read = round_trip_xlsx(&build_mixed_workbook());
     assert_mixed_hidden_flags(read.worksheet(0).unwrap(), "xlsx");
 }
 
+// features: Drawing visibility / hidden flag
 #[test]
 fn xlsb_hidden_image_and_control_round_trip() {
     let read = round_trip_xlsb(&build_mixed_workbook());
     assert_mixed_hidden_flags(read.worksheet(0).unwrap(), "xlsb");
 }
 
+// features: Drawing visibility / hidden flag
 #[test]
 fn xls_hidden_image_and_control_round_trip() {
     let read = round_trip_xls(&build_mixed_workbook());

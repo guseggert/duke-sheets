@@ -107,6 +107,7 @@ fn assert_unknown_edit_box(workbook: &Workbook, expect_ctrl_props: bool) {
         .any(|xml| String::from_utf8_lossy(xml).contains("<x:FmlaLink>$A$1</x:FmlaLink>")));
 }
 
+// features: Unknown legacy Forms controls
 #[test]
 fn unknown_edit_box_round_trips_xlsx_and_xlsb() {
     let mut workbook = unknown_workbook();
@@ -165,6 +166,7 @@ fn assert_xls_unknown(workbook: &Workbook, original_raw: &[u8]) {
     assert_eq!(&raw_obj[10..], &original_raw[10..]);
 }
 
+// features: Unknown legacy Forms controls
 #[test]
 fn xls_unknown_edit_box_obj_body_survives_rewrite() {
     let raw_obj = raw_edit_box_obj();
@@ -244,6 +246,7 @@ fn patch_vml_object_type(bytes: Vec<u8>, replacement: &str) -> Vec<u8> {
     output.finish().expect("finish zip").into_inner()
 }
 
+// features: Unknown legacy Forms controls
 #[test]
 fn pict_vml_is_not_exposed_as_unknown_form_control() {
     let mut bytes = Cursor::new(Vec::new());
@@ -344,6 +347,7 @@ fn assert_metric_anchors(workbook: &Workbook, tolerance_emu: i64) {
     }
 }
 
+// features: Form-control positioning with custom cell metrics
 #[test]
 fn custom_dimensions_drive_all_format_control_anchor_flattening() {
     let workbook = metric_anchor_workbook();

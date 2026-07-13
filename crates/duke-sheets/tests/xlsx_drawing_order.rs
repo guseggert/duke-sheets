@@ -110,6 +110,7 @@ fn xlsx_image_double_round_trip_does_not_duplicate() {
 
 /// A form control's z-position among native drawing objects survives
 /// a round trip via its a14 placeholder twin in the drawing part.
+// features: Drawing z-order across kinds
 #[test]
 fn xlsx_control_z_order_between_images_round_trips() {
     let mut workbook = Workbook::new();
@@ -171,6 +172,7 @@ fn xlsx_comment_control_relative_order_round_trips() {
 
 /// A shape group containing two pictures round-trips as a Group with
 /// child transforms, instead of degrading to a raw blob.
+// features: Grouped drawing objects
 #[test]
 fn xlsx_group_of_images_round_trips() {
     let mut workbook = Workbook::new();
@@ -267,6 +269,7 @@ fn xlsx_image_locked_printable_round_trips() {
 
 /// A customized comment popup anchor survives a round trip instead of
 /// being re-synthesized from the cell position.
+// features: Plain-text comments with author; Comment positioning (anchor)
 #[test]
 fn xlsx_comment_anchor_round_trips() {
     let mut workbook = Workbook::new();

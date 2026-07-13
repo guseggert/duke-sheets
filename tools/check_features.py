@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
-"""Validate format-specific evidence in FEATURES.md."""
+"""Validate format-specific evidence in FEATURES.md.
+
+Relevance markers: a test may declare which FEATURES.md rows it
+evidences with a comment line above the function, e.g.
+
+    /// features: Text boxes; Drawing z-order across kinds
+
+Names are semicolon-separated and must match row feature names
+exactly. When a linked test carries markers, every row linking it
+must be named; unmarked tests are exempt (incremental adoption).
+Markers naming no existing row fail the check."""
 
 from __future__ import annotations
 
@@ -22,6 +32,7 @@ FN_RE = re.compile(
     r"(?:unsafe\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)"
 )
 MOD_RE = re.compile(r"^(\s*)(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{")
+MARKER_RE = re.compile(r"^\s*//[/!]?\s*features:\s*(.+?)\s*$")
 
 CANONICAL_PARITY = {
     "crates/duke-sheets-excel-com/tests/e2e/writing.rs": "XLSX",
@@ -76,6 +87,7 @@ class TestFunction:
     line: int
     modules: tuple[str, ...]
     body: str
+    features: tuple[str, ...] = ()
     formats: dict[str, set[str]] = field(default_factory=dict)
     parity_format: str | None = None
 
@@ -207,6 +219,7 @@ def inventory_tests() -> list[TestFunction]:
         crate = path.relative_to(crates).parts[0]
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
         pending_attributes: list[str] = []
+        pending_features: list[str] = []
         modules: list[tuple[str, int]] = []
         depth = 0
         for line_number, line in enumerate(lines, start=1):
@@ -214,6 +227,11 @@ def inventory_tests() -> list[TestFunction]:
             module_match = MOD_RE.match(line)
             if module_match:
                 modules.append((module_match.group(2), depth))
+            marker_match = MARKER_RE.match(line)
+            if marker_match:
+                pending_features.extend(
+                    name.strip() for name in marker_match.group(1).split(";") if name.strip()
+                )
             if stripped.startswith("#["):
                 pending_attributes.append(stripped)
             else:
@@ -227,10 +245,12 @@ def inventory_tests() -> list[TestFunction]:
                             line=line_number,
                             modules=tuple(module for module, _ in modules),
                             body=function_body(lines, line_number - 1),
+                            features=tuple(pending_features),
                         )
                     )
                 if stripped and not stripped.startswith("//"):
                     pending_attributes = []
+                    pending_features = []
             depth += line.count("{") - line.count("}")
             while modules and depth <= modules[-1][1]:
                 modules.pop()
@@ -424,6 +444,17 @@ def validate(rows: list[FeatureRow], tests: list[TestFunction]) -> tuple[list[st
         by_name[test.name].append(test)
     errors: list[str] = []
     totals: Counter[str] = Counter()
+    feature_names = {row.feature for row in rows}
+    for test in tests:
+        if not test.features:
+            continue
+        totals["marked tests"] += 1
+        for name in test.features:
+            if name not in feature_names:
+                errors.append(
+                    f"{test.path}:{test.line} [{test.name}]: feature marker "
+                    f"{name!r} names no FEATURES.md row"
+                )
     for row in rows:
         resolved: dict[str, list[TestFunction]] = {}
         for ref in row.refs:
@@ -445,6 +476,16 @@ def validate(rows: list[FeatureRow], tests: list[TestFunction]) -> tuple[list[st
                     f"line {row.line} [{row.feature}] Test: `{ref}` is ambiguous ({locations})"
                 )
         linked_tests = [test for matches in resolved.values() for test in matches]
+        for test in linked_tests:
+            if not test.features:
+                continue
+            totals["relevance-checked links"] += 1
+            if row.feature not in test.features:
+                errors.append(
+                    f"line {row.line} [{row.feature}] Test: linked test "
+                    f"`{test.name}` ({test.path}:{test.line}) declares feature "
+                    f"markers but not this row's feature"
+                )
         for fmt, cell in row.cells.items():
             statuses = parse_status(cell)
             if not statuses:
@@ -586,6 +627,10 @@ def print_totals(totals: Counter[str]) -> None:
     print(
         f"Checked {totals['rows']} format rows, {totals['claims']} supported directions, "
         f"{totals['refs']} links, and {totals['tests']} Rust tests."
+    )
+    print(
+        f"  relevance markers: {totals['marked tests']} marked tests, "
+        f"{totals['relevance-checked links']} links relevance-checked"
     )
     for fmt in FORMATS:
         print(
