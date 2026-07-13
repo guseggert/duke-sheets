@@ -1149,8 +1149,7 @@ impl Worksheet {
     /// ```
     pub fn set_comment(&mut self, address: &str, comment: CellComment) -> Result<()> {
         let addr = CellAddress::parse(address)?;
-        self.set_comment_at(addr.row, addr.col, comment);
-        Ok(())
+        self.set_comment_at(addr.row, addr.col, comment)
     }
 
     /// Set a comment on a cell by row and column indices.
@@ -1158,7 +1157,16 @@ impl Worksheet {
     /// Replacing an existing comment keeps its drawing-list position
     /// and popup anchor; a new comment is appended to the drawing
     /// list with Excel's default popup placement, hidden by default.
-    pub fn set_comment_at(&mut self, row: u32, col: u16, comment: CellComment) {
+    ///
+    /// Errors when the cell is off the grid, matching the bounds
+    /// validation applied by [`Self::try_add_drawing`].
+    pub fn set_comment_at(&mut self, row: u32, col: u16, comment: CellComment) -> Result<()> {
+        if row >= MAX_ROWS {
+            return Err(Error::RowOutOfBounds(row, MAX_ROWS - 1));
+        }
+        if col >= MAX_COLS {
+            return Err(Error::ColumnOutOfBounds(col, MAX_COLS - 1));
+        }
         for object in &mut self.drawings {
             if let DrawingKind::Comment {
                 row: r,
@@ -1168,11 +1176,12 @@ impl Worksheet {
             {
                 if (*r, *c) == (row, col) {
                     *existing = comment;
-                    return;
+                    return Ok(());
                 }
             }
         }
         self.drawings.push(DrawingObject::comment(row, col, comment));
+        Ok(())
     }
 
     /// Get a comment from a cell by address string
@@ -2685,11 +2694,13 @@ mod tests {
         assert_eq!(ws.comment_authors(), &["John"]);
 
         // Add another comment with same author
-        ws.set_comment_at(1, 1, CellComment::new("John", "Another note"));
+        ws.set_comment_at(1, 1, CellComment::new("John", "Another note"))
+            .unwrap();
         assert_eq!(ws.comment_authors().len(), 1); // Should not duplicate
 
         // Add comment with different author
-        ws.set_comment_at(2, 2, CellComment::new("Jane", "My note"));
+        ws.set_comment_at(2, 2, CellComment::new("Jane", "My note"))
+            .unwrap();
         assert_eq!(ws.comment_authors().len(), 2);
 
         // Remove a comment
@@ -2702,6 +2713,25 @@ mod tests {
         ws.clear_comments();
         assert_eq!(ws.comment_count(), 0);
         assert!(ws.comment_authors().is_empty());
+    }
+
+    #[test]
+    fn set_comment_at_rejects_out_of_bounds_cells() {
+        use crate::CellComment;
+
+        let mut ws = Worksheet::new("Test");
+        assert!(ws
+            .set_comment_at(MAX_ROWS, 0, CellComment::new("a", "row off grid"))
+            .is_err());
+        assert!(ws
+            .set_comment_at(0, MAX_COLS, CellComment::new("a", "col off grid"))
+            .is_err());
+        assert_eq!(ws.comment_count(), 0, "off-grid comments must be rejected");
+
+        // The last grid cell is still valid.
+        ws.set_comment_at(MAX_ROWS - 1, MAX_COLS - 1, CellComment::new("a", "edge"))
+            .unwrap();
+        assert_eq!(ws.comment_count(), 1);
     }
 
     #[test]

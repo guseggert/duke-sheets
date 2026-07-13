@@ -37,8 +37,11 @@ use crate::{
 
 /// Rich text and alignment shared by drawing shapes and form controls.
 ///
-/// Empty text is valid. Alignments are optional so a format's default
-/// can remain implicit.
+/// Empty text is valid and canonically represented as **zero runs**,
+/// never as a single run holding an empty string: readers produce no
+/// runs for absent captions and [`DrawingText::plain`] with an empty
+/// string produces no runs, so empty captions round-trip equal.
+/// Alignments are optional so a format's default can remain implicit.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct DrawingText {
     /// Text runs in display order.
@@ -50,7 +53,8 @@ pub struct DrawingText {
 }
 
 impl DrawingText {
-    /// Create text containing one unformatted run.
+    /// Create text containing one unformatted run, or no runs at all
+    /// when `text` is empty (the canonical empty-caption form).
     pub fn plain(text: impl Into<String>) -> Self {
         let text = text.into();
         // Empty text is no runs, matching what readers produce for
@@ -670,7 +674,7 @@ impl DrawingKind {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RawDrawing {
     /// Format-specific serialized bytes (one XLSX/XLSB anchor XML
-    /// element, or an XLSB drawing bundle during migration).
+    /// element).
     #[doc(hidden)]
     pub bytes: Vec<u8>,
     /// Relationships referenced by `bytes`, captured so rewrites do
@@ -878,6 +882,12 @@ fn validate_kind(kind: &DrawingKind) -> Result<()> {
                     // format nests them in shape groups.
                     return Err(Error::other("comments cannot be group children"));
                 }
+                if matches!(child.kind, DrawingKind::Raw(_)) {
+                    // Raw payloads are whole anchor elements; no format
+                    // can nest them inside a grpSp, and no reader
+                    // produces them there.
+                    return Err(Error::other("raw drawings cannot be group children"));
+                }
                 validate_kind(&child.kind)?;
             }
         }
@@ -1005,11 +1015,35 @@ pub(crate) fn map_child_rect(
     child: &ChildTransform,
 ) -> RectEmu {
     let (ox1, oy1, ox2, oy2) = outer;
-    let (ow, oh) = ((ox2 - ox1).max(0), (oy2 - oy1).max(0));
+    let (ow, oh) = (
+        ox2.saturating_sub(ox1).max(0),
+        oy2.saturating_sub(oy1).max(0),
+    );
     let ch_w = i128::from(transform.child_cx_emu).max(1);
     let ch_h = i128::from(transform.child_cy_emu).max(1);
-    let map_x = |x: i128| ox1 + (x - i128::from(transform.child_x_emu)) * ow / ch_w;
-    let map_y = |y: i128| oy1 + (y - i128::from(transform.child_y_emu)) * oh / ch_h;
+    // Hostile files can make delta * extent exceed i128; saturate
+    // instead of panicking, keeping the map monotonic.
+    let scale = |delta: i128, extent: i128, child_extent: i128| -> i128 {
+        match delta.checked_mul(extent) {
+            Some(product) => product / child_extent,
+            None if delta < 0 => i128::MIN,
+            None => i128::MAX,
+        }
+    };
+    let map_x = |x: i128| {
+        ox1.saturating_add(scale(
+            x.saturating_sub(i128::from(transform.child_x_emu)),
+            ow,
+            ch_w,
+        ))
+    };
+    let map_y = |y: i128| {
+        oy1.saturating_add(scale(
+            y.saturating_sub(i128::from(transform.child_y_emu)),
+            oh,
+            ch_h,
+        ))
+    };
     let x1 = i128::from(child.x_emu);
     let y1 = i128::from(child.y_emu);
     let x2 = x1 + i128::from(child.cx_emu).max(0);
@@ -1021,8 +1055,9 @@ pub(crate) fn map_child_rect(
 
     // Flip, then rotate, each corner about the outer frame center;
     // rot is in 60,000ths of a degree, clockwise in y-down coords.
-    let center_x = (ox1 + ox2) as f64 / 2.0;
-    let center_y = (oy1 + oy2) as f64 / 2.0;
+    // Sum in f64: extreme outer frames overflow an i128 addition.
+    let center_x = (ox1 as f64 + ox2 as f64) / 2.0;
+    let center_y = (oy1 as f64 + oy2 as f64) / 2.0;
     let radians = f64::from(transform.rotation) / 60_000.0 * std::f64::consts::PI / 180.0;
     let (sin, cos) = radians.sin_cos();
     let (sx1, sy1, sx2, sy2) = scaled;
@@ -1057,19 +1092,28 @@ pub(crate) fn map_child_rect(
 
 /// Excel's default comment popup placement for a cell: one column to
 /// the right, from just above the cell's row to three rows below.
+/// When the popup cannot fit to the right (cell within three columns
+/// of the grid edge), it goes to the left of the cell, as in Excel,
+/// instead of collapsing against the last column.
 pub fn default_comment_anchor(row: u32, col: u16) -> DrawingAnchor {
     const PX_EMU: i64 = 9_525;
-    let clamp_col = |c: u32| -> u16 { c.min(u32::from(MAX_COLS - 1)) as u16 };
+    let last_col = u32::from(MAX_COLS - 1);
+    let cell_col = u32::from(col).min(last_col);
+    let (from_col, to_col) = if cell_col + 3 <= last_col {
+        (cell_col + 1, cell_col + 3)
+    } else {
+        (cell_col.saturating_sub(3), cell_col.saturating_sub(1))
+    };
     let clamp_row = |r: u32| -> u32 { r.min(MAX_ROWS - 1) };
     DrawingAnchor::TwoCell {
         from: duke_sheets_chart::CellMarker {
-            col: clamp_col(u32::from(col) + 1),
+            col: from_col as u16,
             col_offset_emu: 15 * PX_EMU,
             row: row.saturating_sub(1),
             row_offset_emu: 10 * PX_EMU,
         },
         to: duke_sheets_chart::CellMarker {
-            col: clamp_col(u32::from(col) + 3),
+            col: to_col as u16,
             col_offset_emu: 15 * PX_EMU,
             row: clamp_row(row + 3),
             row_offset_emu: 4 * PX_EMU,
@@ -1112,6 +1156,29 @@ mod tests {
         }));
         assert!(!object.meta.hidden);
         assert!(object.meta.locked);
+    }
+
+    #[test]
+    fn default_comment_anchor_flips_left_at_the_right_grid_edge() {
+        let last_col = MAX_COLS - 1;
+        // Excel places the popup left of the cell when it cannot fit
+        // on the right; it must never collapse to zero width.
+        for col in [last_col, MAX_COLS - 2, MAX_COLS - 3] {
+            match default_comment_anchor(5, col) {
+                DrawingAnchor::TwoCell { from, to, .. } => {
+                    assert_eq!((from.col, to.col), (col - 3, col - 1), "col {col}");
+                    assert_eq!((from.row, to.row), (4, 8));
+                }
+                other => panic!("expected two-cell anchor, got {other:?}"),
+            }
+        }
+        // The last column where the popup still fits on the right.
+        match default_comment_anchor(5, MAX_COLS - 4) {
+            DrawingAnchor::TwoCell { from, to, .. } => {
+                assert_eq!((from.col, to.col), (MAX_COLS - 3, last_col));
+            }
+            other => panic!("expected two-cell anchor, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1159,6 +1226,23 @@ mod tests {
             children: vec![child],
         });
         assert!(object.validate().unwrap_err().to_string().contains("lines"));
+    }
+
+    #[test]
+    fn validate_rejects_raw_group_children() {
+        let object = DrawingObject::group(Group {
+            transform: GroupTransform::default(),
+            children: vec![GroupChild {
+                meta: DrawingMeta::default(),
+                transform: ChildTransform::default(),
+                kind: DrawingKind::Raw(RawDrawing::default()),
+            }],
+        });
+        assert!(object
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("raw drawings cannot be group children"));
     }
 
     #[test]
@@ -1219,6 +1303,70 @@ mod tests {
             map_child_rect(outer, &half, &child),
             (500, 500, 1000, 1000)
         );
+    }
+
+    #[test]
+    fn map_child_rect_flips_before_rotating() {
+        let outer: RectEmu = (0, 0, 1000, 1000);
+        let child = ChildTransform {
+            x_emu: 0,
+            y_emu: 0,
+            cx_emu: 50,
+            cy_emu: 50,
+            ..ChildTransform::default()
+        };
+        // The top-left child quadrant, flipped horizontally (lands
+        // top-right), then rotated 90 degrees clockwise about the
+        // frame center (lands bottom-right). Rotate-then-flip would
+        // land it top-left, (0, 0, 500, 500), so this pins DrawingML's
+        // flip-first order.
+        let transform = GroupTransform {
+            child_x_emu: 0,
+            child_y_emu: 0,
+            child_cx_emu: 100,
+            child_cy_emu: 100,
+            rotation: 5_400_000,
+            flip_h: true,
+            ..GroupTransform::default()
+        };
+        assert_eq!(
+            map_child_rect(outer, &transform, &child),
+            (500, 500, 1000, 1000)
+        );
+    }
+
+    #[test]
+    fn map_child_rect_survives_hostile_extents() {
+        // ow ~ 2^77 against a child delta ~ 2^64 overflows a naive
+        // i128 multiply; the mapping must saturate, not panic.
+        let outer: RectEmu = (0, 0, 1_i128 << 77, 1_i128 << 77);
+        let transform = GroupTransform {
+            child_x_emu: i64::MIN,
+            child_y_emu: i64::MIN,
+            child_cx_emu: 1,
+            child_cy_emu: 1,
+            ..GroupTransform::default()
+        };
+        let child = ChildTransform {
+            x_emu: i64::MAX,
+            y_emu: i64::MAX,
+            cx_emu: i64::MAX,
+            cy_emu: i64::MAX,
+            ..ChildTransform::default()
+        };
+        let (x1, y1, x2, y2) = map_child_rect(outer, &transform, &child);
+        assert!(x1 <= x2 && y1 <= y2);
+
+        // The rotation path must survive an extreme outer frame, as
+        // produced by saturated nested mappings.
+        let extreme: RectEmu = (i128::MIN, i128::MIN, i128::MAX, i128::MAX);
+        let rotated = GroupTransform {
+            rotation: 5_400_000,
+            flip_h: true,
+            ..transform
+        };
+        let (x1, y1, x2, y2) = map_child_rect(extreme, &rotated, &child);
+        assert!(x1 <= x2 && y1 <= y2);
     }
 
     #[test]
