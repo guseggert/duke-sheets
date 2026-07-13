@@ -33,6 +33,21 @@ FN_RE = re.compile(
 )
 MOD_RE = re.compile(r"^(\s*)(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{")
 MARKER_RE = re.compile(r"^\s*//[/!]?\s*features:\s*(.+?)\s*$")
+# Matches a fn declared on the same line as (after) an attribute,
+# e.g. `#[test] fn x() {` or a multi-line attribute closing `)] fn x()`.
+ATTR_FN_RE = re.compile(
+    r"\]\s*(?:pub(?:\([^)]*\))?\s+)?(?:const\s+)?(?:async\s+)?"
+    r"(?:unsafe\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)"
+)
+LINE_COMMENT_RE = re.compile(r"(?<!:)//.*")
+
+# Supported-status claims that lost their linked evidence when the
+# checker stopped crediting commented-out code, FileFormat::X-only
+# writes, and blanket whitelist grants. Real evidence is missing; add
+# a test (or fix the link), then delete the entry. Entries here are
+# reported as non-fatal warnings; anything not listed stays a hard
+# error, and stale entries (that no longer fire) are errors too.
+KNOWN_EVIDENCE_GAPS: set[tuple[str, str, str]] = set()
 
 CANONICAL_PARITY = {
     "crates/duke-sheets-excel-com/tests/e2e/writing.rs": "XLSX",
@@ -188,11 +203,27 @@ def parse_features(text: str) -> tuple[list[FeatureRow], list[str]]:
     return rows, structure_errors
 
 
+def strip_line_comments(text: str) -> str:
+    """Drop `//` line comments so commented-out code is not evidence.
+
+    Pragmatic approximation: strips from `//` to end of line unless the
+    slashes are directly preceded by ':' (protects `https://` URLs). It
+    does not parse string literals, so a `//` inside a string is also
+    stripped. `// features:` markers are collected from raw lines in
+    inventory_tests before bodies are built, so they are unaffected."""
+    return "".join(
+        LINE_COMMENT_RE.sub("", line) for line in text.splitlines(keepends=True)
+    )
+
+
 def function_body(lines: list[str], start: int) -> str:
+    # Comments are stripped up front so commented-out calls neither
+    # count as evidence downstream nor corrupt the brace counting.
     output: list[str] = []
     depth = 0
     started = False
     for line in lines[start:]:
+        line = strip_line_comments(line)
         output.append(line)
         depth += line.count("{") - line.count("}")
         started = started or "{" in line
@@ -206,7 +237,15 @@ def is_test_attribute(attributes: list[str]) -> bool:
     return bool(
         re.search(r"#\[(?:[A-Za-z0-9_]+::)?test(?:\([^]]*\))?\]", joined)
         or re.search(r"#\[(?:rstest|proptest)(?:\([^]]*\))?\]", joined)
+        # cfg_attr applying `test` conditionally: the predicate (which
+        # may itself be `test`, as in `cfg_attr(test, allow(...))`) sits
+        # before the first comma, so require a comma before the token.
+        or re.search(r"#\[cfg_attr\([^()]*,\s*(?:[A-Za-z0-9_]+::)?test\s*[,)]", joined)
     )
+
+
+def attribute_balance(text: str) -> int:
+    return text.count("[") + text.count("(") - text.count("]") - text.count(")")
 
 
 def inventory_tests() -> list[TestFunction]:
@@ -220,6 +259,7 @@ def inventory_tests() -> list[TestFunction]:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
         pending_attributes: list[str] = []
         pending_features: list[str] = []
+        attribute_open = 0  # unbalanced []/() depth of a multi-line attribute
         modules: list[tuple[str, int]] = []
         depth = 0
         for line_number, line in enumerate(lines, start=1):
@@ -232,25 +272,49 @@ def inventory_tests() -> list[TestFunction]:
                 pending_features.extend(
                     name.strip() for name in marker_match.group(1).split(";") if name.strip()
                 )
-            if stripped.startswith("#["):
+            fn_name: str | None = None
+            if attribute_open > 0:
+                # Continuation of a multi-line attribute. Comment lines
+                # are skipped so they cannot corrupt the balance.
+                if not stripped.startswith("//"):
+                    pending_attributes.append(stripped)
+                    attribute_open = max(0, attribute_open + attribute_balance(stripped))
+                    if attribute_open == 0:
+                        attribute_fn = ATTR_FN_RE.search(line)
+                        if attribute_fn:
+                            fn_name = attribute_fn.group(1)
+            elif stripped.startswith("#["):
                 pending_attributes.append(stripped)
+                attribute_fn = ATTR_FN_RE.search(line)
+                if attribute_fn:
+                    # `#[test] fn x()` on one line: any bracket imbalance
+                    # belongs to the body, not the attribute.
+                    fn_name = attribute_fn.group(1)
+                else:
+                    attribute_open = max(0, attribute_balance(stripped))
             else:
                 function_match = FN_RE.match(line)
-                if function_match and is_test_attribute(pending_attributes):
+                if function_match:
+                    fn_name = function_match.group(1)
+                elif stripped and not stripped.startswith("//"):
+                    pending_attributes = []
+                    pending_features = []
+            if fn_name is not None:
+                if is_test_attribute(pending_attributes):
                     tests.append(
                         TestFunction(
                             crate=crate,
                             path=relative,
-                            name=function_match.group(1),
+                            name=fn_name,
                             line=line_number,
                             modules=tuple(module for module, _ in modules),
                             body=function_body(lines, line_number - 1),
                             features=tuple(pending_features),
                         )
                     )
-                if stripped and not stripped.startswith("//"):
-                    pending_attributes = []
-                    pending_features = []
+                pending_attributes = []
+                pending_features = []
+                attribute_open = 0
             depth += line.count("{") - line.count("}")
             while modules and depth <= modules[-1][1]:
                 modules.pop()
@@ -277,19 +341,28 @@ def body_directions(test: TestFunction, fmt: str) -> set[str]:
     body = test.body
     prefix = {"XLSX": "Xlsx", "XLSB": "Xlsb", "XLS": "Xls"}[fmt]
     directions: set[str] = set()
-    if re.search(rf"{prefix}Writer|write_{fmt.lower()}|FileFormat::{prefix}", body):
+    # FileFormat::X is deliberately not write evidence: read-only tests
+    # assert wb.file_format() == FileFormat::X after a read. A body that
+    # actually saves/writes is credited by the patterns below.
+    if re.search(rf"{prefix}Writer|write_{fmt.lower()}", body) or re.search(
+        r"\.(?:save|save_with)\s*\(", body
+    ):
         directions.add("W")
     if re.search(rf"{prefix}Reader|read_{fmt.lower()}", body):
         directions.add("R")
-    if re.search(r"\.(?:save|save_with)\s*\(", body):
-        directions.add("W")
     if re.search(r"\bWorkbook::(?:open|open_with|from_bytes)\s*\(", body):
         directions.add("R")
     # Round-trip helper calls (round_trip, round_trip_xlsx, ...) are
     # body evidence; test names alone grant nothing.
     if re.search(rf"\bround_?trip(?:_{fmt.lower()})?\s*\(", body):
         directions.update(("R", "W"))
-    if re.search(r"\b(?:write_xlsb_bytes|sheet1_records|first_dval_header_and_formula1)\s*\(", body):
+    # Curated file-local writer-helper names (each wraps an in-process
+    # format writer at its definition site, e.g. write_bytes in
+    # xlsb_drawing_order.rs wraps XlsbWriter::write).
+    if re.search(
+        r"\b(?:write_bytes|write_xlsb_bytes|sheet1_records|first_dval_header_and_formula1)\s*\(",
+        body,
+    ):
         directions.add("W")
     return directions
 
@@ -390,8 +463,17 @@ def classify_test(test: TestFunction) -> None:
         "xlsb_drawing_order.rs": ("XLSB", {"R", "W"}),
     }
     if path.startswith("crates/duke-sheets/tests/") and Path(path).name in static_files:
-        fmt, directions = static_files[Path(path).name]
-        set_formats(test, {fmt}, directions)
+        # The file supplies a format tag, but direction grants require
+        # body evidence: the old blanket R+W counted tests that never
+        # read or wrote anything. The whitelisted direction set still
+        # caps its format (chart_corpus etc. stay reader-only).
+        fmt, allowed = static_files[Path(path).name]
+        for body_fmt in body_formats(test) | {fmt}:
+            directions = body_directions(test, body_fmt)
+            if body_fmt == fmt:
+                directions &= allowed
+            if directions:
+                set_formats(test, {body_fmt}, directions)
         return
 
     formats = body_formats(test)
@@ -438,11 +520,15 @@ def parity_impossible(notes: str) -> bool:
     return "parity impossible" in notes.lower()
 
 
-def validate(rows: list[FeatureRow], tests: list[TestFunction]) -> tuple[list[str], Counter[str]]:
+def validate(
+    rows: list[FeatureRow], tests: list[TestFunction]
+) -> tuple[list[str], list[str], Counter[str]]:
     by_name: dict[str, list[TestFunction]] = defaultdict(list)
     for test in tests:
         by_name[test.name].append(test)
     errors: list[str] = []
+    warnings: list[str] = []
+    fired_gaps: set[tuple[str, str, str]] = set()
     totals: Counter[str] = Counter()
     feature_names = {row.feature for row in rows}
     for test in tests:
@@ -508,10 +594,19 @@ def validate(rows: list[FeatureRow], tests: list[TestFunction]) -> tuple[list[st
                         if direction == "W"
                         else f"format-specific {fmt} reader"
                     )
-                    errors.append(
+                    message = (
                         f"line {row.line} [{row.feature}] {fmt} {direction}{status}: "
                         f"no linked {evidence} test"
                     )
+                    gap = (row.feature, fmt, direction)
+                    if gap in KNOWN_EVIDENCE_GAPS:
+                        fired_gaps.add(gap)
+                        warnings.append(
+                            f"{message} (known gap: add real evidence, then drop "
+                            "the KNOWN_EVIDENCE_GAPS entry)"
+                        )
+                    else:
+                        errors.append(message)
                 if status == "\u25cf" and (not row.notes or row.notes == "-"):
                     errors.append(
                         f"line {row.line} [{row.feature}] {fmt} {direction}\u25cf: "
@@ -530,10 +625,34 @@ def validate(rows: list[FeatureRow], tests: list[TestFunction]) -> tuple[list[st
                         f"no canonical Excel parity test from `{expected}`"
                     )
                 totals[f"{fmt}:parity"] += bool(parity)
+    for gap in sorted(KNOWN_EVIDENCE_GAPS - fired_gaps):
+        errors.append(
+            f"KNOWN_EVIDENCE_GAPS entry {gap!r} no longer fires; remove it"
+        )
     totals["rows"] = len(rows)
     totals["refs"] = sum(len(row.refs) for row in rows)
     totals["tests"] = len(tests)
-    return errors, totals
+    return errors, warnings, totals
+
+
+def duplicate_feature_notes(rows: list[FeatureRow]) -> list[str]:
+    """Non-fatal: relevance markers match feature names globally, so a
+    name shared by rows in different sections is ambiguous to humans
+    reading markers. List them so someone can rename."""
+    by_feature: dict[str, list[FeatureRow]] = defaultdict(list)
+    for row in rows:
+        by_feature[row.feature].append(row)
+    notes: list[str] = []
+    for feature in sorted(by_feature):
+        dupes = by_feature[feature]
+        if len({row.section for row in dupes}) < 2:
+            continue
+        where = ", ".join(f"'{row.section}' line {row.line}" for row in dupes)
+        notes.append(
+            f"note: feature name {feature!r} appears in multiple sections "
+            f"({where}); relevance markers match names globally - consider renaming"
+        )
+    return notes
 
 
 def status_counts(rows: list[FeatureRow]) -> dict[str, Counter[str]]:
@@ -646,9 +765,15 @@ def main() -> int:
         return 2
     rows, structure_errors = parse_features(FEATURES.read_text(encoding="utf-8"))
     tests = inventory_tests()
-    errors, totals = validate(rows, tests)
+    errors, warnings, totals = validate(rows, tests)
     errors = structure_errors + errors
     print_totals(totals)
+    for note in duplicate_feature_notes(rows):
+        print(f"  {note}")
+    if warnings:
+        print(f"WARN: {len(warnings)} known evidence gap(s), non-fatal:")
+        for warning in warnings:
+            print(f"  - {warning}")
     for line in change_summary(rows, git_head_features(), tests):
         print(line)
     if errors:
