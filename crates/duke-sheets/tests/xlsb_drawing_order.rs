@@ -430,7 +430,7 @@ fn xlsb_comments_part_uses_spec_record_ids() {
     workbook
         .worksheet_mut(0)
         .unwrap()
-        .set_comment_at(5, 5, CellComment::new("probe", "a comment"));
+        .set_comment_at(5, 5, CellComment::new("probe", "a comment")).unwrap();
     let bytes = write_bytes(&workbook);
 
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
@@ -749,8 +749,8 @@ fn xlsb_smartart_rel_ids_attributes_are_captured_and_round_trip() {
 fn xlsb_empty_author_comment_keeps_attribution() {
     let mut workbook = Workbook::new();
     let sheet = workbook.worksheet_mut(0).unwrap();
-    sheet.set_comment_at(0, 0, CellComment::new("Bob", "named"));
-    sheet.set_comment_at(1, 0, CellComment::new("", "anonymous"));
+    sheet.set_comment_at(0, 0, CellComment::new("Bob", "named")).unwrap();
+    sheet.set_comment_at(1, 0, CellComment::new("", "anonymous")).unwrap();
 
     let read = round_trip(&workbook);
     let sheet = read.worksheet(0).unwrap();

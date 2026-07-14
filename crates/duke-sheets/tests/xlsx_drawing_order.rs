@@ -984,8 +984,8 @@ fn xlsx_chart_one_cell_and_edit_as_anchors_round_trip() {
 fn xlsx_empty_author_comment_keeps_attribution() {
     let mut workbook = Workbook::new();
     let sheet = workbook.worksheet_mut(0).unwrap();
-    sheet.set_comment_at(0, 0, CellComment::new("Bob", "named"));
-    sheet.set_comment_at(1, 0, CellComment::new("", "anonymous"));
+    sheet.set_comment_at(0, 0, CellComment::new("Bob", "named")).unwrap();
+    sheet.set_comment_at(1, 0, CellComment::new("", "anonymous")).unwrap();
 
     let read = round_trip(&workbook);
     let sheet = read.worksheet(0).unwrap();
