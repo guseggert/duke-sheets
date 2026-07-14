@@ -333,7 +333,6 @@ pub(super) fn assemble(
             legacy_object_type: None,
             caption,
             raw_properties: pr.raw_properties.clone(),
-            raw_client_data: Vec::new(),
             raw_obj: None,
         },
     };
@@ -363,14 +362,9 @@ pub(super) fn assemble_with_vml(
     let caption = vml.map(|shape| shape.text.clone()).unwrap_or_default();
     let mut object = assemble(pending, pr, caption)?;
     if let Some(control) = object.kind.as_form_control_mut() {
-        if let FormControlKind::Unknown {
-            raw_client_data, ..
-        } = &mut control.kind
-        {
-            *raw_client_data = vml
-                .map(|shape| shape.raw_client_data.clone())
-                .unwrap_or_default();
-        }
+        control.raw_client_data = vml
+            .map(|shape| shape.raw_client_data.clone())
+            .unwrap_or_default();
         if control.macro_name.is_none() {
             control.macro_name = vml.and_then(|shape| shape.macro_name.clone());
         }

@@ -685,15 +685,20 @@ pub fn write_control_shape_with_metrics(
             xml.push_str(&format!("   <x:Inc>{increment}</x:Inc>\n"));
             xml.push_str("   <x:Page>10</x:Page>\n   <x:Dx>22</x:Dx>\n");
         }
-        K::Unknown {
-            raw_client_data, ..
-        } => {
-            for child in raw_client_data {
-                xml.push_str("   ");
-                xml.push_str(&String::from_utf8_lossy(child));
-                xml.push('\n');
-            }
+        K::Unknown { .. } => {}
+    }
+    let object_type = vml_object_type(kind);
+    for child in &control.raw_client_data {
+        // A raw child whose name collides with a modeled emission for
+        // this kind would double-represent it; the modeled value wins.
+        if raw_child_local_name(child)
+            .is_some_and(|name| is_modeled_client_data_child(object_type, &name))
+        {
+            continue;
         }
+        xml.push_str("   ");
+        xml.push_str(&String::from_utf8_lossy(child));
+        xml.push('\n');
     }
     xml.push_str("  </x:ClientData>\n");
     xml.push_str(" </v:shape>\n");
@@ -1235,7 +1240,6 @@ impl VmlControl {
                 legacy_object_type: None,
                 caption: caption(),
                 raw_properties: Vec::new(),
-                raw_client_data: self.raw_client_data.clone(),
                 raw_obj: None,
             },
         };
@@ -1246,6 +1250,7 @@ impl VmlControl {
             .unwrap_or_default();
         let mut control = FormControl::new(kind);
         control.macro_name = self.macro_name.clone();
+        control.raw_client_data = self.raw_client_data.clone();
         let mut object = DrawingObject::form_control(control).with_anchor(anchor);
         object.meta.locked = self.locked;
         object.meta.printable = self.print_object;
@@ -1652,8 +1657,98 @@ fn parse_raw_shapes(bytes: &[u8]) -> Vec<RawShape> {
     out
 }
 
-fn is_modeled_client_data_child(name: &[u8]) -> bool {
-    matches!(
+/// Validate every control's raw `ClientData` children on a sheet as
+/// balanced, well-formed XML element fragments. Writers call this
+/// before building the legacy VML part: one malformed fragment would
+/// corrupt the whole part and take every comment and control with it.
+pub fn validate_sheet_raw_client_data(
+    sheet: &duke_sheets_core::Worksheet,
+) -> Result<(), String> {
+    for control in &sheet_controls(sheet) {
+        for child in &control.payload.raw_client_data {
+            validate_raw_client_data_fragment(child)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_raw_client_data_fragment(fragment: &[u8]) -> Result<(), String> {
+    let display = || String::from_utf8_lossy(fragment).into_owned();
+    let mut reader = Reader::from_reader(fragment);
+    let mut buf = Vec::new();
+    let mut depth = 0usize;
+    let mut element_seen = false;
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(_)) => {
+                depth += 1;
+                element_seen = true;
+            }
+            Ok(Event::End(_)) => {
+                if depth == 0 {
+                    return Err(format!(
+                        "raw ClientData fragment has an unopened end tag: {}",
+                        display()
+                    ));
+                }
+                depth -= 1;
+            }
+            Ok(Event::Empty(_)) => element_seen = true,
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(error) => {
+                return Err(format!(
+                    "raw ClientData fragment is not well-formed XML ({error}): {}",
+                    display()
+                ));
+            }
+        }
+        buf.clear();
+    }
+    if depth != 0 {
+        return Err(format!(
+            "raw ClientData fragment has an unclosed element: {}",
+            display()
+        ));
+    }
+    if !element_seen {
+        return Err(format!(
+            "raw ClientData fragment must contain an element: {}",
+            display()
+        ));
+    }
+    Ok(())
+}
+
+/// Local element name of a raw `ClientData` child fragment: the tag
+/// name of its first element, prefix stripped.
+fn raw_child_local_name(fragment: &[u8]) -> Option<Vec<u8>> {
+    let start = fragment.iter().position(|&b| b == b'<')?;
+    let name: Vec<u8> = fragment[start + 1..]
+        .iter()
+        .take_while(|&&b| !b.is_ascii_whitespace() && b != b'>' && b != b'/')
+        .copied()
+        .collect();
+    if name.is_empty() {
+        return None;
+    }
+    let local = match name.iter().rposition(|&b| b == b':') {
+        Some(colon) => name[colon + 1..].to_vec(),
+        None => name,
+    };
+    (!local.is_empty()).then_some(local)
+}
+
+/// Whether a `ClientData` child is modeled for the given VML
+/// ObjectType: parsed into a model field for that kind, or emitted by
+/// the writer for that kind. Everything else is captured into
+/// `FormControl::raw_client_data` on read and replayed verbatim on
+/// write; the writer also drops raw children whose name is modeled so
+/// the part never carries a double representation.
+fn is_modeled_client_data_child(object_type: &str, name: &[u8]) -> bool {
+    // Wrapper-level children: parsed for every kind and re-emitted
+    // from the drawing object's meta/anchor/caption/macro.
+    if matches!(
         name,
         b"Anchor"
             | b"Locked"
@@ -1666,7 +1761,75 @@ fn is_modeled_client_data_child(name: &[u8]) -> bool {
             | b"Row"
             | b"Column"
             | b"Visible"
-    )
+            | b"UIObj"
+    ) {
+        return true;
+    }
+    match object_type {
+        "Button" | "Label" => matches!(name, b"AutoFill"),
+        "Checkbox" => matches!(
+            name,
+            b"AutoFill" | b"AutoLine" | b"Checked" | b"FmlaLink" | b"NoThreeD" | b"NoThreeD2"
+        ),
+        "Radio" => matches!(
+            name,
+            b"AutoFill"
+                | b"AutoLine"
+                | b"Checked"
+                | b"FmlaLink"
+                | b"NoThreeD"
+                | b"NoThreeD2"
+                | b"FirstButton"
+        ),
+        "GBox" => matches!(name, b"NoThreeD" | b"NoThreeD2"),
+        "List" => matches!(
+            name,
+            b"AutoFill"
+                | b"FmlaLink"
+                | b"Val"
+                | b"Min"
+                | b"Max"
+                | b"Inc"
+                | b"Page"
+                | b"Dx"
+                | b"FmlaRange"
+                | b"Sel"
+                | b"NoThreeD"
+                | b"NoThreeD2"
+                | b"SelType"
+                | b"LCT"
+                | b"MultiSel"
+        ),
+        "Drop" => matches!(
+            name,
+            b"AutoFill"
+                | b"FmlaLink"
+                | b"Val"
+                | b"Min"
+                | b"Max"
+                | b"Inc"
+                | b"Page"
+                | b"Dx"
+                | b"FmlaRange"
+                | b"Sel"
+                | b"NoThreeD"
+                | b"NoThreeD2"
+                | b"SelType"
+                | b"LCT"
+                | b"DropStyle"
+                | b"DropLines"
+        ),
+        "Scroll" => matches!(
+            name,
+            b"FmlaLink" | b"Val" | b"Min" | b"Max" | b"Inc" | b"Page" | b"Horiz" | b"Dx"
+        ),
+        "Spin" => matches!(
+            name,
+            b"FmlaLink" | b"Val" | b"Min" | b"Max" | b"Inc" | b"Page" | b"Dx"
+        ),
+        // Unknown kinds keep every kind-specific child raw.
+        _ => false,
+    }
 }
 
 /// Capture complete immediate `ClientData` children that the modeled
@@ -1681,6 +1844,7 @@ fn parse_raw_client_data(bytes: &[u8]) -> std::collections::HashMap<u32, Vec<Vec
     let mut buf = Vec::new();
     let mut shape_num = 0u32;
     let mut in_client_data = false;
+    let mut object_type = String::new();
     let mut capture: Option<(usize, u32)> = None;
 
     loop {
@@ -1724,17 +1888,25 @@ fn parse_raw_client_data(bytes: &[u8]) -> std::collections::HashMap<u32, Vec<Vec
             }
             Event::Start(e) if e.local_name().as_ref() == b"ClientData" => {
                 in_client_data = true;
+                object_type.clear();
+                for attr in e.attributes().flatten() {
+                    if attr.key.as_ref() == b"ObjectType" {
+                        object_type = String::from_utf8_lossy(&attr.value).into_owned();
+                    }
+                }
             }
             Event::End(e) if e.local_name().as_ref() == b"ClientData" => {
                 in_client_data = false;
             }
             Event::Start(e)
-                if in_client_data && !is_modeled_client_data_child(e.local_name().as_ref()) =>
+                if in_client_data
+                    && !is_modeled_client_data_child(&object_type, e.local_name().as_ref()) =>
             {
                 capture = Some((event_start, 1));
             }
             Event::Empty(e)
-                if in_client_data && !is_modeled_client_data_child(e.local_name().as_ref()) =>
+                if in_client_data
+                    && !is_modeled_client_data_child(&object_type, e.local_name().as_ref()) =>
             {
                 out.entry(shape_num)
                     .or_default()
@@ -2224,6 +2396,74 @@ mod tests {
         let parsed = parse_vml_controls(wrap(vml_body).as_bytes());
         assert_eq!(parsed.len(), 1);
         assert!(parsed[0].to_drawing_object().is_none());
+    }
+
+    #[test]
+    fn modeled_kinds_capture_unmodeled_client_data() {
+        // ECMA-376 Part 4 ClientData children we do not model
+        // (x:Disabled §14.4.2.19, x:Accel §14.4.2.1) must survive on
+        // modeled control kinds, while modeled elements stay out of
+        // the raw set (no double representation).
+        let body = r##" <v:shape id="_x0000_s1025" type="#_x0000_t201">
+  <x:ClientData ObjectType="Checkbox">
+   <x:MoveWithCells/>
+   <x:SizeWithCells/>
+   <x:Anchor>0, 0, 0, 0, 1, 0, 1, 0</x:Anchor>
+   <x:AutoFill>False</x:AutoFill>
+   <x:AutoLine>False</x:AutoLine>
+   <x:Checked>1</x:Checked>
+   <x:FmlaLink>$A$1</x:FmlaLink>
+   <x:Disabled/>
+   <x:Accel>65</x:Accel>
+   <x:NoThreeD/>
+  </x:ClientData>
+ </v:shape>
+"##;
+        let parsed = parse_vml_controls(wrap(body).as_bytes());
+        assert_eq!(parsed.len(), 1);
+        let object = parsed[0].to_drawing_object().expect("control");
+        let control = object.kind.as_form_control().expect("form control");
+        assert!(matches!(
+            control.kind,
+            FormControlKind::Checkbox { .. }
+        ));
+        let raws: Vec<String> = control
+            .raw_client_data
+            .iter()
+            .map(|raw| String::from_utf8_lossy(raw).into_owned())
+            .collect();
+        assert_eq!(
+            raws,
+            vec!["<x:Disabled/>".to_string(), "<x:Accel>65</x:Accel>".to_string()],
+            "exactly the unmodeled children, in document order"
+        );
+    }
+
+    #[test]
+    fn raw_client_data_write_skips_children_colliding_with_modeled_emit() {
+        let mut object = checkbox(Some("$B$2"));
+        {
+            let control = match &mut object.kind {
+                DrawingKind::FormControl(control) => control,
+                other => panic!("expected form control, got {other:?}"),
+            };
+            control.raw_client_data = vec![
+                b"<x:Disabled/>".to_vec(),
+                b"<x:Accel>65</x:Accel>".to_vec(),
+                // Collides with the checkbox's modeled emission; must
+                // be dropped so the part carries a single x:Checked.
+                b"<x:Checked>0</x:Checked>".to_vec(),
+            ];
+        }
+        let xml = shape_xml(&object, 1025, 1, true);
+        assert_eq!(xml.matches("<x:Disabled/>").count(), 1);
+        assert_eq!(xml.matches("<x:Accel>65</x:Accel>").count(), 1);
+        assert_eq!(
+            xml.matches("<x:Checked>").count(),
+            1,
+            "raw duplicate of a modeled element must be dropped: {xml}"
+        );
+        assert!(xml.contains("<x:Checked>1</x:Checked>"));
     }
 
     #[test]

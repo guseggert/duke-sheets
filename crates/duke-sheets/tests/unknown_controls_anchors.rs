@@ -16,18 +16,18 @@ fn unknown_edit_box() -> FormControlKind {
             ("val".to_string(), "17".to_string()),
             ("fmlaLink".to_string(), "$A$1".to_string()),
         ],
-        raw_client_data: vec![
-            b"<x:CustomState mode=\"alpha\"/>".to_vec(),
-            b"<x:Val>17</x:Val>".to_vec(),
-            b"<x:FmlaLink>$A$1</x:FmlaLink>".to_vec(),
-        ],
         raw_obj: None,
     }
 }
 
 fn unknown_workbook() -> Workbook {
     let mut workbook = Workbook::new();
-    let control = FormControl::new(unknown_edit_box()).with_macro_name("RunUnknown");
+    let mut control = FormControl::new(unknown_edit_box()).with_macro_name("RunUnknown");
+    control.raw_client_data = vec![
+        b"<x:CustomState mode=\"alpha\"/>".to_vec(),
+        b"<x:Val>17</x:Val>".to_vec(),
+        b"<x:FmlaLink>$A$1</x:FmlaLink>".to_vec(),
+    ];
     let mut object = DrawingObject::form_control(control).with_anchor(DrawingAnchor::TwoCell {
         from: CellMarker {
             col: 1,
@@ -76,11 +76,11 @@ fn assert_unknown_edit_box(workbook: &Workbook, expect_ctrl_props: bool) {
             edit_as: None,
         }
     );
+    let raw_client_data = &drawn.payload.raw_client_data;
     let FormControlKind::Unknown {
         object_type,
         legacy_object_type,
         raw_properties,
-        raw_client_data,
         raw_obj,
         ..
     } = &drawn.payload.kind
@@ -175,7 +175,6 @@ fn xls_unknown_edit_box_obj_body_survives_rewrite() {
         legacy_object_type: Some(0x000D),
         caption: "Raw edit box".into(),
         raw_properties: Vec::new(),
-        raw_client_data: Vec::new(),
         raw_obj: Some(raw_obj.clone()),
     });
     let mut object = DrawingObject::form_control(control).with_anchor(DrawingAnchor::TwoCell {
@@ -267,7 +266,6 @@ fn xls_unknown_control_embedded_macro_is_replaced_not_replayed() {
         legacy_object_type: Some(0x000D),
         caption: "Macro edit box".into(),
         raw_properties: Vec::new(),
-        raw_client_data: Vec::new(),
         raw_obj: Some(raw_edit_box_obj_with_macro()),
     })
     .with_macro_name("RunEdit");
@@ -452,6 +450,185 @@ fn excel_uiobj_aux_shape_is_not_a_control_xlsb() {
     assert_aux_ui_shape_skipped(&reopened);
 }
 
+/// Insert extra children into the ClientData of the shape whose
+/// `ObjectType` matches, right before its `</x:ClientData>`.
+fn splice_into_client_data(bytes: Vec<u8>, object_type: &str, insert: &str) -> Vec<u8> {
+    let mut input = zip::ZipArchive::new(Cursor::new(bytes)).expect("open zip");
+    let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let mut spliced = false;
+    for index in 0..input.len() {
+        let mut file = input.by_index(index).expect("zip entry");
+        let name = file.name().to_string();
+        let is_dir = file.is_dir();
+        let mut data = Vec::new();
+        file.read_to_end(&mut data).expect("read zip entry");
+        drop(file);
+
+        if is_dir {
+            output
+                .add_directory(name, zip::write::SimpleFileOptions::default())
+                .expect("copy directory");
+            continue;
+        }
+        if name.contains("vmlDrawing") {
+            let xml = String::from_utf8(data).expect("VML is UTF-8");
+            let marker = format!("ObjectType=\"{object_type}\"");
+            let type_at = xml.find(&marker).expect("shape with the object type");
+            let close_at = xml[type_at..]
+                .find("</x:ClientData>")
+                .map(|offset| type_at + offset)
+                .expect("ClientData close");
+            let mut patched = String::with_capacity(xml.len() + insert.len());
+            patched.push_str(&xml[..close_at]);
+            patched.push_str(insert);
+            patched.push_str(&xml[close_at..]);
+            data = patched.into_bytes();
+            spliced = true;
+        }
+        output
+            .start_file(name, zip::write::SimpleFileOptions::default())
+            .expect("copy file");
+        output.write_all(&data).expect("write zip entry");
+    }
+    assert!(spliced, "no vmlDrawing part found to splice into");
+    output.finish().expect("finish zip").into_inner()
+}
+
+/// Read the concatenated vmlDrawing parts of an OOXML zip.
+fn vml_parts(bytes: &[u8]) -> String {
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes.to_vec())).expect("open zip");
+    let mut out = String::new();
+    for index in 0..archive.len() {
+        let mut file = archive.by_index(index).expect("zip entry");
+        if file.name().contains("vmlDrawing") {
+            let mut s = String::new();
+            file.read_to_string(&mut s).expect("read vml");
+            out.push_str(&s);
+        }
+    }
+    out
+}
+
+fn control_raws(workbook: &Workbook) -> Vec<String> {
+    workbook
+        .worksheet(0)
+        .unwrap()
+        .form_controls()
+        .next()
+        .expect("control present")
+        .payload
+        .raw_client_data
+        .iter()
+        .map(|raw| String::from_utf8_lossy(raw).into_owned())
+        .collect()
+}
+
+// features: Form control unmodeled ClientData passthrough
+#[test]
+fn unmodeled_client_data_round_trips_on_checkbox_xlsx() {
+    let mut workbook = Workbook::new();
+    workbook.worksheet_mut(0).unwrap().add_form_control(
+        FormControl::new(FormControlKind::Checkbox {
+            caption: "Audit".into(),
+            state: CheckState::Checked,
+            cell_link: None,
+            no_3d: true,
+        }),
+        DrawingAnchor::default(),
+    );
+    let mut bytes = Cursor::new(Vec::new());
+    XlsxWriter::write(&workbook, &mut bytes).expect("write xlsx");
+    let spliced = splice_into_client_data(
+        bytes.into_inner(),
+        "Checkbox",
+        "   <x:Disabled/>\n   <x:Accel>65</x:Accel>\n  ",
+    );
+
+    let reopened = XlsxReader::read(Cursor::new(spliced)).expect("read spliced xlsx");
+    assert_eq!(
+        control_raws(&reopened),
+        vec!["<x:Disabled/>".to_string(), "<x:Accel>65</x:Accel>".to_string()],
+        "unmodeled ClientData children captured on a modeled kind"
+    );
+
+    let mut rewritten = Cursor::new(Vec::new());
+    XlsxWriter::write(&reopened, &mut rewritten).expect("rewrite xlsx");
+    let rewritten = rewritten.into_inner();
+    let vml = vml_parts(&rewritten);
+    assert_eq!(vml.matches("<x:Disabled/>").count(), 1);
+    assert_eq!(vml.matches("<x:Accel>65</x:Accel>").count(), 1);
+    assert_eq!(vml.matches("<x:Checked>").count(), 1, "no double representation");
+
+    let reread = XlsxReader::read(Cursor::new(rewritten)).expect("reread xlsx");
+    assert_eq!(control_raws(&reread), control_raws(&reopened));
+}
+
+// features: Form control unmodeled ClientData passthrough
+#[test]
+fn unmodeled_client_data_round_trips_on_button_xlsb() {
+    let mut workbook = Workbook::new();
+    workbook.worksheet_mut(0).unwrap().add_form_control(
+        FormControl::new(FormControlKind::Button {
+            caption: "OK".into(),
+        }),
+        DrawingAnchor::default(),
+    );
+    let mut bytes = Cursor::new(Vec::new());
+    XlsbWriter::write(&workbook, &mut bytes).expect("write xlsb");
+    let spliced = splice_into_client_data(
+        bytes.into_inner(),
+        "Button",
+        "   <x:Default/>\n   <x:Cancel/>\n  ",
+    );
+
+    let reopened = XlsbReader::read(Cursor::new(spliced)).expect("read spliced xlsb");
+    assert_eq!(
+        control_raws(&reopened),
+        vec!["<x:Default/>".to_string(), "<x:Cancel/>".to_string()],
+        "dialog button semantics captured on a modeled kind"
+    );
+
+    let mut rewritten = Cursor::new(Vec::new());
+    XlsbWriter::write(&reopened, &mut rewritten).expect("rewrite xlsb");
+    let rewritten = rewritten.into_inner();
+    let vml = vml_parts(&rewritten);
+    assert_eq!(vml.matches("<x:Default/>").count(), 1);
+    assert_eq!(vml.matches("<x:Cancel/>").count(), 1);
+
+    let reread = XlsbReader::read(Cursor::new(rewritten)).expect("reread xlsb");
+    assert_eq!(control_raws(&reread), control_raws(&reopened));
+}
+
+// features: Form control unmodeled ClientData passthrough
+#[test]
+fn malformed_raw_client_data_is_rejected_at_write() {
+    let mut workbook = Workbook::new();
+    let mut control = FormControl::new(FormControlKind::Checkbox {
+        caption: "Audit".into(),
+        state: CheckState::Unchecked,
+        cell_link: None,
+        no_3d: false,
+    });
+    control.raw_client_data = vec![b"<x:Oops>".to_vec()];
+    workbook
+        .worksheet_mut(0)
+        .unwrap()
+        .add_form_control(control, DrawingAnchor::default());
+
+    let xlsx_err = XlsxWriter::write(&workbook, &mut Cursor::new(Vec::new()))
+        .expect_err("unbalanced raw ClientData must not produce a corrupt XLSX part");
+    assert!(
+        xlsx_err.to_string().contains("ClientData"),
+        "error names the raw ClientData fragment: {xlsx_err}"
+    );
+    let xlsb_err = XlsbWriter::write(&workbook, &mut Cursor::new(Vec::new()))
+        .expect_err("unbalanced raw ClientData must not produce a corrupt XLSB part");
+    assert!(
+        xlsb_err.to_string().contains("ClientData"),
+        "error names the raw ClientData fragment: {xlsb_err}"
+    );
+}
+
 fn patch_vml_object_type(bytes: Vec<u8>, replacement: &str) -> Vec<u8> {
     let mut input = zip::ZipArchive::new(Cursor::new(bytes)).expect("open zip");
     let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
@@ -497,7 +674,6 @@ fn pict_vml_is_not_exposed_as_unknown_form_control() {
         legacy_object_type: None,
         caption: "ActiveX placeholder".into(),
         raw_properties: Vec::new(),
-        raw_client_data: Vec::new(),
         raw_obj: None,
     });
     assert!(pict.validate().is_err());
@@ -515,7 +691,6 @@ fn pict_vml_is_not_exposed_as_unknown_form_control() {
         legacy_object_type: None,
         caption: "blank type".into(),
         raw_properties: Vec::new(),
-        raw_client_data: Vec::new(),
         raw_obj: None,
     });
     assert!(blank.validate().is_err());
