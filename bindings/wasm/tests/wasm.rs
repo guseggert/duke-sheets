@@ -827,9 +827,9 @@ fn test_uint8array_payloads_survive_add_and_set_drawing() {
         Some(&svg[..])
     );
 
-    // Unknown-control rawClientData elements and rawObj as Uint8Array,
-    // exercised through both addDrawing and setDrawing (both pass the
-    // payload through serde's tagged-enum buffering).
+    // Payload-level rawClientData and unknown-control rawObj as
+    // Uint8Array, exercised through both addDrawing and setDrawing
+    // (both pass the payload through serde's tagged-enum buffering).
     let fragment = b"<x:Val>17</x:Val>";
     let obj_body = [0x15u8, 0x00, 0x12, 0x00];
     let unknown_control = |name: &str| {

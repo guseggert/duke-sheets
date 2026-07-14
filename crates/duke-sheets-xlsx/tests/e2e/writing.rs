@@ -90,7 +90,14 @@ fn lo_can_open_xlsx_with_form_controls_we_emit() {
     ];
     for (i, kind) in kinds.into_iter().enumerate() {
         let row = 1 + 2 * i as u32;
-        ws.add_form_control(FormControl::new(kind), anchor(1, row, 3, row + 1));
+        let mut control = FormControl::new(kind);
+        if matches!(control.kind, FormControlKind::Checkbox { .. }) {
+            // Envelope check for the raw ClientData passthrough: the
+            // replayed children must not make LO reject the VML part.
+            control.raw_client_data =
+                vec![b"<x:Disabled/>".to_vec(), b"<x:Accel>65</x:Accel>".to_vec()];
+        }
+        ws.add_form_control(control, anchor(1, row, 3, row + 1));
     }
     assert_eq!(wb.sync_form_control_links(), 1);
 
