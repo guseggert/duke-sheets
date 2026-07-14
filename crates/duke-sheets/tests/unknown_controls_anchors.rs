@@ -660,7 +660,7 @@ fn malformed_raw_client_data_is_rejected_at_write() {
 
     // Fragment shapes that are balanced but would defeat the
     // duplicate-name guard or corrupt the part must also be rejected.
-    let hostile: [&[u8]; 10] = [
+    let hostile: [&[u8]; 18] = [
         // Multi-root: second root smuggles a modeled element past the
         // guard (it inspects only the first element's name).
         b"<x:Disabled/><x:Checked>0</x:Checked>",
@@ -682,6 +682,22 @@ fn malformed_raw_client_data_is_rejected_at_write() {
         b"<x:/>",
         // Undefined entity in an attribute value.
         b"<x:A v=\"&bogus;\"/>",
+        // Literal ]]> in character data (XML 1.0 section 2.4).
+        b"<x:A>]]></x:A>",
+        // Double hyphen inside a comment (section 2.5).
+        b"<x:A><!-- -- --></x:A>",
+        // Comment ending in ---> is the same violation.
+        b"<x:A><!--x---></x:A>",
+        // Character reference to a control char invalid in XML.
+        b"<x:A>&#11;</x:A>",
+        // Raw control character invalid in XML content.
+        b"<x:A>\x0b</x:A>",
+        // Unicode noncharacter in content.
+        "<x:A>\u{FFFE}</x:A>".as_bytes(),
+        // Unescaped < in an attribute value (section 3.1).
+        b"<x:A b=\"<\"/>",
+        // Form feed is not XML whitespace outside the element.
+        b"<x:A/>\x0c",
     ];
     for fragment in hostile {
         let mut workbook = Workbook::new();

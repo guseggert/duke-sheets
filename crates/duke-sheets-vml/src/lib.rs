@@ -1679,9 +1679,35 @@ pub fn validate_sheet_raw_client_data(
     Ok(())
 }
 
+/// A character permitted by XML 1.0 §2.2 `Char`.
+fn valid_xml_char(c: char) -> bool {
+    matches!(c, '\u{9}' | '\u{A}' | '\u{D}')
+        || ('\u{20}'..='\u{D7FF}').contains(&c)
+        || ('\u{E000}'..='\u{FFFD}').contains(&c)
+        || c >= '\u{10000}'
+}
+
+/// Check content bytes are UTF-8 made of XML-permitted characters.
+/// quick-xml is a non-validating parser and never checks `Char`
+/// validity; a control character or noncharacter in an emitted part
+/// makes conforming consumers reject the whole part.
+fn scan_xml_chars(bytes: &[u8]) -> Result<(), String> {
+    let text =
+        std::str::from_utf8(bytes).map_err(|_| "content is not valid UTF-8".to_string())?;
+    match text.chars().find(|&c| !valid_xml_char(c)) {
+        Some(c) => Err(format!(
+            "character U+{:04X} is not permitted in XML",
+            c as u32
+        )),
+        None => Ok(()),
+    }
+}
+
 fn validate_raw_client_data_fragment(fragment: &[u8]) -> Result<(), String> {
     let display = || String::from_utf8_lossy(fragment).into_owned();
     let mut reader = Reader::from_reader(fragment);
+    // quick-xml can enforce the comment `--` rules itself.
+    reader.config_mut().check_comments = true;
     let mut buf = Vec::new();
     let mut depth = 0usize;
     let mut roots = 0usize;
@@ -1711,15 +1737,35 @@ fn validate_raw_client_data_fragment(fragment: &[u8]) -> Result<(), String> {
                                 display()
                             ));
                         }
-                        // Undefined entities or invalid character
-                        // references in a value make the part
-                        // ill-formed.
+                        // Undefined entities, invalid character
+                        // references, characters outside XML `Char`,
+                        // or a literal `<` in a value make the part
+                        // ill-formed; quick-xml checks none of these.
                         Ok(attr) => {
-                            if let Err(error) = attr.unescape_value() {
+                            if attr.value.contains(&b'<') {
                                 return Err(format!(
-                                    "raw ClientData fragment has an invalid attribute value ({error}): {}",
+                                    "raw ClientData fragment has a literal '<' in an attribute value: {}",
                                     display()
                                 ));
+                            }
+                            match attr.unescape_value() {
+                                Err(error) => {
+                                    return Err(format!(
+                                        "raw ClientData fragment has an invalid attribute value ({error}): {}",
+                                        display()
+                                    ));
+                                }
+                                Ok(value) => {
+                                    if let Some(c) =
+                                        value.chars().find(|&c| !valid_xml_char(c))
+                                    {
+                                        return Err(format!(
+                                            "raw ClientData fragment attribute contains U+{:04X}, not permitted in XML: {}",
+                                            c as u32,
+                                            display()
+                                        ));
+                                    }
+                                }
                             }
                         }
                     }
@@ -1750,17 +1796,71 @@ fn validate_raw_client_data_fragment(fragment: &[u8]) -> Result<(), String> {
                 depth -= 1;
             }
             Event::Text(text) => {
-                if depth == 0 && !text.iter().all(|byte| byte.is_ascii_whitespace()) {
+                // XML `S` is space/tab/CR/LF only (is_ascii_whitespace
+                // would also admit form feed).
+                if depth == 0
+                    && !text
+                        .iter()
+                        .all(|byte| matches!(byte, b' ' | b'\t' | b'\r' | b'\n'))
+                {
                     return Err(format!(
                         "raw ClientData fragment must contain exactly one element: {}",
                         display()
                     ));
                 }
-                // Undefined entities or invalid character references
-                // make the part ill-formed.
-                if let Err(error) = text.unescape() {
+                // A literal ]]> is forbidden in character data
+                // (XML 1.0 section 2.4).
+                if text.windows(3).any(|window| window == b"]]>") {
                     return Err(format!(
-                        "raw ClientData fragment has invalid text content ({error}): {}",
+                        "raw ClientData fragment contains a literal ]]> in text: {}",
+                        display()
+                    ));
+                }
+                // Undefined entities, invalid character references,
+                // or resolved characters outside XML `Char` make the
+                // part ill-formed.
+                match text.unescape() {
+                    Err(error) => {
+                        return Err(format!(
+                            "raw ClientData fragment has invalid text content ({error}): {}",
+                            display()
+                        ));
+                    }
+                    Ok(resolved) => {
+                        if let Some(c) = resolved.chars().find(|&c| !valid_xml_char(c)) {
+                            return Err(format!(
+                                "raw ClientData fragment text contains U+{:04X}, not permitted in XML: {}",
+                                c as u32,
+                                display()
+                            ));
+                        }
+                    }
+                }
+            }
+            Event::Comment(content) => {
+                if depth == 0 {
+                    return Err(format!(
+                        "raw ClientData fragment must start with its element, found a comment: {}",
+                        display()
+                    ));
+                }
+                if let Err(error) = scan_xml_chars(content) {
+                    return Err(format!(
+                        "raw ClientData fragment comment: {error}: {}",
+                        display()
+                    ));
+                }
+            }
+            Event::CData(content) => {
+                if depth == 0 {
+                    return Err(format!(
+                        "raw ClientData fragment must start with its element, found CDATA: {}",
+                        display()
+                    ));
+                }
+                if let Err(error) = scan_xml_chars(content) {
+                    return Err(format!(
+                        "raw ClientData fragment CDATA: {error}: {}",
                         display()
                     ));
                 }
@@ -1773,17 +1873,30 @@ fn validate_raw_client_data_fragment(fragment: &[u8]) -> Result<(), String> {
                     display()
                 ));
             }
-            Event::PI(pi) if pi.target().eq_ignore_ascii_case(b"xml") => {
-                return Err(format!(
-                    "raw ClientData fragment must not contain an XML declaration or DOCTYPE: {}",
-                    display()
-                ));
+            Event::PI(pi) => {
+                if pi.target().eq_ignore_ascii_case(b"xml") {
+                    return Err(format!(
+                        "raw ClientData fragment must not contain an XML declaration or DOCTYPE: {}",
+                        display()
+                    ));
+                }
+                if depth == 0 {
+                    return Err(format!(
+                        "raw ClientData fragment must start with its element, found a processing instruction: {}",
+                        display()
+                    ));
+                }
+                if let Err(error) = scan_xml_chars(pi) {
+                    return Err(format!(
+                        "raw ClientData fragment processing instruction: {error}: {}",
+                        display()
+                    ));
+                }
             }
             Event::Eof => break,
             other => {
-                // Comments, PIs, or CDATA outside the element would
-                // defeat the element-name guard; inside the element
-                // they are ordinary content.
+                // Anything else outside the element would defeat the
+                // element-name guard.
                 if depth == 0 {
                     return Err(format!(
                         "raw ClientData fragment must start with its element, found {other:?}: {}",
@@ -2000,6 +2113,13 @@ fn parse_raw_client_data(bytes: &[u8]) -> std::collections::HashMap<usize, Vec<V
             Event::Start(e) | Event::Empty(e) if e.local_name().as_ref() == b"shape" => {
                 shape_ordinal = Some(next_ordinal);
                 next_ordinal += 1;
+                in_client_data = false;
+            }
+            // The shape's lifetime ends here even when its ClientData
+            // was left unclosed; without this, presentation markup
+            // between shapes would be captured as ClientData children.
+            Event::End(e) if e.local_name().as_ref() == b"shape" => {
+                shape_ordinal = None;
                 in_client_data = false;
             }
             Event::Start(e) if e.local_name().as_ref() == b"ClientData" => {
@@ -2712,6 +2832,61 @@ mod tests {
             vec![b"<x:AAA>1</x:AAA>".to_vec()],
             "the next shape's raws must survive"
         );
+    }
+
+    #[test]
+    fn unclosed_client_data_ended_by_shape_does_not_capture_between_shapes() {
+        // When </x:ClientData> is missing and the shape is closed by
+        // </v:shape>, the raw scan must end the ClientData scope there
+        // too; otherwise presentation markup between shapes would be
+        // captured and re-emitted inside x:ClientData.
+        let body = r##" <v:shape id="_x0000_s1025" type="#_x0000_t201">
+  <x:ClientData ObjectType="Checkbox">
+   <x:Anchor>0, 0, 0, 0, 1, 0, 1, 0</x:Anchor>
+ </v:shape>
+ <v:fill color="red"/>
+ <v:oval><x:Foo>1</x:Foo></v:oval>
+ <v:shape id="_x0000_s1026" type="#_x0000_t201">
+  <x:ClientData ObjectType="Checkbox">
+   <x:Anchor>0, 0, 2, 0, 1, 0, 3, 0</x:Anchor>
+   <x:Accel>65</x:Accel>
+  </x:ClientData>
+ </v:shape>
+"##;
+        let parsed = parse_vml_controls(wrap(body).as_bytes());
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(
+            parsed[0].raw_client_data,
+            Vec::<Vec<u8>>::new(),
+            "content between shapes must not become ClientData"
+        );
+        assert_eq!(
+            parsed[1].raw_client_data,
+            vec![b"<x:Accel>65</x:Accel>".to_vec()]
+        );
+    }
+
+    #[test]
+    fn floating_client_data_between_shapes_is_not_captured() {
+        // A stray x:ClientData outside any shape applies to nothing in
+        // the main scan; the raw scan must not attach its children to
+        // the previous shape.
+        let body = r##" <v:shape id="_x0000_s1025" type="#_x0000_t201">
+  <x:ClientData ObjectType="Checkbox">
+   <x:Anchor>0, 0, 0, 0, 1, 0, 1, 0</x:Anchor>
+  </x:ClientData>
+ </v:shape>
+ <x:ClientData ObjectType="Checkbox"><x:Foo>1</x:Foo></x:ClientData>
+ <v:shape id="_x0000_s1026" type="#_x0000_t201">
+  <x:ClientData ObjectType="Checkbox">
+   <x:Anchor>0, 0, 2, 0, 1, 0, 3, 0</x:Anchor>
+  </x:ClientData>
+ </v:shape>
+"##;
+        let parsed = parse_vml_controls(wrap(body).as_bytes());
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].raw_client_data, Vec::<Vec<u8>>::new());
+        assert_eq!(parsed[1].raw_client_data, Vec::<Vec<u8>>::new());
     }
 
     #[test]
