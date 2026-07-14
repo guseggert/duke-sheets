@@ -356,6 +356,10 @@ pub(super) fn assemble_with_vml(
     if vml.is_some_and(|shape| {
         shape.object_type.eq_ignore_ascii_case("Note")
             || duke_sheets_core::form_control::is_activex_object_type(&shape.object_type)
+            // Excel-managed auxiliary UI, even when a (contradictory)
+            // ctrlProps twin exists; mirrors the unconditional fUIObj
+            // skip in the XLS reader.
+            || shape.ui_obj
     }) {
         return None;
     }
