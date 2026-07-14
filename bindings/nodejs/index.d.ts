@@ -372,12 +372,11 @@ export type FormControlKind =
   | { kind: 'spinner'; value: number; min: number; max: number; increment: number; cellLink?: string }
   /**
    * Unsupported legacy control. `rawProperties` (unmodeled XLSX
-   * formControlPr attributes), `rawClientData` (unmodeled VML ClientData
-   * fragments), and `rawObj` (original BIFF OBJ body) are opaque internal
-   * passthrough data; echo them back unchanged so a read -> setDrawing
-   * round trip preserves the control on rewrite.
+   * formControlPr attributes) and `rawObj` (original BIFF OBJ body) are
+   * opaque internal passthrough data; echo them back unchanged so a
+   * read -> setDrawing round trip preserves the control on rewrite.
    */
-  | { kind: 'unknown'; objectType: string; legacyObjectType?: number; caption: DrawingText; rawProperties: Array<[string, string]>; rawClientData: Buffer[]; rawObj?: Buffer }
+  | { kind: 'unknown'; objectType: string; legacyObjectType?: number; caption: DrawingText; rawProperties: Array<[string, string]>; rawObj?: Buffer }
 
 export type FormControlKindInput =
   | { kind: 'button'; caption: DrawingText }
@@ -395,16 +394,24 @@ export type FormControlKindInput =
    * FormControlKind); omit them for hand-authored controls and echo them
    * back unchanged when rewriting a control read from a file.
    */
-  | { kind: 'unknown'; objectType: string; legacyObjectType?: number; caption?: DrawingText; rawProperties?: Array<[string, string]>; rawClientData?: Buffer[]; rawObj?: Buffer }
+  | { kind: 'unknown'; objectType: string; legacyObjectType?: number; caption?: DrawingText; rawProperties?: Array<[string, string]>; rawObj?: Buffer }
 
 export interface FormControlPayload {
   kind: FormControlKind
   macroName?: string
+  /**
+   * Unmodeled VML ClientData child fragments preserved on any control
+   * kind (`<x:Disabled/>`, button dialog semantics, ...); opaque
+   * internal passthrough echoed back unchanged on write.
+   */
+  rawClientData: Buffer[]
 }
 
 export interface FormControlInputPayload {
   kind: FormControlKindInput
   macroName?: string
+  /** Echo back `rawClientData` unchanged when rewriting a control read from a file. */
+  rawClientData?: Buffer[]
 }
 
 export interface DrawingImage {

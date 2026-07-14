@@ -259,8 +259,8 @@ describe("unified drawings", () => {
               ["val", "17"],
               ["fmlaLink", "$A$1"],
             ],
-            rawClientData: [Buffer.from("<x:Val>17</x:Val>")],
           },
+          rawClientData: [Buffer.from("<x:Val>17</x:Val>")],
         },
       });
       wb.save(filePath);
@@ -278,7 +278,7 @@ describe("unified drawings", () => {
       expect(kind.rawProperties).toContainEqual(["customFlag", "kept"]);
       const propertyCount = kind.rawProperties.length;
       expect(propertyCount).toBeGreaterThanOrEqual(3);
-      expect(kind.rawClientData.length).toBeGreaterThanOrEqual(1);
+      expect(control.formControl.rawClientData.length).toBeGreaterThanOrEqual(1);
 
       // Identity rewrite: the read snapshot keeps its passthrough data.
       // The narrowed `kind` rebuilds the payload because output states
@@ -293,10 +293,49 @@ describe("unified drawings", () => {
       expect(second.kind.rawProperties.length).toBe(propertyCount);
       expect(second.kind.rawProperties).toContainEqual(["customFlag", "kept"]);
       expect(
-        second.kind.rawClientData.some((fragment) =>
+        second.control.formControl.rawClientData.some((fragment) =>
           Buffer.from(fragment).toString("utf8").includes("<x:Val>17</x:Val>"),
         ),
       ).toBe(true);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves rawClientData on modeled control kinds through save and setDrawing", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "duke-drawings-"));
+    const filePath = path.join(tmpDir, "modeled-raws.xlsx");
+    try {
+      const wb = new Workbook();
+      wb.getSheet(0).addDrawing({
+        anchor: anchor(1, 1, 3, 3),
+        kind: "formControl",
+        formControl: {
+          kind: { kind: "checkbox", caption: text("Audit"), state: "checked" },
+          rawClientData: [Buffer.from("<x:Disabled/>"), Buffer.from("<x:Accel>65</x:Accel>")],
+        },
+      });
+      wb.save(filePath);
+
+      const readRaws = (workbook: Workbook) =>
+        workbook
+          .getSheet(0)
+          .formControls[0].formControl.rawClientData.map((fragment) =>
+            Buffer.from(fragment).toString("utf8"),
+          );
+
+      const first = Workbook.fromBytes(fs.readFileSync(filePath));
+      expect(readRaws(first)).toEqual(["<x:Disabled/>", "<x:Accel>65</x:Accel>"]);
+
+      const control = first.getSheet(0).formControls[0];
+      const kind = control.formControl.kind;
+      if (kind.kind !== "checkbox") throw new Error("expected checkbox");
+      first
+        .getSheet(0)
+        .setDrawing([0], { ...control, formControl: { ...control.formControl, kind } });
+      first.save(filePath);
+      const second = Workbook.fromBytes(fs.readFileSync(filePath));
+      expect(readRaws(second)).toEqual(["<x:Disabled/>", "<x:Accel>65</x:Accel>"]);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

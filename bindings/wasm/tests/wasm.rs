@@ -461,7 +461,19 @@ fn form_control_drawing(
     anchor: JsValue,
     control_kind: JsValue,
 ) -> JsValue {
-    let form_control = make_options(&[("kind", control_kind)]);
+    form_control_drawing_with_raws(name, anchor, control_kind, None)
+}
+
+fn form_control_drawing_with_raws(
+    name: &str,
+    anchor: JsValue,
+    control_kind: JsValue,
+    raw_client_data: Option<JsValue>,
+) -> JsValue {
+    let form_control = match raw_client_data {
+        Some(raws) => make_options(&[("kind", control_kind), ("rawClientData", raws)]),
+        None => make_options(&[("kind", control_kind)]),
+    };
     make_options(&[
         ("name", JsValue::from_str(name)),
         ("anchor", anchor),
@@ -698,7 +710,7 @@ fn test_unknown_control_passthrough_survives_set_drawing_and_save() {
             .collect::<Vec<_>>(),
     )]);
     sheet
-        .add_drawing(form_control_drawing(
+        .add_drawing(form_control_drawing_with_raws(
             "Legacy editor",
             drawing_anchor(1, 2, 3, 4),
             make_options(&[
@@ -706,8 +718,8 @@ fn test_unknown_control_passthrough_survives_set_drawing_and_save() {
                 ("objectType", JsValue::from_str("EditBox")),
                 ("caption", drawing_text("Unsupported editor")),
                 ("rawProperties", raw_properties),
-                ("rawClientData", raw_client_data),
             ]),
+            Some(raw_client_data),
         ))
         .unwrap();
     let bytes = wb.save_xlsx_bytes().unwrap();
@@ -724,7 +736,8 @@ fn test_unknown_control_passthrough_survives_set_drawing_and_save() {
         property_count >= 3,
         "expected raw properties to survive the read, got {property_count}"
     );
-    let client_data = Array::from(&Reflect::get(&kind, &"rawClientData".into()).unwrap());
+    let payload = Reflect::get(&control, &"formControl".into()).unwrap();
+    let client_data = Array::from(&Reflect::get(&payload, &"rawClientData".into()).unwrap());
     assert!(client_data.length() >= 1);
 
     // Identity rewrite: the read snapshot keeps its passthrough data.
@@ -744,11 +757,42 @@ fn test_unknown_control_passthrough_survives_set_drawing_and_save() {
             && pair.get(1).as_string().as_deref() == Some("kept")
     });
     assert!(has_custom_flag, "customFlag raw property must survive rewrite");
-    let client_data = Array::from(&Reflect::get(&kind, &"rawClientData".into()).unwrap());
+    let payload = Reflect::get(&control, &"formControl".into()).unwrap();
+    let client_data = Array::from(&Reflect::get(&payload, &"rawClientData".into()).unwrap());
     let has_val_fragment = client_data.iter().any(|fragment| {
         String::from_utf8_lossy(&byte_array_to_vec(&fragment)).contains("<x:Val>17</x:Val>")
     });
     assert!(has_val_fragment, "raw ClientData fragment must survive rewrite");
+}
+
+#[wasm_bindgen_test]
+fn test_modeled_control_raw_client_data_survives_save() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    let fragment = b"<x:Disabled/>";
+    sheet
+        .add_drawing(form_control_drawing_with_raws(
+            "Audit",
+            drawing_anchor(1, 1, 3, 3),
+            make_options(&[
+                ("kind", JsValue::from_str("checkbox")),
+                ("caption", drawing_text("Audit")),
+                ("state", JsValue::from_str("checked")),
+            ]),
+            Some(make_array(&[js_sys::Uint8Array::from(&fragment[..]).into()])),
+        ))
+        .unwrap();
+    let bytes = wb.save_xlsx_bytes().unwrap();
+
+    let reopened = Workbook::from_bytes(&bytes).unwrap();
+    let sheet = reopened.get_sheet(0).unwrap();
+    let control = Array::from(&sheet.form_controls().unwrap()).get(0);
+    let kind = form_control_kind(&control);
+    assert_eq!(get_string_field(&kind, "kind"), "checkbox");
+    let payload = Reflect::get(&control, &"formControl".into()).unwrap();
+    let client_data = Array::from(&Reflect::get(&payload, &"rawClientData".into()).unwrap());
+    assert_eq!(client_data.length(), 1);
+    assert_eq!(byte_array_to_vec(&client_data.get(0)), fragment.to_vec());
 }
 
 #[wasm_bindgen_test]
@@ -789,19 +833,16 @@ fn test_uint8array_payloads_survive_add_and_set_drawing() {
     let fragment = b"<x:Val>17</x:Val>";
     let obj_body = [0x15u8, 0x00, 0x12, 0x00];
     let unknown_control = |name: &str| {
-        form_control_drawing(
+        form_control_drawing_with_raws(
             name,
             drawing_anchor(1, 2, 3, 4),
             make_options(&[
                 ("kind", JsValue::from_str("unknown")),
                 ("objectType", JsValue::from_str("EditBox")),
                 ("caption", drawing_text("editor")),
-                (
-                    "rawClientData",
-                    make_array(&[js_sys::Uint8Array::from(&fragment[..]).into()]),
-                ),
                 ("rawObj", js_sys::Uint8Array::from(&obj_body[..]).into()),
             ]),
+            Some(make_array(&[js_sys::Uint8Array::from(&fragment[..]).into()])),
         )
     };
     sheet.add_drawing(unknown_control("added")).unwrap();
@@ -812,7 +853,8 @@ fn test_uint8array_payloads_survive_add_and_set_drawing() {
     let control = Array::from(&sheet.form_controls().unwrap()).get(0);
     assert_eq!(get_string_field(&control, "name"), "replaced");
     let kind = form_control_kind(&control);
-    let client_data = Array::from(&Reflect::get(&kind, &"rawClientData".into()).unwrap());
+    let payload = Reflect::get(&control, &"formControl".into()).unwrap();
+    let client_data = Array::from(&Reflect::get(&payload, &"rawClientData".into()).unwrap());
     assert_eq!(byte_array_to_vec(&client_data.get(0)), fragment.to_vec());
     let raw_obj = Reflect::get(&kind, &"rawObj".into()).unwrap();
     assert_eq!(byte_array_to_vec(&raw_obj), obj_body.to_vec());
