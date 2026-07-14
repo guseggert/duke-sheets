@@ -602,6 +602,33 @@ fn unmodeled_client_data_round_trips_on_button_xlsb() {
     assert_eq!(control_raws(&reread), control_raws(&reopened));
 }
 
+// features: Form control: dropdown (combo box)
+#[test]
+fn uiobj_marker_wins_over_a_ctrlprops_twin_xlsx() {
+    // A UIObj-marked VML shape with a worksheet <control> entry and
+    // ctrlProps part is self-contradictory; the marker wins, matching
+    // the XLS reader's unconditional fUIObj skip.
+    let mut workbook = Workbook::new();
+    workbook.worksheet_mut(0).unwrap().add_form_control(
+        FormControl::new(FormControlKind::Checkbox {
+            caption: "Audit".into(),
+            state: CheckState::Checked,
+            cell_link: None,
+            no_3d: true,
+        }),
+        DrawingAnchor::default(),
+    );
+    let mut bytes = Cursor::new(Vec::new());
+    XlsxWriter::write(&workbook, &mut bytes).expect("write xlsx");
+    let spliced = splice_into_client_data(bytes.into_inner(), "Checkbox", "   <x:UIObj/>\n  ");
+    let reopened = XlsxReader::read(Cursor::new(spliced)).expect("read spliced xlsx");
+    assert_eq!(
+        reopened.worksheet(0).unwrap().form_control_count(),
+        0,
+        "UIObj-marked shape must not surface even with a ctrlProps twin"
+    );
+}
+
 // features: Form control unmodeled ClientData passthrough
 #[test]
 fn malformed_raw_client_data_is_rejected_at_write() {
@@ -633,7 +660,7 @@ fn malformed_raw_client_data_is_rejected_at_write() {
 
     // Fragment shapes that are balanced but would defeat the
     // duplicate-name guard or corrupt the part must also be rejected.
-    let hostile: [&[u8]; 4] = [
+    let hostile: [&[u8]; 10] = [
         // Multi-root: second root smuggles a modeled element past the
         // guard (it inspects only the first element's name).
         b"<x:Disabled/><x:Checked>0</x:Checked>",
@@ -643,6 +670,18 @@ fn malformed_raw_client_data_is_rejected_at_write() {
         b"<?xml version=\"1.0\"?><x:A/>",
         // Unquoted attribute value is not well-formed XML.
         b"<x:A foo=bar>t</x:A>",
+        // Undefined entity reference makes the part ill-formed.
+        b"<x:A>&bogus;</x:A>",
+        // Surrogate character reference is not a valid XML character.
+        b"<x:A>&#xD800;</x:A>",
+        // Nested XML declaration is malformed anywhere but the start.
+        b"<x:A><?xml version=\"1.0\"?></x:A>",
+        // DOCTYPE inside content is malformed.
+        b"<x:A><!DOCTYPE d></x:A>",
+        // Empty local name is not a valid element name.
+        b"<x:/>",
+        // Undefined entity in an attribute value.
+        b"<x:A v=\"&bogus;\"/>",
     ];
     for fragment in hostile {
         let mut workbook = Workbook::new();

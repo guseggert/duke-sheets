@@ -1697,12 +1697,31 @@ fn validate_raw_client_data_fragment(fragment: &[u8]) -> Result<(), String> {
         };
         match &event {
             Event::Start(e) | Event::Empty(e) => {
+                if e.local_name().as_ref().is_empty() {
+                    return Err(format!(
+                        "raw ClientData fragment has an element without a name: {}",
+                        display()
+                    ));
+                }
                 for attr in e.attributes() {
-                    if let Err(error) = attr {
-                        return Err(format!(
-                            "raw ClientData fragment has a malformed attribute ({error}): {}",
-                            display()
-                        ));
+                    match attr {
+                        Err(error) => {
+                            return Err(format!(
+                                "raw ClientData fragment has a malformed attribute ({error}): {}",
+                                display()
+                            ));
+                        }
+                        // Undefined entities or invalid character
+                        // references in a value make the part
+                        // ill-formed.
+                        Ok(attr) => {
+                            if let Err(error) = attr.unescape_value() {
+                                return Err(format!(
+                                    "raw ClientData fragment has an invalid attribute value ({error}): {}",
+                                    display()
+                                ));
+                            }
+                        }
                     }
                 }
                 if depth == 0 {
@@ -1737,13 +1756,34 @@ fn validate_raw_client_data_fragment(fragment: &[u8]) -> Result<(), String> {
                         display()
                     ));
                 }
+                // Undefined entities or invalid character references
+                // make the part ill-formed.
+                if let Err(error) = text.unescape() {
+                    return Err(format!(
+                        "raw ClientData fragment has invalid text content ({error}): {}",
+                        display()
+                    ));
+                }
+            }
+            // An XML declaration or DOCTYPE is malformed anywhere
+            // inside a part.
+            Event::Decl(_) | Event::DocType(_) => {
+                return Err(format!(
+                    "raw ClientData fragment must not contain an XML declaration or DOCTYPE: {}",
+                    display()
+                ));
+            }
+            Event::PI(pi) if pi.target().eq_ignore_ascii_case(b"xml") => {
+                return Err(format!(
+                    "raw ClientData fragment must not contain an XML declaration or DOCTYPE: {}",
+                    display()
+                ));
             }
             Event::Eof => break,
             other => {
-                // Comments, PIs, declarations, DOCTYPE, or CDATA
-                // outside the element would defeat the element-name
-                // guard or corrupt the part; inside the element they
-                // are ordinary content.
+                // Comments, PIs, or CDATA outside the element would
+                // defeat the element-name guard; inside the element
+                // they are ordinary content.
                 if depth == 0 {
                     return Err(format!(
                         "raw ClientData fragment must start with its element, found {other:?}: {}",
@@ -1867,6 +1907,9 @@ fn is_modeled_client_data_child(object_type: &str, name: &[u8]) -> bool {
                 | b"LCT"
                 | b"DropStyle"
                 | b"DropLines"
+                // A Drop's selection is Sel-driven; a stray MultiSel
+                // is a stale hint, normalized away like on List.
+                | b"MultiSel"
         ),
         "Scroll" => matches!(
             name,
@@ -1911,6 +1954,28 @@ fn parse_raw_client_data(bytes: &[u8]) -> std::collections::HashMap<usize, Vec<V
 
         if let Some((start, depth)) = capture.as_mut() {
             match &event {
+                // A legitimate ClientData child never spans a shape
+                // boundary or its ancestors' end tags. Seeing one
+                // means the child was left unclosed: drop the capture
+                // (a readable file must stay writable) and process
+                // the boundary exactly as the main scan does, keeping
+                // the shape ordinals of the two scans in lockstep.
+                Event::Start(e) | Event::Empty(e) if e.local_name().as_ref() == b"shape" => {
+                    capture = None;
+                    shape_ordinal = Some(next_ordinal);
+                    next_ordinal += 1;
+                    in_client_data = false;
+                    buf.clear();
+                    continue;
+                }
+                Event::End(e)
+                    if matches!(e.local_name().as_ref(), b"ClientData" | b"shape") =>
+                {
+                    capture = None;
+                    in_client_data = false;
+                    buf.clear();
+                    continue;
+                }
                 Event::Start(_) => *depth += 1,
                 Event::End(_) => *depth = depth.saturating_sub(1),
                 Event::Eof => break,
@@ -1918,17 +1983,11 @@ fn parse_raw_client_data(bytes: &[u8]) -> std::collections::HashMap<usize, Vec<V
             }
             if *depth == 0 {
                 let fragment = &bytes[*start..event_end];
-                // A malformed child (unclosed tag terminated by an
-                // ancestor's end tag) must not enter the model: a
-                // readable file must stay writable. Replay the state
-                // effect of the ancestor end the capture consumed.
+                // Inner malformations (mismatched nested tags, lazy
+                // attribute errors) must not enter the model either.
                 if validate_raw_client_data_fragment(fragment).is_ok() {
                     if let Some(ordinal) = shape_ordinal {
                         out.entry(ordinal).or_default().push(fragment.to_vec());
-                    }
-                } else if let Event::End(e) = &event {
-                    if matches!(e.local_name().as_ref(), b"ClientData" | b"shape") {
-                        in_client_data = false;
                     }
                 }
                 capture = None;
@@ -1965,10 +2024,15 @@ fn parse_raw_client_data(bytes: &[u8]) -> std::collections::HashMap<usize, Vec<V
                 if in_client_data
                     && !is_modeled_client_data_child(&object_type, e.local_name().as_ref()) =>
             {
-                if let Some(ordinal) = shape_ordinal {
-                    out.entry(ordinal).or_default().push(
-                        bytes[event_start..event_end].to_vec(),
-                    );
+                // quick-xml parses attributes lazily, so an Empty
+                // event can still carry malformed attributes; validate
+                // like Start-rooted captures so it cannot poison a
+                // later save.
+                let fragment = &bytes[event_start..event_end];
+                if validate_raw_client_data_fragment(fragment).is_ok() {
+                    if let Some(ordinal) = shape_ordinal {
+                        out.entry(ordinal).or_default().push(fragment.to_vec());
+                    }
                 }
             }
             Event::Eof => break,
@@ -2556,6 +2620,116 @@ mod tests {
             vec![b"<x:Accel>65</x:Accel>".to_vec()],
             "next shape must not inherit ClientData state"
         );
+    }
+
+    #[test]
+    fn empty_child_with_malformed_attribute_is_dropped_at_capture() {
+        // quick-xml parses attributes lazily, so <x:Weird foo=bar/>
+        // arrives as a valid Empty event. Capturing it unvalidated
+        // would make a readable file unsaveable at write validation.
+        let body = r##" <v:shape id="_x0000_s1025" type="#_x0000_t201">
+  <x:ClientData ObjectType="Checkbox">
+   <x:Anchor>0, 0, 0, 0, 1, 0, 1, 0</x:Anchor>
+   <x:Weird foo=bar/>
+   <x:Accel>65</x:Accel>
+  </x:ClientData>
+ </v:shape>
+"##;
+        let parsed = parse_vml_controls(wrap(body).as_bytes());
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(
+            parsed[0].raw_client_data,
+            vec![b"<x:Accel>65</x:Accel>".to_vec()],
+            "malformed Empty child must be dropped like malformed Start children"
+        );
+    }
+
+    #[test]
+    fn shape_boundary_inside_capture_keeps_ordinals_in_sync() {
+        // A captured child containing a <v:shape/> is well-formed XML,
+        // but the main scan treats every shape start as a new shape.
+        // The raw scan must count it too, or every later capture
+        // attaches to the wrong control.
+        let body = r##" <v:shape id="_x0000_s1025" type="#_x0000_t201">
+  <x:ClientData ObjectType="Checkbox">
+   <x:Anchor>0, 0, 0, 0, 1, 0, 1, 0</x:Anchor>
+   <x:Weird><v:shape/></x:Weird>
+  </x:ClientData>
+ </v:shape>
+ <v:shape id="_x0000_s1026" type="#_x0000_t201">
+  <x:ClientData ObjectType="Checkbox">
+   <x:Anchor>0, 0, 2, 0, 1, 0, 3, 0</x:Anchor>
+   <x:AAA>1</x:AAA>
+  </x:ClientData>
+ </v:shape>
+ <v:shape id="_x0000_s1027" type="#_x0000_t201">
+  <x:ClientData ObjectType="Checkbox">
+   <x:Anchor>0, 0, 4, 0, 1, 0, 5, 0</x:Anchor>
+   <x:BBB>2</x:BBB>
+  </x:ClientData>
+ </v:shape>
+"##;
+        let parsed = parse_vml_controls(wrap(body).as_bytes());
+        let raws_of = |num: u32| -> Vec<Vec<u8>> {
+            parsed
+                .iter()
+                .find(|control| control.shape_num == num)
+                .expect("shape present")
+                .raw_client_data
+                .clone()
+        };
+        assert_eq!(raws_of(1026), vec![b"<x:AAA>1</x:AAA>".to_vec()]);
+        assert_eq!(raws_of(1027), vec![b"<x:BBB>2</x:BBB>".to_vec()]);
+    }
+
+    #[test]
+    fn deeply_unclosed_child_does_not_swallow_later_shapes() {
+        // Several unclosed children mean the capture's depth counter
+        // never reaches zero; without a boundary abort it would run to
+        // </xml> and swallow every later shape's raws.
+        let body = r##" <v:shape id="_x0000_s1025" type="#_x0000_t201">
+  <x:ClientData ObjectType="Checkbox">
+   <x:Anchor>0, 0, 0, 0, 1, 0, 1, 0</x:Anchor>
+   <x:A><x:B><x:C>
+  </x:ClientData>
+ </v:shape>
+ <v:shape id="_x0000_s1026" type="#_x0000_t201">
+  <x:ClientData ObjectType="Checkbox">
+   <x:Anchor>0, 0, 2, 0, 1, 0, 3, 0</x:Anchor>
+   <x:AAA>1</x:AAA>
+  </x:ClientData>
+ </v:shape>
+"##;
+        let parsed = parse_vml_controls(wrap(body).as_bytes());
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(
+            parsed[0].raw_client_data,
+            Vec::<Vec<u8>>::new(),
+            "unclosed children must be dropped"
+        );
+        assert_eq!(
+            parsed[1].raw_client_data,
+            vec![b"<x:AAA>1</x:AAA>".to_vec()],
+            "the next shape's raws must survive"
+        );
+    }
+
+    #[test]
+    fn multisel_on_dropdown_is_normalized_away() {
+        // A Drop's selection is Sel-driven; a stray x:MultiSel is a
+        // stale hint that must not be replayed next to the modeled
+        // selection.
+        let body = r##" <v:shape id="_x0000_s1025" type="#_x0000_t201">
+  <x:ClientData ObjectType="Drop">
+   <x:Anchor>0, 0, 0, 0, 1, 0, 1, 0</x:Anchor>
+   <x:Sel>2</x:Sel>
+   <x:MultiSel>1,3</x:MultiSel>
+  </x:ClientData>
+ </v:shape>
+"##;
+        let parsed = parse_vml_controls(wrap(body).as_bytes());
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].raw_client_data, Vec::<Vec<u8>>::new());
     }
 
     #[test]
