@@ -15,6 +15,7 @@ pub(super) fn write_vml_drawing<W: Write + Seek>(
         .worksheet(sheet_index)
         .ok_or_else(|| XlsxError::InvalidFormat("Sheet not found".into()))?;
 
+    duke_sheets_vml::validate_sheet_raw_client_data(sheet).map_err(XlsxError::InvalidFormat)?;
     let Some(xml) = duke_sheets_vml::build_legacy_vml(sheet, sheet_index) else {
         return Ok(());
     };

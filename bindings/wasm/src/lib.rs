@@ -289,12 +289,11 @@ export type FormControlKind =
   | { kind: "spinner"; value: number; min: number; max: number; increment: number; cellLink?: string }
   /**
    * Unsupported legacy control. `rawProperties` (unmodeled XLSX
-   * formControlPr attributes), `rawClientData` (unmodeled VML ClientData
-   * fragments), and `rawObj` (original BIFF OBJ body) are opaque internal
-   * passthrough data; echo them back unchanged so a read -> setDrawing
-   * round trip preserves the control on rewrite.
+   * formControlPr attributes) and `rawObj` (original BIFF OBJ body) are
+   * opaque internal passthrough data; echo them back unchanged so a
+   * read -> setDrawing round trip preserves the control on rewrite.
    */
-  | { kind: "unknown"; objectType: string; legacyObjectType?: number; caption: DrawingText; rawProperties: Array<[string, string]>; rawClientData: number[][]; rawObj?: number[] };
+  | { kind: "unknown"; objectType: string; legacyObjectType?: number; caption: DrawingText; rawProperties: Array<[string, string]>; rawObj?: number[] };
 
 export type FormControlKindInput =
   | { kind: "button"; caption: DrawingText }
@@ -312,16 +311,23 @@ export type FormControlKindInput =
    * FormControlKind); omit them for hand-authored controls and echo them
    * back unchanged when rewriting a control read from a file.
    */
-  | { kind: "unknown"; objectType: string; legacyObjectType?: number; caption?: DrawingText; rawProperties?: Array<[string, string]>; rawClientData?: Array<Uint8Array | number[]>; rawObj?: Uint8Array | number[] };
+  | { kind: "unknown"; objectType: string; legacyObjectType?: number; caption?: DrawingText; rawProperties?: Array<[string, string]>; rawObj?: Uint8Array | number[] };
 
 export interface FormControlPayload {
   kind: FormControlKind;
   macroName?: string;
+  /**
+   * Unmodeled VML ClientData child fragments preserved on any control
+   * kind; opaque internal passthrough echoed back unchanged on write.
+   */
+  rawClientData: number[][];
 }
 
 export interface FormControlInputPayload {
   kind: FormControlKindInput;
   macroName?: string;
+  /** Echo back `rawClientData` unchanged when rewriting a control read from a file. */
+  rawClientData?: Array<Uint8Array | number[]>;
 }
 
 export interface DrawingImage {

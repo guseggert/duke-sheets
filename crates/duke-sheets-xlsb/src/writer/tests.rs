@@ -617,9 +617,9 @@ mod tests {
         let mut wb = Workbook::new();
         let ws = wb.worksheet_mut(0).unwrap();
         ws.set_cell_value_at(0, 0, "commented").unwrap();
-        ws.set_comment_at(0, 0, CellComment::new("Author1", "First comment"));
+        ws.set_comment_at(0, 0, CellComment::new("Author1", "First comment")).unwrap();
         ws.set_cell_value_at(1, 1, "also commented").unwrap();
-        ws.set_comment_at(1, 1, CellComment::new("Author2", "Second comment"));
+        ws.set_comment_at(1, 1, CellComment::new("Author2", "Second comment")).unwrap();
 
         let wb2 = round_trip(&wb);
         let ws2 = wb2.worksheet(0).unwrap();
@@ -884,7 +884,7 @@ mod tests {
         ws.set_auto_filter(Some(AutoFilter::new(
             duke_sheets_core::CellRange::parse("A1:B2").unwrap(),
         )));
-        ws.set_comment_at(0, 0, CellComment::new("Test", "A note"));
+        ws.set_comment_at(0, 0, CellComment::new("Test", "A note")).unwrap();
         ws.set_hyperlink(
             "B1",
             Hyperlink {
@@ -3054,7 +3054,7 @@ mod tests {
 
         let mut wb = Workbook::new();
         let ws = wb.worksheet_mut(0).unwrap();
-        ws.set_comment_at(0, 0, CellComment::new("Author", "note"));
+        ws.set_comment_at(0, 0, CellComment::new("Author", "note")).unwrap();
         ws.add_form_control(
             FormControl::new(FormControlKind::Checkbox {
                 caption: "check".into(),

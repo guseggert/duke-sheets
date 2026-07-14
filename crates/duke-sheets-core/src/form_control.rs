@@ -212,9 +212,6 @@ pub enum FormControlKind {
         /// Unmodeled XLSX `formControlPr` attributes.
         #[doc(hidden)]
         raw_properties: Vec<(String, String)>,
-        /// Unmodeled VML `ClientData` child elements.
-        #[doc(hidden)]
-        raw_client_data: Vec<Vec<u8>>,
         /// Original BIFF OBJ body, required for XLS passthrough.
         #[doc(hidden)]
         raw_obj: Option<Vec<u8>>,
@@ -418,6 +415,15 @@ pub struct FormControl {
     /// writer supports workbook-local procedure names and does not
     /// embed a VBA project.
     pub macro_name: Option<String>,
+    /// Unmodeled VML `ClientData` child elements, preserved for
+    /// XLSX/XLSB passthrough (`x:Disabled`, button dialog semantics,
+    /// script hooks, ...). Each entry is one complete child fragment,
+    /// emitted verbatim after the modeled elements; entries whose
+    /// element name collides with a modeled emission for the kind are
+    /// dropped at write. Element-granular and orthogonal to the
+    /// modeled fields, so mutating the control does not stale them.
+    #[doc(hidden)]
+    pub raw_client_data: Vec<Vec<u8>>,
 }
 
 impl FormControl {
@@ -426,6 +432,7 @@ impl FormControl {
         Self {
             kind,
             macro_name: None,
+            raw_client_data: Vec::new(),
         }
     }
 

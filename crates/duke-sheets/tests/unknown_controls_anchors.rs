@@ -16,18 +16,18 @@ fn unknown_edit_box() -> FormControlKind {
             ("val".to_string(), "17".to_string()),
             ("fmlaLink".to_string(), "$A$1".to_string()),
         ],
-        raw_client_data: vec![
-            b"<x:CustomState mode=\"alpha\"/>".to_vec(),
-            b"<x:Val>17</x:Val>".to_vec(),
-            b"<x:FmlaLink>$A$1</x:FmlaLink>".to_vec(),
-        ],
         raw_obj: None,
     }
 }
 
 fn unknown_workbook() -> Workbook {
     let mut workbook = Workbook::new();
-    let control = FormControl::new(unknown_edit_box()).with_macro_name("RunUnknown");
+    let mut control = FormControl::new(unknown_edit_box()).with_macro_name("RunUnknown");
+    control.raw_client_data = vec![
+        b"<x:CustomState mode=\"alpha\"/>".to_vec(),
+        b"<x:Val>17</x:Val>".to_vec(),
+        b"<x:FmlaLink>$A$1</x:FmlaLink>".to_vec(),
+    ];
     let mut object = DrawingObject::form_control(control).with_anchor(DrawingAnchor::TwoCell {
         from: CellMarker {
             col: 1,
@@ -76,11 +76,11 @@ fn assert_unknown_edit_box(workbook: &Workbook, expect_ctrl_props: bool) {
             edit_as: None,
         }
     );
+    let raw_client_data = &drawn.payload.raw_client_data;
     let FormControlKind::Unknown {
         object_type,
         legacy_object_type,
         raw_properties,
-        raw_client_data,
         raw_obj,
         ..
     } = &drawn.payload.kind
@@ -175,7 +175,6 @@ fn xls_unknown_edit_box_obj_body_survives_rewrite() {
         legacy_object_type: Some(0x000D),
         caption: "Raw edit box".into(),
         raw_properties: Vec::new(),
-        raw_client_data: Vec::new(),
         raw_obj: Some(raw_obj.clone()),
     });
     let mut object = DrawingObject::form_control(control).with_anchor(DrawingAnchor::TwoCell {
@@ -267,7 +266,6 @@ fn xls_unknown_control_embedded_macro_is_replaced_not_replayed() {
         legacy_object_type: Some(0x000D),
         caption: "Macro edit box".into(),
         raw_properties: Vec::new(),
-        raw_client_data: Vec::new(),
         raw_obj: Some(raw_edit_box_obj_with_macro()),
     })
     .with_macro_name("RunEdit");
@@ -323,6 +321,410 @@ fn xls_unknown_control_embedded_macro_is_replaced_not_replayed() {
     );
 }
 
+/// Old-Excel autofilter dropdown button: `x:UIObj` + `PrintObject=False`,
+/// no `x:LCT` (ECMA-376 Part 4 §14.4.2.62). Modern Excel emits no legacy
+/// VML for these; the shape survives only in files from older producers.
+const AUX_UI_DROPDOWN_VML: &str = r##" <v:shape id="_x0000_s2001" type="#_x0000_t201" style="position:absolute">
+  <x:ClientData ObjectType="Drop">
+   <x:SizeWithCells/>
+   <x:Anchor>0, 0, 0, 0, 1, 16, 1, 0</x:Anchor>
+   <x:AutoFill>False</x:AutoFill>
+   <x:AutoLine>False</x:AutoLine>
+   <x:DropStyle>Combo</x:DropStyle>
+   <x:DropLines>8</x:DropLines>
+   <x:Sel>0</x:Sel>
+   <x:NoThreeD/>
+   <x:PrintObject>False</x:PrintObject>
+   <x:UIObj/>
+  </x:ClientData>
+ </v:shape>
+"##;
+
+/// Insert an extra `<v:shape>` before `</xml>` in every vmlDrawing part.
+fn splice_vml_shape(bytes: Vec<u8>, extra_shape: &str) -> Vec<u8> {
+    let mut input = zip::ZipArchive::new(Cursor::new(bytes)).expect("open zip");
+    let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let mut spliced = false;
+    for index in 0..input.len() {
+        let mut file = input.by_index(index).expect("zip entry");
+        let name = file.name().to_string();
+        let is_dir = file.is_dir();
+        let mut data = Vec::new();
+        file.read_to_end(&mut data).expect("read zip entry");
+        drop(file);
+
+        if is_dir {
+            output
+                .add_directory(name, zip::write::SimpleFileOptions::default())
+                .expect("copy directory");
+            continue;
+        }
+        if name.contains("vmlDrawing") {
+            let xml = String::from_utf8(data).expect("VML is UTF-8");
+            assert!(xml.contains("</xml>"), "VML part must close with </xml>");
+            data = xml
+                .replace("</xml>", &format!("{extra_shape}</xml>"))
+                .into_bytes();
+            spliced = true;
+        }
+        output
+            .start_file(name, zip::write::SimpleFileOptions::default())
+            .expect("copy file");
+        output.write_all(&data).expect("write zip entry");
+    }
+    assert!(spliced, "no vmlDrawing part found to splice into");
+    output.finish().expect("finish zip").into_inner()
+}
+
+fn checkbox_and_comment_workbook() -> Workbook {
+    let mut workbook = Workbook::new();
+    let sheet = workbook.worksheet_mut(0).unwrap();
+    sheet.add_form_control(
+        FormControl::new(FormControlKind::Checkbox {
+            caption: "Real control".into(),
+            state: CheckState::Checked,
+            cell_link: None,
+            no_3d: true,
+        }),
+        DrawingAnchor::TwoCell {
+            from: CellMarker {
+                col: 0,
+                col_offset_emu: 0,
+                row: 0,
+                row_offset_emu: 0,
+            },
+            to: CellMarker {
+                col: 2,
+                col_offset_emu: 0,
+                row: 2,
+                row_offset_emu: 0,
+            },
+            edit_as: None,
+        },
+    );
+    sheet
+        .set_comment_at(
+            4,
+            4,
+            duke_sheets::CellComment::new("Reviewer", "still here"),
+        )
+        .unwrap();
+    workbook
+}
+
+fn assert_aux_ui_shape_skipped(workbook: &Workbook) {
+    let sheet = workbook.worksheet(0).unwrap();
+    assert_eq!(
+        sheet.form_control_count(),
+        1,
+        "UIObj auxiliary shape must not surface as a control"
+    );
+    let control = sheet.form_controls().next().unwrap();
+    assert!(matches!(
+        control.payload.kind,
+        FormControlKind::Checkbox { .. }
+    ));
+    let comment = sheet.comment_at(4, 4).expect("comment survives");
+    assert_eq!(comment.text, "still here");
+}
+
+// features: Form control: dropdown (combo box)
+#[test]
+fn excel_uiobj_aux_shape_is_not_a_control_xlsx() {
+    let workbook = checkbox_and_comment_workbook();
+    let mut bytes = Cursor::new(Vec::new());
+    XlsxWriter::write(&workbook, &mut bytes).expect("write xlsx");
+    let spliced = splice_vml_shape(bytes.into_inner(), AUX_UI_DROPDOWN_VML);
+    let reopened = XlsxReader::read(Cursor::new(spliced)).expect("read spliced xlsx");
+    assert_aux_ui_shape_skipped(&reopened);
+}
+
+// features: Form control: dropdown (combo box)
+#[test]
+fn excel_uiobj_aux_shape_is_not_a_control_xlsb() {
+    let workbook = checkbox_and_comment_workbook();
+    let mut bytes = Cursor::new(Vec::new());
+    XlsbWriter::write(&workbook, &mut bytes).expect("write xlsb");
+    let spliced = splice_vml_shape(bytes.into_inner(), AUX_UI_DROPDOWN_VML);
+    let reopened = XlsbReader::read(Cursor::new(spliced)).expect("read spliced xlsb");
+    assert_aux_ui_shape_skipped(&reopened);
+}
+
+/// Insert extra children into the ClientData of the shape whose
+/// `ObjectType` matches, right before its `</x:ClientData>`.
+fn splice_into_client_data(bytes: Vec<u8>, object_type: &str, insert: &str) -> Vec<u8> {
+    let mut input = zip::ZipArchive::new(Cursor::new(bytes)).expect("open zip");
+    let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let mut spliced = false;
+    for index in 0..input.len() {
+        let mut file = input.by_index(index).expect("zip entry");
+        let name = file.name().to_string();
+        let is_dir = file.is_dir();
+        let mut data = Vec::new();
+        file.read_to_end(&mut data).expect("read zip entry");
+        drop(file);
+
+        if is_dir {
+            output
+                .add_directory(name, zip::write::SimpleFileOptions::default())
+                .expect("copy directory");
+            continue;
+        }
+        if name.contains("vmlDrawing") {
+            let xml = String::from_utf8(data).expect("VML is UTF-8");
+            let marker = format!("ObjectType=\"{object_type}\"");
+            data = if let Some(type_at) = xml.find(&marker) {
+                let close_at = xml[type_at..]
+                    .find("</x:ClientData>")
+                    .map(|offset| type_at + offset)
+                    .expect("ClientData close");
+                let mut patched = String::with_capacity(xml.len() + insert.len());
+                patched.push_str(&xml[..close_at]);
+                patched.push_str(insert);
+                patched.push_str(&xml[close_at..]);
+                spliced = true;
+                patched.into_bytes()
+            } else {
+                xml.into_bytes()
+            };
+        }
+        output
+            .start_file(name, zip::write::SimpleFileOptions::default())
+            .expect("copy file");
+        output.write_all(&data).expect("write zip entry");
+    }
+    assert!(spliced, "no vmlDrawing part found to splice into");
+    output.finish().expect("finish zip").into_inner()
+}
+
+/// Read the concatenated vmlDrawing parts of an OOXML zip.
+fn vml_parts(bytes: &[u8]) -> String {
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes.to_vec())).expect("open zip");
+    let mut out = String::new();
+    for index in 0..archive.len() {
+        let mut file = archive.by_index(index).expect("zip entry");
+        if file.name().contains("vmlDrawing") {
+            let mut s = String::new();
+            file.read_to_string(&mut s).expect("read vml");
+            out.push_str(&s);
+        }
+    }
+    out
+}
+
+fn control_raws(workbook: &Workbook) -> Vec<String> {
+    workbook
+        .worksheet(0)
+        .unwrap()
+        .form_controls()
+        .next()
+        .expect("control present")
+        .payload
+        .raw_client_data
+        .iter()
+        .map(|raw| String::from_utf8_lossy(raw).into_owned())
+        .collect()
+}
+
+// features: Form control unmodeled ClientData passthrough
+#[test]
+fn unmodeled_client_data_round_trips_on_checkbox_xlsx() {
+    let mut workbook = Workbook::new();
+    workbook.worksheet_mut(0).unwrap().add_form_control(
+        FormControl::new(FormControlKind::Checkbox {
+            caption: "Audit".into(),
+            state: CheckState::Checked,
+            cell_link: None,
+            no_3d: true,
+        }),
+        DrawingAnchor::default(),
+    );
+    let mut bytes = Cursor::new(Vec::new());
+    XlsxWriter::write(&workbook, &mut bytes).expect("write xlsx");
+    let spliced = splice_into_client_data(
+        bytes.into_inner(),
+        "Checkbox",
+        "   <x:Disabled/>\n   <x:Accel>65</x:Accel>\n  ",
+    );
+
+    let reopened = XlsxReader::read(Cursor::new(spliced)).expect("read spliced xlsx");
+    assert_eq!(
+        control_raws(&reopened),
+        vec!["<x:Disabled/>".to_string(), "<x:Accel>65</x:Accel>".to_string()],
+        "unmodeled ClientData children captured on a modeled kind"
+    );
+
+    let mut rewritten = Cursor::new(Vec::new());
+    XlsxWriter::write(&reopened, &mut rewritten).expect("rewrite xlsx");
+    let rewritten = rewritten.into_inner();
+    let vml = vml_parts(&rewritten);
+    assert_eq!(vml.matches("<x:Disabled/>").count(), 1);
+    assert_eq!(vml.matches("<x:Accel>65</x:Accel>").count(), 1);
+    assert_eq!(vml.matches("<x:Checked>").count(), 1, "no double representation");
+
+    let reread = XlsxReader::read(Cursor::new(rewritten)).expect("reread xlsx");
+    assert_eq!(control_raws(&reread), control_raws(&reopened));
+}
+
+// features: Form control unmodeled ClientData passthrough
+#[test]
+fn unmodeled_client_data_round_trips_on_button_xlsb() {
+    let mut workbook = Workbook::new();
+    workbook.worksheet_mut(0).unwrap().add_form_control(
+        FormControl::new(FormControlKind::Button {
+            caption: "OK".into(),
+        }),
+        DrawingAnchor::default(),
+    );
+    let mut bytes = Cursor::new(Vec::new());
+    XlsbWriter::write(&workbook, &mut bytes).expect("write xlsb");
+    let spliced = splice_into_client_data(
+        bytes.into_inner(),
+        "Button",
+        "   <x:Default/>\n   <x:Cancel/>\n  ",
+    );
+
+    let reopened = XlsbReader::read(Cursor::new(spliced)).expect("read spliced xlsb");
+    assert_eq!(
+        control_raws(&reopened),
+        vec!["<x:Default/>".to_string(), "<x:Cancel/>".to_string()],
+        "dialog button semantics captured on a modeled kind"
+    );
+
+    let mut rewritten = Cursor::new(Vec::new());
+    XlsbWriter::write(&reopened, &mut rewritten).expect("rewrite xlsb");
+    let rewritten = rewritten.into_inner();
+    let vml = vml_parts(&rewritten);
+    assert_eq!(vml.matches("<x:Default/>").count(), 1);
+    assert_eq!(vml.matches("<x:Cancel/>").count(), 1);
+
+    let reread = XlsbReader::read(Cursor::new(rewritten)).expect("reread xlsb");
+    assert_eq!(control_raws(&reread), control_raws(&reopened));
+}
+
+// features: Form control: dropdown (combo box)
+#[test]
+fn uiobj_marker_wins_over_a_ctrlprops_twin_xlsx() {
+    // A UIObj-marked VML shape with a worksheet <control> entry and
+    // ctrlProps part is self-contradictory; the marker wins, matching
+    // the XLS reader's unconditional fUIObj skip.
+    let mut workbook = Workbook::new();
+    workbook.worksheet_mut(0).unwrap().add_form_control(
+        FormControl::new(FormControlKind::Checkbox {
+            caption: "Audit".into(),
+            state: CheckState::Checked,
+            cell_link: None,
+            no_3d: true,
+        }),
+        DrawingAnchor::default(),
+    );
+    let mut bytes = Cursor::new(Vec::new());
+    XlsxWriter::write(&workbook, &mut bytes).expect("write xlsx");
+    let spliced = splice_into_client_data(bytes.into_inner(), "Checkbox", "   <x:UIObj/>\n  ");
+    let reopened = XlsxReader::read(Cursor::new(spliced)).expect("read spliced xlsx");
+    assert_eq!(
+        reopened.worksheet(0).unwrap().form_control_count(),
+        0,
+        "UIObj-marked shape must not surface even with a ctrlProps twin"
+    );
+}
+
+// features: Form control unmodeled ClientData passthrough
+#[test]
+fn malformed_raw_client_data_is_rejected_at_write() {
+    let mut workbook = Workbook::new();
+    let mut control = FormControl::new(FormControlKind::Checkbox {
+        caption: "Audit".into(),
+        state: CheckState::Unchecked,
+        cell_link: None,
+        no_3d: false,
+    });
+    control.raw_client_data = vec![b"<x:Oops>".to_vec()];
+    workbook
+        .worksheet_mut(0)
+        .unwrap()
+        .add_form_control(control, DrawingAnchor::default());
+
+    let xlsx_err = XlsxWriter::write(&workbook, &mut Cursor::new(Vec::new()))
+        .expect_err("unbalanced raw ClientData must not produce a corrupt XLSX part");
+    assert!(
+        xlsx_err.to_string().contains("ClientData"),
+        "error names the raw ClientData fragment: {xlsx_err}"
+    );
+    let xlsb_err = XlsbWriter::write(&workbook, &mut Cursor::new(Vec::new()))
+        .expect_err("unbalanced raw ClientData must not produce a corrupt XLSB part");
+    assert!(
+        xlsb_err.to_string().contains("ClientData"),
+        "error names the raw ClientData fragment: {xlsb_err}"
+    );
+
+    // Fragment shapes that are balanced but would defeat the
+    // duplicate-name guard or corrupt the part must also be rejected.
+    let hostile: [&[u8]; 18] = [
+        // Multi-root: second root smuggles a modeled element past the
+        // guard (it inspects only the first element's name).
+        b"<x:Disabled/><x:Checked>0</x:Checked>",
+        // Comment prefix: the guard would read the name as `!--`.
+        b"<!--c--><x:Checked>0</x:Checked>",
+        // XML declaration mid-part is malformed.
+        b"<?xml version=\"1.0\"?><x:A/>",
+        // Unquoted attribute value is not well-formed XML.
+        b"<x:A foo=bar>t</x:A>",
+        // Undefined entity reference makes the part ill-formed.
+        b"<x:A>&bogus;</x:A>",
+        // Surrogate character reference is not a valid XML character.
+        b"<x:A>&#xD800;</x:A>",
+        // Nested XML declaration is malformed anywhere but the start.
+        b"<x:A><?xml version=\"1.0\"?></x:A>",
+        // DOCTYPE inside content is malformed.
+        b"<x:A><!DOCTYPE d></x:A>",
+        // Empty local name is not a valid element name.
+        b"<x:/>",
+        // Undefined entity in an attribute value.
+        b"<x:A v=\"&bogus;\"/>",
+        // Literal ]]> in character data (XML 1.0 section 2.4).
+        b"<x:A>]]></x:A>",
+        // Double hyphen inside a comment (section 2.5).
+        b"<x:A><!-- -- --></x:A>",
+        // Comment ending in ---> is the same violation.
+        b"<x:A><!--x---></x:A>",
+        // Character reference to a control char invalid in XML.
+        b"<x:A>&#11;</x:A>",
+        // Raw control character invalid in XML content.
+        b"<x:A>\x0b</x:A>",
+        // Unicode noncharacter in content.
+        "<x:A>\u{FFFE}</x:A>".as_bytes(),
+        // Unescaped < in an attribute value (section 3.1).
+        b"<x:A b=\"<\"/>",
+        // Form feed is not XML whitespace outside the element.
+        b"<x:A/>\x0c",
+    ];
+    for fragment in hostile {
+        let mut workbook = Workbook::new();
+        let mut control = FormControl::new(FormControlKind::Checkbox {
+            caption: "Audit".into(),
+            state: CheckState::Unchecked,
+            cell_link: None,
+            no_3d: false,
+        });
+        control.raw_client_data = vec![fragment.to_vec()];
+        workbook
+            .worksheet_mut(0)
+            .unwrap()
+            .add_form_control(control, DrawingAnchor::default());
+        let error = XlsxWriter::write(&workbook, &mut Cursor::new(Vec::new())).expect_err(
+            &format!(
+                "hostile fragment must be rejected: {}",
+                String::from_utf8_lossy(fragment)
+            ),
+        );
+        assert!(
+            error.to_string().contains("ClientData"),
+            "error names the raw ClientData fragment: {error}"
+        );
+    }
+}
+
 fn patch_vml_object_type(bytes: Vec<u8>, replacement: &str) -> Vec<u8> {
     let mut input = zip::ZipArchive::new(Cursor::new(bytes)).expect("open zip");
     let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
@@ -368,7 +770,6 @@ fn pict_vml_is_not_exposed_as_unknown_form_control() {
         legacy_object_type: None,
         caption: "ActiveX placeholder".into(),
         raw_properties: Vec::new(),
-        raw_client_data: Vec::new(),
         raw_obj: None,
     });
     assert!(pict.validate().is_err());
@@ -386,7 +787,6 @@ fn pict_vml_is_not_exposed_as_unknown_form_control() {
         legacy_object_type: None,
         caption: "blank type".into(),
         raw_properties: Vec::new(),
-        raw_client_data: Vec::new(),
         raw_obj: None,
     });
     assert!(blank.validate().is_err());

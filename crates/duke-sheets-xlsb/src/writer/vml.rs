@@ -21,6 +21,8 @@ pub(crate) fn write_legacy_vml<W: Write + Seek>(
     for control in &sheet_controls(ws) {
         control.payload.validate()?;
     }
+    duke_sheets_vml::validate_sheet_raw_client_data(ws)
+        .map_err(crate::error::XlsbError::InvalidFormat)?;
     let Some(xml) = duke_sheets_vml::build_legacy_vml(ws, sheet_index) else {
         return Ok(false);
     };

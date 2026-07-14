@@ -660,10 +660,6 @@ enum DrawingFormControlKind {
         /// attributes; echoed back unchanged on write.
         #[serde(default)]
         raw_properties: Vec<(String, String)>,
-        /// Internal passthrough of unmodeled VML `ClientData` children
-        /// (Buffers in JS); echoed back unchanged on write.
-        #[serde(default)]
-        raw_client_data: Vec<ByteBuf>,
         /// Internal passthrough of the original BIFF OBJ body (Buffer
         /// in JS), required for XLS rewrite.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -769,18 +765,12 @@ impl From<&core::FormControlKind> for DrawingFormControlKind {
                 legacy_object_type,
                 caption,
                 raw_properties,
-                raw_client_data,
                 raw_obj,
             } => Self::Unknown {
                 object_type: object_type.clone(),
                 legacy_object_type: *legacy_object_type,
                 caption: DrawingText::from(caption),
                 raw_properties: raw_properties.clone(),
-                raw_client_data: raw_client_data
-                    .iter()
-                    .cloned()
-                    .map(ByteBuf::from)
-                    .collect(),
                 raw_obj: raw_obj.clone().map(ByteBuf::from),
             },
         }
@@ -887,17 +877,12 @@ impl TryFrom<DrawingFormControlKind> for core::FormControlKind {
                 legacy_object_type,
                 caption,
                 raw_properties,
-                raw_client_data,
                 raw_obj,
             } => Self::Unknown {
                 object_type,
                 legacy_object_type,
                 caption: caption.try_into()?,
                 raw_properties,
-                raw_client_data: raw_client_data
-                    .into_iter()
-                    .map(ByteBuf::into_vec)
-                    .collect(),
                 raw_obj: raw_obj.map(ByteBuf::into_vec),
             },
         })
@@ -910,6 +895,10 @@ struct DrawingFormControl {
     kind: DrawingFormControlKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     macro_name: Option<String>,
+    /// Unmodeled VML `ClientData` children (Buffers in JS) preserved
+    /// on any control kind; echoed back unchanged on write.
+    #[serde(default)]
+    raw_client_data: Vec<ByteBuf>,
 }
 
 impl From<&core::FormControl> for DrawingFormControl {
@@ -917,6 +906,12 @@ impl From<&core::FormControl> for DrawingFormControl {
         Self {
             kind: DrawingFormControlKind::from(&control.kind),
             macro_name: control.macro_name.clone(),
+            raw_client_data: control
+                .raw_client_data
+                .iter()
+                .cloned()
+                .map(ByteBuf::from)
+                .collect(),
         }
     }
 }
@@ -925,12 +920,17 @@ impl TryFrom<DrawingFormControl> for core::FormControl {
     type Error = String;
 
     fn try_from(control: DrawingFormControl) -> std::result::Result<Self, Self::Error> {
-        let control = Self {
+        let result = Self {
             kind: control.kind.try_into()?,
             macro_name: control.macro_name,
+            raw_client_data: control
+                .raw_client_data
+                .into_iter()
+                .map(ByteBuf::into_vec)
+                .collect(),
         };
-        control.validate().map_err(|error| error.to_string())?;
-        Ok(control)
+        result.validate().map_err(|error| error.to_string())?;
+        Ok(result)
     }
 }
 

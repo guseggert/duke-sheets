@@ -2002,7 +2002,7 @@ fn excel_can_read_xlsb_comment_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("B2", "has note").unwrap();
-    ws.set_comment_at(1, 1, CellComment::new("Reviewer", "Check this figure"));
+    ws.set_comment_at(1, 1, CellComment::new("Reviewer", "Check this figure")).unwrap();
 
     let result = roundtrip_through_excel_xlsb(&wb);
     let sheet = result.worksheet(0).unwrap();
@@ -2479,5 +2479,70 @@ fn excel_preserves_xlsb_basic_shape_we_emit() {
     assert_eq!(
         text.runs[1].font.as_ref().unwrap().color,
         Some(Color::rgb(0, 0, 255))
+    );
+}
+
+/// Unmodeled ClientData children we replay on a modeled control kind
+/// survive a real Excel XLSB round-trip. Dialog-button semantics
+/// (`x:Default`, `x:Cancel`) ride a worksheet button; the Repaired
+/// check inside the helper proves the raw emission is spec-clean and
+/// the re-read model proves Excel re-saved the elements.
+// features: Form control unmodeled ClientData passthrough
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_unmodeled_client_data_we_emit_xlsb() {
+    use duke_sheets_chart::{CellMarker, DrawingAnchor};
+    use duke_sheets_core::{FormControl, FormControlKind};
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 1.0).expect("A1");
+    let mut control = FormControl::new(FormControlKind::Button {
+        caption: "OK".into(),
+    });
+    control.raw_client_data = vec![b"<x:Default/>".to_vec(), b"<x:Cancel/>".to_vec()];
+    ws.add_form_control(
+        control,
+        DrawingAnchor::TwoCell {
+            from: CellMarker {
+                col: 1,
+                col_offset_emu: 0,
+                row: 1,
+                row_offset_emu: 0,
+            },
+            to: CellMarker {
+                col: 3,
+                col_offset_emu: 0,
+                row: 3,
+                row_offset_emu: 0,
+            },
+            edit_as: None,
+        },
+    );
+
+    let result = roundtrip_through_excel_xlsb(&wb);
+    let control = result
+        .worksheet(0)
+        .unwrap()
+        .form_controls()
+        .next()
+        .expect("button survives");
+    assert!(matches!(
+        control.payload.kind,
+        duke_sheets_core::FormControlKind::Button { .. }
+    ));
+    let raws: Vec<String> = control
+        .payload
+        .raw_client_data
+        .iter()
+        .map(|raw| String::from_utf8_lossy(raw).into_owned())
+        .collect();
+    assert!(
+        raws.iter().any(|raw| raw.contains("Default")),
+        "x:Default survives Excel's re-save: {raws:?}"
+    );
+    assert!(
+        raws.iter().any(|raw| raw.contains("Cancel")),
+        "x:Cancel survives Excel's re-save: {raws:?}"
     );
 }

@@ -691,10 +691,6 @@ enum WasmFormControlKind {
         /// attributes; echoed back unchanged on write.
         #[serde(default)]
         raw_properties: Vec<(String, String)>,
-        /// Internal passthrough of unmodeled VML `ClientData` children
-        /// (byte arrays in JS); echoed back unchanged on write.
-        #[serde(default, deserialize_with = "de_bytes_vec")]
-        raw_client_data: Vec<Vec<u8>>,
         /// Internal passthrough of the original BIFF OBJ body (byte
         /// array in JS), required for XLS rewrite.
         #[serde(default, deserialize_with = "de_opt_bytes")]
@@ -800,14 +796,12 @@ impl From<&core::FormControlKind> for WasmFormControlKind {
                 legacy_object_type,
                 caption,
                 raw_properties,
-                raw_client_data,
                 raw_obj,
             } => Self::Unknown {
                 object_type: object_type.clone(),
                 legacy_object_type: *legacy_object_type,
                 caption: WasmDrawingText::from(caption),
                 raw_properties: raw_properties.clone(),
-                raw_client_data: raw_client_data.clone(),
                 raw_obj: raw_obj.clone(),
             },
         }
@@ -914,14 +908,12 @@ impl TryFrom<WasmFormControlKind> for core::FormControlKind {
                 legacy_object_type,
                 caption,
                 raw_properties,
-                raw_client_data,
                 raw_obj,
             } => Self::Unknown {
                 object_type,
                 legacy_object_type,
                 caption: caption.try_into()?,
                 raw_properties,
-                raw_client_data,
                 raw_obj,
             },
         })
@@ -934,6 +926,10 @@ struct WasmFormControl {
     kind: WasmFormControlKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     macro_name: Option<String>,
+    /// Unmodeled VML `ClientData` children (byte arrays in JS)
+    /// preserved on any control kind; echoed back unchanged on write.
+    #[serde(default, deserialize_with = "de_bytes_vec")]
+    raw_client_data: Vec<Vec<u8>>,
 }
 
 impl From<&core::FormControl> for WasmFormControl {
@@ -941,6 +937,7 @@ impl From<&core::FormControl> for WasmFormControl {
         Self {
             kind: WasmFormControlKind::from(&control.kind),
             macro_name: control.macro_name.clone(),
+            raw_client_data: control.raw_client_data.clone(),
         }
     }
 }
@@ -949,12 +946,13 @@ impl TryFrom<WasmFormControl> for core::FormControl {
     type Error = String;
 
     fn try_from(control: WasmFormControl) -> Result<Self, Self::Error> {
-        let control = Self {
+        let result = Self {
             kind: control.kind.try_into()?,
             macro_name: control.macro_name,
+            raw_client_data: control.raw_client_data,
         };
-        control.validate().map_err(|error| error.to_string())?;
-        Ok(control)
+        result.validate().map_err(|error| error.to_string())?;
+        Ok(result)
     }
 }
 

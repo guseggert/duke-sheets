@@ -233,8 +233,46 @@ def test_unknown_control_raw_getters():
 
     checkbox = duke_sheets.FormControl.checkbox("check")
     assert checkbox.raw_properties is None
-    assert checkbox.raw_client_data is None
+    # raw_client_data is carried on every control kind.
+    assert checkbox.raw_client_data == []
     assert checkbox.raw_obj is None
+
+
+def test_modeled_control_raw_client_data_survives_reload(tmp_path):
+    import zipfile
+
+    workbook = duke_sheets.Workbook()
+    sheet = workbook.get_sheet(0)
+    sheet.add_drawing(top(duke_sheets.FormControl.checkbox("Audit"), name="cb"))
+    file_path = tmp_path / "modeled.xlsx"
+    workbook.save(str(file_path))
+
+    # Splice an unmodeled ClientData child into the checkbox shape.
+    spliced_path = tmp_path / "spliced.xlsx"
+    with zipfile.ZipFile(file_path) as source, zipfile.ZipFile(
+        spliced_path, "w"
+    ) as target:
+        for item in source.infolist():
+            data = source.read(item.filename)
+            if "vmlDrawing" in item.filename:
+                xml = data.decode()
+                at = xml.index("ObjectType=\"Checkbox\"")
+                close = xml.index("</x:ClientData>", at)
+                xml = xml[:close] + "   <x:Disabled/>\n  " + xml[close:]
+                data = xml.encode()
+            target.writestr(item, data)
+
+    reopened = duke_sheets.Workbook.open(str(spliced_path))
+    control = reopened.get_sheet(0).form_controls[0].form_control
+    assert control.kind == "checkbox"
+    assert control.raw_client_data == [b"<x:Disabled/>"]
+
+    # The passthrough survives a save from the Python model.
+    resaved_path = tmp_path / "resaved.xlsx"
+    reopened.save(str(resaved_path))
+    resaved = duke_sheets.Workbook.open(str(resaved_path))
+    control = resaved.get_sheet(0).form_controls[0].form_control
+    assert control.raw_client_data == [b"<x:Disabled/>"]
 
 
 def test_unknown_control_raw_getters_return_bytes_after_reload(tmp_path):

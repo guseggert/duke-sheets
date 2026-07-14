@@ -1416,7 +1416,7 @@ fn excel_can_read_comment_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "anchor").unwrap();
-    ws.set_comment_at(0, 0, CellComment::new("Alice", "Hello from duke-sheets"));
+    ws.set_comment_at(0, 0, CellComment::new("Alice", "Hello from duke-sheets")).unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     let s = result.worksheet(0).unwrap();
@@ -1447,11 +1447,11 @@ fn excel_can_read_multiple_comments_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "first").unwrap();
-    ws.set_comment_at(0, 0, CellComment::new("Alice", "Comment one"));
+    ws.set_comment_at(0, 0, CellComment::new("Alice", "Comment one")).unwrap();
     ws.set_cell_value("C3", "second").unwrap();
-    ws.set_comment_at(2, 2, CellComment::new("Bob", "Comment two body"));
+    ws.set_comment_at(2, 2, CellComment::new("Bob", "Comment two body")).unwrap();
     ws.set_cell_value("E5", "third").unwrap();
-    ws.set_comment_at(4, 4, CellComment::new("Carol", "Comment three"));
+    ws.set_comment_at(4, 4, CellComment::new("Carol", "Comment three")).unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     let s = result.worksheet(0).unwrap();
@@ -1489,7 +1489,7 @@ fn excel_can_read_unicode_comment_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "jp").unwrap();
-    ws.set_comment_at(0, 0, CellComment::new("作者", "こんにちは"));
+    ws.set_comment_at(0, 0, CellComment::new("作者", "こんにちは")).unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     let c = result.worksheet(0).unwrap().comment_at(0, 0).unwrap();
@@ -1554,7 +1554,7 @@ fn excel_can_read_xls_picture_and_comment_on_same_sheet_we_emit() {
         7,
         5,
         CellComment::new("Alice", "Mixed-with-picture comment"),
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     let s = result.worksheet(0).unwrap();
@@ -1688,13 +1688,13 @@ fn excel_can_read_comments_across_multiple_sheets_we_emit() {
     // because Beta has no shapes to take a cluster slot.
     wb.worksheet_mut(0)
         .unwrap()
-        .set_comment_at(0, 0, CellComment::new("Alice", "Alpha A1"));
+        .set_comment_at(0, 0, CellComment::new("Alice", "Alpha A1")).unwrap();
     wb.worksheet_mut(0)
         .unwrap()
-        .set_comment_at(3, 3, CellComment::new("Alice", "Alpha D4"));
+        .set_comment_at(3, 3, CellComment::new("Alice", "Alpha D4")).unwrap();
     wb.worksheet_mut(2)
         .unwrap()
-        .set_comment_at(5, 5, CellComment::new("Carol", "Gamma F6"));
+        .set_comment_at(5, 5, CellComment::new("Carol", "Gamma F6")).unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     assert_eq!(result.worksheet(0).unwrap().comment_count(), 2);
@@ -3822,7 +3822,7 @@ fn excel_can_read_mixed_control_comment_picture_we_emit() {
         },
         control_anchor(6, 1, 8, 4),
     );
-    ws.set_comment_at(0, 0, duke_sheets_core::CellComment::new("Author", "a note"));
+    ws.set_comment_at(0, 0, duke_sheets_core::CellComment::new("Author", "a note")).unwrap();
     ws.add_form_control(
         FormControl::new(FormControlKind::Checkbox {
             caption: "mixed sheet".into(),

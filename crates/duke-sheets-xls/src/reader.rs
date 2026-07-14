@@ -3636,7 +3636,6 @@ impl XlsReader {
                 legacy_object_type: Some(parsed.ot),
                 caption: caption(),
                 raw_properties: Vec::new(),
-                raw_client_data: Vec::new(),
                 raw_obj: Some(parsed.raw_body.clone()),
             },
             _ => unreachable!(),

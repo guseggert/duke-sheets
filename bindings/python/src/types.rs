@@ -3075,7 +3075,6 @@ impl PyFormControl {
                 legacy_object_type,
                 caption: drawing_text_input_to_core(caption)?,
                 raw_properties: Vec::new(),
-                raw_client_data: Vec::new(),
                 raw_obj: None,
             },
             macro_name,
@@ -3129,10 +3128,10 @@ impl PyFormControl {
     /// control; read-only passthrough echoed back on write.
     #[getter]
     fn raw_properties(&self) -> Option<Vec<(String, String)>> { match &self.inner.kind { core::FormControlKind::Unknown { raw_properties, .. } => Some(raw_properties.clone()), _ => None } }
-    /// Unmodeled VML `ClientData` fragments carried by an unknown
-    /// control; read-only passthrough echoed back on write.
+    /// Unmodeled VML `ClientData` fragments preserved on any control
+    /// kind; read-only passthrough echoed back on write.
     #[getter]
-    fn raw_client_data(&self, py: Python<'_>) -> Option<Vec<Py<PyBytes>>> { match &self.inner.kind { core::FormControlKind::Unknown { raw_client_data, .. } => Some(raw_client_data.iter().map(|bytes| PyBytes::new_bound(py, bytes).unbind()).collect()), _ => None } }
+    fn raw_client_data(&self, py: Python<'_>) -> Vec<Py<PyBytes>> { self.inner.raw_client_data.iter().map(|bytes| PyBytes::new_bound(py, bytes).unbind()).collect() }
     /// Original BIFF OBJ body carried by an unknown control, required
     /// for XLS rewrite; read-only passthrough echoed back on write.
     #[getter]
