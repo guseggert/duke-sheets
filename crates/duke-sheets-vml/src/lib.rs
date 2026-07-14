@@ -1382,6 +1382,10 @@ struct RawShape {
     row: Option<u32>,
     col: Option<u16>,
     visible: bool,
+    /// Zero-based `<v:shape>` position in the part, pairing this shape
+    /// with its raw ClientData captures. Shape ids are not usable as
+    /// the key: third-party parts duplicate or free-form them.
+    ordinal: usize,
 }
 
 fn parse_raw_shapes(bytes: &[u8]) -> Vec<RawShape> {
@@ -1393,6 +1397,7 @@ fn parse_raw_shapes(bytes: &[u8]) -> Vec<RawShape> {
     let mut buf = Vec::new();
 
     let mut current: Option<RawShape> = None;
+    let mut shape_ordinal = 0usize;
     let mut in_client_data = false;
     let mut in_textbox = false;
     let mut in_caption_div = false;
@@ -1430,7 +1435,9 @@ fn parse_raw_shapes(bytes: &[u8]) -> Vec<RawShape> {
                             row: None,
                             col: None,
                             visible: false,
+                            ordinal: shape_ordinal,
                         };
+                        shape_ordinal += 1;
                         for attr in e.attributes().flatten() {
                             match attr.key.as_ref() {
                                 b"id" => {
@@ -1650,7 +1657,7 @@ fn parse_raw_shapes(bytes: &[u8]) -> Vec<RawShape> {
     }
     let raw_client_data = parse_raw_client_data(bytes);
     for shape in &mut out {
-        if let Some(children) = raw_client_data.get(&shape.control.shape_num) {
+        if let Some(children) = raw_client_data.get(&shape.ordinal) {
             shape.control.raw_client_data = children.clone();
         }
     }
@@ -1677,14 +1684,44 @@ fn validate_raw_client_data_fragment(fragment: &[u8]) -> Result<(), String> {
     let mut reader = Reader::from_reader(fragment);
     let mut buf = Vec::new();
     let mut depth = 0usize;
-    let mut element_seen = false;
+    let mut roots = 0usize;
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(_)) => {
-                depth += 1;
-                element_seen = true;
+        let event = match reader.read_event_into(&mut buf) {
+            Ok(event) => event,
+            Err(error) => {
+                return Err(format!(
+                    "raw ClientData fragment is not well-formed XML ({error}): {}",
+                    display()
+                ));
             }
-            Ok(Event::End(_)) => {
+        };
+        match &event {
+            Event::Start(e) | Event::Empty(e) => {
+                for attr in e.attributes() {
+                    if let Err(error) = attr {
+                        return Err(format!(
+                            "raw ClientData fragment has a malformed attribute ({error}): {}",
+                            display()
+                        ));
+                    }
+                }
+                if depth == 0 {
+                    roots += 1;
+                    // Exactly one root: the duplicate-name guard and
+                    // the modeled/raw split inspect fragments as one
+                    // element each.
+                    if roots > 1 {
+                        return Err(format!(
+                            "raw ClientData fragment must contain exactly one element: {}",
+                            display()
+                        ));
+                    }
+                }
+                if matches!(event, Event::Start(_)) {
+                    depth += 1;
+                }
+            }
+            Event::End(_) => {
                 if depth == 0 {
                     return Err(format!(
                         "raw ClientData fragment has an unopened end tag: {}",
@@ -1693,14 +1730,26 @@ fn validate_raw_client_data_fragment(fragment: &[u8]) -> Result<(), String> {
                 }
                 depth -= 1;
             }
-            Ok(Event::Empty(_)) => element_seen = true,
-            Ok(Event::Eof) => break,
-            Ok(_) => {}
-            Err(error) => {
-                return Err(format!(
-                    "raw ClientData fragment is not well-formed XML ({error}): {}",
-                    display()
-                ));
+            Event::Text(text) => {
+                if depth == 0 && !text.iter().all(|byte| byte.is_ascii_whitespace()) {
+                    return Err(format!(
+                        "raw ClientData fragment must contain exactly one element: {}",
+                        display()
+                    ));
+                }
+            }
+            Event::Eof => break,
+            other => {
+                // Comments, PIs, declarations, DOCTYPE, or CDATA
+                // outside the element would defeat the element-name
+                // guard or corrupt the part; inside the element they
+                // are ordinary content.
+                if depth == 0 {
+                    return Err(format!(
+                        "raw ClientData fragment must start with its element, found {other:?}: {}",
+                        display()
+                    ));
+                }
             }
         }
         buf.clear();
@@ -1711,7 +1760,7 @@ fn validate_raw_client_data_fragment(fragment: &[u8]) -> Result<(), String> {
             display()
         ));
     }
-    if !element_seen {
+    if roots == 0 {
         return Err(format!(
             "raw ClientData fragment must contain an element: {}",
             display()
@@ -1833,16 +1882,21 @@ fn is_modeled_client_data_child(object_type: &str, name: &[u8]) -> bool {
 }
 
 /// Capture complete immediate `ClientData` children that the modeled
-/// parser does not understand. Byte slicing keeps prefixes, attributes,
-/// nested content, and whitespace intact for passthrough.
-fn parse_raw_client_data(bytes: &[u8]) -> std::collections::HashMap<u32, Vec<Vec<u8>>> {
+/// parser does not understand, keyed by zero-based `<v:shape>`
+/// position (ids are not unique in third-party parts). Byte slicing
+/// keeps prefixes, attributes, nested content, and whitespace intact
+/// for passthrough; fragments that fail validation (unclosed children
+/// terminated by an ancestor's end tag) are dropped so a readable
+/// file stays writable.
+fn parse_raw_client_data(bytes: &[u8]) -> std::collections::HashMap<usize, Vec<Vec<u8>>> {
     let mut reader = Reader::from_reader(bytes);
     reader.config_mut().trim_text(false);
     reader.config_mut().check_end_names = false;
-    let mut out: std::collections::HashMap<u32, Vec<Vec<u8>>> =
+    let mut out: std::collections::HashMap<usize, Vec<Vec<u8>>> =
         std::collections::HashMap::new();
     let mut buf = Vec::new();
-    let mut shape_num = 0u32;
+    let mut shape_ordinal: Option<usize> = None;
+    let mut next_ordinal = 0usize;
     let mut in_client_data = false;
     let mut object_type = String::new();
     let mut capture: Option<(usize, u32)> = None;
@@ -1863,9 +1917,20 @@ fn parse_raw_client_data(bytes: &[u8]) -> std::collections::HashMap<u32, Vec<Vec
                 _ => {}
             }
             if *depth == 0 {
-                out.entry(shape_num)
-                    .or_default()
-                    .push(bytes[*start..event_end].to_vec());
+                let fragment = &bytes[*start..event_end];
+                // A malformed child (unclosed tag terminated by an
+                // ancestor's end tag) must not enter the model: a
+                // readable file must stay writable. Replay the state
+                // effect of the ancestor end the capture consumed.
+                if validate_raw_client_data_fragment(fragment).is_ok() {
+                    if let Some(ordinal) = shape_ordinal {
+                        out.entry(ordinal).or_default().push(fragment.to_vec());
+                    }
+                } else if let Event::End(e) = &event {
+                    if matches!(e.local_name().as_ref(), b"ClientData" | b"shape") {
+                        in_client_data = false;
+                    }
+                }
                 capture = None;
             }
             buf.clear();
@@ -1874,17 +1939,9 @@ fn parse_raw_client_data(bytes: &[u8]) -> std::collections::HashMap<u32, Vec<Vec
 
         match &event {
             Event::Start(e) | Event::Empty(e) if e.local_name().as_ref() == b"shape" => {
-                shape_num = 0;
-                for attr in e.attributes().flatten() {
-                    if attr.key.local_name().as_ref() == b"id" {
-                        let id = String::from_utf8_lossy(&attr.value);
-                        shape_num = id
-                            .rsplit(['s', 'S'])
-                            .next()
-                            .and_then(|value| value.parse().ok())
-                            .unwrap_or(0);
-                    }
-                }
+                shape_ordinal = Some(next_ordinal);
+                next_ordinal += 1;
+                in_client_data = false;
             }
             Event::Start(e) if e.local_name().as_ref() == b"ClientData" => {
                 in_client_data = true;
@@ -1908,9 +1965,11 @@ fn parse_raw_client_data(bytes: &[u8]) -> std::collections::HashMap<u32, Vec<Vec
                 if in_client_data
                     && !is_modeled_client_data_child(&object_type, e.local_name().as_ref()) =>
             {
-                out.entry(shape_num)
-                    .or_default()
-                    .push(bytes[event_start..event_end].to_vec());
+                if let Some(ordinal) = shape_ordinal {
+                    out.entry(ordinal).or_default().push(
+                        bytes[event_start..event_end].to_vec(),
+                    );
+                }
             }
             Event::Eof => break,
             _ => {}
@@ -2436,6 +2495,66 @@ mod tests {
             raws,
             vec!["<x:Disabled/>".to_string(), "<x:Accel>65</x:Accel>".to_string()],
             "exactly the unmodeled children, in document order"
+        );
+    }
+
+    #[test]
+    fn raw_client_data_stays_with_its_shape_on_duplicate_ids() {
+        // Third-party generators reuse or free-form the shape id; raw
+        // capture must attach by document position, not parsed id.
+        let body = r##" <v:shape id="_x0000_s1025" type="#_x0000_t201">
+  <x:ClientData ObjectType="Checkbox">
+   <x:Anchor>0, 0, 0, 0, 1, 0, 1, 0</x:Anchor>
+   <x:Disabled/>
+  </x:ClientData>
+ </v:shape>
+ <v:shape id="_x0000_s1025" type="#_x0000_t201">
+  <x:ClientData ObjectType="Checkbox">
+   <x:Anchor>0, 0, 2, 0, 1, 0, 3, 0</x:Anchor>
+   <x:Accel>65</x:Accel>
+  </x:ClientData>
+ </v:shape>
+"##;
+        let parsed = parse_vml_controls(wrap(body).as_bytes());
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].raw_client_data, vec![b"<x:Disabled/>".to_vec()]);
+        assert_eq!(
+            parsed[1].raw_client_data,
+            vec![b"<x:Accel>65</x:Accel>".to_vec()]
+        );
+    }
+
+    #[test]
+    fn unclosed_client_data_child_is_dropped_without_contamination() {
+        // An unmodeled child left unclosed makes </x:ClientData> the
+        // capture terminator. The malformed fragment must be dropped
+        // (never fail a later save) and must not leak the ClientData
+        // state into the next shape's presentation elements.
+        let body = r##" <v:shape id="_x0000_s1025" type="#_x0000_t201">
+  <x:ClientData ObjectType="Checkbox">
+   <x:Anchor>0, 0, 0, 0, 1, 0, 1, 0</x:Anchor>
+   <x:Broken>
+  </x:ClientData>
+ </v:shape>
+ <v:shape id="_x0000_s1026" type="#_x0000_t201">
+  <v:fill color="red"/>
+  <x:ClientData ObjectType="Checkbox">
+   <x:Anchor>0, 0, 2, 0, 1, 0, 3, 0</x:Anchor>
+   <x:Accel>65</x:Accel>
+  </x:ClientData>
+ </v:shape>
+"##;
+        let parsed = parse_vml_controls(wrap(body).as_bytes());
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(
+            parsed[0].raw_client_data,
+            Vec::<Vec<u8>>::new(),
+            "malformed fragment must not enter the model"
+        );
+        assert_eq!(
+            parsed[1].raw_client_data,
+            vec![b"<x:Accel>65</x:Accel>".to_vec()],
+            "next shape must not inherit ClientData state"
         );
     }
 

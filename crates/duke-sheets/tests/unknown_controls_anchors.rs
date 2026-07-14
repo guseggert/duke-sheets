@@ -473,17 +473,20 @@ fn splice_into_client_data(bytes: Vec<u8>, object_type: &str, insert: &str) -> V
         if name.contains("vmlDrawing") {
             let xml = String::from_utf8(data).expect("VML is UTF-8");
             let marker = format!("ObjectType=\"{object_type}\"");
-            let type_at = xml.find(&marker).expect("shape with the object type");
-            let close_at = xml[type_at..]
-                .find("</x:ClientData>")
-                .map(|offset| type_at + offset)
-                .expect("ClientData close");
-            let mut patched = String::with_capacity(xml.len() + insert.len());
-            patched.push_str(&xml[..close_at]);
-            patched.push_str(insert);
-            patched.push_str(&xml[close_at..]);
-            data = patched.into_bytes();
-            spliced = true;
+            data = if let Some(type_at) = xml.find(&marker) {
+                let close_at = xml[type_at..]
+                    .find("</x:ClientData>")
+                    .map(|offset| type_at + offset)
+                    .expect("ClientData close");
+                let mut patched = String::with_capacity(xml.len() + insert.len());
+                patched.push_str(&xml[..close_at]);
+                patched.push_str(insert);
+                patched.push_str(&xml[close_at..]);
+                spliced = true;
+                patched.into_bytes()
+            } else {
+                xml.into_bytes()
+            };
         }
         output
             .start_file(name, zip::write::SimpleFileOptions::default())
@@ -627,6 +630,44 @@ fn malformed_raw_client_data_is_rejected_at_write() {
         xlsb_err.to_string().contains("ClientData"),
         "error names the raw ClientData fragment: {xlsb_err}"
     );
+
+    // Fragment shapes that are balanced but would defeat the
+    // duplicate-name guard or corrupt the part must also be rejected.
+    let hostile: [&[u8]; 4] = [
+        // Multi-root: second root smuggles a modeled element past the
+        // guard (it inspects only the first element's name).
+        b"<x:Disabled/><x:Checked>0</x:Checked>",
+        // Comment prefix: the guard would read the name as `!--`.
+        b"<!--c--><x:Checked>0</x:Checked>",
+        // XML declaration mid-part is malformed.
+        b"<?xml version=\"1.0\"?><x:A/>",
+        // Unquoted attribute value is not well-formed XML.
+        b"<x:A foo=bar>t</x:A>",
+    ];
+    for fragment in hostile {
+        let mut workbook = Workbook::new();
+        let mut control = FormControl::new(FormControlKind::Checkbox {
+            caption: "Audit".into(),
+            state: CheckState::Unchecked,
+            cell_link: None,
+            no_3d: false,
+        });
+        control.raw_client_data = vec![fragment.to_vec()];
+        workbook
+            .worksheet_mut(0)
+            .unwrap()
+            .add_form_control(control, DrawingAnchor::default());
+        let error = XlsxWriter::write(&workbook, &mut Cursor::new(Vec::new())).expect_err(
+            &format!(
+                "hostile fragment must be rejected: {}",
+                String::from_utf8_lossy(fragment)
+            ),
+        );
+        assert!(
+            error.to_string().contains("ClientData"),
+            "error names the raw ClientData fragment: {error}"
+        );
+    }
 }
 
 fn patch_vml_object_type(bytes: Vec<u8>, replacement: &str) -> Vec<u8> {
