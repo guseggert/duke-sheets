@@ -1029,6 +1029,6 @@ fn radio_grouping_uses_custom_sheet_dimensions() {
     ));
 
     let placed = sheet.placed_form_controls();
-    assert_eq!(placed[1].rect_emu.0, 1_381_125);
+    assert_eq!(placed[1].rect_emu.x_emu, 1_381_125);
     assert_eq!(radio_groups(&placed), vec![vec![1], vec![2]]);
 }

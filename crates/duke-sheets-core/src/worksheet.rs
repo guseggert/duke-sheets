@@ -1719,7 +1719,7 @@ impl Worksheet {
     pub fn placed_form_controls(&self) -> Vec<PlacedControl<'_>> {
         fn walk<'a>(
             kind: &'a DrawingKind,
-            outer: crate::drawing::RectEmu,
+            outer: crate::drawing::CornersEmu,
             path: &DrawingPath,
             out: &mut Vec<PlacedControl<'a>>,
         ) {
@@ -1731,7 +1731,7 @@ impl Worksheet {
                     if let DrawingKind::FormControl(control) = &child.kind {
                         out.push(PlacedControl {
                             path: child_path.clone(),
-                            rect_emu: rect,
+                            rect_emu: crate::drawing::RectEmu::from_corners(rect),
                             control,
                         });
                     }
@@ -1746,7 +1746,7 @@ impl Worksheet {
             if let DrawingKind::FormControl(control) = &object.kind {
                 out.push(PlacedControl {
                     path: path.clone(),
-                    rect_emu: rect,
+                    rect_emu: crate::drawing::RectEmu::from_corners(rect),
                     control,
                 });
             }
@@ -1773,7 +1773,7 @@ impl Worksheet {
             rect = map_child_rect(rect, &group.transform, &child.transform);
             kind = &child.kind;
         }
-        Some(rect)
+        Some(crate::drawing::RectEmu::from_corners(rect))
     }
 
     /// Mutable access to the form control at `path`.
@@ -2629,7 +2629,12 @@ mod tests {
         // not the raw child transform.
         assert_ne!(
             ws.drawing_rect_emu(&placed[1].path).unwrap(),
-            (200_000, 100_000, 600_000, 300_000),
+            crate::drawing::RectEmu {
+                x_emu: 200_000,
+                y_emu: 100_000,
+                width_emu: 400_000,
+                height_emu: 200_000,
+            },
         );
         assert_eq!(ws.drawing_rect_emu(&[7]), None);
         assert_eq!(ws.drawing_rect_emu(&[1, 3]), None);

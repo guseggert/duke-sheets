@@ -732,13 +732,12 @@ pub fn sheet_controls(sheet: &duke_sheets_core::Worksheet) -> Vec<SheetControl<'
             let anchor = if let [index] = placed.path.as_slice() {
                 sheet.drawings()[*index].anchor.clone()
             } else {
-                let (x1, y1, x2, y2) = placed.rect_emu;
-                let clamp = |v: i128| v.clamp(0, i64::MAX as i128) as i64;
+                let rect = placed.rect_emu;
                 DrawingAnchor::Absolute {
-                    x_emu: clamp(x1),
-                    y_emu: clamp(y1),
-                    width_emu: clamp((x2 - x1).max(0)),
-                    height_emu: clamp((y2 - y1).max(0)),
+                    x_emu: rect.x_emu.max(0),
+                    y_emu: rect.y_emu.max(0),
+                    width_emu: rect.width_emu.max(0),
+                    height_emu: rect.height_emu.max(0),
                 }
             };
             SheetControl {
@@ -1894,16 +1893,6 @@ fn validate_raw_client_data_fragment(fragment: &[u8]) -> Result<(), String> {
                 }
             }
             Event::Eof => break,
-            other => {
-                // Anything else outside the element would defeat the
-                // element-name guard.
-                if depth == 0 {
-                    return Err(format!(
-                        "raw ClientData fragment must start with its element, found {other:?}: {}",
-                        display()
-                    ));
-                }
-            }
         }
         buf.clear();
     }

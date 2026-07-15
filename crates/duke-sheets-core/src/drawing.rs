@@ -724,8 +724,43 @@ pub struct GroupChild {
 /// drawing list, subsequent elements index group children.
 pub type DrawingPath = Vec<usize>;
 
-/// Absolute rectangle in an EMU coordinate space: `(x1, y1, x2, y2)`.
-pub type RectEmu = (i128, i128, i128, i128);
+/// Absolute rectangle in the sheet's EMU coordinate space.
+///
+/// Fields saturate at ±(2^53 − 1) EMU so every value is exactly
+/// representable as an IEEE-754 double (and thus a JS number).
+/// Real sheet geometry never approaches the bound (2^53 EMU is about
+/// 250,000 km); only degenerate group transforms in hostile files
+/// saturate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct RectEmu {
+    /// Left edge, in EMU from the sheet origin.
+    pub x_emu: i64,
+    /// Top edge, in EMU from the sheet origin.
+    pub y_emu: i64,
+    /// Width in EMU. Negative when the source anchor is inverted
+    /// (its `to` marker before its `from` marker).
+    pub width_emu: i64,
+    /// Height in EMU. Negative when the source anchor is inverted.
+    pub height_emu: i64,
+}
+
+impl RectEmu {
+    pub(crate) fn from_corners((x1, y1, x2, y2): CornersEmu) -> Self {
+        const JS_SAFE: i128 = (1i128 << 53) - 1;
+        let clamp = |v: i128| -> i64 { v.clamp(-JS_SAFE, JS_SAFE) as i64 };
+        Self {
+            x_emu: clamp(x1),
+            y_emu: clamp(y1),
+            width_emu: clamp(x2.saturating_sub(x1)),
+            height_emu: clamp(y2.saturating_sub(y1)),
+        }
+    }
+}
+
+/// Internal corner-form rectangle `(x1, y1, x2, y2)` used by the
+/// group transform math; i128 keeps hostile nested transforms from
+/// overflowing before the final [`RectEmu`] saturation.
+pub(crate) type CornersEmu = (i128, i128, i128, i128);
 
 /// A filtered view item: a typed payload together with its wrapper
 /// object and position in the drawing list. Yielded by the
@@ -954,18 +989,21 @@ pub fn validate_anchor(anchor: &DrawingAnchor) -> Result<()> {
     Ok(())
 }
 
-/// Absolute EMU rectangle (x1, y1, x2, y2) for a drawing anchor at
-/// Excel's default cell metrics.
+/// Absolute EMU rectangle for a drawing anchor at Excel's default
+/// cell metrics.
 #[cfg(test)]
 pub(crate) fn anchor_rect_emu(anchor: &DrawingAnchor) -> RectEmu {
-    anchor_rect_emu_with_metrics(anchor, &duke_sheets_chart::DefaultDrawingMetrics)
+    RectEmu::from_corners(anchor_rect_emu_with_metrics(
+        anchor,
+        &duke_sheets_chart::DefaultDrawingMetrics,
+    ))
 }
 
-/// Absolute EMU rectangle using the supplied worksheet metrics.
+/// Absolute EMU corner rectangle using the supplied worksheet metrics.
 pub(crate) fn anchor_rect_emu_with_metrics(
     anchor: &DrawingAnchor,
     metrics: &(impl duke_sheets_chart::DrawingMetrics + ?Sized),
-) -> RectEmu {
+) -> CornersEmu {
     match anchor {
         DrawingAnchor::TwoCell { from, to, .. } => {
             let (x1, y1) = duke_sheets_chart::marker_position_emu(from, metrics);
@@ -1010,10 +1048,10 @@ pub(crate) fn anchor_rect_emu_with_metrics(
 /// nested group rotation applies through recursion via the inner
 /// group's transform.
 pub(crate) fn map_child_rect(
-    outer: RectEmu,
+    outer: CornersEmu,
     transform: &GroupTransform,
     child: &ChildTransform,
-) -> RectEmu {
+) -> CornersEmu {
     let (ox1, oy1, ox2, oy2) = outer;
     let (ow, oh) = (
         ox2.saturating_sub(ox1).max(0),
@@ -1247,7 +1285,7 @@ mod tests {
 
     #[test]
     fn map_child_rect_scales_into_outer_frame() {
-        let outer: RectEmu = (1000, 2000, 3000, 4000);
+        let outer: CornersEmu = (1000, 2000, 3000, 4000);
         let transform = GroupTransform {
             child_x_emu: 0,
             child_y_emu: 0,
@@ -1271,7 +1309,7 @@ mod tests {
 
     #[test]
     fn map_child_rect_rotates_about_the_outer_frame_center() {
-        let outer: RectEmu = (0, 0, 1000, 1000);
+        let outer: CornersEmu = (0, 0, 1000, 1000);
         let child = ChildTransform {
             x_emu: 0,
             y_emu: 0,
@@ -1307,7 +1345,7 @@ mod tests {
 
     #[test]
     fn map_child_rect_flips_before_rotating() {
-        let outer: RectEmu = (0, 0, 1000, 1000);
+        let outer: CornersEmu = (0, 0, 1000, 1000);
         let child = ChildTransform {
             x_emu: 0,
             y_emu: 0,
@@ -1339,7 +1377,7 @@ mod tests {
     fn map_child_rect_survives_hostile_extents() {
         // ow ~ 2^77 against a child delta ~ 2^64 overflows a naive
         // i128 multiply; the mapping must saturate, not panic.
-        let outer: RectEmu = (0, 0, 1_i128 << 77, 1_i128 << 77);
+        let outer: CornersEmu = (0, 0, 1_i128 << 77, 1_i128 << 77);
         let transform = GroupTransform {
             child_x_emu: i64::MIN,
             child_y_emu: i64::MIN,
@@ -1359,7 +1397,7 @@ mod tests {
 
         // The rotation path must survive an extreme outer frame, as
         // produced by saturated nested mappings.
-        let extreme: RectEmu = (i128::MIN, i128::MIN, i128::MAX, i128::MAX);
+        let extreme: CornersEmu = (i128::MIN, i128::MIN, i128::MAX, i128::MAX);
         let rotated = GroupTransform {
             rotation: 5_400_000,
             flip_h: true,
@@ -1371,7 +1409,7 @@ mod tests {
 
     #[test]
     fn map_child_rect_applies_group_flips_about_the_outer_frame_center() {
-        let outer: RectEmu = (0, 0, 1000, 2000);
+        let outer: CornersEmu = (0, 0, 1000, 2000);
         let child = ChildTransform {
             x_emu: 0,
             y_emu: 0,

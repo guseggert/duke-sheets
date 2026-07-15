@@ -521,17 +521,16 @@ pub fn radio_groups(controls: &[PlacedControl<'_>]) -> Vec<Vec<usize>> {
         .collect();
 
     let containing_box = |rect: RectEmu| -> Option<usize> {
-        let (x1, y1, x2, y2) = rect;
-        let (cx, cy) = (x1.saturating_add(x2) / 2, y1.saturating_add(y2) / 2);
+        let cx = rect.x_emu.saturating_add(rect.width_emu / 2);
+        let cy = rect.y_emu.saturating_add(rect.height_emu / 2);
         box_rects
             .iter()
             .enumerate()
-            .filter(|(_, (bx1, by1, bx2, by2))| {
-                (*bx1..=*bx2).contains(&cx) && (*by1..=*by2).contains(&cy)
+            .filter(|(_, b)| {
+                (b.x_emu..=b.x_emu.saturating_add(b.width_emu)).contains(&cx)
+                    && (b.y_emu..=b.y_emu.saturating_add(b.height_emu)).contains(&cy)
             })
-            .min_by_key(|(_, (bx1, by1, bx2, by2))| {
-                (bx2 - bx1).max(0).saturating_mul((by2 - by1).max(0))
-            })
+            .min_by_key(|(_, b)| b.width_emu.max(0).saturating_mul(b.height_emu.max(0)))
             .map(|(i, _)| i)
     };
 
