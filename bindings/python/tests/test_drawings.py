@@ -28,6 +28,61 @@ def top(payload, *, name=None, meta=None, drawing_anchor=None):
     )
 
 
+def test_absolute_rect_emu_resolves_group_children():
+    workbook = duke_sheets.Workbook()
+    sheet = workbook.get_sheet(0)
+    sheet.add_drawing(top(duke_sheets.FormControl.label("top"), name="top"))
+
+    group = duke_sheets.DrawingGroup(
+        duke_sheets.GroupTransform(child_cx_emu=1000, child_cy_emu=1000),
+        [
+            duke_sheets.Drawing(
+                duke_sheets.FormControl.label("nested"),
+                transform=duke_sheets.ChildTransform(
+                    x_emu=250, y_emu=500, cx_emu=500, cy_emu=250
+                ),
+            )
+        ],
+    )
+    sheet.add_drawing(top(group, drawing_anchor=anchor(0, 0, 4, 4)))
+
+    drawings = sheet.drawings
+    rect = drawings[0].absolute_rect_emu
+    assert (rect.x_emu, rect.y_emu) == (0, 0)
+    assert rect.width_emu > 0 and rect.height_emu > 0
+
+    group_rect = drawings[1].absolute_rect_emu
+    controls = sheet.form_controls
+    assert len(controls) == 2
+    nested = controls[1].absolute_rect_emu
+    assert nested.x_emu == group_rect.x_emu + group_rect.width_emu // 4
+    assert nested.y_emu == group_rect.y_emu + group_rect.height_emu // 2
+    assert nested.width_emu == group_rect.width_emu // 2
+    assert nested.height_emu == group_rect.height_emu // 4
+
+    # The tree view agrees with the flattened view.
+    tree_child = drawings[1].group.children[0].absolute_rect_emu
+    assert (tree_child.x_emu, tree_child.width_emu) == (nested.x_emu, nested.width_emu)
+
+    # Drawings constructed in Python have no on-sheet placement yet.
+    assert top(duke_sheets.FormControl.label("free")).absolute_rect_emu is None
+
+
+def test_theme_palette_and_resolve_color():
+    workbook = duke_sheets.Workbook()
+    palette = workbook.theme_palette
+    assert len(palette) == 12
+    assert palette[4] == "4F81BD"
+
+    theme = duke_sheets.Color("theme", theme_index=4, tint=0)
+    assert workbook.resolve_color(theme) == "4F81BD"
+    tinted = duke_sheets.Color("theme", theme_index=4, tint=50)
+    assert workbook.resolve_color(tinted) == "A7C0DE"
+    rgb = duke_sheets.Color("rgb", r=1, g=2, b=3)
+    assert workbook.resolve_color(rgb) == "010203"
+    assert workbook.resolve_color(duke_sheets.Color("auto")) is None
+
+
 def test_recursive_paths_and_z_order():
     workbook = duke_sheets.Workbook()
     sheet = workbook.get_sheet(0)

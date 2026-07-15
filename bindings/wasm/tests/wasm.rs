@@ -568,6 +568,139 @@ fn test_drawing_paths_order_and_nested_groups() {
 }
 
 #[wasm_bindgen_test]
+fn test_absolute_rect_emu_resolves_group_children() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+
+    // Top-level control anchored at the sheet origin.
+    sheet
+        .add_drawing(form_control_drawing(
+            "top",
+            drawing_anchor(0, 0, 1, 1),
+            make_options(&[
+                ("kind", JsValue::from_str("label")),
+                ("caption", drawing_text("top")),
+            ]),
+        ))
+        .unwrap();
+
+    // Group with a 1000x1000 child space; the child occupies the
+    // quarter starting at (250, 500), so its absolute rectangle is a
+    // frame-relative slice of the group's anchor rectangle.
+    let child = make_options(&[
+        ("transform", make_options(&[
+            ("xEmu", JsValue::from_f64(250.0)),
+            ("yEmu", JsValue::from_f64(500.0)),
+            ("cxEmu", JsValue::from_f64(500.0)),
+            ("cyEmu", JsValue::from_f64(250.0)),
+        ])),
+        ("kind", JsValue::from_str("formControl")),
+        (
+            "formControl",
+            make_options(&[(
+                "kind",
+                make_options(&[
+                    ("kind", JsValue::from_str("label")),
+                    ("caption", drawing_text("nested")),
+                ]),
+            )]),
+        ),
+    ]);
+    let group = make_options(&[
+        ("anchor", drawing_anchor(0, 0, 4, 4)),
+        ("kind", JsValue::from_str("group")),
+        (
+            "group",
+            make_options(&[
+                ("groupTransform", make_options(&[
+                    ("childXEmu", JsValue::from_f64(0.0)),
+                    ("childYEmu", JsValue::from_f64(0.0)),
+                    ("childCxEmu", JsValue::from_f64(1000.0)),
+                    ("childCyEmu", JsValue::from_f64(1000.0)),
+                ])),
+                ("children", make_array(&[child])),
+            ]),
+        ),
+    ]);
+    sheet.add_drawing(group).unwrap();
+
+    let rect_of = |value: &JsValue| -> (f64, f64, f64, f64) {
+        let rect = Reflect::get(value, &"absoluteRectEmu".into()).unwrap();
+        let field = |name: &str| {
+            Reflect::get(&rect, &name.into())
+                .unwrap()
+                .as_f64()
+                .unwrap()
+        };
+        (
+            field("xEmu"),
+            field("yEmu"),
+            field("widthEmu"),
+            field("heightEmu"),
+        )
+    };
+
+    let drawings = Array::from(&sheet.drawings().unwrap());
+    let (x, y, w, h) = rect_of(&drawings.get(0));
+    assert_eq!((x, y), (0.0, 0.0));
+    assert!(w > 0.0 && h > 0.0, "anchor rect must have extent");
+
+    let (gx, gy, gw, gh) = rect_of(&drawings.get(1));
+    let controls = Array::from(&sheet.form_controls().unwrap());
+    assert_eq!(controls.length(), 2);
+    let (cx, cy, cw, ch) = rect_of(&controls.get(1));
+    assert_eq!(cx, gx + gw * 0.25, "child x scales into the group frame");
+    assert_eq!(cy, gy + gh * 0.5, "child y scales into the group frame");
+    assert_eq!(cw, gw * 0.5, "child width scales into the group frame");
+    assert_eq!(ch, gh * 0.25, "child height scales into the group frame");
+
+    // The tree and flat views agree.
+    let group_node = Reflect::get(&drawings.get(1), &"group".into()).unwrap();
+    let children = Array::from(&Reflect::get(&group_node, &"children".into()).unwrap());
+    assert_eq!(rect_of(&children.get(0)), (cx, cy, cw, ch));
+}
+
+#[wasm_bindgen_test]
+fn test_theme_palette_and_resolve_color() {
+    let wb = Workbook::new();
+    let palette = wb.theme_palette();
+    assert_eq!(palette.len(), 12);
+    assert_eq!(palette[4], "4F81BD", "default accent 1");
+
+    let resolve = |color: JsValue| -> Option<String> { wb.resolve_color(color).unwrap() };
+    assert_eq!(
+        resolve(make_options(&[
+            ("colorType", JsValue::from_str("theme")),
+            ("index", JsValue::from_f64(4.0)),
+            ("tint", JsValue::from_f64(0.0)),
+        ])),
+        Some("4F81BD".to_string())
+    );
+    // Positive tint lightens; matches Color::theme(4, 50).
+    assert_eq!(
+        resolve(make_options(&[
+            ("colorType", JsValue::from_str("theme")),
+            ("index", JsValue::from_f64(4.0)),
+            ("tint", JsValue::from_f64(50.0)),
+        ])),
+        Some("A7C0DE".to_string())
+    );
+    assert_eq!(
+        resolve(make_options(&[
+            ("colorType", JsValue::from_str("rgb")),
+            ("r", JsValue::from_f64(1.0)),
+            ("g", JsValue::from_f64(2.0)),
+            ("b", JsValue::from_f64(3.0)),
+        ])),
+        Some("010203".to_string())
+    );
+    assert_eq!(
+        resolve(make_options(&[("colorType", JsValue::from_str("auto"))])),
+        None
+    );
+}
+
+#[wasm_bindgen_test]
 fn test_drawing_image_bytes_are_lazy() {
     let wb = Workbook::new();
     let sheet = wb.get_sheet(0).unwrap();

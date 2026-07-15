@@ -115,6 +115,32 @@ impl PyWorkbook {
             })
             .collect())
     }
+
+    /// The workbook theme's 12 clrScheme colors as ``RRGGBB`` hex, in
+    /// theme-index order (background 1, text 1, background 2, text 2,
+    /// accent 1-6, hyperlink, followed hyperlink). The Office default
+    /// palette when the file carries no theme.
+    #[getter]
+    fn theme_palette(&self) -> PyResult<Vec<String>> {
+        let wb = self.inner.read().map_err(to_py_err)?;
+        Ok(wb
+            .theme_palette()
+            .colors
+            .iter()
+            .map(|(r, g, b)| format!("{r:02X}{g:02X}{b:02X}"))
+            .collect())
+    }
+
+    /// Resolve a :class:`Color` to display RGB (``RRGGBB`` hex)
+    /// against this workbook's theme palette. ``auto`` has no fixed
+    /// RGB and resolves to ``None``.
+    fn resolve_color(&self, color: &crate::PyColor) -> PyResult<Option<String>> {
+        let core = color.to_core()?;
+        let wb = self.inner.read().map_err(to_py_err)?;
+        Ok(wb
+            .resolve_color(&core)
+            .map(|(r, g, b)| format!("{r:02X}{g:02X}{b:02X}")))
+    }
 }
 
 #[pymethods]

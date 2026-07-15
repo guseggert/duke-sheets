@@ -52,7 +52,7 @@ fn parse_xls_variant(
 }
 
 mod types;
-mod drawings;
+pub(crate) mod drawings;
 mod workbook_read;
 mod worksheet_read;
 
@@ -550,7 +550,14 @@ export interface RawDrawingMetadata {
   relationships: Array<{ id: string; relType: string; target: string; external: boolean; hasPart: boolean }>;
 }
 
-type DrawingNode = DrawingMeta & DrawingPlacement & { drawingPath: number[] };
+/**
+ * Resolved on-sheet placement in EMU: the anchor rectangle for
+ * top-level drawings, the group-mapped (rotation/flip aware)
+ * rectangle for group children.
+ */
+export type RectEmu = { xEmu: number; yEmu: number; widthEmu: number; heightEmu: number };
+
+type DrawingNode = DrawingMeta & DrawingPlacement & { drawingPath: number[]; absoluteRectEmu: RectEmu };
 
 export type ImageDrawing = DrawingNode & { kind: "image"; image: DrawingImage };
 export type ChartDrawing = DrawingNode & { kind: "chart"; chart: Chart };
@@ -610,6 +617,14 @@ export interface Worksheet {
   /** Paths are positional; mutating the drawing list invalidates previously returned paths. */
   drawingSvgData(path: number[]): Uint8Array | undefined;
   setFormControlCheckState(path: number[], state: "unchecked" | "checked" | "mixed"): FormControlInteractionResult;
+}
+
+export interface Workbook {
+  /**
+   * Resolve a drawing color to display RGB ("RRGGBB" hex) against
+   * this workbook's theme palette; `auto` resolves to undefined.
+   */
+  resolveColor(color: DrawingColor): string | undefined;
 }
 "#;
 

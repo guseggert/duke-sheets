@@ -1510,6 +1510,7 @@ fn objects_to_array<'env>(
 
 fn drawing_node_to_js<'env>(
     env: &'env Env,
+    sheet: &core::Worksheet,
     meta: &core::DrawingMeta,
     placement: DrawingPlacement<'_>,
     kind: &core::DrawingKind,
@@ -1517,6 +1518,10 @@ fn drawing_node_to_js<'env>(
 ) -> Result<JsObject<'env>> {
     let mut drawing = Object::new(env)?;
     drawing.set("drawingPath", drawing_path_to_js(path)?)?;
+    drawing.set(
+        "absoluteRectEmu",
+        rect_emu_to_js(env, sheet.drawing_rect_emu(path).unwrap_or_default())?,
+    )?;
     if let Some(name) = &meta.name {
         drawing.set("name", name.clone())?;
     }
@@ -1608,6 +1613,7 @@ fn drawing_node_to_js<'env>(
                 child_path.push(index);
                 children.push(drawing_node_to_js(
                     env,
+                    sheet,
                     &child.meta,
                     DrawingPlacement::Child(&child.transform),
                     &child.kind,
@@ -1643,6 +1649,20 @@ fn drawing_node_to_js<'env>(
     Ok(drawing)
 }
 
+/// Resolved on-sheet placement in EMU. Core saturates the values at
+/// the JS safe-integer range, so the `as f64` casts are exact.
+fn rect_emu_to_js<'env>(
+    env: &'env Env,
+    rect: core::drawing::RectEmu,
+) -> Result<JsObject<'env>> {
+    let mut object = Object::new(env)?;
+    object.set("xEmu", rect.x_emu as f64)?;
+    object.set("yEmu", rect.y_emu as f64)?;
+    object.set("widthEmu", rect.width_emu as f64)?;
+    object.set("heightEmu", rect.height_emu as f64)?;
+    Ok(object)
+}
+
 fn drawing_tree<'env>(
     env: &'env Env,
     sheet: &core::Worksheet,
@@ -1654,6 +1674,7 @@ fn drawing_tree<'env>(
         .map(|(index, object)| {
             drawing_node_to_js(
                 env,
+                sheet,
                 &object.meta,
                 DrawingPlacement::TopLevel(&object.anchor),
                 &object.kind,
@@ -1685,6 +1706,7 @@ impl DrawingFilter {
 
 fn collect_children<'env>(
     env: &'env Env,
+    sheet: &core::Worksheet,
     kind: &core::DrawingKind,
     path: &[usize],
     filter: DrawingFilter,
@@ -1699,13 +1721,14 @@ fn collect_children<'env>(
         if filter.matches(&child.kind) {
             output.push(drawing_node_to_js(
                 env,
+                sheet,
                 &child.meta,
                 DrawingPlacement::Child(&child.transform),
                 &child.kind,
                 &child_path,
             )?);
         }
-        collect_children(env, &child.kind, &child_path, filter, output)?;
+        collect_children(env, sheet, &child.kind, &child_path, filter, output)?;
     }
     Ok(())
 }
@@ -1721,13 +1744,14 @@ fn filtered_drawings<'env>(
         if filter.matches(&object.kind) {
             output.push(drawing_node_to_js(
                 env,
+                sheet,
                 &object.meta,
                 DrawingPlacement::TopLevel(&object.anchor),
                 &object.kind,
                 &path,
             )?);
         }
-        collect_children(env, &object.kind, &path, filter, &mut output)?;
+        collect_children(env, sheet, &object.kind, &path, filter, &mut output)?;
     }
     Ok(output)
 }
@@ -1735,6 +1759,14 @@ fn filtered_drawings<'env>(
 fn deserialize_drawing(env: &Env, input: Unknown<'_>) -> Result<DrawingInput> {
     env.from_js_value(input)
         .map_err(|error| napi::Error::from_reason(format!("invalid drawing: {error}")))
+}
+
+/// Deserialize a `DrawingColor` DTO into a core color.
+pub(crate) fn drawing_color_from_js(env: &Env, input: Unknown<'_>) -> Result<core::Color> {
+    let color: DrawingColor = env
+        .from_js_value(input)
+        .map_err(|error| napi::Error::from_reason(format!("invalid color: {error}")))?;
+    Ok(color.into())
 }
 
 fn drawing_path(path: Vec<u32>) -> Result<Vec<usize>> {

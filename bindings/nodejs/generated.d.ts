@@ -87,6 +87,19 @@ export declare class Workbook {
   get workbookProtection(): JsWorkbookProtection | null
   /** Get all named ranges defined in the workbook. */
   get namedRanges(): Array<JsNamedRange>
+  /**
+   * The workbook theme's 12 clrScheme colors as `RRGGBB` hex, in
+   * theme-index order (background 1, text 1, background 2, text 2,
+   * accent 1-6, hyperlink, followed hyperlink). The Office default
+   * palette when the file carries no theme.
+   */
+  get themePalette(): Array<string>
+  /**
+   * Resolve a drawing color to display RGB (`RRGGBB` hex) against
+   * this workbook's theme palette. `auto` has no fixed RGB and
+   * resolves to `null`.
+   */
+  resolveColor(color: object): string | null
   /** Get all chart sheets. */
   get chartsheets(): Array<JsChartSheet>
   /** Get the number of chart sheets. */

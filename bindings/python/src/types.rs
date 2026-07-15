@@ -38,6 +38,80 @@ pub struct PyColor {
     pub palette_index: Option<u32>,
 }
 
+#[pymethods]
+impl PyColor {
+    /// Build a color for :meth:`Workbook.resolve_color`, e.g.
+    /// ``Color("theme", theme_index=4, tint=50)`` or
+    /// ``Color("rgb", r=255, g=0, b=0)``.
+    #[new]
+    #[pyo3(signature=(color_type, *, r=None, g=None, b=None, a=None, theme_index=None, tint=None, palette_index=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        color_type: String,
+        r: Option<u32>,
+        g: Option<u32>,
+        b: Option<u32>,
+        a: Option<u32>,
+        theme_index: Option<u32>,
+        tint: Option<i32>,
+        palette_index: Option<u32>,
+    ) -> PyResult<Self> {
+        let color = Self {
+            color_type,
+            hex: String::new(),
+            r,
+            g,
+            b,
+            a,
+            theme_index,
+            tint,
+            palette_index,
+        };
+        // Validate eagerly and stamp the context-free hex.
+        let core = color.to_core()?;
+        Ok(Self {
+            hex: core.to_hex(),
+            ..color
+        })
+    }
+}
+
+impl PyColor {
+    /// Reconstruct the core color this DTO was built from.
+    pub(crate) fn to_core(&self) -> PyResult<CoreColor> {
+        let channel = |value: Option<u32>, name: &str| -> PyResult<u8> {
+            let value = value
+                .ok_or_else(|| PyValueError::new_err(format!("color is missing {name}")))?;
+            u8::try_from(value)
+                .map_err(|_| PyValueError::new_err(format!("color {name} out of range")))
+        };
+        match self.color_type.as_str() {
+            "auto" => Ok(CoreColor::Auto),
+            "rgb" => Ok(CoreColor::Rgb {
+                r: channel(self.r, "r")?,
+                g: channel(self.g, "g")?,
+                b: channel(self.b, "b")?,
+            }),
+            "argb" => Ok(CoreColor::Argb {
+                a: channel(self.a, "a")?,
+                r: channel(self.r, "r")?,
+                g: channel(self.g, "g")?,
+                b: channel(self.b, "b")?,
+            }),
+            "theme" => {
+                let index = channel(self.theme_index, "theme_index")?;
+                let tint = self
+                    .tint
+                    .unwrap_or(0)
+                    .clamp(i8::MIN as i32, i8::MAX as i32) as i8;
+                Ok(CoreColor::Theme { index, tint })
+            }
+            "indexed" => Ok(CoreColor::Indexed(channel(self.palette_index, "palette_index")?)),
+            other => Err(PyValueError::new_err(format!("unknown color type {other:?}"))),
+        }
+    }
+}
+
 impl From<&CoreColor> for PyColor {
     fn from(c: &CoreColor) -> Self {
         let hex = c.to_hex();

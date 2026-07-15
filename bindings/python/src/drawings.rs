@@ -843,10 +843,45 @@ impl PyDrawingGroup {
     }
 }
 
+#[pyclass(name = "RectEmu")]
+#[derive(Clone, Copy)]
+pub struct PyRectEmu {
+    #[pyo3(get)]
+    pub x_emu: i64,
+    #[pyo3(get)]
+    pub y_emu: i64,
+    #[pyo3(get)]
+    pub width_emu: i64,
+    #[pyo3(get)]
+    pub height_emu: i64,
+}
+
+#[pymethods]
+impl PyRectEmu {
+    fn __repr__(&self) -> String {
+        format!(
+            "RectEmu(x_emu={}, y_emu={}, width_emu={}, height_emu={})",
+            self.x_emu, self.y_emu, self.width_emu, self.height_emu
+        )
+    }
+}
+
+impl PyRectEmu {
+    fn from_core(rect: core::drawing::RectEmu) -> Self {
+        Self {
+            x_emu: rect.x_emu,
+            y_emu: rect.y_emu,
+            width_emu: rect.width_emu,
+            height_emu: rect.height_emu,
+        }
+    }
+}
+
 #[pyclass(name = "Drawing")]
 #[derive(Clone)]
 pub struct PyDrawing {
     drawing_path: Vec<usize>,
+    absolute_rect_emu: Option<PyRectEmu>,
     meta: PyDrawingMeta,
     anchor: Option<PyDrawingAnchor>,
     transform: Option<PyChildTransform>,
@@ -868,6 +903,7 @@ impl PyDrawing {
     ) -> Self {
         Self {
             drawing_path: Vec::new(),
+            absolute_rect_emu: None,
             meta,
             anchor,
             transform,
@@ -883,6 +919,7 @@ impl PyDrawing {
     }
 
     fn from_kind(
+        sheet: &core::Worksheet,
         meta: &core::DrawingMeta,
         kind: &core::DrawingKind,
         path: Vec<usize>,
@@ -895,6 +932,7 @@ impl PyDrawing {
             transform.map(PyChildTransform::from),
         );
         drawing.drawing_path = path.clone();
+        drawing.absolute_rect_emu = sheet.drawing_rect_emu(&path).map(PyRectEmu::from_core);
         match kind {
             core::DrawingKind::Image(image) => {
                 drawing.image = Some(PyEmbeddedImage::from_metadata(image));
@@ -927,6 +965,7 @@ impl PyDrawing {
                         let mut child_path = path.clone();
                         child_path.push(index);
                         Self::from_kind(
+                            sheet,
                             &child.meta,
                             &child.kind,
                             child_path,
@@ -947,8 +986,13 @@ impl PyDrawing {
         drawing
     }
 
-    pub(crate) fn from_top(object: &core::DrawingObject, index: usize) -> Self {
+    pub(crate) fn from_top(
+        sheet: &core::Worksheet,
+        object: &core::DrawingObject,
+        index: usize,
+    ) -> Self {
         Self::from_kind(
+            sheet,
             &object.meta,
             &object.kind,
             vec![index],
@@ -1124,6 +1168,15 @@ impl PyDrawing {
     #[getter]
     fn drawing_path(&self) -> Vec<usize> {
         self.drawing_path.clone()
+    }
+
+    /// Resolved on-sheet placement in EMU: the anchor rectangle for
+    /// top-level drawings, the group-mapped (rotation/flip aware)
+    /// rectangle for group children. ``None`` for drawings
+    /// constructed in Python rather than read from a sheet.
+    #[getter]
+    fn absolute_rect_emu(&self) -> Option<PyRectEmu> {
+        self.absolute_rect_emu
     }
 
     #[getter]
@@ -1338,12 +1391,15 @@ fn remove_group_child(kind: &mut core::DrawingKind, path: &[usize]) -> PyResult<
 }
 
 fn collect_filtered_drawings(
+    sheet: &core::Worksheet,
     object: &core::DrawingObject,
     top_index: usize,
     predicate: fn(&core::DrawingKind) -> bool,
     output: &mut Vec<PyDrawing>,
 ) {
+    #[allow(clippy::too_many_arguments)]
     fn walk(
+        sheet: &core::Worksheet,
         meta: &core::DrawingMeta,
         kind: &core::DrawingKind,
         path: Vec<usize>,
@@ -1354,7 +1410,7 @@ fn collect_filtered_drawings(
     ) {
         if predicate(kind) {
             output.push(PyDrawing::from_kind(
-                meta, kind, path.clone(), anchor, transform,
+                sheet, meta, kind, path.clone(), anchor, transform,
             ));
         }
         if let core::DrawingKind::Group(group) = kind {
@@ -1362,6 +1418,7 @@ fn collect_filtered_drawings(
                 let mut child_path = path.clone();
                 child_path.push(index);
                 walk(
+                    sheet,
                     &child.meta,
                     &child.kind,
                     child_path,
@@ -1375,6 +1432,7 @@ fn collect_filtered_drawings(
     }
 
     walk(
+        sheet,
         &object.meta,
         &object.kind,
         vec![top_index],
@@ -1411,7 +1469,7 @@ impl PyWorksheet {
             .drawings()
             .iter()
             .enumerate()
-            .map(|(index, object)| PyDrawing::from_top(object, index))
+            .map(|(index, object)| PyDrawing::from_top(worksheet, object, index))
             .collect())
     }
 
@@ -1425,6 +1483,7 @@ impl PyWorksheet {
         let mut images = Vec::new();
         for (index, object) in worksheet.drawings().iter().enumerate() {
             collect_filtered_drawings(
+                worksheet,
                 object,
                 index,
                 |kind| matches!(kind, core::DrawingKind::Image(_)),
@@ -1461,6 +1520,7 @@ impl PyWorksheet {
         let mut controls = Vec::new();
         for (index, object) in worksheet.drawings().iter().enumerate() {
             collect_filtered_drawings(
+                worksheet,
                 object,
                 index,
                 |kind| matches!(kind, core::DrawingKind::FormControl(_)),
@@ -1497,6 +1557,7 @@ impl PyWorksheet {
         let mut charts = Vec::new();
         for (index, object) in worksheet.drawings().iter().enumerate() {
             collect_filtered_drawings(
+                worksheet,
                 object,
                 index,
                 |kind| matches!(kind, core::DrawingKind::Chart(_)),
@@ -1533,6 +1594,7 @@ impl PyWorksheet {
         let mut charts = Vec::new();
         for (index, object) in worksheet.drawings().iter().enumerate() {
             collect_filtered_drawings(
+                worksheet,
                 object,
                 index,
                 |kind| matches!(kind, core::DrawingKind::ChartEx(_)),

@@ -509,7 +509,14 @@ export interface RawDrawingMetadata {
   relationships: RawDrawingRelationshipMetadata[]
 }
 
-type DrawingNode = DrawingMeta & DrawingPlacement & { drawingPath: number[] }
+/**
+ * Resolved on-sheet placement in EMU: the anchor rectangle for
+ * top-level drawings, the group-mapped (rotation/flip aware)
+ * rectangle for group children.
+ */
+export type RectEmu = { xEmu: number; yEmu: number; widthEmu: number; heightEmu: number }
+
+type DrawingNode = DrawingMeta & DrawingPlacement & { drawingPath: number[]; absoluteRectEmu: RectEmu }
 
 export type DrawnImage = DrawingNode & { kind: 'image'; image: DrawingImage }
 export type DrawnChart = DrawingNode & { kind: 'chart'; chart: JsChart }
@@ -604,12 +611,17 @@ export declare const Worksheet: {
 
 export type Workbook = Omit<
   Generated.Workbook,
-  'getSheet' | 'chartsheets' | 'syncFormControls' | 'syncFormControlsFromLinkedCells'
+  'getSheet' | 'chartsheets' | 'syncFormControls' | 'syncFormControlsFromLinkedCells' | 'resolveColor'
 > & {
   getSheet(indexOrName: number | string): Worksheet
   readonly chartsheets: JsChartSheet[]
   syncFormControls(): number
   syncFormControlsFromLinkedCells(): number
+  /**
+   * Resolve a drawing color to display RGB ("RRGGBB" hex) against
+   * this workbook's theme palette; `auto` resolves to null.
+   */
+  resolveColor(color: DrawingColor): string | null
 }
 
 export declare const Workbook: {

@@ -72,7 +72,7 @@ pub(crate) fn catch_panic<T>(f: impl FnOnce() -> napi::Result<T>) -> napi::Resul
 
 mod types;
 pub use types::*;
-mod drawings;
+pub(crate) mod drawings;
 mod workbook_read;
 mod worksheet_read;
 

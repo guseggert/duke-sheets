@@ -47,6 +47,33 @@ impl Workbook {
             wb.named_ranges().iter().map(WasmNamedRange::from).collect();
         to_js_value(&ranges)
     }
+
+    /// The workbook theme's 12 clrScheme colors as `RRGGBB` hex, in
+    /// theme-index order (background 1, text 1, background 2, text 2,
+    /// accent 1-6, hyperlink, followed hyperlink). The Office default
+    /// palette when the file carries no theme.
+    #[wasm_bindgen(getter, js_name = themePalette)]
+    pub fn theme_palette(&self) -> Vec<String> {
+        let wb = self.inner.borrow();
+        wb.theme_palette()
+            .colors
+            .iter()
+            .map(|(r, g, b)| format!("{r:02X}{g:02X}{b:02X}"))
+            .collect()
+    }
+
+    /// Resolve a drawing color to display RGB (`RRGGBB` hex) against
+    /// this workbook's theme palette. `auto` has no fixed RGB and
+    /// resolves to `null`.
+    #[wasm_bindgen(js_name = resolveColor, skip_typescript)]
+    pub fn resolve_color(&self, color: JsValue) -> Result<Option<String>, JsError> {
+        let color: crate::drawings::WasmDrawingColor = serde_wasm_bindgen::from_value(color)
+            .map_err(|error| JsError::new(&format!("invalid color: {error}")))?;
+        let wb = self.inner.borrow();
+        Ok(wb
+            .resolve_color(&color.into())
+            .map(|(r, g, b)| format!("{r:02X}{g:02X}{b:02X}")))
+    }
 }
 
 #[wasm_bindgen]

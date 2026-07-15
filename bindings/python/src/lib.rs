@@ -1030,6 +1030,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCalculationImage>()?;
     m.add_class::<PyCalculationStats>()?;
     m.add_class::<PyColor>()?;
+    m.add_class::<crate::drawings::PyRectEmu>()?;
     m.add_class::<PyFontStyle>()?;
     m.add_class::<PyGradientStop>()?;
     m.add_class::<PyFillStyle>()?;

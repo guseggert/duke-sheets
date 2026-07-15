@@ -317,7 +317,7 @@ enum WasmDrawingPlacement {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "colorType", rename_all = "camelCase", rename_all_fields = "camelCase")]
-enum WasmDrawingColor {
+pub(crate) enum WasmDrawingColor {
     Auto,
     Rgb { r: u8, g: u8, b: u8 },
     Argb { a: u8, r: u8, g: u8, b: u8 },
@@ -1480,12 +1480,38 @@ enum WasmDrawingInputKind {
 #[serde(rename_all = "camelCase")]
 struct WasmDrawing {
     drawing_path: Vec<usize>,
+    /// Resolved on-sheet placement in EMU: the anchor rectangle for
+    /// top-level drawings, the group-mapped (rotation/flip aware)
+    /// rectangle for group children.
+    absolute_rect_emu: WasmRectEmu,
     #[serde(flatten)]
     meta: WasmDrawingMeta,
     #[serde(flatten)]
     placement: WasmDrawingPlacement,
     #[serde(flatten)]
     kind: WasmDrawingKind,
+}
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WasmRectEmu {
+    x_emu: i64,
+    y_emu: i64,
+    width_emu: i64,
+    height_emu: i64,
+}
+
+impl WasmRectEmu {
+    fn from_core(rect: core::drawing::RectEmu) -> Self {
+        // Core saturates at the JS safe-integer range, so the i64
+        // values are directly representable.
+        Self {
+            x_emu: rect.x_emu,
+            y_emu: rect.y_emu,
+            width_emu: rect.width_emu,
+            height_emu: rect.height_emu,
+        }
+    }
 }
 
 #[derive(Clone, Deserialize)]
@@ -1502,9 +1528,10 @@ struct WasmDrawingInput {
 }
 
 impl WasmDrawing {
-    fn from_object(object: &core::DrawingObject, index: usize) -> Self {
+    fn from_object(sheet: &core::Worksheet, object: &core::DrawingObject, index: usize) -> Self {
         let path = vec![index];
         Self::from_parts(
+            sheet,
             &object.meta,
             WasmDrawingPlacement::TopLevel {
                 anchor: WasmDrawingAnchor::from(&object.anchor),
@@ -1514,8 +1541,9 @@ impl WasmDrawing {
         )
     }
 
-    fn from_child(child: &core::GroupChild, path: Vec<usize>) -> Self {
+    fn from_child(sheet: &core::Worksheet, child: &core::GroupChild, path: Vec<usize>) -> Self {
         Self::from_parts(
+            sheet,
             &child.meta,
             WasmDrawingPlacement::Child {
                 transform: WasmChildTransform::from(&child.transform),
@@ -1526,6 +1554,7 @@ impl WasmDrawing {
     }
 
     fn from_parts(
+        sheet: &core::Worksheet,
         meta: &core::DrawingMeta,
         placement: WasmDrawingPlacement,
         kind: &core::DrawingKind,
@@ -1563,7 +1592,7 @@ impl WasmDrawing {
                     .map(|(index, child)| {
                         let mut path = drawing_path.clone();
                         path.push(index);
-                        Self::from_child(child, path)
+                        Self::from_child(sheet, child, path)
                     })
                     .collect();
                 WasmDrawingKind::Group {
@@ -1590,8 +1619,14 @@ impl WasmDrawing {
                 },
             },
         };
+        let absolute_rect_emu = WasmRectEmu::from_core(
+            sheet
+                .drawing_rect_emu(&drawing_path)
+                .unwrap_or_default(),
+        );
         Self {
             drawing_path,
+            absolute_rect_emu,
             meta: WasmDrawingMeta::from(meta),
             placement,
             kind,
@@ -1756,7 +1791,7 @@ fn drawing_tree(sheet: &core::Worksheet) -> Vec<WasmDrawing> {
         .drawings()
         .iter()
         .enumerate()
-        .map(|(index, object)| WasmDrawing::from_object(object, index))
+        .map(|(index, object)| WasmDrawing::from_object(sheet, object, index))
         .collect()
 }
 
