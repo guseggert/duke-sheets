@@ -1483,7 +1483,7 @@ impl From<&core::CellComment> for PyComment {
     fn from(c: &core::CellComment) -> Self {
         Self {
             author: c.author.clone(),
-            text: c.text.clone(),
+            text: c.plain_text(),
         }
     }
 }
@@ -3212,7 +3212,7 @@ impl PyFormControl {
     fn raw_obj(&self, py: Python<'_>) -> Option<Py<PyBytes>> { self.inner.raw_obj.as_ref().map(|bytes| PyBytes::new_bound(py, bytes).unbind()) }
 }
 
-fn drawing_text_input_to_core(value: &Bound<'_, PyAny>) -> PyResult<core::DrawingText> {
+pub(crate) fn drawing_text_input_to_core(value: &Bound<'_, PyAny>) -> PyResult<core::DrawingText> {
     if let Ok(text) = value.extract::<String>() {
         return Ok(core::DrawingText::plain(text));
     }

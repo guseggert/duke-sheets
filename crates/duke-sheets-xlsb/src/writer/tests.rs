@@ -625,10 +625,10 @@ mod tests {
         let ws2 = wb2.worksheet(0).unwrap();
         let c1 = ws2.comment_at(0, 0).expect("comment at A1");
         assert_eq!(c1.author, "Author1");
-        assert_eq!(c1.text, "First comment");
+        assert_eq!(c1.plain_text(), "First comment");
         let c2 = ws2.comment_at(1, 1).expect("comment at B2");
         assert_eq!(c2.author, "Author2");
-        assert_eq!(c2.text, "Second comment");
+        assert_eq!(c2.plain_text(), "Second comment");
     }
 
     #[test]

@@ -41,10 +41,7 @@ fn build(with_image: bool) -> Workbook {
 
     ws.set_comment(
         "A1",
-        CellComment {
-            author: "Tester".to_string(),
-            text: "fixture comment".to_string(),
-        },
+        CellComment::new("Tester", "fixture comment"),
     )
     .unwrap();
 

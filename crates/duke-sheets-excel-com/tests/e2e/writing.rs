@@ -1902,9 +1902,9 @@ fn excel_can_read_xlsx_comment_we_emit() {
 
     let hidden = sheet.comment_at(1, 1).expect("comment survives at B2");
     assert!(
-        hidden.text.contains("Check this figure"),
+        hidden.plain_text().contains("Check this figure"),
         "comment text lost: {:?}",
-        hidden.text
+        hidden.plain_text()
     );
     assert!(
         hidden.author.contains("Reviewer"),
@@ -2093,6 +2093,65 @@ fn excel_preserves_unmodeled_client_data_we_emit() {
         raws.iter()
             .any(|raw| raw.contains("Accel") && raw.contains("65")),
         "x:Accel value survives Excel's re-save: {raws:?}"
+    );
+}
+
+/// Excel parity for rich comment text in XLSX: the `<r>/<rPr>` runs
+/// we emit in the comments part must survive Excel's re-save with
+/// their run boundary and bold flag.
+// features: Rich text in comments
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_rich_comment_runs_we_emit() {
+    use duke_sheets_core::rich_text::{RichTextRun, RunFont};
+    use duke_sheets_core::{CellComment, DrawingText};
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "anchor").unwrap();
+    ws.set_comment_at(
+        0,
+        0,
+        CellComment {
+            author: "Reviewer".to_string(),
+            text: DrawingText {
+                runs: vec![
+                    RichTextRun {
+                        text: "Bold lead".to_string(),
+                        font: Some(RunFont {
+                            bold: Some(true),
+                            ..RunFont::default()
+                        }),
+                    },
+                    RichTextRun {
+                        text: " then plain".to_string(),
+                        font: None,
+                    },
+                ],
+                ..DrawingText::default()
+            },
+        },
+    )
+    .unwrap();
+
+    let result = roundtrip_through_excel(&wb);
+    let comment = result
+        .worksheet(0)
+        .unwrap()
+        .comment_at(0, 0)
+        .expect("comment must survive Excel re-save");
+    assert_eq!(comment.plain_text(), "Bold lead then plain");
+    let bold_run = comment
+        .text
+        .runs
+        .iter()
+        .find(|run| run.text.contains("Bold lead"))
+        .expect("bold run boundary survives Excel re-save");
+    assert_eq!(
+        bold_run.font.as_ref().and_then(|font| font.bold),
+        Some(true),
+        "bold formatting lost: {:?}",
+        comment.text.runs
     );
 }
 

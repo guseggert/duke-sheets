@@ -167,7 +167,7 @@ fn xlsx_comment_control_relative_order_round_trips() {
         controls[1].payload.caption_text().as_deref(),
         Some("Second")
     );
-    assert_eq!(sheet.comment_at(4, 4).unwrap().text, "between the controls");
+    assert_eq!(sheet.comment_at(4, 4).unwrap().plain_text(), "between the controls");
 }
 
 /// A shape group containing two pictures round-trips as a Group with

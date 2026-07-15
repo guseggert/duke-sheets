@@ -133,7 +133,7 @@ fn xls_full_interleave_round_trips() {
         vec!["image", "comment", "control", "image"]
     );
     let sheet = read.worksheet(0).unwrap();
-    assert_eq!(sheet.comment_at(3, 3).unwrap().text, "note between");
+    assert_eq!(sheet.comment_at(3, 3).unwrap().plain_text(), "note between");
 }
 
 /// A shape group of two pictures round-trips as a Group tree through

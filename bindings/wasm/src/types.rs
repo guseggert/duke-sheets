@@ -1175,7 +1175,7 @@ impl WasmComment {
     pub fn from_comment(comment: &core::CellComment, visible: bool) -> Self {
         Self {
             author: comment.author.clone(),
-            text: comment.text.clone(),
+            text: comment.plain_text(),
             visible,
         }
     }

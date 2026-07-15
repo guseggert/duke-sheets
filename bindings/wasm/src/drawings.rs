@@ -1215,7 +1215,12 @@ struct WasmDrawingComment {
     row: u32,
     col: u16,
     author: String,
+    /// Plain text (runs concatenated).
     text: String,
+    /// Rich runs; present on output when any run is formatted, and
+    /// wins over `text` on input when supplied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rich_text: Option<WasmDrawingText>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1574,7 +1579,13 @@ impl WasmDrawing {
                     row: *row,
                     col: *col,
                     author: comment.author.clone(),
-                    text: comment.text.clone(),
+                    text: comment.plain_text(),
+                    rich_text: comment
+                        .text
+                        .runs
+                        .iter()
+                        .any(|run| run.font.is_some())
+                        .then(|| WasmDrawingText::from(&comment.text)),
                 },
             },
             core::DrawingKind::Shape(shape) => WasmDrawingKind::Shape {
@@ -1698,14 +1709,23 @@ fn drawing_kind_from_input(kind: WasmDrawingInputKind) -> Result<(core::DrawingK
             core::DrawingKind::FormControl(form_control.try_into()?),
             false,
         ),
-        WasmDrawingInputKind::Comment { comment } => (
-            core::DrawingKind::Comment {
-                row: comment.row,
-                col: comment.col,
-                comment: core::CellComment::new(comment.author, comment.text),
-            },
-            true,
-        ),
+        WasmDrawingInputKind::Comment { comment } => {
+            let text = match comment.rich_text {
+                Some(rich) => rich.try_into()?,
+                None => core::DrawingText::plain(comment.text),
+            };
+            (
+                core::DrawingKind::Comment {
+                    row: comment.row,
+                    col: comment.col,
+                    comment: core::CellComment {
+                        author: comment.author,
+                        text,
+                    },
+                },
+                true,
+            )
+        }
         WasmDrawingInputKind::Shape { shape } => {
             (core::DrawingKind::Shape(Box::new(shape.try_into()?)), false)
         }

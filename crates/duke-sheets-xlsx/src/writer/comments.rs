@@ -84,10 +84,7 @@ pub(super) fn write_comments<W: Write + Seek>(
             w.write_event(Event::Start(c_tag))?;
 
             w.write_event(Event::Start(BytesStart::new("text")))?;
-            w.write_event(Event::Start(BytesStart::new("r")))?;
-            w.create_element("t")
-                .write_text_content(BytesText::new(&comment.text))?;
-            w.write_event(Event::End(BytesEnd::new("r")))?;
+            super::XlsxWriter::write_rich_text_runs(w, &comment.text.runs)?;
             w.write_event(Event::End(BytesEnd::new("text")))?;
 
             w.write_event(Event::End(BytesEnd::new("comment")))?;

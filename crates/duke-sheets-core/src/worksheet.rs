@@ -3076,7 +3076,7 @@ mod tests {
         // Get the comment
         let comment = ws.comment("A1").unwrap().unwrap();
         assert_eq!(comment.author, "John");
-        assert_eq!(comment.text, "Review this");
+        assert_eq!(comment.plain_text(), "Review this");
 
         // Check authors
         assert_eq!(ws.comment_authors(), &["John"]);

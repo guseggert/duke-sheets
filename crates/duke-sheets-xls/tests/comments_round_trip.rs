@@ -28,6 +28,60 @@ fn write_then_read(wb: &Workbook) -> Workbook {
     XlsReader::read(Cursor::new(&bytes)).expect("read back")
 }
 
+// features: Rich text in comments
+#[test]
+fn rich_comment_runs_round_trip_xls() {
+    use duke_sheets_core::rich_text::{RichTextRun, RunFont};
+    use duke_sheets_core::DrawingText;
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    let text = DrawingText {
+        runs: vec![
+            RichTextRun {
+                text: "Bold lead".to_string(),
+                font: Some(RunFont {
+                    bold: Some(true),
+                    ..RunFont::default()
+                }),
+            },
+            RichTextRun {
+                text: " then plain".to_string(),
+                font: None,
+            },
+        ],
+        ..DrawingText::default()
+    };
+    ws.set_comment_at(
+        0,
+        0,
+        CellComment {
+            author: "Reviewer".to_string(),
+            text,
+        },
+    )
+    .expect("set comment");
+
+    let parsed = write_then_read(&wb);
+    let comment = parsed
+        .worksheet(0)
+        .unwrap()
+        .comment_at(0, 0)
+        .expect("comment survives");
+    assert_eq!(comment.plain_text(), "Bold lead then plain");
+    assert_eq!(comment.text.runs.len(), 2, "run boundaries survive");
+    assert_eq!(comment.text.runs[0].text, "Bold lead");
+    assert_eq!(
+        comment.text.runs[0]
+            .font
+            .as_ref()
+            .and_then(|font| font.bold),
+        Some(true),
+        "bold run formatting survives"
+    );
+    assert_eq!(comment.text.runs[1].text, " then plain");
+}
+
 #[test]
 fn single_comment_round_trips() {
     let mut wb = Workbook::new();
@@ -41,7 +95,7 @@ fn single_comment_round_trips() {
     let c = ws_in
         .comment_at(0, 0)
         .expect("comment must survive round-trip");
-    assert_eq!(c.text, "This is a note");
+    assert_eq!(c.plain_text(), "This is a note");
     assert_eq!(c.author, "Alice");
 }
 
@@ -59,7 +113,7 @@ fn comment_without_anchor_cell_value_round_trips() {
     let c = ws_in
         .comment_at(5, 3)
         .expect("comment on empty cell must survive");
-    assert_eq!(c.text, "Empty-cell note");
+    assert_eq!(c.plain_text(), "Empty-cell note");
     assert_eq!(c.author, "Bob");
 }
 
@@ -96,7 +150,7 @@ fn custom_comment_anchor_round_trips() {
     let ws_in = parsed.worksheet(0).unwrap();
     let comment = ws_in.comments_drawn().next().expect("comment survives");
     assert_eq!((comment.row, comment.col), (1, 1));
-    assert_eq!(comment.comment.text, "moved popup");
+    assert_eq!(comment.comment.plain_text(), "moved popup");
     assert_eq!(comment.object.anchor, custom);
 }
 
@@ -112,9 +166,9 @@ fn multiple_comments_on_same_sheet_round_trip() {
     let parsed = write_then_read(&wb);
     let ws_in = parsed.worksheet(0).unwrap();
     assert_eq!(ws_in.comment_count(), 3);
-    assert_eq!(ws_in.comment_at(0, 0).unwrap().text, "First");
-    assert_eq!(ws_in.comment_at(2, 1).unwrap().text, "Second");
-    assert_eq!(ws_in.comment_at(10, 5).unwrap().text, "Third");
+    assert_eq!(ws_in.comment_at(0, 0).unwrap().plain_text(), "First");
+    assert_eq!(ws_in.comment_at(2, 1).unwrap().plain_text(), "Second");
+    assert_eq!(ws_in.comment_at(10, 5).unwrap().plain_text(), "Third");
     assert_eq!(ws_in.comment_at(10, 5).unwrap().author, "Charlie");
 }
 
@@ -129,7 +183,7 @@ fn unicode_comment_text_round_trips() {
 
     let parsed = write_then_read(&wb);
     let c = parsed.worksheet(0).unwrap().comment_at(0, 0).unwrap();
-    assert_eq!(c.text, "こんにちは 🌸");
+    assert_eq!(c.plain_text(), "こんにちは 🌸");
     assert_eq!(c.author, "作者");
 }
 
@@ -149,12 +203,12 @@ fn comments_on_multiple_sheets_round_trip() {
 
     let parsed = write_then_read(&wb);
     assert_eq!(
-        parsed.worksheet(0).unwrap().comment_at(0, 0).unwrap().text,
+        parsed.worksheet(0).unwrap().comment_at(0, 0).unwrap().plain_text(),
         "sheet 1 comment"
     );
     assert_eq!(parsed.worksheet(1).unwrap().comment_count(), 0);
     assert_eq!(
-        parsed.worksheet(2).unwrap().comment_at(4, 4).unwrap().text,
+        parsed.worksheet(2).unwrap().comment_at(4, 4).unwrap().plain_text(),
         "sheet 3 comment"
     );
 }

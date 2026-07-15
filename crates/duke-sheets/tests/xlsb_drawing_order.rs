@@ -336,7 +336,7 @@ fn xlsb_comment_control_relative_order_round_trips() {
     let read = round_trip(&workbook);
     assert_eq!(kind_tags(&read), vec!["control", "comment", "control"]);
     assert_eq!(
-        read.worksheet(0).unwrap().comment_at(4, 4).unwrap().text,
+        read.worksheet(0).unwrap().comment_at(4, 4).unwrap().plain_text(),
         "between the controls"
     );
 }

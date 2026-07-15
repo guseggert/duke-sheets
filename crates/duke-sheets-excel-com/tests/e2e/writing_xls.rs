@@ -1424,7 +1424,7 @@ fn excel_can_read_comment_we_emit() {
         .comment_at(0, 0)
         .expect("comment must survive Excel re-save");
     assert!(
-        c.text.contains("Hello from duke-sheets"),
+        c.plain_text().contains("Hello from duke-sheets"),
         "comment text lost after Excel round-trip: {:?}",
         c.text
     );
@@ -1432,6 +1432,64 @@ fn excel_can_read_comment_we_emit() {
         c.author.contains("Alice"),
         "comment author lost after Excel round-trip: {:?}",
         c.author
+    );
+}
+
+/// Excel parity for rich comment text: our TXO formatting runs must
+/// survive Excel's re-save with their run boundary and bold flag.
+// features: Rich text in comments
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_rich_comment_runs_we_emit_xls() {
+    use duke_sheets_core::rich_text::{RichTextRun, RunFont};
+    use duke_sheets_core::{CellComment, DrawingText};
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "anchor").unwrap();
+    ws.set_comment_at(
+        0,
+        0,
+        CellComment {
+            author: "Reviewer".to_string(),
+            text: DrawingText {
+                runs: vec![
+                    RichTextRun {
+                        text: "Bold lead".to_string(),
+                        font: Some(RunFont {
+                            bold: Some(true),
+                            ..RunFont::default()
+                        }),
+                    },
+                    RichTextRun {
+                        text: " then plain".to_string(),
+                        font: None,
+                    },
+                ],
+                ..DrawingText::default()
+            },
+        },
+    )
+    .unwrap();
+
+    let result = roundtrip_through_excel_xls(&wb);
+    let comment = result
+        .worksheet(0)
+        .unwrap()
+        .comment_at(0, 0)
+        .expect("comment must survive Excel re-save");
+    assert_eq!(comment.plain_text(), "Bold lead then plain");
+    let bold_run = comment
+        .text
+        .runs
+        .iter()
+        .find(|run| run.text.contains("Bold lead"))
+        .expect("bold run boundary survives Excel re-save");
+    assert_eq!(
+        bold_run.font.as_ref().and_then(|font| font.bold),
+        Some(true),
+        "bold formatting lost: {:?}",
+        comment.text.runs
     );
 }
 
@@ -1461,19 +1519,19 @@ fn excel_can_read_multiple_comments_we_emit() {
     // Without per-author assertion, the test would silently pass if
     // Excel scrambled the author–text mapping during NOTE re-save.
     let c1 = s.comment_at(0, 0).unwrap();
-    assert!(c1.text.contains("Comment one"), "A1 text: {:?}", c1.text);
+    assert!(c1.plain_text().contains("Comment one"), "A1 text: {:?}", c1.plain_text());
     assert!(c1.author.contains("Alice"), "A1 author: {:?}", c1.author);
 
     let c2 = s.comment_at(2, 2).unwrap();
     assert!(
-        c2.text.contains("Comment two body"),
+        c2.plain_text().contains("Comment two body"),
         "C3 text: {:?}",
         c2.text
     );
     assert!(c2.author.contains("Bob"), "C3 author: {:?}", c2.author);
 
     let c3 = s.comment_at(4, 4).unwrap();
-    assert!(c3.text.contains("Comment three"), "E5 text: {:?}", c3.text);
+    assert!(c3.plain_text().contains("Comment three"), "E5 text: {:?}", c3.plain_text());
     assert!(c3.author.contains("Carol"), "E5 author: {:?}", c3.author);
 }
 
@@ -1494,7 +1552,7 @@ fn excel_can_read_unicode_comment_we_emit() {
     let result = roundtrip_through_excel_xls(&wb);
     let c = result.worksheet(0).unwrap().comment_at(0, 0).unwrap();
     assert!(
-        c.text.contains("こんにちは"),
+        c.plain_text().contains("こんにちは"),
         "Japanese text lost: {:?}",
         c.text
     );
@@ -1565,7 +1623,7 @@ fn excel_can_read_xls_picture_and_comment_on_same_sheet_we_emit() {
     assert_eq!(img.data, TEST_PNG_1X1, "PNG bytes preserved");
     let c = s.comment_at(7, 5).expect("comment at G8 must exist");
     assert!(
-        c.text.contains("Mixed-with-picture comment"),
+        c.plain_text().contains("Mixed-with-picture comment"),
         "comment text lost: {:?}",
         c.text
     );
@@ -1705,7 +1763,7 @@ fn excel_can_read_comments_across_multiple_sheets_we_emit() {
     // sheets would be caught.
     let alpha_a1 = result.worksheet(0).unwrap().comment_at(0, 0).unwrap();
     assert!(
-        alpha_a1.text.contains("Alpha A1"),
+        alpha_a1.plain_text().contains("Alpha A1"),
         "Alpha A1 text: {:?}",
         alpha_a1.text
     );
@@ -1717,7 +1775,7 @@ fn excel_can_read_comments_across_multiple_sheets_we_emit() {
 
     let alpha_d4 = result.worksheet(0).unwrap().comment_at(3, 3).unwrap();
     assert!(
-        alpha_d4.text.contains("Alpha D4"),
+        alpha_d4.plain_text().contains("Alpha D4"),
         "Alpha D4 text: {:?}",
         alpha_d4.text
     );
@@ -1729,7 +1787,7 @@ fn excel_can_read_comments_across_multiple_sheets_we_emit() {
 
     let gamma_f6 = result.worksheet(2).unwrap().comment_at(5, 5).unwrap();
     assert!(
-        gamma_f6.text.contains("Gamma F6"),
+        gamma_f6.plain_text().contains("Gamma F6"),
         "Gamma F6 text: {:?}",
         gamma_f6.text
     );

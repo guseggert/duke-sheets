@@ -2980,17 +2980,17 @@ impl XlsReader {
         obj_texts: &std::collections::HashMap<u16, duke_sheets_core::ControlText>,
         ws: &mut duke_sheets_core::Worksheet,
     ) {
-        let text = obj_texts
-            .get(&note.obj_id)
-            .map(duke_sheets_core::ControlText::plain_text)
-            .unwrap_or_default();
+        let text = obj_texts.get(&note.obj_id).cloned().unwrap_or_default();
         // Permissive read: a NOTE pointing outside the model grid is
         // dropped rather than failing the sheet load.
         if ws
             .set_comment_at(
                 note.row,
                 note.col,
-                CellComment::new(note.author.clone(), text),
+                CellComment {
+                    author: note.author.clone(),
+                    text,
+                },
             )
             .is_ok()
         {
@@ -3056,14 +3056,14 @@ impl XlsReader {
                 .enumerate()
                 .find(|(i, note)| !note_used[*i] && note.obj_id == parsed.id)?;
             note_used[index] = true;
-            let text = obj_texts
-                .get(&note.obj_id)
-                .map(duke_sheets_core::ControlText::plain_text)
-                .unwrap_or_default();
+            let text = obj_texts.get(&note.obj_id).cloned().unwrap_or_default();
             let mut object = duke_sheets_core::DrawingObject::comment(
                 note.row,
                 note.col,
-                CellComment::new(note.author.clone(), text),
+                CellComment {
+                    author: note.author.clone(),
+                    text,
+                },
             );
             if let Some(anchor) = &node.client_anchor {
                 object.anchor = Self::client_anchor_to_drawing_anchor(anchor, metrics);
@@ -3213,14 +3213,14 @@ impl XlsReader {
                     .find(|(i, note)| !note_used[*i] && note.obj_id == parsed.id)
                 {
                     note_used[index] = true;
-                    let text = obj_texts
-                        .get(&note.obj_id)
-                        .map(duke_sheets_core::ControlText::plain_text)
-                        .unwrap_or_default();
+                    let text = obj_texts.get(&note.obj_id).cloned().unwrap_or_default();
                     let mut object = duke_sheets_core::DrawingObject::comment(
                         note.row,
                         note.col,
-                        CellComment::new(note.author.clone(), text),
+                        CellComment {
+                            author: note.author.clone(),
+                            text,
+                        },
                     );
                     object.meta.hidden = !note.visible;
                     hoisted.push(object);
@@ -5078,7 +5078,7 @@ mod tests {
 
         let comment = ws.comment_at(2, 3).expect("comment should exist");
         assert_eq!(comment.author, "John");
-        assert_eq!(comment.text, "Review this");
+        assert_eq!(comment.plain_text(), "Review this");
         assert_eq!(ws.comment_visible(2, 3), Some(true));
     }
 
@@ -5095,7 +5095,7 @@ mod tests {
 
         let ws = parse(vec![rec(records::NOTE, note_data)]);
         let comment = ws.comment_at(0, 0).expect("comment should exist");
-        assert_eq!(comment.text, "");
+        assert_eq!(comment.plain_text(), "");
         assert_eq!(comment.author, "");
     }
 

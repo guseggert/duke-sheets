@@ -2008,9 +2008,9 @@ fn excel_can_read_xlsb_comment_we_emit() {
     let sheet = result.worksheet(0).unwrap();
     let comment = sheet.comment_at(1, 1).expect("comment survives at B2");
     assert!(
-        comment.text.contains("Check this figure"),
+        comment.plain_text().contains("Check this figure"),
         "comment text lost: {:?}",
-        comment.text
+        comment.plain_text()
     );
     assert!(
         comment.author.contains("Reviewer"),

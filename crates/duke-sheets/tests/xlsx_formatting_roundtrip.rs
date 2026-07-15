@@ -248,7 +248,7 @@ fn test_roundtrip_cell_comments() {
     assert!(comment_a1.is_some(), "A1 should have a comment");
     if let Some(c) = comment_a1 {
         assert_eq!(c.author, "John Doe");
-        assert_eq!(c.text, "This is a note");
+        assert_eq!(c.plain_text(), "This is a note");
     }
 
     // Check B2 comment
@@ -256,8 +256,66 @@ fn test_roundtrip_cell_comments() {
     assert!(comment_b2.is_some(), "B2 should have a comment");
     if let Some(c) = comment_b2 {
         assert_eq!(c.author, "Jane Smith");
-        assert_eq!(c.text, "Review this value");
+        assert_eq!(c.plain_text(), "Review this value");
     }
+}
+
+// features: Rich text in comments
+#[test]
+fn rich_comment_runs_round_trip_xlsx() {
+    use duke_sheets::{DrawingText, RichTextRun, RunFont};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    let text = DrawingText {
+        runs: vec![
+            RichTextRun {
+                text: "Bold lead".to_string(),
+                font: Some(RunFont {
+                    bold: Some(true),
+                    ..RunFont::default()
+                }),
+            },
+            RichTextRun {
+                text: " then plain".to_string(),
+                font: None,
+            },
+        ],
+        ..DrawingText::default()
+    };
+    sheet
+        .set_comment(
+            "A1",
+            CellComment {
+                author: "Reviewer".to_string(),
+                text,
+            },
+        )
+        .unwrap();
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let comment = wb2
+        .worksheet(0)
+        .unwrap()
+        .comment("A1")
+        .unwrap()
+        .expect("comment survives");
+
+    assert_eq!(comment.plain_text(), "Bold lead then plain");
+    assert_eq!(comment.text.runs.len(), 2, "run boundaries survive");
+    assert_eq!(comment.text.runs[0].text, "Bold lead");
+    assert_eq!(
+        comment.text.runs[0]
+            .font
+            .as_ref()
+            .and_then(|font| font.bold),
+        Some(true),
+        "bold run formatting survives"
+    );
+    assert_eq!(comment.text.runs[1].text, " then plain");
+    assert!(comment.text.runs[1].font.is_none());
 }
 
 #[test]
@@ -291,7 +349,7 @@ fn test_comments_emit_vml_and_legacy_drawing() {
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
     let sheet2 = wb2.worksheet(0).unwrap();
     let comment = sheet2.comment("B2").unwrap().unwrap();
-    assert_eq!(comment.text, "VML-backed comment");
+    assert_eq!(comment.plain_text(), "VML-backed comment");
 }
 
 /// Test cell comments without author
@@ -320,7 +378,7 @@ fn test_roundtrip_cell_comments_no_author() {
     assert!(comment.is_some(), "A1 should have a comment");
     if let Some(c) = comment {
         assert!(c.author.is_empty(), "Author should be empty");
-        assert_eq!(c.text, "Anonymous note");
+        assert_eq!(c.plain_text(), "Anonymous note");
     }
 }
 
@@ -356,14 +414,14 @@ fn test_roundtrip_comments_multiple_sheets() {
     assert_eq!(sheet1.comment_count(), 1);
     let c1 = sheet1.comment("A1").unwrap().unwrap();
     assert_eq!(c1.author, "Author1");
-    assert_eq!(c1.text, "Comment on sheet 1");
+    assert_eq!(c1.plain_text(), "Comment on sheet 1");
 
     // Verify sheet 2 comments
     let sheet2 = wb2.worksheet(1).unwrap();
     assert_eq!(sheet2.comment_count(), 1);
     let c2 = sheet2.comment("B2").unwrap().unwrap();
     assert_eq!(c2.author, "Author2");
-    assert_eq!(c2.text, "Comment on sheet 2");
+    assert_eq!(c2.plain_text(), "Comment on sheet 2");
 }
 
 /// Test color scale conditional formatting roundtrip

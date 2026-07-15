@@ -1233,7 +1233,7 @@ impl JsComment {
     pub(crate) fn from_with_visibility(c: &core::CellComment, visible: bool) -> Self {
         JsComment {
             author: c.author.clone(),
-            text: c.text.clone(),
+            text: c.plain_text(),
             visible,
         }
     }

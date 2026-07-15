@@ -2723,7 +2723,7 @@ impl XlsxWriter {
     }
 
     /// Write a sequence of rich text runs as `<r>` elements.
-    fn write_rich_text_runs(
+    pub(super) fn write_rich_text_runs(
         w: &mut XmlWriter,
         runs: &[duke_sheets_core::RichTextRun],
     ) -> XlsxResult<()> {

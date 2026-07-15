@@ -26,9 +26,9 @@ fn test_comment_basic_text() {
     let sheet = workbook.worksheet(0).expect("worksheet");
     let comment = sheet.comment_at(0, 0).expect("A1 should have a comment");
     assert!(
-        comment.text.contains("This is a comment"),
+        comment.plain_text().contains("This is a comment"),
         "Comment text should contain our text, got: {}",
-        comment.text
+        comment.plain_text()
     );
 
     cleanup_fixture(&fixture);
@@ -86,9 +86,9 @@ fn test_comment_unicode() {
     let sheet = workbook.worksheet(0).expect("worksheet");
     let comment = sheet.comment_at(0, 0).expect("A1 should have a comment");
     assert!(
-        comment.text.contains("\u{65e5}\u{672c}\u{8a9e}"),
+        comment.plain_text().contains("\u{65e5}\u{672c}\u{8a9e}"),
         "Comment should contain Japanese text, got: {}",
-        comment.text
+        comment.plain_text()
     );
 
     cleanup_fixture(&fixture);

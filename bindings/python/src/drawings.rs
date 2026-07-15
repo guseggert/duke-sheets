@@ -721,14 +721,19 @@ pub struct PyDrawingComment {
 
 #[pymethods]
 impl PyDrawingComment {
+    /// ``text`` accepts a plain string or a :class:`DrawingText` with
+    /// rich runs.
     #[new]
     #[pyo3(signature=(row, col, text, *, author=None))]
-    fn new(row: u32, col: u16, text: String, author: Option<String>) -> Self {
-        Self {
+    fn new(row: u32, col: u16, text: &Bound<'_, PyAny>, author: Option<String>) -> PyResult<Self> {
+        Ok(Self {
             row,
             col,
-            comment: core::CellComment::new(author.unwrap_or_default(), text),
-        }
+            comment: core::CellComment {
+                author: author.unwrap_or_default(),
+                text: crate::types::drawing_text_input_to_core(text)?,
+            },
+        })
     }
 
     #[getter]
@@ -746,9 +751,16 @@ impl PyDrawingComment {
         self.comment.author.clone()
     }
 
+    /// Plain comment text (runs concatenated).
     #[getter]
     fn text(&self) -> String {
-        self.comment.text.clone()
+        self.comment.plain_text()
+    }
+
+    /// Rich comment text runs.
+    #[getter]
+    fn rich_text(&self) -> PyDrawingText {
+        PyDrawingText::from(&self.comment.text)
     }
 
     #[getter]

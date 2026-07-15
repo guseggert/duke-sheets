@@ -61,7 +61,7 @@ use workbook::{read_sheet_rels, read_workbook_rels, read_workbook_xml, SheetRela
 /// - `_x000a_` = LF (line feed)
 /// - `_x0009_` = Tab
 /// - `_x005f_` = Underscore (escaped underscore)
-fn decode_excel_escapes(s: &str) -> String {
+pub(crate) fn decode_excel_escapes(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
 
@@ -4208,6 +4208,6 @@ mod tests {
         let sheet = workbook.worksheet(0).unwrap();
         let comment = sheet.comment("A1").unwrap().expect("comment via rels path");
         assert_eq!(comment.author, "Alice");
-        assert_eq!(comment.text, "Custom path comment");
+        assert_eq!(comment.plain_text(), "Custom path comment");
     }
 }

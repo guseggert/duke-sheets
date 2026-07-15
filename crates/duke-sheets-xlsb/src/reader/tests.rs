@@ -1481,11 +1481,11 @@ mod tests {
 
         let c1 = ws.comment_at(0, 0).expect("comment at A1");
         assert_eq!(c1.author, "Alice");
-        assert_eq!(c1.text, "First comment");
+        assert_eq!(c1.plain_text(), "First comment");
 
         let c2 = ws.comment_at(1, 2).expect("comment at C2");
         assert_eq!(c2.author, "Bob");
-        assert_eq!(c2.text, "Second comment");
+        assert_eq!(c2.plain_text(), "Second comment");
 
         assert!(ws.comment_at(0, 1).is_none());
     }
@@ -1524,11 +1524,11 @@ mod tests {
 
         let c1 = ws.comment_at(0, 0).expect("comment at A1");
         assert_eq!(c1.author, "Alice");
-        assert_eq!(c1.text, "First comment");
+        assert_eq!(c1.plain_text(), "First comment");
 
         let c2 = ws.comment_at(1, 2).expect("comment at C2");
         assert_eq!(c2.author, "Bob");
-        assert_eq!(c2.text, "Second comment");
+        assert_eq!(c2.plain_text(), "Second comment");
     }
 
     #[test]
@@ -1570,7 +1570,7 @@ mod tests {
 
         let c = ws.comment_at(2, 1).expect("comment at B3");
         assert_eq!(c.author, "TestUser");
-        assert_eq!(c.text, "XML comment");
+        assert_eq!(c.plain_text(), "XML comment");
     }
 
     #[test]

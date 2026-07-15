@@ -420,7 +420,7 @@ fn assert_aux_ui_shape_skipped(workbook: &Workbook) {
         FormControlKind::Checkbox { .. }
     ));
     let comment = sheet.comment_at(4, 4).expect("comment survives");
-    assert_eq!(comment.text, "still here");
+    assert_eq!(comment.plain_text(), "still here");
 }
 
 // features: Form control: dropdown (combo box)

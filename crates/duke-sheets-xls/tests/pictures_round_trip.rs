@@ -846,7 +846,7 @@ fn picture_and_comment_coexist_on_same_sheet() {
     let ws_in = parsed.worksheet(0).unwrap();
     assert_eq!(ws_in.image_count(), 1, "picture must survive");
     assert_eq!(ws_in.comment_count(), 1, "comment must survive");
-    assert_eq!(ws_in.comment_at(3, 3).unwrap().text, "A note");
+    assert_eq!(ws_in.comment_at(3, 3).unwrap().plain_text(), "A note");
     assert_eq!(
         images_of(ws_in)[0].object.unwrap().meta.name.as_deref(),
         Some("Picture 1")

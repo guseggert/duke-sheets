@@ -493,6 +493,19 @@ impl StyleTables {
                     }
                 }
             }
+            for (_, comment) in sheet.comments() {
+                for run in &comment.text.runs {
+                    if let Some(rf) = &run.font {
+                        let font = run_font_to_font_style(rf);
+                        if !font_xf_index.contains_key(&font) {
+                            let on_disk = fonts_in_order.len() as u16;
+                            let xf_idx = if on_disk < 4 { on_disk } else { on_disk + 1 };
+                            fonts_in_order.push(font.clone());
+                            font_xf_index.insert(font, xf_idx);
+                        }
+                    }
+                }
+            }
             for (_, node) in sheet.drawings_flat() {
                 let Some(shape) = node.kind.as_shape() else {
                     continue;
@@ -4761,7 +4774,9 @@ struct CommentShape {
     /// Author string from `CellComment.author`.
     author: String,
     /// Comment body text from `CellComment.text`.
-    text: String,
+    text: duke_sheets_core::DrawingText,
+    /// TXO formatting runs (utf16 offset, font index) for the text.
+    txo_runs: Vec<(u16, u16)>,
     /// Whether the comment box is visible by default (sets `NOTE.flags`
     /// bit 1).
     visible: bool,
@@ -5210,6 +5225,18 @@ impl ShapeBuilder<'_> {
         let spid = self.alloc_spid()?;
         let obj_id = self.alloc_obj_id()?;
         let text_id = self.alloc_text_id();
+        let mut txo_runs = Vec::new();
+        let mut offset = 0usize;
+        for run in &comment.text.runs {
+            let font_index = run
+                .font
+                .as_ref()
+                .map(run_font_to_font_style)
+                .and_then(|font| self.styles.font_xf_index.get(&font).copied())
+                .unwrap_or(0);
+            txo_runs.push((offset.min(u16::MAX as usize) as u16, font_index));
+            offset = offset.saturating_add(run.text.encode_utf16().count());
+        }
         Ok(SheetShape::Comment(CommentShape {
             spid,
             obj_id,
@@ -5218,6 +5245,7 @@ impl ShapeBuilder<'_> {
             col,
             author: comment.author.clone(),
             text: comment.text.clone(),
+            txo_runs,
             visible,
             anchor: anchor.clone(),
         }))
@@ -6247,7 +6275,12 @@ fn deterministic_guid(seed: u32) -> [u8; 16] {
 /// Emit a comment's `TXO` record + the two `CONTINUE` records that
 /// carry its text payload and formatting runs.
 fn write_comment_txo_to_vec(out: &mut Vec<u8>, comment: &CommentShape) -> XlsResult<()> {
-    write_txo_records(out, &comment.text, 0x0212, &[])
+    write_txo_records(
+        out,
+        &comment.text.plain_text(),
+        0x0212,
+        &comment.txo_runs,
+    )
 }
 
 /// Emit a `TXO` record with the given flags, plus (for non-empty

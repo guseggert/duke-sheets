@@ -454,7 +454,13 @@ export interface DrawingComment {
   row: number
   col: number
   author: string
+  /** Plain text (runs concatenated). */
   text: string
+  /**
+   * Rich runs; present on output when any run is formatted, and wins
+   * over `text` on input when supplied.
+   */
+  richText?: DrawingText
 }
 
 export type ChartDataReferenceInput =
