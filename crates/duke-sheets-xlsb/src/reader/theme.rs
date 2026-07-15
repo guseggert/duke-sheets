@@ -4,7 +4,6 @@ use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
 use crate::error::{XlsbError, XlsbResult};
-use duke_sheets_core::style::{Color, FillStyle, Style};
 
 pub(crate) use duke_sheets_core::style::ThemePalette;
 
@@ -110,53 +109,6 @@ fn extract_theme_rgb_from_attrs(e: &quick_xml::events::BytesStart<'_>) -> Option
     None
 }
 
-pub(crate) fn resolve_style_theme_colors(style: &mut Style, theme: &ThemePalette) {
-    style.font.color = resolve_color_theme(style.font.color, theme);
-
-    match &mut style.fill {
-        FillStyle::None => {}
-        FillStyle::Solid { color } => {
-            *color = resolve_color_theme(*color, theme);
-        }
-        FillStyle::Pattern {
-            foreground,
-            background,
-            ..
-        } => {
-            *foreground = resolve_color_theme(*foreground, theme);
-            *background = resolve_color_theme(*background, theme);
-        }
-        FillStyle::Gradient { stops, .. } => {
-            for stop in stops {
-                stop.color = resolve_color_theme(stop.color, theme);
-            }
-        }
-    }
-
-    for edge in [
-        &mut style.border.left,
-        &mut style.border.right,
-        &mut style.border.top,
-        &mut style.border.bottom,
-        &mut style.border.diagonal,
-    ]
-    .into_iter()
-    .flatten()
-    {
-        edge.color = resolve_color_theme(edge.color, theme);
-    }
-}
-
-pub(crate) fn resolve_color_theme(color: Color, theme: &ThemePalette) -> Color {
-    match color {
-        Color::Theme { index, tint } => {
-            let (r, g, b) = theme.resolve_theme(index, tint);
-            Color::Rgb { r, g, b }
-        }
-        other => other,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
@@ -187,89 +139,6 @@ mod tests {
 
         let palette = parse_theme_palette(Cursor::new(xml.as_bytes())).unwrap();
         assert_eq!(palette.colors[4], (0x11, 0x22, 0x33));
-        assert_eq!(palette.resolve_theme(4, 0), (0x11, 0x22, 0x33));
-    }
-
-    #[test]
-    fn resolve_color_theme_converts_to_rgb() {
-        let palette = ThemePalette::default();
-        let color = Color::Theme { index: 4, tint: 0 };
-        let resolved = resolve_color_theme(color, &palette);
-        assert_eq!(
-            resolved,
-            Color::Rgb {
-                r: 79,
-                g: 129,
-                b: 189
-            }
-        );
-    }
-
-    #[test]
-    fn resolve_color_theme_with_positive_tint() {
-        let palette = ThemePalette::default();
-        let color = Color::Theme { index: 4, tint: 50 };
-        let resolved = resolve_color_theme(color, &palette);
-        assert_eq!(
-            resolved,
-            Color::Rgb {
-                r: 167,
-                g: 192,
-                b: 222
-            }
-        );
-    }
-
-    #[test]
-    fn resolve_color_theme_with_negative_tint() {
-        let palette = ThemePalette::default();
-        let color = Color::Theme {
-            index: 4,
-            tint: -25,
-        };
-        let resolved = resolve_color_theme(color, &palette);
-        assert_eq!(
-            resolved,
-            Color::Rgb {
-                r: 59,
-                g: 96,
-                b: 141
-            }
-        );
-    }
-
-    #[test]
-    fn resolve_color_theme_passthrough_rgb() {
-        let palette = ThemePalette::default();
-        let color = Color::Rgb {
-            r: 10,
-            g: 20,
-            b: 30,
-        };
-        let resolved = resolve_color_theme(color, &palette);
-        assert_eq!(
-            resolved,
-            Color::Rgb {
-                r: 10,
-                g: 20,
-                b: 30
-            }
-        );
-    }
-
-    #[test]
-    fn resolve_style_theme_colors_font() {
-        let palette = ThemePalette::default();
-        let mut style = Style::default();
-        style.font.color = Color::Theme { index: 4, tint: 0 };
-        resolve_style_theme_colors(&mut style, &palette);
-        assert_eq!(
-            style.font.color,
-            Color::Rgb {
-                r: 79,
-                g: 129,
-                b: 189
-            }
-        );
+        assert_eq!(palette.resolve_theme(4, 0.0), (0x11, 0x22, 0x33));
     }
 }

@@ -43,7 +43,7 @@ impl XlsbReader {
             .map_err(|e| XlsbError::InvalidFormat(format!("not a valid ZIP: {e}")))?;
 
         let styles_data = styles::read_styles(&mut archive)?;
-        let mut cell_styles = styles_data.styles;
+        let cell_styles = styles_data.styles;
         let dxf_styles = styles_data.dxf_styles;
         let shared_strings = shared_strings::read_shared_strings(&mut archive, &styles_data.fonts)?;
         let relationships = workbook::read_relationships(&mut archive)?;
@@ -54,12 +54,11 @@ impl XlsbReader {
             .theme_path
             .as_deref()
             .unwrap_or("xl/theme/theme1.xml");
+        // Style colors keep their Color::Theme form; consumers
+        // resolve display RGB through Workbook::resolve_color.
         let mut theme_palette = None;
         if let Ok(file) = archive.by_name(theme_path) {
             if let Ok(palette) = theme::parse_theme_palette(file) {
-                for style in &mut cell_styles {
-                    theme::resolve_style_theme_colors(style, &palette);
-                }
                 theme_palette = Some(palette);
             }
         }

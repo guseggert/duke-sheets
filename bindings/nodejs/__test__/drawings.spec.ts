@@ -80,7 +80,7 @@ describe("unified drawings", () => {
     expect(wb.themePalette).toHaveLength(12);
     expect(wb.themePalette[4]).toBe("4F81BD");
     expect(wb.resolveColor({ colorType: "theme", index: 4, tint: 0 })).toBe("4F81BD");
-    expect(wb.resolveColor({ colorType: "theme", index: 4, tint: 50 })).toBe("A7C0DE");
+    expect(wb.resolveColor({ colorType: "theme", index: 4, tint: 0.5 })).toBe("A7C0DE");
     expect(wb.resolveColor({ colorType: "rgb", r: 1, g: 2, b: 3 })).toBe("010203");
     expect(wb.resolveColor({ colorType: "auto" })).toBeNull();
   });

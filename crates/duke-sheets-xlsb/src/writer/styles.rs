@@ -626,7 +626,7 @@ fn encode_xfprop_color(color: &Color) -> [u8; 8] {
         Color::Theme { index, tint } => {
             buf[0] = 0x07; // fValidRGBA=1, xclrType=3 (theme)
             buf[1] = *index;
-            let t = (*tint as f64 / 100.0 * 32767.0) as i16;
+            let t = (tint.clamp(-1.0, 1.0) * 32767.0).round() as i16;
             buf[2..4].copy_from_slice(&t.to_le_bytes());
         }
         _ => {
@@ -680,11 +680,7 @@ fn encode_brt_color(color: &Color) -> [u8; 8] {
         Color::Theme { index, tint } => {
             buf[0] = 3;
             buf[1] = *index;
-            let tint_i16 = if *tint == 0 {
-                0i16
-            } else {
-                ((*tint as f64 / 100.0) * 32767.0).round() as i16
-            };
+            let tint_i16 = (tint.clamp(-1.0, 1.0) * 32767.0).round() as i16;
             buf[2..4].copy_from_slice(&tint_i16.to_le_bytes());
         }
     }

@@ -226,11 +226,7 @@ fn encode_brt_color_ws(color: &duke_sheets_core::style::Color) -> [u8; 8] {
         Color::Theme { index, tint } => {
             buf[0] = 3;
             buf[1] = *index;
-            let tint_i16 = if *tint == 0 {
-                0i16
-            } else {
-                ((*tint as f64 / 100.0) * 32767.0).round() as i16
-            };
+            let tint_i16 = (tint.clamp(-1.0, 1.0) * 32767.0).round() as i16;
             buf[2..4].copy_from_slice(&tint_i16.to_le_bytes());
         }
     }
@@ -1751,11 +1747,7 @@ fn encode_cf_color(color: &Color) -> [u8; 8] {
         Color::Theme { index, tint } => {
             buf[0] = 3 << 1;
             buf[1] = *index;
-            let tint_i16 = if *tint == 0 {
-                0i16
-            } else {
-                ((*tint as f64 / 100.0) * 32767.0).round() as i16
-            };
+            let tint_i16 = (tint.clamp(-1.0, 1.0) * 32767.0).round() as i16;
             buf[2..4].copy_from_slice(&tint_i16.to_le_bytes());
         }
         Color::Indexed(idx) => {

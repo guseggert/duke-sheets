@@ -76,7 +76,7 @@ def test_theme_palette_and_resolve_color():
 
     theme = duke_sheets.Color("theme", theme_index=4, tint=0)
     assert workbook.resolve_color(theme) == "4F81BD"
-    tinted = duke_sheets.Color("theme", theme_index=4, tint=50)
+    tinted = duke_sheets.Color("theme", theme_index=4, tint=0.5)
     assert workbook.resolve_color(tinted) == "A7C0DE"
     rgb = duke_sheets.Color("rgb", r=1, g=2, b=3)
     assert workbook.resolve_color(rgb) == "010203"

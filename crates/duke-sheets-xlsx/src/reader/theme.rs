@@ -5,7 +5,6 @@ use quick_xml::reader::Reader;
 
 use super::archive_by_name;
 use crate::error::{XlsxError, XlsxResult};
-use duke_sheets_core::style::{Color, FillStyle, Style};
 
 pub(crate) use duke_sheets_core::style::ThemePalette;
 
@@ -152,76 +151,11 @@ fn extract_theme_rgb_from_attrs(e: &quick_xml::events::BytesStart<'_>) -> Option
     None
 }
 
-pub(super) fn resolve_style_theme_colors(style: &mut Style, theme: &ThemePalette) {
-    style.font.color = resolve_color_theme(style.font.color, theme);
-
-    match &mut style.fill {
-        FillStyle::None => {}
-        FillStyle::Solid { color } => *color = resolve_color_theme(*color, theme),
-        FillStyle::Pattern {
-            foreground,
-            background,
-            ..
-        } => {
-            *foreground = resolve_color_theme(*foreground, theme);
-            *background = resolve_color_theme(*background, theme);
-        }
-        FillStyle::Gradient { stops, .. } => {
-            for stop in stops {
-                stop.color = resolve_color_theme(stop.color, theme);
-            }
-        }
-    }
-
-    for edge in [
-        &mut style.border.left,
-        &mut style.border.right,
-        &mut style.border.top,
-        &mut style.border.bottom,
-        &mut style.border.diagonal,
-    ]
-    .into_iter()
-    .flatten()
-    {
-        edge.color = resolve_color_theme(edge.color, theme);
-    }
-}
-
-pub(super) fn resolve_color_theme(color: Color, theme: &ThemePalette) -> Color {
-    match color {
-        Color::Theme { index, tint } => {
-            let (r, g, b) = theme.resolve_theme(index, tint);
-            Color::Rgb { r, g, b }
-        }
-        other => other,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
 
-    use quick_xml::events::BytesStart;
-
     use super::*;
-    use crate::reader::conditional_format::parse_color_element;
-
-    #[test]
-    fn test_parse_color_element_theme_with_palette_resolves_to_rgb() {
-        let mut e = BytesStart::new("color");
-        e.push_attribute(("theme", "4"));
-        e.push_attribute(("tint", "0.5"));
-
-        let palette = ThemePalette::default();
-        assert_eq!(
-            parse_color_element(&e, Some(&palette)),
-            Color::Rgb {
-                r: 167,
-                g: 192,
-                b: 222
-            }
-        );
-    }
 
     #[test]
     fn test_parse_theme_palette_custom_accent() {
@@ -247,6 +181,6 @@ mod tests {
 
         let palette = parse_theme_palette(Cursor::new(xml.as_bytes())).unwrap();
         assert_eq!(palette.colors[4], (0x11, 0x22, 0x33));
-        assert_eq!(palette.resolve_theme(4, 0), (0x11, 0x22, 0x33));
+        assert_eq!(palette.resolve_theme(4, 0.0), (0x11, 0x22, 0x33));
     }
 }

@@ -44,6 +44,29 @@ fn test_roundtrip_font_styles() {
     assert_eq!(read_style_b1.font.size, 14.0, "B1 font size should be 14");
 }
 
+/// Theme tints carry Excel's full f64 precision through a round trip;
+/// Excel emits values like 0.3499862666707358 that a percentage
+/// quantization would corrupt.
+#[test]
+fn test_roundtrip_theme_tint_precision() {
+    const EXCEL_TINT: f64 = 0.349_986_266_670_735_8;
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    let style = Style::new().font_color(Color::theme(4, EXCEL_TINT));
+    sheet.set_cell_value("A1", "tinted").unwrap();
+    sheet.set_cell_style("A1", &style).unwrap();
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let style2 = wb2.worksheet(0).unwrap().cell_style("A1").unwrap().unwrap();
+    assert_eq!(
+        style2.font.color,
+        Color::theme(4, EXCEL_TINT),
+        "theme tint must survive with full f64 precision"
+    );
+}
+
 /// Test border styling roundtrip
 #[test]
 fn test_roundtrip_border_styles() {

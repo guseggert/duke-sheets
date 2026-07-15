@@ -806,15 +806,8 @@ fn parse_brt_color_ws(buf: &[u8], off: usize) -> duke_sheets_core::style::Color 
             }
         }
         3 => {
-            let tint_i8 = if tint_raw == 0 {
-                0i8
-            } else {
-                ((tint_raw as f64 / 32767.0) * 100.0).round() as i8
-            };
-            Color::Theme {
-                index,
-                tint: tint_i8,
-            }
+            let tint = tint_raw as f64 / 32767.0;
+            Color::Theme { index, tint }
         }
         _ => Color::Auto,
     }
@@ -1892,15 +1885,8 @@ fn read_cf_brt_color(data: &[u8], pos: &mut usize) -> Color {
             }
         }
         3 => {
-            let tint_i8 = if tint_raw == 0 {
-                0i8
-            } else {
-                ((tint_raw as f64 / 32767.0) * 100.0).round() as i8
-            };
-            Color::Theme {
-                index,
-                tint: tint_i8,
-            }
+            let tint = tint_raw as f64 / 32767.0;
+            Color::Theme { index, tint }
         }
         _ => Color::Auto,
     }

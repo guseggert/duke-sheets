@@ -1015,9 +1015,9 @@ export interface JsColor {
   g?: number
   b?: number
   a?: number
-  /** Theme color index (0-9), present when `colorType === "theme"`. */
+  /** Theme color index (0-11), present when `colorType === "theme"`. */
   themeIndex?: number
-  /** Tint percentage (-100 to 100), present when `colorType === "theme"`. */
+  /** OOXML tint fraction (-1.0 to 1.0), present when `colorType === "theme"`. */
   tint?: number
   /** Palette index, present when `colorType === "indexed"`. */
   paletteIndex?: number

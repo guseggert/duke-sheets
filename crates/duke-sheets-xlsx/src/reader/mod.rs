@@ -29,7 +29,7 @@ use duke_sheets_core::{
 use formulas::{
     parse_cell_formula_state, resolve_cell_formula, CellFormulaKind, SharedFormulaMaster,
 };
-use theme::{read_theme_palette, resolve_style_theme_colors};
+use theme::read_theme_palette;
 
 mod archive;
 pub(crate) mod chart;
@@ -49,7 +49,7 @@ mod workbook;
 pub(crate) use archive::archive_by_name;
 pub(crate) use formulas::CellFormulaState;
 use shared_strings::SharedStringEntry;
-pub(crate) use theme::ThemePalette;
+
 use workbook::{read_sheet_rels, read_workbook_rels, read_workbook_xml, SheetRelationship};
 
 /// Resolve a relative path from a drawing's .rels against the drawing's own path.
@@ -599,21 +599,15 @@ impl XlsxReader {
         let shared_strings = shared_strings::read_shared_strings(&mut archive)?;
 
         // Read styles (if present)
-        let mut parsed_styles = Self::read_styles(&mut archive)?;
+        let parsed_styles = Self::read_styles(&mut archive)?;
         let roundtrip_style_data = parsed_styles.roundtrip_data();
         // Read workbook.xml.rels to get sheet/theme paths
         let workbook_rels = read_workbook_rels(&mut archive)?;
-        // Read workbook theme (if present) and resolve theme colors in styles
+        // Read the workbook theme (if present). Style colors keep
+        // their Color::Theme form; consumers resolve display RGB
+        // through Workbook::resolve_color.
         let (theme_palette, raw_theme_xml) =
             read_theme_palette(&mut archive, workbook_rels.theme_path.as_deref())?;
-        if let Some(theme) = theme_palette {
-            for style in &mut parsed_styles.cell_styles {
-                resolve_style_theme_colors(style, &theme);
-            }
-            for style in &mut parsed_styles.dxf_styles {
-                resolve_style_theme_colors(style, &theme);
-            }
-        }
         let cell_styles = parsed_styles.cell_styles;
         let dxf_styles = parsed_styles.dxf_styles;
 
@@ -664,7 +658,6 @@ impl XlsxReader {
                     &shared_strings,
                     &cell_styles,
                     &dxf_styles,
-                    theme_palette.as_ref(),
                     &sheet_rels,
                 )?);
 
@@ -1135,7 +1128,6 @@ impl XlsxReader {
         shared_strings: &[SharedStringEntry],
         cell_styles: &[Style],
         dxf_styles: &[Style],
-        theme_palette: Option<&ThemePalette>,
         sheet_rels: &HashMap<String, SheetRelationship>,
     ) -> XlsxResult<Vec<form_controls::PendingControl>> {
         let file = archive
@@ -2719,7 +2711,7 @@ impl XlsxReader {
                         }
                         // Parse color elements for colorScale and dataBar
                         b"color" if in_color_scale || in_data_bar => {
-                            let color = parse_color_element(&e, theme_palette);
+                            let color = parse_color_element(&e);
                             if in_color_scale {
                                 cf_colors.push(color);
                             } else if in_data_bar {

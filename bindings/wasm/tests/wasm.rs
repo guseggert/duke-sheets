@@ -676,12 +676,12 @@ fn test_theme_palette_and_resolve_color() {
         ])),
         Some("4F81BD".to_string())
     );
-    // Positive tint lightens; matches Color::theme(4, 50).
+    // Positive tint lightens; matches Color::theme(4, 0.5).
     assert_eq!(
         resolve(make_options(&[
             ("colorType", JsValue::from_str("theme")),
             ("index", JsValue::from_f64(4.0)),
-            ("tint", JsValue::from_f64(50.0)),
+            ("tint", JsValue::from_f64(0.5)),
         ])),
         Some("A7C0DE".to_string())
     );

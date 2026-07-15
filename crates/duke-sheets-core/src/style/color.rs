@@ -5,7 +5,7 @@ use std::fmt;
 /// Color representation
 ///
 /// Supports RGB, ARGB, theme colors, and indexed colors.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum Color {
     /// Automatic/default color
     #[default]
@@ -25,15 +25,68 @@ pub enum Color {
     /// 2 = Background 2
     /// 3 = Text 2
     /// 4-9 = Accent 1-6
+    /// 10 = Hyperlink
+    /// 11 = Followed hyperlink
     Theme {
-        /// Theme color index (0-9)
+        /// Theme slot index (0-11)
         index: u8,
-        /// Tint value (-1.0 to 1.0, stored as i8 percentage)
-        tint: i8,
+        /// OOXML tint fraction (-1.0 to 1.0): negative darkens toward
+        /// black, positive lightens toward white, 0.0 keeps the base
+        /// theme color.
+        tint: f64,
     },
 
     /// Indexed color (legacy Excel palette)
     Indexed(u8),
+}
+
+/// Equality compares `Theme::tint` bitwise so [`Color`] keeps total
+/// equality and stays usable as a style-dedup key.
+impl PartialEq for Color {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Color::Auto, Color::Auto) => true,
+            (Color::Rgb { r, g, b }, Color::Rgb { r: r2, g: g2, b: b2 }) => {
+                (r, g, b) == (r2, g2, b2)
+            }
+            (
+                Color::Argb { a, r, g, b },
+                Color::Argb {
+                    a: a2,
+                    r: r2,
+                    g: g2,
+                    b: b2,
+                },
+            ) => (a, r, g, b) == (a2, r2, g2, b2),
+            (
+                Color::Theme { index, tint },
+                Color::Theme {
+                    index: index2,
+                    tint: tint2,
+                },
+            ) => index == index2 && tint.to_bits() == tint2.to_bits(),
+            (Color::Indexed(i), Color::Indexed(j)) => i == j,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Color {}
+
+impl std::hash::Hash for Color {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            Color::Auto => {}
+            Color::Rgb { r, g, b } => (r, g, b).hash(state),
+            Color::Argb { a, r, g, b } => (a, r, g, b).hash(state),
+            Color::Theme { index, tint } => {
+                index.hash(state);
+                tint.to_bits().hash(state);
+            }
+            Color::Indexed(i) => i.hash(state),
+        }
+    }
 }
 
 impl Color {
@@ -47,8 +100,8 @@ impl Color {
         Color::Argb { a, r, g, b }
     }
 
-    /// Create a theme color
-    pub const fn theme(index: u8, tint: i8) -> Self {
+    /// Create a theme color with an OOXML tint fraction (-1.0..=1.0).
+    pub const fn theme(index: u8, tint: f64) -> Self {
         Color::Theme { index, tint }
     }
 
@@ -206,7 +259,7 @@ impl Color {
     }
 
     /// Apply tint to a color
-    fn apply_tint(color: (u8, u8, u8), tint: i8) -> (u8, u8, u8) {
+    fn apply_tint(color: (u8, u8, u8), tint: f64) -> (u8, u8, u8) {
         ThemePalette::apply_tint(color, tint)
     }
 
@@ -258,7 +311,7 @@ impl fmt::Display for Color {
             Color::Auto => write!(f, "auto"),
             Color::Rgb { r, g, b } => write!(f, "#{:02X}{:02X}{:02X}", r, g, b),
             Color::Argb { a, r, g, b } => write!(f, "#{:02X}{:02X}{:02X}{:02X}", a, r, g, b),
-            Color::Theme { index, tint } => write!(f, "theme({}, {}%)", index, tint),
+            Color::Theme { index, tint } => write!(f, "theme({}, {})", index, tint),
             Color::Indexed(i) => write!(f, "indexed({})", i),
         }
     }
@@ -308,9 +361,9 @@ impl ThemePalette {
             .unwrap_or((0, 0, 0))
     }
 
-    /// Resolve a theme slot with an Excel tint (percentage in
-    /// -100..=100; negative darkens, positive lightens).
-    pub fn resolve_theme(&self, index: u8, tint: i8) -> (u8, u8, u8) {
+    /// Resolve a theme slot with an OOXML tint fraction (-1.0..=1.0;
+    /// negative darkens, positive lightens).
+    pub fn resolve_theme(&self, index: u8, tint: f64) -> (u8, u8, u8) {
         Self::apply_tint(self.theme_rgb(index), tint)
     }
 
@@ -325,15 +378,13 @@ impl ThemePalette {
         }
     }
 
-    pub(crate) fn apply_tint(color: (u8, u8, u8), tint: i8) -> (u8, u8, u8) {
-        let tint_float = tint as f64 / 100.0;
-
+    pub(crate) fn apply_tint(color: (u8, u8, u8), tint: f64) -> (u8, u8, u8) {
         let apply = |c: u8| -> u8 {
             let c = c as f64;
-            let result = if tint_float < 0.0 {
-                c * (1.0 + tint_float)
+            let result = if tint < 0.0 {
+                c * (1.0 + tint)
             } else {
-                c + (255.0 - c) * tint_float
+                c + (255.0 - c) * tint
             };
             result.clamp(0.0, 255.0) as u8
         };
@@ -380,15 +431,15 @@ mod tests {
             .to_hex(),
             "80FFFFFF"
         );
-        assert_eq!(Color::theme(4, 0).to_hex(), "4F81BD");
-        assert_eq!(Color::theme(4, 50).to_hex(), "A7C0DE");
+        assert_eq!(Color::theme(4, 0.0).to_hex(), "4F81BD");
+        assert_eq!(Color::theme(4, 0.5).to_hex(), "A7C0DE");
     }
 
     #[test]
     fn test_to_argb_hex() {
         assert_eq!(Color::Rgb { r: 255, g: 0, b: 0 }.to_argb_hex(), "FFFF0000");
-        assert_eq!(Color::theme(4, 0).to_argb_hex(), "FF4F81BD");
-        assert_eq!(Color::theme(4, 50).to_argb_hex(), "FFA7C0DE");
+        assert_eq!(Color::theme(4, 0.0).to_argb_hex(), "FF4F81BD");
+        assert_eq!(Color::theme(4, 0.5).to_argb_hex(), "FFA7C0DE");
     }
 
     #[test]
@@ -406,19 +457,19 @@ mod tests {
         assert_eq!(palette.resolve(&Color::rgb(1, 2, 3)), Some((1, 2, 3)));
         assert_eq!(palette.resolve(&Color::argb(9, 4, 5, 6)), Some((4, 5, 6)));
         assert_eq!(palette.resolve(&Color::Indexed(2)), Some((255, 0, 0)));
-        assert_eq!(palette.resolve(&Color::theme(4, 0)), Some((0x11, 0x22, 0x33)));
+        assert_eq!(palette.resolve(&Color::theme(4, 0.0)), Some((0x11, 0x22, 0x33)));
         // Positive tint lightens toward white: c + (255 - c) * 0.5.
         assert_eq!(
-            palette.resolve(&Color::theme(4, 50)),
+            palette.resolve(&Color::theme(4, 0.5)),
             Some((0x88, 0x90, 0x99))
         );
         // Negative tint darkens toward black: c * 0.5.
         assert_eq!(
-            palette.resolve(&Color::theme(4, -50)),
+            palette.resolve(&Color::theme(4, -0.5)),
             Some((0x08, 0x11, 0x19))
         );
         // Out-of-range slots resolve to black.
-        assert_eq!(palette.resolve(&Color::theme(12, 0)), Some((0, 0, 0)));
+        assert_eq!(palette.resolve(&Color::theme(12, 0.0)), Some((0, 0, 0)));
     }
 
     #[test]
@@ -426,8 +477,8 @@ mod tests {
         let palette = ThemePalette::default();
         for index in 0..10u8 {
             assert_eq!(
-                palette.resolve(&Color::theme(index, 25)),
-                Some(Color::theme(index, 25).to_rgb()),
+                palette.resolve(&Color::theme(index, 0.25)),
+                Some(Color::theme(index, 0.25).to_rgb()),
                 "slot {index} must agree with the context-free default resolution"
             );
         }

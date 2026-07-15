@@ -401,8 +401,8 @@ pub(super) fn write_color_element(w: &mut XmlWriter, tag: &str, color: &Color) -
         Color::Theme { index, tint } => {
             let v = index.to_string();
             el.push_attribute(("theme", v.as_str()));
-            if *tint != 0 {
-                let t = ((*tint as f64) / 100.0).to_string();
+            if *tint != 0.0 {
+                let t = tint.to_string();
                 el.push_attribute(("tint", t.as_str()));
             }
         }
@@ -2873,9 +2873,8 @@ impl XlsxWriter {
             }
             duke_sheets_core::Color::Theme { index, tint } => {
                 tag.push_attribute(("theme", index.to_string().as_str()));
-                if *tint != 0 {
-                    let tint_f = *tint as f64 / 100.0;
-                    tag.push_attribute(("tint", tint_f.to_string().as_str()));
+                if *tint != 0.0 {
+                    tag.push_attribute(("tint", tint.to_string().as_str()));
                 }
             }
             duke_sheets_core::Color::Indexed(idx) => {
@@ -3445,7 +3444,7 @@ mod tests {
         let mut wb = Workbook::new();
         wb.worksheet_mut(0)
             .unwrap()
-            .set_tab_color(Some(Color::theme(4, 50)));
+            .set_tab_color(Some(Color::theme(4, 0.5)));
 
         let mut out = Cursor::new(Vec::new());
         XlsxWriter::write(&wb, &mut out).expect("write workbook");
@@ -3462,7 +3461,7 @@ mod tests {
         sheet.set_cell_value("A2", 2.0).unwrap();
         sheet.set_cell_value("A3", 3.0).unwrap();
 
-        let rule = ConditionalFormatRule::color_scale_2(Color::theme(4, -25), Color::Indexed(12))
+        let rule = ConditionalFormatRule::color_scale_2(Color::theme(4, -0.25), Color::Indexed(12))
             .with_range(CellRange::parse("A1:A3").unwrap());
         sheet.add_conditional_format(rule);
 

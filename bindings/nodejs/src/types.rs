@@ -87,10 +87,10 @@ pub struct JsColor {
     pub g: Option<u32>,
     pub b: Option<u32>,
     pub a: Option<u32>,
-    /// Theme color index (0-9), present when `colorType === "theme"`.
+    /// Theme color index (0-11), present when `colorType === "theme"`.
     pub theme_index: Option<u32>,
-    /// Tint percentage (-100 to 100), present when `colorType === "theme"`.
-    pub tint: Option<i32>,
+    /// OOXML tint fraction (-1.0 to 1.0), present when `colorType === "theme"`.
+    pub tint: Option<f64>,
     /// Palette index, present when `colorType === "indexed"`.
     pub palette_index: Option<u32>,
 }
@@ -140,7 +140,7 @@ impl From<&CoreColor> for JsColor {
                 b: None,
                 a: None,
                 theme_index: Some(*index as u32),
-                tint: Some(*tint as i32),
+                tint: Some(*tint),
                 palette_index: None,
             },
             CoreColor::Indexed(i) => JsColor {
@@ -538,7 +538,7 @@ pub struct JsColorInput {
     pub b: Option<u32>,
     pub a: Option<u32>,
     pub theme_index: Option<u32>,
-    pub tint: Option<i32>,
+    pub tint: Option<f64>,
     pub palette_index: Option<u32>,
 }
 
@@ -643,9 +643,12 @@ fn u32_to_u8(value: u32, field: &str) -> NapiResult<u8> {
     u8::try_from(value).map_err(|_| style_input_error(format!("{field} must be between 0 and 255")))
 }
 
-fn i32_to_i8(value: i32, field: &str) -> NapiResult<i8> {
-    i8::try_from(value)
-        .map_err(|_| style_input_error(format!("{field} must be between -128 and 127")))
+fn tint_fraction(value: Option<f64>) -> NapiResult<f64> {
+    let tint = value.unwrap_or(0.0);
+    if !tint.is_finite() || !(-1.0..=1.0).contains(&tint) {
+        return Err(style_input_error("tint must be between -1.0 and 1.0"));
+    }
+    Ok(tint)
 }
 
 fn parse_color_hex(hex: &str) -> NapiResult<CoreColor> {
@@ -727,7 +730,7 @@ impl JsColorInput {
                         .ok_or_else(|| style_input_error("theme color requires themeIndex"))?,
                     "themeIndex",
                 )?,
-                tint: i32_to_i8(self.tint.unwrap_or(0), "tint")?,
+                tint: tint_fraction(self.tint)?,
             }),
             Some("indexed") => Ok(CoreColor::Indexed(u32_to_u8(
                 self.palette_index
@@ -759,7 +762,7 @@ impl JsColorInput {
                 } else if let Some(theme_index) = self.theme_index {
                     Ok(CoreColor::Theme {
                         index: u32_to_u8(theme_index, "themeIndex")?,
-                        tint: i32_to_i8(self.tint.unwrap_or(0), "tint")?,
+                        tint: tint_fraction(self.tint)?,
                     })
                 } else if let Some(palette_index) = self.palette_index {
                     Ok(CoreColor::Indexed(u32_to_u8(

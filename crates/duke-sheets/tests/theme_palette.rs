@@ -68,7 +68,7 @@ fn assert_fixture_palette(workbook: &Workbook, label: &str) {
         );
     }
     assert_eq!(
-        workbook.resolve_color(&Color::theme(4, 0)),
+        workbook.resolve_color(&Color::theme(4, 0.0)),
         Some(expected_slot(4)),
         "{label}: resolve_color must use the stored palette"
     );
@@ -111,7 +111,7 @@ fn workbooks_without_a_theme_part_use_the_office_palette() {
         duke_sheets::ThemePalette::default()
     );
     assert_eq!(
-        workbook.resolve_color(&Color::theme(4, 0)),
+        workbook.resolve_color(&Color::theme(4, 0.0)),
         Some((79, 129, 189)),
         "default accent 1"
     );

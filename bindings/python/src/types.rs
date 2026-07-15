@@ -33,7 +33,7 @@ pub struct PyColor {
     #[pyo3(get)]
     pub theme_index: Option<u32>,
     #[pyo3(get)]
-    pub tint: Option<i32>,
+    pub tint: Option<f64>,
     #[pyo3(get)]
     pub palette_index: Option<u32>,
 }
@@ -41,7 +41,7 @@ pub struct PyColor {
 #[pymethods]
 impl PyColor {
     /// Build a color for :meth:`Workbook.resolve_color`, e.g.
-    /// ``Color("theme", theme_index=4, tint=50)`` or
+    /// ``Color("theme", theme_index=4, tint=0.5)`` or
     /// ``Color("rgb", r=255, g=0, b=0)``.
     #[new]
     #[pyo3(signature=(color_type, *, r=None, g=None, b=None, a=None, theme_index=None, tint=None, palette_index=None))]
@@ -53,7 +53,7 @@ impl PyColor {
         b: Option<u32>,
         a: Option<u32>,
         theme_index: Option<u32>,
-        tint: Option<i32>,
+        tint: Option<f64>,
         palette_index: Option<u32>,
     ) -> PyResult<Self> {
         let color = Self {
@@ -100,10 +100,7 @@ impl PyColor {
             }),
             "theme" => {
                 let index = channel(self.theme_index, "theme_index")?;
-                let tint = self
-                    .tint
-                    .unwrap_or(0)
-                    .clamp(i8::MIN as i32, i8::MAX as i32) as i8;
+                let tint = tint_fraction(self.tint)?;
                 Ok(CoreColor::Theme { index, tint })
             }
             "indexed" => Ok(CoreColor::Indexed(channel(self.palette_index, "palette_index")?)),
@@ -157,7 +154,7 @@ impl From<&CoreColor> for PyColor {
                 b: None,
                 a: None,
                 theme_index: Some(*index as u32),
-                tint: Some(*tint as i32),
+                tint: Some(*tint),
                 palette_index: None,
             },
             CoreColor::Indexed(i) => Self {
@@ -629,9 +626,12 @@ fn u32_to_u8(value: u32, field: &str) -> PyResult<u8> {
     u8::try_from(value).map_err(|_| style_input_error(format!("{field} must be between 0 and 255")))
 }
 
-fn i32_to_i8(value: i32, field: &str) -> PyResult<i8> {
-    i8::try_from(value)
-        .map_err(|_| style_input_error(format!("{field} must be between -128 and 127")))
+fn tint_fraction(value: Option<f64>) -> PyResult<f64> {
+    let tint = value.unwrap_or(0.0);
+    if !tint.is_finite() || !(-1.0..=1.0).contains(&tint) {
+        return Err(style_input_error("tint must be between -1.0 and 1.0"));
+    }
+    Ok(tint)
 }
 
 fn parse_color_hex(hex: &str) -> PyResult<CoreColor> {
@@ -664,7 +664,7 @@ fn color_parts_to_core(
     b: Option<u32>,
     a: Option<u32>,
     theme_index: Option<u32>,
-    tint: Option<i32>,
+    tint: Option<f64>,
     palette_index: Option<u32>,
 ) -> PyResult<CoreColor> {
     match color_type {
@@ -715,7 +715,7 @@ fn color_parts_to_core(
                 theme_index.ok_or_else(|| style_input_error("theme color requires theme_index"))?,
                 "theme_index",
             )?,
-            tint: i32_to_i8(tint.unwrap_or(0), "tint")?,
+            tint: tint_fraction(tint)?,
         }),
         Some("indexed") => Ok(CoreColor::Indexed(u32_to_u8(
             palette_index
@@ -744,7 +744,7 @@ fn color_parts_to_core(
             } else if let Some(theme_index) = theme_index {
                 Ok(CoreColor::Theme {
                     index: u32_to_u8(theme_index, "theme_index")?,
-                    tint: i32_to_i8(tint.unwrap_or(0), "tint")?,
+                    tint: tint_fraction(tint)?,
                 })
             } else if let Some(palette_index) = palette_index {
                 Ok(CoreColor::Indexed(u32_to_u8(
@@ -792,7 +792,7 @@ pub(crate) fn color_input_to_core(input: &Bound<'_, PyAny>) -> PyResult<CoreColo
         dict_get_u32(dict, "b")?,
         dict_get_u32(dict, "a")?,
         dict_get_u32(dict, "theme_index")?,
-        dict_get_i32(dict, "tint")?,
+        dict_get_f64(dict, "tint")?,
         dict_get_u32(dict, "palette_index")?,
     )
 }

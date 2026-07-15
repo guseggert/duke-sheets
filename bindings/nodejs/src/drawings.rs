@@ -290,7 +290,7 @@ enum DrawingColor {
     Auto,
     Rgb { r: u8, g: u8, b: u8 },
     Argb { a: u8, r: u8, g: u8, b: u8 },
-    Theme { index: u8, tint: i8 },
+    Theme { index: u8, tint: f64 },
     Indexed { index: u8 },
 }
 
