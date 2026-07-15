@@ -315,7 +315,12 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
             &addin_table,
         );
         if let Some(sheet_drawing) = drawing_state.sheets.get(&sheet_idx) {
-            write_sheet_drawing_records(&mut stream, sheet_drawing, sheet)?;
+            write_sheet_drawing_records(
+                &mut stream,
+                sheet_drawing,
+                sheet,
+                &workbook.theme_palette(),
+            )?;
         }
         write_eof(&mut stream);
         sheet_bof_offsets.push(bof_pos);
@@ -5461,6 +5466,7 @@ fn write_sheet_drawing_records(
     stream: &mut Vec<u8>,
     drawing: &SheetDrawing,
     metrics: &dyn duke_sheets_chart::DrawingMetrics,
+    palette: &duke_sheets_core::style::ThemePalette,
 ) -> XlsResult<()> {
     use crate::biff::escher::{
         rec_type as er, write_patriarch_sp_container, OfficeArtFdg, OfficeArtRecordHeader,
@@ -5469,7 +5475,7 @@ fn write_sheet_drawing_records(
 
     let mut flats: Vec<FlatShape> = Vec::new();
     for shape in &drawing.shapes {
-        flatten_shape(shape, &mut flats, metrics)?;
+        flatten_shape(shape, &mut flats, metrics, palette)?;
     }
 
     // The patriarch SP_CONTAINER (FSPGR + FSP) is always emitted
@@ -5595,6 +5601,7 @@ fn flatten_shape(
     shape: &SheetShape,
     out: &mut Vec<FlatShape>,
     metrics: &dyn duke_sheets_chart::DrawingMetrics,
+    palette: &duke_sheets_core::style::ThemePalette,
 ) -> XlsResult<()> {
     use crate::biff::escher::{
         comment_fopt, complex_string_entry, fsp_flags, rec_type as er, shape_type,
@@ -5653,7 +5660,7 @@ fn flatten_shape(
                 grf_persistence: grf,
             }
             .write_to(shape.shape_type, &mut pre);
-            basic_shape_fopt(shape).write_to(&mut pre);
+            basic_shape_fopt(shape, palette).write_to(&mut pre);
             shape.anchor.write_to(&mut pre, metrics)?;
             write_client_data(&mut pre);
 
@@ -5757,7 +5764,7 @@ fn flatten_shape(
         SheetShape::Group(group) => {
             let mut kids: Vec<FlatShape> = Vec::new();
             for child in &group.children {
-                flatten_shape(child, &mut kids, metrics)?;
+                flatten_shape(child, &mut kids, metrics, palette)?;
             }
 
             // The group's own SP container: FSPGR (child coordinate
@@ -5839,7 +5846,10 @@ fn flatten_shape(
 /// Build the OfficeArt properties for a basic shape. Shape type lives
 /// in `FSP.recInstance` ([MS-ODRAW] 2.2.40/2.4.24); visual properties
 /// live in FOPT ([MS-ODRAW] 2.3.7, 2.3.8, and 2.3.18.5).
-fn basic_shape_fopt(shape: &BasicShape) -> crate::biff::escher::FoptTable {
+fn basic_shape_fopt(
+    shape: &BasicShape,
+    palette: &duke_sheets_core::style::ThemePalette,
+) -> crate::biff::escher::FoptTable {
     use crate::biff::escher::{
         complex_string_entry, fopt_id, FoptEntry, FoptTable, GROUP_SHAPE_HIDDEN,
         GROUP_SHAPE_VISIBLE,
@@ -5865,7 +5875,7 @@ fn basic_shape_fopt(shape: &BasicShape) -> crate::biff::escher::FoptTable {
         ShapeFill::Solid(color) => {
             table.push(FoptEntry::simple(
                 fopt_id::FILL_COLOR,
-                color_to_officeart(color),
+                color_to_officeart(color, palette),
             ));
             table.push(FoptEntry::simple(fopt_id::FILL_BOOLEAN_PROPS, 0x0010_0010));
         }
@@ -5873,7 +5883,7 @@ fn basic_shape_fopt(shape: &BasicShape) -> crate::biff::escher::FoptTable {
     if let Some(color) = shape.shape.line.color {
         table.push(FoptEntry::simple(
             fopt_id::LINE_COLOR,
-            color_to_officeart(color),
+            color_to_officeart(color, palette),
         ));
     }
     if let Some(width) = shape.shape.line.width_emu {
@@ -5928,8 +5938,13 @@ fn rotation_to_officeart_fixed(rotation: i32) -> u32 {
     (fixed.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32) as u32
 }
 
-fn color_to_officeart(color: duke_sheets_core::Color) -> u32 {
-    let (r, g, b) = color.to_rgb();
+/// OfficeArt wire colors are concrete RGB, so theme colors are baked
+/// here against the workbook palette; Auto falls back to black.
+fn color_to_officeart(
+    color: duke_sheets_core::Color,
+    palette: &duke_sheets_core::style::ThemePalette,
+) -> u32 {
+    let (r, g, b) = palette.resolve(&color).unwrap_or((0, 0, 0));
     u32::from(r) | (u32::from(g) << 8) | (u32::from(b) << 16)
 }
 
@@ -7141,7 +7156,7 @@ mod tests {
                 flip_h: false,
                 flip_v: false,
             };
-            let table = basic_shape_fopt(&basic);
+            let table = basic_shape_fopt(&basic, &duke_sheets_core::style::ThemePalette::default());
             let props = table
                 .entries()
                 .find(|entry| entry.id == fopt_id::LINE_BOOLEAN_PROPS)
@@ -7231,7 +7246,7 @@ mod tests {
         };
         let metrics = duke_sheets_core::Worksheet::new("m");
         let mut flats = Vec::new();
-        flatten_shape(&SheetShape::Group(group), &mut flats, &metrics).expect("flatten");
+        flatten_shape(&SheetShape::Group(group), &mut flats, &metrics, &duke_sheets_core::style::ThemePalette::default()).expect("flatten");
         assert_eq!(
             fopt_rotation_in(&flats[0].pre),
             Some(5_898_240),
@@ -7257,7 +7272,7 @@ mod tests {
         };
         let metrics = duke_sheets_core::Worksheet::new("m");
         let mut flats = Vec::new();
-        flatten_shape(&SheetShape::Picture(picture), &mut flats, &metrics).expect("flatten");
+        flatten_shape(&SheetShape::Picture(picture), &mut flats, &metrics, &duke_sheets_core::style::ThemePalette::default()).expect("flatten");
         assert_eq!(
             fopt_rotation_in(&flats[0].pre),
             Some(5_898_240),

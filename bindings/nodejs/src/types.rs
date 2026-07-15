@@ -77,12 +77,15 @@ pub struct JsRowsOptions {
 
 /// Color representation. The `colorType` field indicates the variant:
 /// `"auto"`, `"rgb"`, `"argb"`, `"theme"`, or `"indexed"`.
-/// The `hex` field always contains the resolved 6- or 8-char hex string.
+/// `hex` carries the context-free hex string; it is absent for
+/// `"auto"` and `"theme"` colors, which have no fixed RGB without the
+/// workbook - resolve those through `Workbook.resolveColor`.
 #[napi(object)]
 pub struct JsColor {
     pub color_type: String,
-    /// Resolved hex string (6 or 8 chars, no `#` prefix).
-    pub hex: String,
+    /// Context-free hex string (6 or 8 chars, no `#` prefix); absent
+    /// for auto and theme colors.
+    pub hex: Option<String>,
     pub r: Option<u32>,
     pub g: Option<u32>,
     pub b: Option<u32>,

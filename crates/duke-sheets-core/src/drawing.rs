@@ -212,7 +212,7 @@ pub fn color_to_drawing_part(color: Color) -> Option<duke_sheets_chart::drawing_
         Color::Rgb { r, g, b } | Color::Argb { r, g, b, .. } => Some(TwinColor::Rgb { r, g, b }),
         Color::Theme { index, tint } => Some(TwinColor::Theme { index, tint }),
         Color::Indexed(_) => {
-            let (r, g, b) = color.to_rgb();
+            let (r, g, b) = color.to_rgb().expect("indexed colors always resolve");
             Some(TwinColor::Rgb { r, g, b })
         }
     }

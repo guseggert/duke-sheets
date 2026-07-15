@@ -1005,12 +1005,17 @@ export type JsCheckState =  'unchecked'|
 /**
  * Color representation. The `colorType` field indicates the variant:
  * `"auto"`, `"rgb"`, `"argb"`, `"theme"`, or `"indexed"`.
- * The `hex` field always contains the resolved 6- or 8-char hex string.
+ * `hex` carries the context-free hex string; it is absent for
+ * `"auto"` and `"theme"` colors, which have no fixed RGB without the
+ * workbook - resolve those through `Workbook.resolveColor`.
  */
 export interface JsColor {
   colorType: string
-  /** Resolved hex string (6 or 8 chars, no `#` prefix). */
-  hex: string
+  /**
+   * Context-free hex string (6 or 8 chars, no `#` prefix); absent
+   * for auto and theme colors.
+   */
+  hex?: string
   r?: number
   g?: number
   b?: number

@@ -86,7 +86,10 @@ impl From<core::ImageInfo> for WasmImageInfo {
 #[serde(rename_all = "camelCase")]
 pub struct WasmColor {
     pub color_type: String,
-    pub hex: String,
+    /// Context-free hex string; omitted for auto and theme colors,
+    /// which resolve through `Workbook.resolveColor`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hex: Option<String>,
     pub r: Option<u32>,
     pub g: Option<u32>,
     pub b: Option<u32>,

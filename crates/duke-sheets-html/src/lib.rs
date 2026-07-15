@@ -19,7 +19,7 @@ use std::fmt::Write;
 
 use duke_sheets_core::style::{
     Alignment, BorderEdge, BorderLineStyle, FillStyle, FontStyle, FontVerticalAlign,
-    HorizontalAlignment, Underline, VerticalAlignment,
+    HorizontalAlignment, ThemePalette, Underline, VerticalAlignment,
 };
 use duke_sheets_core::{CellRange, CellValue, Style, Worksheet};
 
@@ -39,6 +39,11 @@ pub struct HtmlOptions {
     /// When `false`, raw values are emitted (numbers as plain floats, dates as
     /// serial numbers).
     pub formatted: bool,
+
+    /// Palette used to resolve theme colors. Pass the source
+    /// workbook's `theme_palette()` so themed styles render with the
+    /// file's colors; defaults to the Office theme.
+    pub theme_palette: ThemePalette,
 }
 
 impl Default for HtmlOptions {
@@ -47,6 +52,7 @@ impl Default for HtmlOptions {
             full_document: true,
             title: None,
             formatted: true,
+            theme_palette: ThemePalette::default(),
         }
     }
 }
@@ -170,7 +176,9 @@ fn write_cell(
 
     // Inline styles from the cell style
     let style = sheet.cell_style_at(row, col);
-    let css = style.map(style_to_css).unwrap_or_default();
+    let css = style
+        .map(|style| style_to_css(style, &options.theme_palette))
+        .unwrap_or_default();
     if !css.is_empty() {
         let _ = write!(buf, " style=\"{css}\"");
     }
@@ -183,7 +191,7 @@ fn write_cell(
         // Check for rich text - if the raw value is RichText, render with spans
         let raw = sheet.get_value_at(row, col);
         if let CellValue::RichText(runs) = &raw {
-            write_rich_text(buf, runs);
+            write_rich_text(buf, runs, &options.theme_palette);
         } else {
             buf.push_str(&escape_html(&text));
         }
@@ -220,11 +228,15 @@ fn cell_value_to_string(value: &CellValue) -> String {
     }
 }
 
-fn write_rich_text(buf: &mut String, runs: &[duke_sheets_core::RichTextRun]) {
+fn write_rich_text(
+    buf: &mut String,
+    runs: &[duke_sheets_core::RichTextRun],
+    palette: &ThemePalette,
+) {
     for run in runs {
         match &run.font {
             Some(font) if !font.is_empty() => {
-                let css = run_font_to_css(font);
+                let css = run_font_to_css(font, palette);
                 if css.is_empty() {
                     buf.push_str(&escape_html(&run.text));
                 } else {
@@ -240,7 +252,7 @@ fn write_rich_text(buf: &mut String, runs: &[duke_sheets_core::RichTextRun]) {
     }
 }
 
-fn run_font_to_css(font: &duke_sheets_core::RunFont) -> String {
+fn run_font_to_css(font: &duke_sheets_core::RunFont, palette: &ThemePalette) -> String {
     let mut css = String::new();
 
     if let Some(true) = font.bold {
@@ -265,8 +277,10 @@ fn run_font_to_css(font: &duke_sheets_core::RunFont) -> String {
         let _ = write!(css, "font-family:{};", escape_html(name));
     }
     if let Some(color) = &font.color {
-        if !color.is_auto() && color.to_rgb() != (0, 0, 0) {
-            let _ = write!(css, "color:#{};", css_hex(color));
+        if let Some(hex) = css_hex(color, palette) {
+            if hex != "000000" {
+                let _ = write!(css, "color:#{hex};");
+            }
         }
     }
     if let Some(FontVerticalAlign::Superscript) = font.vertical_align {
@@ -281,17 +295,17 @@ fn run_font_to_css(font: &duke_sheets_core::RunFont) -> String {
 
 // Style → CSS conversion
 
-fn style_to_css(style: &Style) -> String {
+fn style_to_css(style: &Style, palette: &ThemePalette) -> String {
     let mut css = String::new();
 
     // Font
-    font_to_css(&mut css, &style.font);
+    font_to_css(&mut css, &style.font, palette);
 
     // Fill
-    fill_to_css(&mut css, &style.fill);
+    fill_to_css(&mut css, &style.fill, palette);
 
     // Borders
-    borders_to_css(&mut css, &style.border);
+    borders_to_css(&mut css, &style.border, palette);
 
     // Alignment
     alignment_to_css(&mut css, &style.alignment);
@@ -299,7 +313,7 @@ fn style_to_css(style: &Style) -> String {
     css
 }
 
-fn font_to_css(css: &mut String, font: &FontStyle) {
+fn font_to_css(css: &mut String, font: &FontStyle, palette: &ThemePalette) {
     if font.bold {
         css.push_str("font-weight:bold;");
     }
@@ -317,8 +331,10 @@ fn font_to_css(css: &mut String, font: &FontStyle) {
     if font.name != "Calibri" {
         let _ = write!(css, "font-family:{};", escape_html(&font.name));
     }
-    if !font.color.is_auto() && font.color.to_rgb() != (0, 0, 0) {
-        let _ = write!(css, "color:#{};", css_hex(&font.color));
+    if let Some(hex) = css_hex(&font.color, palette) {
+        if hex != "000000" {
+            let _ = write!(css, "color:#{hex};");
+        }
     }
     if matches!(font.vertical_align, FontVerticalAlign::Superscript) {
         css.push_str("vertical-align:super;font-size:smaller;");
@@ -328,10 +344,12 @@ fn font_to_css(css: &mut String, font: &FontStyle) {
     }
 }
 
-fn fill_to_css(css: &mut String, fill: &FillStyle) {
+fn fill_to_css(css: &mut String, fill: &FillStyle, palette: &ThemePalette) {
     match fill {
-        FillStyle::Solid { color } if !color.is_auto() => {
-            let _ = write!(css, "background-color:#{};", css_hex(color));
+        FillStyle::Solid { color } => {
+            if let Some(hex) = css_hex(color, palette) {
+                let _ = write!(css, "background-color:#{hex};");
+            }
         }
         FillStyle::Pattern {
             foreground,
@@ -339,38 +357,44 @@ fn fill_to_css(css: &mut String, fill: &FillStyle) {
             ..
         } => {
             // Use foreground as background-color (closest HTML approximation)
-            if !foreground.is_auto() {
-                let _ = write!(css, "background-color:#{};", css_hex(foreground));
-            } else if !background.is_auto() {
-                let _ = write!(css, "background-color:#{};", css_hex(background));
+            if let Some(hex) = css_hex(foreground, palette).or_else(|| css_hex(background, palette))
+            {
+                let _ = write!(css, "background-color:#{hex};");
             }
         }
         _ => {}
     }
 }
 
-fn borders_to_css(css: &mut String, border: &duke_sheets_core::BorderStyle) {
+fn borders_to_css(css: &mut String, border: &duke_sheets_core::BorderStyle, palette: &ThemePalette) {
     if let Some(ref edge) = border.top {
-        push_border(css, "border-top", edge);
+        push_border(css, "border-top", edge, palette);
     }
     if let Some(ref edge) = border.right {
-        push_border(css, "border-right", edge);
+        push_border(css, "border-right", edge, palette);
     }
     if let Some(ref edge) = border.bottom {
-        push_border(css, "border-bottom", edge);
+        push_border(css, "border-bottom", edge, palette);
     }
     if let Some(ref edge) = border.left {
-        push_border(css, "border-left", edge);
+        push_border(css, "border-left", edge, palette);
     }
 }
 
-fn push_border(css: &mut String, prop: &str, edge: &BorderEdge) {
+fn push_border(css: &mut String, prop: &str, edge: &BorderEdge, palette: &ThemePalette) {
     if matches!(edge.style, BorderLineStyle::None) {
         return;
     }
     let (width, style) = border_line_to_css(edge.style);
-    let hex = css_hex(&edge.color);
-    let _ = write!(css, "{prop}:{width} {style} #{hex};");
+    match css_hex(&edge.color, palette) {
+        // Auto keeps CSS's currentColor default.
+        None => {
+            let _ = write!(css, "{prop}:{width} {style};");
+        }
+        Some(hex) => {
+            let _ = write!(css, "{prop}:{width} {style} #{hex};");
+        }
+    }
 }
 
 fn border_line_to_css(line: BorderLineStyle) -> (&'static str, &'static str) {
@@ -494,13 +518,16 @@ fn pt_to_px(pt: f64) -> f64 {
     pt * 96.0 / 72.0
 }
 
-/// Convert a `Color` to a 6-character RGB hex string for CSS.
+/// Convert a `Color` to a 6-character RGB hex string for CSS,
+/// resolving theme colors against the workbook palette. `None` for
+/// `Color::Auto`.
 ///
 /// OOXML stores ARGB as `AARRGGBB` but CSS 8-char hex is `RRGGBBAA`.
 /// Rather than swapping, we just drop the alpha and emit plain RGB.
-fn css_hex(color: &duke_sheets_core::Color) -> String {
-    let (r, g, b) = color.to_rgb();
-    format!("{r:02X}{g:02X}{b:02X}")
+fn css_hex(color: &duke_sheets_core::Color, palette: &ThemePalette) -> Option<String> {
+    palette
+        .resolve(color)
+        .map(|(r, g, b)| format!("{r:02X}{g:02X}{b:02X}"))
 }
 
 // HTML escaping
@@ -580,9 +607,31 @@ mod tests {
 
     #[test]
     fn border_css_generation() {
+        let palette = ThemePalette::default();
         let edge = BorderEdge::new(BorderLineStyle::Thin, Color::BLACK);
         let mut css = String::new();
-        push_border(&mut css, "border-bottom", &edge);
+        push_border(&mut css, "border-bottom", &edge, &palette);
         assert_eq!(css, "border-bottom:1px solid #000000;");
+    }
+
+    #[test]
+    fn theme_colors_resolve_through_the_options_palette() {
+        let mut palette = ThemePalette::default();
+        palette.colors[4] = (0x11, 0x22, 0x33);
+
+        let mut css = String::new();
+        let mut font = FontStyle::default();
+        font.color = Color::theme(4, 0.0);
+        font_to_css(&mut css, &font, &palette);
+        assert!(
+            css.contains("color:#112233;"),
+            "theme font color must use the palette, got {css:?}"
+        );
+
+        // Auto border colors keep CSS's currentColor default.
+        let edge = BorderEdge::new(BorderLineStyle::Thin, Color::Auto);
+        let mut css = String::new();
+        push_border(&mut css, "border-top", &edge, &palette);
+        assert_eq!(css, "border-top:1px solid;");
     }
 }

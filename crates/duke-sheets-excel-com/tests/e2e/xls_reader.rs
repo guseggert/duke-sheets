@@ -576,7 +576,7 @@ fn test_xls_pattern_fills() {
 
                 // Verify foreground (pattern line) color
                 let (pr, pg, pb) = expected_rgb(pattern_rgb);
-                let (fr, fg, fb) = foreground.to_rgb();
+                let (fr, fg, fb) = foreground.to_rgb().unwrap();
                 assert!(
                     close(fr, pr) && close(fg, pg) && close(fb, pb),
                     "{cell}: foreground expected ~({pr},{pg},{pb}), got ({fr},{fg},{fb})"
@@ -584,7 +584,7 @@ fn test_xls_pattern_fills() {
 
                 // Verify background color
                 let (br_e, bg_e, bb_e) = expected_rgb(bg_rgb);
-                let (br, bg_a, bb) = background.to_rgb();
+                let (br, bg_a, bb) = background.to_rgb().unwrap();
                 assert!(
                     close(br, br_e) && close(bg_a, bg_e) && close(bb, bb_e),
                     "{cell}: background expected ~({br_e},{bg_e},{bb_e}), got ({br},{bg_a},{bb})"
@@ -618,7 +618,7 @@ fn test_xls_solid_fill() {
     let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
     match &style.fill {
         FillStyle::Solid { color } => {
-            let (r, g, b) = color.to_rgb();
+            let (r, g, b) = color.to_rgb().unwrap();
             assert!(
                 r > 200 && g < 50 && b < 50,
                 "Expected red solid fill, got ({r}, {g}, {b})"

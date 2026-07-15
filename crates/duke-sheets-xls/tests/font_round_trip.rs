@@ -182,7 +182,7 @@ fn indexed_color_round_trips() {
     let parsed = write_then_read(&wb);
     let sheet = parsed.worksheet(0).unwrap();
     let color = font_at(sheet, "A1").color;
-    let (r, g, b) = color.to_rgb();
+    let (r, g, b) = color.to_rgb().unwrap();
     assert_eq!((r, g, b), (255, 0, 0), "got {color:?}");
 }
 
@@ -212,7 +212,7 @@ fn rgb_color_maps_through_the_default_palette() {
     let sheet = parsed.worksheet(0).unwrap();
     let color = font_at(sheet, "A1").color;
     assert_eq!(
-        color.to_rgb(),
+        color.to_rgb().unwrap(),
         (128, 0, 128),
         "palette-exact RGB survives; got {color:?}"
     );

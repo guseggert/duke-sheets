@@ -20,8 +20,10 @@ use crate::{PyCalculationImage, PyDrawingText};
 pub struct PyColor {
     #[pyo3(get)]
     pub color_type: String,
+    /// Context-free hex string; ``None`` for auto and theme colors,
+    /// which resolve through :meth:`Workbook.resolve_color`.
     #[pyo3(get)]
-    pub hex: String,
+    pub hex: Option<String>,
     #[pyo3(get)]
     pub r: Option<u32>,
     #[pyo3(get)]
@@ -58,7 +60,7 @@ impl PyColor {
     ) -> PyResult<Self> {
         let color = Self {
             color_type,
-            hex: String::new(),
+            hex: None,
             r,
             g,
             b,
@@ -763,7 +765,7 @@ fn color_parts_to_core(
 pub(crate) fn py_color_to_core(color: &PyColor) -> PyResult<CoreColor> {
     color_parts_to_core(
         Some(color.color_type.as_str()),
-        Some(color.hex.as_str()),
+        color.hex.as_deref(),
         color.r,
         color.g,
         color.b,

@@ -103,7 +103,7 @@ fn test_write_font_color() {
     let result = roundtrip_through_excel(&wb);
     let s = result.worksheet(0).unwrap();
     let style = s.cell_style_at(0, 0).expect("A1 should have style");
-    let (r, g, b) = style.font.color.to_rgb();
+    let (r, g, b) = style.font.color.to_rgb().unwrap();
     assert!(
         r > 200 && g < 50 && b < 50,
         "Expected red font, got ({r}, {g}, {b})"
@@ -159,7 +159,7 @@ fn test_write_font_combination() {
     assert!(st.font.bold, "Should be bold");
     assert!(st.font.italic, "Should be italic");
     assert_eq!(st.font.underline, Underline::Single);
-    let (r, g, b) = st.font.color.to_rgb();
+    let (r, g, b) = st.font.color.to_rgb().unwrap();
     assert!(b > 200 && r < 50, "Should be blue, got ({r}, {g}, {b})");
     assert!(
         (st.font.size - 14.0).abs() < 0.5,
@@ -184,7 +184,7 @@ fn test_write_solid_fill() {
     let style = s.cell_style_at(0, 0).expect("A1 should have style");
     match &style.fill {
         FillStyle::Solid { color } => {
-            let (r, g, b) = color.to_rgb();
+            let (r, g, b) = color.to_rgb().unwrap();
             assert!(
                 r > 200 && g < 50 && b < 50,
                 "Expected red fill, got ({r}, {g}, {b})"
@@ -214,12 +214,12 @@ fn test_write_fill_with_font_color() {
 
     match &style.fill {
         FillStyle::Solid { color } => {
-            let (_, _, b) = color.to_rgb();
+            let (_, _, b) = color.to_rgb().unwrap();
             assert!(b > 200, "Expected blue fill");
         }
         other => panic!("Expected Solid fill, got {other:?}"),
     }
-    let (r, g, b) = style.font.color.to_rgb();
+    let (r, g, b) = style.font.color.to_rgb().unwrap();
     assert!(
         r > 200 && g > 200 && b > 200,
         "Expected white font, got ({r}, {g}, {b})"
@@ -271,7 +271,7 @@ fn test_write_border_color() {
     let s = result.worksheet(0).unwrap();
     let style = s.cell_style_at(0, 0).expect("A1 should have style");
     let edge = style.border.left.as_ref().expect("left border");
-    let (_, _, b) = edge.color.to_rgb();
+    let (_, _, b) = edge.color.to_rgb().unwrap();
     assert!(b > 200, "Expected blue border color, got b={b}");
 }
 
