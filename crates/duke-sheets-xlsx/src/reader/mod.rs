@@ -454,6 +454,20 @@ fn capture_raw_rels<R: Read + Seek>(
     rels
 }
 
+/// Options for opening an XLSX/XLSM workbook.
+#[derive(Debug, Clone, Default)]
+pub struct XlsxReadOptions {
+    /// Password for encrypted workbooks.
+    pub password: Option<String>,
+    /// Retry encrypted workbooks with Excel's well-known
+    /// `VelvetSweatshop` sentinel when no password is supplied,
+    /// before reporting them as encrypted.
+    pub try_velvet_sweatshop: bool,
+    /// Skip the post-decrypt HMAC integrity check; default-off
+    /// (false) matches Office.
+    pub skip_integrity_check: bool,
+}
+
 /// XLSX file reader
 pub struct XlsxReader;
 
@@ -515,65 +529,35 @@ impl XlsxReader {
         Self::read(file)
     }
 
-    /// Read a workbook from a file path, supplying a password for
-    /// encrypted files. When `password` is `None` and
-    /// `try_velvet_sweatshop` is true, encrypted files are
-    /// transparently retried with the well-known `VelvetSweatshop`
-    /// password before reporting them as encrypted.
-    pub fn read_file_with_password<P: AsRef<Path>>(
+    /// Read a workbook from a file path with explicit open options
+    /// (password, encrypted-workbook handling).
+    pub fn read_file_with<P: AsRef<Path>>(
         path: P,
-        password: Option<&str>,
-        try_velvet_sweatshop: bool,
-    ) -> XlsxResult<Workbook> {
-        Self::read_file_with_options(path, password, try_velvet_sweatshop, false)
-    }
-
-    /// Read a workbook from a file path with full open-options control.
-    /// `skip_integrity_check` opts out of the post-decrypt HMAC check;
-    /// default-off (false) matches Office.
-    pub fn read_file_with_options<P: AsRef<Path>>(
-        path: P,
-        password: Option<&str>,
-        try_velvet_sweatshop: bool,
-        skip_integrity_check: bool,
+        options: &XlsxReadOptions,
     ) -> XlsxResult<Workbook> {
         let bytes = std::fs::read(path)?;
-        Self::read_bytes_with_options(&bytes, password, try_velvet_sweatshop, skip_integrity_check)
+        Self::read_bytes_with(&bytes, options)
     }
 
-    /// Read a workbook from raw bytes with an optional password.
+    /// Read a workbook from raw bytes with explicit open options.
     ///
     /// Encrypted XLSX files are CFB envelopes (not plain ZIPs); when
     /// the leading magic bytes match CFB we delegate to
     /// `duke_sheets_crypto::ooxml::decrypt` and then proceed with the
     /// resulting plaintext ZIP.
-    pub fn read_bytes_with_password(
-        bytes: &[u8],
-        password: Option<&str>,
-        try_velvet_sweatshop: bool,
-    ) -> XlsxResult<Workbook> {
-        Self::read_bytes_with_options(bytes, password, try_velvet_sweatshop, false)
-    }
-
-    /// Read a workbook from raw bytes with full open-options control.
-    /// `skip_integrity_check` opts out of the post-decrypt HMAC check.
-    pub fn read_bytes_with_options(
-        bytes: &[u8],
-        password: Option<&str>,
-        try_velvet_sweatshop: bool,
-        skip_integrity_check: bool,
-    ) -> XlsxResult<Workbook> {
+    pub fn read_bytes_with(bytes: &[u8], options: &XlsxReadOptions) -> XlsxResult<Workbook> {
+        let password = options.password.as_deref();
         if is_cfb_envelope(bytes) {
             let try_pw = match password {
                 Some(p) => p,
-                None if try_velvet_sweatshop => "VelvetSweatshop",
+                None if options.try_velvet_sweatshop => "VelvetSweatshop",
                 None => {
                     return Err(XlsxError::Encrypted(
                         "workbook is encrypted but no password was supplied".into(),
                     ));
                 }
             };
-            return match decrypt_ooxml_envelope(bytes, try_pw, skip_integrity_check) {
+            return match decrypt_ooxml_envelope(bytes, try_pw, options.skip_integrity_check) {
                 Ok(decrypted) => Self::read(std::io::Cursor::new(decrypted)),
                 Err(XlsxError::BadPassword) if password.is_none() => Err(XlsxError::Encrypted(
                     "workbook is encrypted but no password was supplied".into(),

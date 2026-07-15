@@ -31,6 +31,17 @@ use crate::biff::{self, BiffRecord};
 use crate::error::{XlsError, XlsResult};
 use crate::styles::{self, StyleContext};
 
+/// Options for opening an XLS workbook.
+#[derive(Debug, Clone, Default)]
+pub struct XlsReadOptions {
+    /// Password for encrypted workbooks.
+    pub password: Option<String>,
+    /// Retry encrypted workbooks with Excel's well-known
+    /// `VelvetSweatshop` sentinel when no password is supplied,
+    /// before reporting them as encrypted.
+    pub try_velvet_sweatshop: bool,
+}
+
 /// XLS file reader.
 pub struct XlsReader;
 
@@ -258,36 +269,26 @@ impl XlsReader {
         Self::read(file)
     }
 
-    /// Read an XLS file from a filesystem path, supplying a password for
-    /// encrypted workbooks. When `password` is `None` and
-    /// `try_velvet_sweatshop` is true, encrypted workbooks are
-    /// transparently retried with the `VelvetSweatshop` sentinel before
-    /// reporting them as encrypted.
-    pub fn read_file_with_password<P: AsRef<Path>>(
+    /// Read an XLS file from a filesystem path with explicit open
+    /// options (password, encrypted-workbook handling).
+    pub fn read_file_with<P: AsRef<Path>>(
         path: P,
-        password: Option<&str>,
-        try_velvet_sweatshop: bool,
+        options: &XlsReadOptions,
     ) -> XlsResult<Workbook> {
         let file = std::fs::File::open(path.as_ref())?;
-        Self::read_with_password(file, password, try_velvet_sweatshop)
+        Self::read_with(file, options)
     }
 
     /// Read an XLS file from any `Read + Seek` source.
     pub fn read<R: Read + Seek>(reader: R) -> XlsResult<Workbook> {
-        Self::read_with_password(reader, None, false)
+        Self::read_with(reader, &XlsReadOptions::default())
     }
 
-    /// Read an XLS file from any `Read + Seek` source, supplying a
-    /// password for encrypted workbooks.
-    ///
-    /// `try_velvet_sweatshop` enables the Excel-compatible auto-retry
-    /// with the well-known sentinel password when no explicit password
-    /// is supplied. Wrong passwords return [`XlsError::BadPassword`].
-    pub fn read_with_password<R: Read + Seek>(
-        reader: R,
-        password: Option<&str>,
-        try_velvet_sweatshop: bool,
-    ) -> XlsResult<Workbook> {
+    /// Read an XLS file from any `Read + Seek` source with explicit
+    /// open options. Wrong passwords return [`XlsError::BadPassword`].
+    pub fn read_with<R: Read + Seek>(reader: R, options: &XlsReadOptions) -> XlsResult<Workbook> {
+        let password = options.password.as_deref();
+        let try_velvet_sweatshop = options.try_velvet_sweatshop;
         let cfb = crate::cfb::CompoundFile::open(reader).map_err(std::io::Error::from)?;
         let stream_path = resolve_workbook_stream(|p| cfb.exists(p))?;
         let mut stream_data = cfb.read_stream(stream_path).map_err(std::io::Error::from)?;

@@ -327,7 +327,7 @@ pub fn roundtrip_through_excel_xls(wb: &duke_sheets_core::Workbook) -> duke_shee
 pub fn roundtrip_through_excel_xls_bytes(
     wb: &duke_sheets_core::Workbook,
 ) -> (duke_sheets_core::Workbook, Vec<u8>, Vec<u8>) {
-    use duke_sheets_xls::{XlsReader, XlsWriter};
+    use duke_sheets_xls::{XlsReadOptions, XlsReader, XlsWriter};
 
     let input = temp_fixture_xls();
     let output = temp_fixture_xls();
@@ -360,8 +360,8 @@ pub fn roundtrip_through_excel_xls_bytes(
     pull_file_from_vm(&output);
     let output_bytes = std::fs::read(&output.host_path)
         .unwrap_or_else(|e| panic!("read {}: {e}", output.host_path.display()));
-    let result = XlsReader::read_file_with_password(&output.host_path, None, true)
-        .expect("XlsReader::read_file_with_password");
+    let result = XlsReader::read_file_with(&output.host_path, &XlsReadOptions { try_velvet_sweatshop: true, ..Default::default() })
+        .expect("XlsReader::read_file_with");
 
     cleanup_fixture(&input);
     cleanup_fixture(&output);
