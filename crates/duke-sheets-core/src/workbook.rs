@@ -45,6 +45,8 @@ pub struct Workbook {
     active_sheet: usize,
     /// Named ranges (defined names)
     named_ranges: NamedRangeCollection,
+    /// Theme color scheme parsed from the file's theme part, when any.
+    theme_palette: Option<crate::style::ThemePalette>,
     /// Opaque calculation cache, populated and consumed by the calculation engine.
     /// Stored as type-erased `Box<dyn Any>` so the core crate needs no dependency
     /// on `duke-sheets-formula`.
@@ -67,6 +69,7 @@ impl Workbook {
             workbook_protection: None,
             active_sheet: 0,
             named_ranges: NamedRangeCollection::new(),
+            theme_palette: None,
             calc_cache: None,
             structural_generation: 0,
             nonce: NEXT_WORKBOOK_NONCE.fetch_add(1, Ordering::Relaxed),
@@ -85,6 +88,7 @@ impl Workbook {
             workbook_protection: None,
             active_sheet: 0,
             named_ranges: NamedRangeCollection::new(),
+            theme_palette: None,
             calc_cache: None,
             structural_generation: 0,
             nonce: NEXT_WORKBOOK_NONCE.fetch_add(1, Ordering::Relaxed),
@@ -676,6 +680,7 @@ impl Workbook {
             settings: self.settings.clone(),
             active_sheet: self.active_sheet,
             named_ranges: self.named_ranges.clone(),
+            theme_palette: self.theme_palette,
             workbook_protection: self.workbook_protection.clone(),
             calc_cache: None,
             structural_generation: self.structural_generation,
@@ -927,6 +932,25 @@ impl Workbook {
     /// Get mutable workbook settings
     pub fn settings_mut(&mut self) -> &mut WorkbookSettings {
         &mut self.settings
+    }
+
+    /// The workbook's theme color scheme: the file's `clrScheme` when
+    /// one was read, otherwise the default Office palette.
+    pub fn theme_palette(&self) -> crate::style::ThemePalette {
+        self.theme_palette.unwrap_or_default()
+    }
+
+    /// Record the theme color scheme parsed from a file's theme part.
+    pub fn set_theme_palette(&mut self, palette: crate::style::ThemePalette) {
+        self.theme_palette = Some(palette);
+    }
+
+    /// Resolve a color to display RGB against this workbook's theme
+    /// palette. [`Color::Auto`] resolves to `None`.
+    ///
+    /// [`Color::Auto`]: crate::style::Color::Auto
+    pub fn resolve_color(&self, color: &crate::style::Color) -> Option<(u8, u8, u8)> {
+        self.theme_palette().resolve(color)
     }
 
     /// Get workbook protection settings, honoring legacy `WorkbookSettings`

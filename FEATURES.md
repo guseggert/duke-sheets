@@ -146,7 +146,7 @@ One row per category, backed by the formula engine test suite. Individual functi
 
 | Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
 |---------|------|------|-----|-----|------|------|
-| Theme color scheme (12 slots) | R✔ W● | R✖ W✖ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_chart_style_color_passthrough` | §20.1.6.2 (DrawingML) | XLSX writer has in-process round-trip; Excel parity pending. |
+| Theme color scheme (12 slots) | R✔ W● | R✔ W✖ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_chart_style_color_passthrough`, `theme_palette::xlsx_reader_stores_the_file_theme_palette`, `theme_palette::xlsb_reader_stores_the_file_theme_palette` | §20.1.6.2 (DrawingML) | XLSX writer has in-process round-trip; Excel parity pending. The parsed clrScheme is stored as `Workbook::theme_palette` and drives `Workbook::resolve_color` (tint-aware display RGB). |
 | Theme font scheme | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | §20.1.4.1.18 (DrawingML) |
 | Theme format scheme (fills/lines/effects) | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | §20.1.4.1.8 (DrawingML) |
 | Theme override per-sheet | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | §18.2.4 |

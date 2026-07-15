@@ -54,15 +54,20 @@ impl XlsbReader {
             .theme_path
             .as_deref()
             .unwrap_or("xl/theme/theme1.xml");
+        let mut theme_palette = None;
         if let Ok(file) = archive.by_name(theme_path) {
             if let Ok(palette) = theme::parse_theme_palette(file) {
                 for style in &mut cell_styles {
                     theme::resolve_style_theme_colors(style, &palette);
                 }
+                theme_palette = Some(palette);
             }
         }
 
         let mut wb = Workbook::empty();
+        if let Some(palette) = theme_palette {
+            wb.set_theme_palette(palette);
+        }
         wb.settings_mut().date_1904 = props.date_1904;
         wb.set_workbook_protection(props.workbook_protection.clone());
 

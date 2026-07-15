@@ -202,36 +202,12 @@ impl Color {
 
     /// Get RGB for theme color (using default Office theme)
     fn theme_to_rgb(index: u8) -> (u8, u8, u8) {
-        match index {
-            0 => (255, 255, 255), // Background 1 (white)
-            1 => (0, 0, 0),       // Text 1 (black)
-            2 => (238, 236, 225), // Background 2
-            3 => (31, 73, 125),   // Text 2
-            4 => (79, 129, 189),  // Accent 1
-            5 => (192, 80, 77),   // Accent 2
-            6 => (155, 187, 89),  // Accent 3
-            7 => (128, 100, 162), // Accent 4
-            8 => (75, 172, 198),  // Accent 5
-            9 => (247, 150, 70),  // Accent 6
-            _ => (0, 0, 0),
-        }
+        ThemePalette::default().theme_rgb(index)
     }
 
     /// Apply tint to a color
     fn apply_tint(color: (u8, u8, u8), tint: i8) -> (u8, u8, u8) {
-        let tint_float = tint as f64 / 100.0;
-
-        let apply = |c: u8| -> u8 {
-            let c = c as f64;
-            let result = if tint_float < 0.0 {
-                c * (1.0 + tint_float)
-            } else {
-                c + (255.0 - c) * tint_float
-            };
-            result.clamp(0.0, 255.0) as u8
-        };
-
-        (apply(color.0), apply(color.1), apply(color.2))
+        ThemePalette::apply_tint(color, tint)
     }
 
     // Common colors
@@ -288,6 +264,84 @@ impl fmt::Display for Color {
     }
 }
 
+/// The workbook theme's color scheme (`clrScheme`), in [`Color::Theme`]
+/// index order: 0 background 1, 1 text 1, 2 background 2, 3 text 2,
+/// 4-9 accent 1-6, 10 hyperlink, 11 followed hyperlink.
+///
+/// Readers populate it from the theme part; [`Default`] is the Office
+/// theme, used when a file carries no theme.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ThemePalette {
+    /// RGB triples in theme-index order.
+    pub colors: [(u8, u8, u8); 12],
+}
+
+impl Default for ThemePalette {
+    fn default() -> Self {
+        Self {
+            colors: [
+                (255, 255, 255), // Background 1
+                (0, 0, 0),       // Text 1
+                (238, 236, 225), // Background 2
+                (31, 73, 125),   // Text 2
+                (79, 129, 189),  // Accent 1
+                (192, 80, 77),   // Accent 2
+                (155, 187, 89),  // Accent 3
+                (128, 100, 162), // Accent 4
+                (75, 172, 198),  // Accent 5
+                (247, 150, 70),  // Accent 6
+                (0, 0, 255),     // Hyperlink
+                (128, 0, 128),   // Followed hyperlink
+            ],
+        }
+    }
+}
+
+impl ThemePalette {
+    /// The base RGB of a theme slot (no tint). Out-of-range indices
+    /// resolve to black.
+    pub fn theme_rgb(&self, index: u8) -> (u8, u8, u8) {
+        self.colors
+            .get(index as usize)
+            .copied()
+            .unwrap_or((0, 0, 0))
+    }
+
+    /// Resolve a theme slot with an Excel tint (percentage in
+    /// -100..=100; negative darkens, positive lightens).
+    pub fn resolve_theme(&self, index: u8, tint: i8) -> (u8, u8, u8) {
+        Self::apply_tint(self.theme_rgb(index), tint)
+    }
+
+    /// Resolve any [`Color`] to display RGB against this palette.
+    /// [`Color::Auto`] has no fixed RGB and resolves to `None`.
+    pub fn resolve(&self, color: &Color) -> Option<(u8, u8, u8)> {
+        match color {
+            Color::Auto => None,
+            Color::Rgb { r, g, b } | Color::Argb { r, g, b, .. } => Some((*r, *g, *b)),
+            Color::Theme { index, tint } => Some(self.resolve_theme(*index, *tint)),
+            Color::Indexed(i) => Some(Color::indexed_to_rgb(*i)),
+        }
+    }
+
+    pub(crate) fn apply_tint(color: (u8, u8, u8), tint: i8) -> (u8, u8, u8) {
+        let tint_float = tint as f64 / 100.0;
+
+        let apply = |c: u8| -> u8 {
+            let c = c as f64;
+            let result = if tint_float < 0.0 {
+                c * (1.0 + tint_float)
+            } else {
+                c + (255.0 - c) * tint_float
+            };
+            result.clamp(0.0, 255.0) as u8
+        };
+
+        (apply(color.0), apply(color.1), apply(color.2))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,5 +395,41 @@ mod tests {
     fn test_to_rgb() {
         assert_eq!(Color::RED.to_rgb(), (255, 0, 0));
         assert_eq!(Color::Indexed(2).to_rgb(), (255, 0, 0));
+    }
+
+    #[test]
+    fn theme_palette_resolves_every_color_kind() {
+        let mut palette = ThemePalette::default();
+        palette.colors[4] = (0x11, 0x22, 0x33);
+
+        assert_eq!(palette.resolve(&Color::Auto), None);
+        assert_eq!(palette.resolve(&Color::rgb(1, 2, 3)), Some((1, 2, 3)));
+        assert_eq!(palette.resolve(&Color::argb(9, 4, 5, 6)), Some((4, 5, 6)));
+        assert_eq!(palette.resolve(&Color::Indexed(2)), Some((255, 0, 0)));
+        assert_eq!(palette.resolve(&Color::theme(4, 0)), Some((0x11, 0x22, 0x33)));
+        // Positive tint lightens toward white: c + (255 - c) * 0.5.
+        assert_eq!(
+            palette.resolve(&Color::theme(4, 50)),
+            Some((0x88, 0x90, 0x99))
+        );
+        // Negative tint darkens toward black: c * 0.5.
+        assert_eq!(
+            palette.resolve(&Color::theme(4, -50)),
+            Some((0x08, 0x11, 0x19))
+        );
+        // Out-of-range slots resolve to black.
+        assert_eq!(palette.resolve(&Color::theme(12, 0)), Some((0, 0, 0)));
+    }
+
+    #[test]
+    fn default_theme_palette_matches_color_to_rgb() {
+        let palette = ThemePalette::default();
+        for index in 0..10u8 {
+            assert_eq!(
+                palette.resolve(&Color::theme(index, 25)),
+                Some(Color::theme(index, 25).to_rgb()),
+                "slot {index} must agree with the context-free default resolution"
+            );
+        }
     }
 }

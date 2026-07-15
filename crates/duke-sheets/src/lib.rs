@@ -146,6 +146,7 @@ pub use duke_sheets_core::{
     Table,
     TableColumn,
     TableStyleInfo,
+    ThemePalette,
     TimePeriod,
     Top10Filter,
     TotalsRowFunction,

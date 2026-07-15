@@ -1755,6 +1755,27 @@ impl Worksheet {
         out
     }
 
+    /// The absolute EMU rectangle of the drawing at `path`, using this
+    /// worksheet's row and column metrics: the anchor's rectangle for
+    /// top-level objects, and the resolved on-sheet rectangle (group
+    /// transform applied, rotation/flip aware) for group children.
+    /// `None` when no drawing exists at `path`.
+    pub fn drawing_rect_emu(&self, path: &[usize]) -> Option<crate::drawing::RectEmu> {
+        let (&first, rest) = path.split_first()?;
+        let object = self.drawings.get(first)?;
+        let mut rect = anchor_rect_emu_with_metrics(&object.anchor, self);
+        let mut kind = &object.kind;
+        for &index in rest {
+            let DrawingKind::Group(group) = kind else {
+                return None;
+            };
+            let child = group.children.get(index)?;
+            rect = map_child_rect(rect, &group.transform, &child.transform);
+            kind = &child.kind;
+        }
+        Some(rect)
+    }
+
     /// Mutable access to the form control at `path`.
     pub fn form_control_at_path_mut(&mut self, path: &[usize]) -> Option<&mut FormControl> {
         match self.drawing_at_path_mut(path)?.kind {
@@ -2532,6 +2553,88 @@ pub enum PageOrientation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drawing_rect_emu_matches_placed_form_controls() {
+        use crate::drawing::{ChildTransform, Group, GroupChild, GroupTransform};
+        use crate::drawing::{DrawingMeta, DrawingObject};
+        use crate::{CheckState, FormControl, FormControlKind};
+        use duke_sheets_chart::{CellMarker, DrawingAnchor};
+
+        let checkbox = || {
+            FormControl::new(FormControlKind::Checkbox {
+                caption: "cb".into(),
+                state: CheckState::Unchecked,
+                cell_link: None,
+                no_3d: false,
+            })
+        };
+
+        let mut ws = Worksheet::new("Test");
+        ws.add_form_control(
+            checkbox(),
+            DrawingAnchor::TwoCell {
+                from: CellMarker {
+                    col: 1,
+                    col_offset_emu: 1000,
+                    row: 1,
+                    row_offset_emu: 2000,
+                },
+                to: CellMarker {
+                    col: 3,
+                    col_offset_emu: 0,
+                    row: 4,
+                    row_offset_emu: 0,
+                },
+                edit_as: None,
+            },
+        );
+        ws.add_drawing(DrawingObject::group(Group {
+            transform: GroupTransform {
+                x_emu: 100_000,
+                y_emu: 50_000,
+                cx_emu: 400_000,
+                cy_emu: 200_000,
+                child_x_emu: 0,
+                child_y_emu: 0,
+                child_cx_emu: 800_000,
+                child_cy_emu: 400_000,
+                ..GroupTransform::default()
+            },
+            children: vec![GroupChild {
+                meta: DrawingMeta::default(),
+                transform: ChildTransform {
+                    x_emu: 200_000,
+                    y_emu: 100_000,
+                    cx_emu: 400_000,
+                    cy_emu: 200_000,
+                    rotation: 45,
+                    ..ChildTransform::default()
+                },
+                kind: DrawingKind::FormControl(checkbox()),
+            }],
+        }));
+
+        let placed = ws.placed_form_controls();
+        assert_eq!(placed.len(), 2);
+        for control in &placed {
+            assert_eq!(
+                ws.drawing_rect_emu(&control.path),
+                Some(control.rect_emu),
+                "path {:?} must resolve to the placed rectangle",
+                control.path
+            );
+        }
+        // The group child's resolved rect is scaled by the group frame,
+        // not the raw child transform.
+        assert_ne!(
+            ws.drawing_rect_emu(&placed[1].path).unwrap(),
+            (200_000, 100_000, 600_000, 300_000),
+        );
+        assert_eq!(ws.drawing_rect_emu(&[7]), None);
+        assert_eq!(ws.drawing_rect_emu(&[1, 3]), None);
+        assert_eq!(ws.drawing_rect_emu(&[]), None);
+    }
 
     #[test]
     fn test_new_worksheet() {

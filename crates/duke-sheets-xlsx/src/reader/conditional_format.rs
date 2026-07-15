@@ -72,7 +72,7 @@ pub(crate) fn parse_color_element(
     if let Some(index) = theme {
         let tint_i8 = tint.map(|t| (t * 100.0).round() as i8).unwrap_or(0);
         if let Some(theme) = theme_palette {
-            let (r, g, b) = theme.resolve_theme_color(index, tint_i8);
+            let (r, g, b) = theme.resolve_theme(index, tint_i8);
             return Color::Rgb { r, g, b };
         }
         return Color::Theme {

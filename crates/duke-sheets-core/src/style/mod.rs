@@ -18,7 +18,7 @@ mod pool;
 
 pub use alignment::{Alignment, HorizontalAlignment, ReadingOrder, VerticalAlignment};
 pub use border::{BorderEdge, BorderLineStyle, BorderStyle, DiagonalDirection};
-pub use color::Color;
+pub use color::{Color, ThemePalette};
 pub use fill::{FillStyle, GradientStop, GradientType, PatternType};
 pub use font::{FontStyle, FontVerticalAlign, Underline};
 pub use number_format::NumberFormat;

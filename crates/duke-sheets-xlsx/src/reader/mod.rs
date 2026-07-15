@@ -816,6 +816,9 @@ impl XlsxReader {
         }
 
         register_roundtrip_style_data(&workbook, roundtrip_style_data);
+        if let Some(theme) = theme_palette {
+            workbook.set_theme_palette(theme);
+        }
         if let Some(theme_bytes) = raw_theme_xml {
             register_roundtrip_theme_data(&workbook, theme_bytes);
         }

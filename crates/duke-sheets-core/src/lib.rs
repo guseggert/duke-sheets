@@ -88,7 +88,7 @@ pub use worksheet::{
 // Re-export all style types for convenience
 pub use style::{
     Alignment, BorderEdge, BorderLineStyle, BorderStyle, Color, FillStyle, FontStyle,
-    HorizontalAlignment, NumberFormat, Style, StylePool, VerticalAlignment,
+    HorizontalAlignment, NumberFormat, Style, StylePool, ThemePalette, VerticalAlignment,
 };
 
 /// Maximum number of rows in a worksheet (Excel limit)
