@@ -308,12 +308,12 @@ describe("unified drawings", () => {
             kind: "unknown",
             objectType: "EditBox",
             caption: text("Unsupported editor"),
-            rawProperties: [
-              ["customFlag", "kept"],
-              ["val", "17"],
-              ["fmlaLink", "$A$1"],
-            ],
           },
+          rawProperties: [
+            ["customFlag", "kept"],
+            ["val", "17"],
+            ["fmlaLink", "$A$1"],
+          ],
           rawClientData: [Buffer.from("<x:Val>17</x:Val>")],
         },
       });
@@ -329,8 +329,8 @@ describe("unified drawings", () => {
       const first = Workbook.fromBytes(fs.readFileSync(filePath));
       const { control, kind } = readUnknown(first);
       expect(kind.objectType).toBe("EditBox");
-      expect(kind.rawProperties).toContainEqual(["customFlag", "kept"]);
-      const propertyCount = kind.rawProperties.length;
+      expect(control.formControl.rawProperties).toContainEqual(["customFlag", "kept"]);
+      const propertyCount = control.formControl.rawProperties.length;
       expect(propertyCount).toBeGreaterThanOrEqual(3);
       expect(control.formControl.rawClientData.length).toBeGreaterThanOrEqual(1);
 
@@ -344,8 +344,8 @@ describe("unified drawings", () => {
 
       const second = readUnknown(Workbook.fromBytes(fs.readFileSync(filePath)));
       expect(second.kind.objectType).toBe("EditBox");
-      expect(second.kind.rawProperties.length).toBe(propertyCount);
-      expect(second.kind.rawProperties).toContainEqual(["customFlag", "kept"]);
+      expect(second.control.formControl.rawProperties.length).toBe(propertyCount);
+      expect(second.control.formControl.rawProperties).toContainEqual(["customFlag", "kept"]);
       expect(
         second.control.formControl.rawClientData.some((fragment) =>
           Buffer.from(fragment).toString("utf8").includes("<x:Val>17</x:Val>"),

@@ -3150,8 +3150,6 @@ impl PyFormControl {
                 object_type,
                 legacy_object_type,
                 caption: drawing_text_input_to_core(caption)?,
-                raw_properties: Vec::new(),
-                raw_obj: None,
             },
             macro_name,
         )
@@ -3200,18 +3198,18 @@ impl PyFormControl {
     fn object_type(&self) -> Option<String> { match &self.inner.kind { core::FormControlKind::Unknown { object_type, .. } => Some(object_type.clone()), _ => None } }
     #[getter]
     fn legacy_object_type(&self) -> Option<u16> { match &self.inner.kind { core::FormControlKind::Unknown { legacy_object_type, .. } => *legacy_object_type, _ => None } }
-    /// Unmodeled XLSX `formControlPr` attributes carried by an unknown
-    /// control; read-only passthrough echoed back on write.
+    /// Unmodeled XLSX `formControlPr` attributes preserved on any
+    /// control kind; read-only passthrough echoed back on write.
     #[getter]
-    fn raw_properties(&self) -> Option<Vec<(String, String)>> { match &self.inner.kind { core::FormControlKind::Unknown { raw_properties, .. } => Some(raw_properties.clone()), _ => None } }
+    fn raw_properties(&self) -> Vec<(String, String)> { self.inner.raw_properties.clone() }
     /// Unmodeled VML `ClientData` fragments preserved on any control
     /// kind; read-only passthrough echoed back on write.
     #[getter]
     fn raw_client_data(&self, py: Python<'_>) -> Vec<Py<PyBytes>> { self.inner.raw_client_data.iter().map(|bytes| PyBytes::new_bound(py, bytes).unbind()).collect() }
-    /// Original BIFF OBJ body carried by an unknown control, required
-    /// for XLS rewrite; read-only passthrough echoed back on write.
+    /// Original BIFF OBJ body for XLS passthrough of unknown
+    /// controls; read-only passthrough echoed back on write.
     #[getter]
-    fn raw_obj(&self, py: Python<'_>) -> Option<Py<PyBytes>> { match &self.inner.kind { core::FormControlKind::Unknown { raw_obj, .. } => raw_obj.as_ref().map(|bytes| PyBytes::new_bound(py, bytes).unbind()), _ => None } }
+    fn raw_obj(&self, py: Python<'_>) -> Option<Py<PyBytes>> { self.inner.raw_obj.as_ref().map(|bytes| PyBytes::new_bound(py, bytes).unbind()) }
 }
 
 fn drawing_text_input_to_core(value: &Bound<'_, PyAny>) -> PyResult<core::DrawingText> {

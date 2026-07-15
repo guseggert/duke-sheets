@@ -1248,8 +1248,6 @@ impl VmlControl {
                 object_type: object_type.to_string(),
                 legacy_object_type: None,
                 caption: caption(),
-                raw_properties: Vec::new(),
-                raw_obj: None,
             },
         };
 

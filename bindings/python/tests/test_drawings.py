@@ -287,7 +287,7 @@ def test_unknown_control_raw_getters():
     assert unknown.raw_obj is None
 
     checkbox = duke_sheets.FormControl.checkbox("check")
-    assert checkbox.raw_properties is None
+    assert checkbox.raw_properties == []
     # raw_client_data is carried on every control kind.
     assert checkbox.raw_client_data == []
     assert checkbox.raw_obj is None

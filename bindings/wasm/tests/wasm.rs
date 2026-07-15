@@ -461,7 +461,7 @@ fn form_control_drawing(
     anchor: JsValue,
     control_kind: JsValue,
 ) -> JsValue {
-    form_control_drawing_with_raws(name, anchor, control_kind, None)
+    form_control_drawing_with_raws(name, anchor, control_kind, None, &[])
 }
 
 fn form_control_drawing_with_raws(
@@ -469,11 +469,14 @@ fn form_control_drawing_with_raws(
     anchor: JsValue,
     control_kind: JsValue,
     raw_client_data: Option<JsValue>,
+    payload_raws: &[(&str, JsValue)],
 ) -> JsValue {
-    let form_control = match raw_client_data {
-        Some(raws) => make_options(&[("kind", control_kind), ("rawClientData", raws)]),
-        None => make_options(&[("kind", control_kind)]),
-    };
+    let mut payload_fields: Vec<(&str, JsValue)> = vec![("kind", control_kind)];
+    if let Some(raws) = raw_client_data {
+        payload_fields.push(("rawClientData", raws));
+    }
+    payload_fields.extend(payload_raws.iter().cloned());
+    let form_control = make_options(&payload_fields);
     make_options(&[
         ("name", JsValue::from_str(name)),
         ("anchor", anchor),
@@ -850,9 +853,9 @@ fn test_unknown_control_passthrough_survives_set_drawing_and_save() {
                 ("kind", JsValue::from_str("unknown")),
                 ("objectType", JsValue::from_str("EditBox")),
                 ("caption", drawing_text("Unsupported editor")),
-                ("rawProperties", raw_properties),
             ]),
             Some(raw_client_data),
+            &[("rawProperties", raw_properties)],
         ))
         .unwrap();
     let bytes = wb.save_xlsx_bytes().unwrap();
@@ -863,13 +866,13 @@ fn test_unknown_control_passthrough_survives_set_drawing_and_save() {
     let kind = form_control_kind(&control);
     assert_eq!(get_string_field(&kind, "kind"), "unknown");
     assert_eq!(get_string_field(&kind, "objectType"), "EditBox");
-    let properties = Array::from(&Reflect::get(&kind, &"rawProperties".into()).unwrap());
+    let payload = Reflect::get(&control, &"formControl".into()).unwrap();
+    let properties = Array::from(&Reflect::get(&payload, &"rawProperties".into()).unwrap());
     let property_count = properties.length();
     assert!(
         property_count >= 3,
         "expected raw properties to survive the read, got {property_count}"
     );
-    let payload = Reflect::get(&control, &"formControl".into()).unwrap();
     let client_data = Array::from(&Reflect::get(&payload, &"rawClientData".into()).unwrap());
     assert!(client_data.length() >= 1);
 
@@ -882,7 +885,8 @@ fn test_unknown_control_passthrough_survives_set_drawing_and_save() {
     let control = Array::from(&sheet.form_controls().unwrap()).get(0);
     let kind = form_control_kind(&control);
     assert_eq!(get_string_field(&kind, "objectType"), "EditBox");
-    let properties = Array::from(&Reflect::get(&kind, &"rawProperties".into()).unwrap());
+    let payload = Reflect::get(&control, &"formControl".into()).unwrap();
+    let properties = Array::from(&Reflect::get(&payload, &"rawProperties".into()).unwrap());
     assert_eq!(properties.length(), property_count);
     let has_custom_flag = properties.iter().any(|pair| {
         let pair = Array::from(&pair);
@@ -890,7 +894,6 @@ fn test_unknown_control_passthrough_survives_set_drawing_and_save() {
             && pair.get(1).as_string().as_deref() == Some("kept")
     });
     assert!(has_custom_flag, "customFlag raw property must survive rewrite");
-    let payload = Reflect::get(&control, &"formControl".into()).unwrap();
     let client_data = Array::from(&Reflect::get(&payload, &"rawClientData".into()).unwrap());
     let has_val_fragment = client_data.iter().any(|fragment| {
         String::from_utf8_lossy(&byte_array_to_vec(&fragment)).contains("<x:Val>17</x:Val>")
@@ -913,6 +916,7 @@ fn test_modeled_control_raw_client_data_survives_save() {
                 ("state", JsValue::from_str("checked")),
             ]),
             Some(make_array(&[js_sys::Uint8Array::from(&fragment[..]).into()])),
+            &[],
         ))
         .unwrap();
     let bytes = wb.save_xlsx_bytes().unwrap();
@@ -973,9 +977,9 @@ fn test_uint8array_payloads_survive_add_and_set_drawing() {
                 ("kind", JsValue::from_str("unknown")),
                 ("objectType", JsValue::from_str("EditBox")),
                 ("caption", drawing_text("editor")),
-                ("rawObj", js_sys::Uint8Array::from(&obj_body[..]).into()),
             ]),
             Some(make_array(&[js_sys::Uint8Array::from(&fragment[..]).into()])),
+            &[("rawObj", js_sys::Uint8Array::from(&obj_body[..]).into())],
         )
     };
     sheet.add_drawing(unknown_control("added")).unwrap();
@@ -985,11 +989,10 @@ fn test_uint8array_payloads_survive_add_and_set_drawing() {
 
     let control = Array::from(&sheet.form_controls().unwrap()).get(0);
     assert_eq!(get_string_field(&control, "name"), "replaced");
-    let kind = form_control_kind(&control);
     let payload = Reflect::get(&control, &"formControl".into()).unwrap();
     let client_data = Array::from(&Reflect::get(&payload, &"rawClientData".into()).unwrap());
     assert_eq!(byte_array_to_vec(&client_data.get(0)), fragment.to_vec());
-    let raw_obj = Reflect::get(&kind, &"rawObj".into()).unwrap();
+    let raw_obj = Reflect::get(&payload, &"rawObj".into()).unwrap();
     assert_eq!(byte_array_to_vec(&raw_obj), obj_body.to_vec());
 }
 

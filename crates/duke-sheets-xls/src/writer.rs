@@ -6519,12 +6519,10 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
 
     let kind = &control.control.kind;
     if let FormControlKind::Unknown {
-        legacy_object_type,
-        raw_obj,
-        ..
+        legacy_object_type, ..
     } = kind
     {
-        let Some(raw_obj) = raw_obj else {
+        let Some(raw_obj) = &control.control.raw_obj else {
             return Err(XlsError::InvalidFormat(
                 "XLS unknown controls require a raw OBJ body captured from an XLS file".into(),
             ));

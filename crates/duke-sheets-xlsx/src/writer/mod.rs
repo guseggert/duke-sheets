@@ -20,7 +20,7 @@ mod comments;
 mod conditional_format;
 mod data_validation;
 mod drawing;
-mod form_controls;
+pub(crate) mod form_controls;
 mod tables;
 
 const NS_SPREADSHEET: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";

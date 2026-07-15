@@ -2097,3 +2097,58 @@ fn excel_preserves_unmodeled_client_data_we_emit() {
         "x:Accel value survives Excel's re-save: {raws:?}"
     );
 }
+
+/// Excel parity for unmodeled `formControlPr` attribute passthrough
+/// on a modeled kind: our emit must not trip the Repaired dialog and
+/// the control must stay modeled. Attribute survival itself is
+/// Excel's call; this is a spec-compliance smoke check for the raw
+/// emission path.
+// features: Form control unmodeled ctrlProps passthrough
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_accepts_unmodeled_ctrl_props_we_emit() {
+    use duke_sheets_chart::{CellMarker, DrawingAnchor};
+    use duke_sheets_core::{CheckState, FormControl, FormControlKind};
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 1.0).expect("A1");
+    let mut control = FormControl::new(FormControlKind::Checkbox {
+        caption: "Audit".into(),
+        state: CheckState::Checked,
+        cell_link: None,
+        no_3d: true,
+    });
+    control.raw_properties = vec![("customFlag".to_string(), "kept".to_string())];
+    ws.add_form_control(
+        control,
+        DrawingAnchor::TwoCell {
+            from: CellMarker {
+                col: 1,
+                col_offset_emu: 0,
+                row: 1,
+                row_offset_emu: 0,
+            },
+            to: CellMarker {
+                col: 3,
+                col_offset_emu: 0,
+                row: 3,
+                row_offset_emu: 0,
+            },
+            edit_as: None,
+        },
+    )
+    .unwrap();
+
+    let result = roundtrip_through_excel(&wb);
+    let control = result
+        .worksheet(0)
+        .unwrap()
+        .form_controls()
+        .next()
+        .expect("checkbox survives");
+    let FormControlKind::Checkbox { state, .. } = &control.payload.kind else {
+        panic!("checkbox must stay modeled, got {:?}", control.payload.kind);
+    };
+    assert_eq!(*state, CheckState::Checked);
+}

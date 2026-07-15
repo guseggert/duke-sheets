@@ -3635,13 +3635,14 @@ impl XlsReader {
                 },
                 legacy_object_type: Some(parsed.ot),
                 caption: caption(),
-                raw_properties: Vec::new(),
-                raw_obj: Some(parsed.raw_body.clone()),
             },
             _ => unreachable!(),
         };
 
         let mut control = FormControl::new(kind);
+        if matches!(control.kind, FormControlKind::Unknown { .. }) {
+            control.raw_obj = Some(parsed.raw_body.clone());
+        }
         control.macro_name = parsed.macro_rgce.as_ref().and_then(|rgce| {
             let name = crate::biff::formula::decompile(rgce, formula_ctx);
             let name = name.strip_prefix('=').unwrap_or(&name).trim();

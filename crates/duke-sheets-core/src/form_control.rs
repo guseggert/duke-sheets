@@ -209,12 +209,6 @@ pub enum FormControlKind {
         legacy_object_type: Option<u16>,
         /// Text displayed by the legacy shape.
         caption: ControlText,
-        /// Unmodeled XLSX `formControlPr` attributes.
-        #[doc(hidden)]
-        raw_properties: Vec<(String, String)>,
-        /// Original BIFF OBJ body, required for XLS passthrough.
-        #[doc(hidden)]
-        raw_obj: Option<Vec<u8>>,
     },
 }
 
@@ -424,6 +418,19 @@ pub struct FormControl {
     /// modeled fields, so mutating the control does not stale them.
     #[doc(hidden)]
     pub raw_client_data: Vec<Vec<u8>>,
+    /// Unmodeled XLSX `formControlPr` attributes, preserved for
+    /// passthrough on every kind. Attribute-granular and disjoint
+    /// from the modeled fields (names a kind's writer can emit are
+    /// never captured here), so mutating the control does not stale
+    /// them; entries colliding with a modeled emission are dropped at
+    /// write.
+    #[doc(hidden)]
+    pub raw_properties: Vec<(String, String)>,
+    /// Original BIFF OBJ body, required for XLS passthrough of
+    /// Unknown controls. Modeled kinds re-emit their OBJ from the
+    /// model and leave this `None`.
+    #[doc(hidden)]
+    pub raw_obj: Option<Vec<u8>>,
 }
 
 impl FormControl {
@@ -433,6 +440,8 @@ impl FormControl {
             kind,
             macro_name: None,
             raw_client_data: Vec::new(),
+            raw_properties: Vec::new(),
+            raw_obj: None,
         }
     }
 

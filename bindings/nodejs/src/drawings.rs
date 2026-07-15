@@ -656,14 +656,6 @@ enum DrawingFormControlKind {
         legacy_object_type: Option<u16>,
         #[serde(default)]
         caption: DrawingText,
-        /// Internal passthrough of unmodeled XLSX `formControlPr`
-        /// attributes; echoed back unchanged on write.
-        #[serde(default)]
-        raw_properties: Vec<(String, String)>,
-        /// Internal passthrough of the original BIFF OBJ body (Buffer
-        /// in JS), required for XLS rewrite.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        raw_obj: Option<ByteBuf>,
     },
 }
 
@@ -764,14 +756,10 @@ impl From<&core::FormControlKind> for DrawingFormControlKind {
                 object_type,
                 legacy_object_type,
                 caption,
-                raw_properties,
-                raw_obj,
             } => Self::Unknown {
                 object_type: object_type.clone(),
                 legacy_object_type: *legacy_object_type,
                 caption: DrawingText::from(caption),
-                raw_properties: raw_properties.clone(),
-                raw_obj: raw_obj.clone().map(ByteBuf::from),
             },
         }
     }
@@ -876,14 +864,10 @@ impl TryFrom<DrawingFormControlKind> for core::FormControlKind {
                 object_type,
                 legacy_object_type,
                 caption,
-                raw_properties,
-                raw_obj,
             } => Self::Unknown {
                 object_type,
                 legacy_object_type,
                 caption: caption.try_into()?,
-                raw_properties,
-                raw_obj: raw_obj.map(ByteBuf::into_vec),
             },
         })
     }
@@ -899,6 +883,14 @@ struct DrawingFormControl {
     /// on any control kind; echoed back unchanged on write.
     #[serde(default)]
     raw_client_data: Vec<ByteBuf>,
+    /// Unmodeled XLSX `formControlPr` attributes preserved on any
+    /// control kind; echoed back unchanged on write.
+    #[serde(default)]
+    raw_properties: Vec<(String, String)>,
+    /// Original BIFF OBJ body (Buffer in JS) for XLS passthrough of
+    /// Unknown controls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    raw_obj: Option<ByteBuf>,
 }
 
 impl From<&core::FormControl> for DrawingFormControl {
@@ -912,6 +904,8 @@ impl From<&core::FormControl> for DrawingFormControl {
                 .cloned()
                 .map(ByteBuf::from)
                 .collect(),
+            raw_properties: control.raw_properties.clone(),
+            raw_obj: control.raw_obj.clone().map(ByteBuf::from),
         }
     }
 }
@@ -928,6 +922,8 @@ impl TryFrom<DrawingFormControl> for core::FormControl {
                 .into_iter()
                 .map(ByteBuf::into_vec)
                 .collect(),
+            raw_properties: control.raw_properties,
+            raw_obj: control.raw_obj.map(ByteBuf::into_vec),
         };
         result.validate().map_err(|error| error.to_string())?;
         Ok(result)

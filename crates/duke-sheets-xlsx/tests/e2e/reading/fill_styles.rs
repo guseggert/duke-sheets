@@ -28,7 +28,7 @@ fn test_solid_fill_red() {
     let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
     match &style.fill {
         FillStyle::Solid { color } => {
-            let (r, g, b) = color.to_rgb();
+            let (r, g, b) = color.to_rgb().unwrap();
             assert!(
                 r > 200 && g < 50 && b < 50,
                 "Expected red fill, got ({r}, {g}, {b})"
@@ -111,13 +111,13 @@ fn test_fill_with_white_font() {
 
     match &style.fill {
         FillStyle::Solid { color } => {
-            let (_, _, b) = color.to_rgb();
+            let (_, _, b) = color.to_rgb().unwrap();
             assert!(b > 200, "Expected blue fill");
         }
         other => panic!("Expected Solid fill, got {other:?}"),
     }
 
-    let (r, g, b) = style.font.color.to_rgb();
+    let (r, g, b) = style.font.color.to_rgb().unwrap();
     assert!(
         r > 200 && g > 200 && b > 200,
         "Expected white font, got ({r}, {g}, {b})"

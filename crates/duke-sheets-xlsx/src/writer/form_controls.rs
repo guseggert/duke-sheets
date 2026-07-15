@@ -67,6 +67,43 @@ fn vertical_alignment_value(alignment: VerticalAlignment) -> &'static str {
     }
 }
 
+/// Attribute names the writer can emit in `formControlPr` for a
+/// ctrlProps `objectType`, including conditionally emitted ones. The
+/// reader excludes these from raw-attribute capture so model edits
+/// are never shadowed by stale raw copies.
+pub(crate) fn modeled_ctrl_prop_attrs(object_type: &str) -> &'static [&'static str] {
+    match object_type {
+        "Button" => &["lockText"],
+        "CheckBox" => &["checked", "fmlaLink", "lockText", "noThreeD"],
+        "Radio" => &["checked", "firstButton", "fmlaLink", "lockText", "noThreeD"],
+        "Label" => &["lockText"],
+        "GBox" => &["noThreeD"],
+        "List" => &[
+            "dx",
+            "fmlaLink",
+            "fmlaRange",
+            "multiSel",
+            "noThreeD",
+            "sel",
+            "seltype",
+            "val",
+        ],
+        "Drop" => &[
+            "dropLines",
+            "dropStyle",
+            "dx",
+            "fmlaLink",
+            "fmlaRange",
+            "noThreeD",
+            "sel",
+            "val",
+        ],
+        "Scroll" => &["dx", "fmlaLink", "horiz", "inc", "max", "min", "page", "val"],
+        "Spin" => &["dx", "fmlaLink", "inc", "max", "min", "page", "val"],
+        _ => &[],
+    }
+}
+
 /// Write one `xl/ctrlProps/ctrlProp{num}.xml` part.
 pub(super) fn write_ctrl_prop_part<W: Write + Seek>(
     zip: &mut zip::ZipWriter<W>,
@@ -79,6 +116,24 @@ pub(super) fn write_ctrl_prop_part<W: Write + Seek>(
     let options = zip::write::SimpleFileOptions::default();
     zip.start_file(path, options).map_err(XlsxError::from)?;
 
+    let attrs = ctrl_prop_attrs(control, first_button);
+    let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n");
+    xml.push_str(&format!(
+        "<formControlPr xmlns=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\" objectType=\"{}\"",
+        ctrl_prop_object_type(&control.kind)
+    ));
+    for (name, value) in &attrs {
+        xml.push_str(&format!(" {name}=\"{}\"", escape_attr(value)));
+    }
+    xml.push_str("/>");
+    zip.write_all(xml.as_bytes()).map_err(XlsxError::from)?;
+    Ok(())
+}
+
+/// The `formControlPr` attributes for a control: the modeled ones for
+/// its kind, caption alignment, macro, then unmodeled raw attributes
+/// that do not collide with an emitted name.
+fn ctrl_prop_attrs(control: &FormControl, first_button: bool) -> Vec<(&str, String)> {
     let mut attrs: Vec<(&str, String)> = Vec::new();
     let push_checked = |attrs: &mut Vec<(&str, String)>, state: &CheckState| match state {
             CheckState::Unchecked => {}
@@ -237,13 +292,7 @@ pub(super) fn write_ctrl_prop_part<W: Write + Seek>(
             attrs.push(("page", "10".to_string()));
             attrs.push(("val", value.to_string()));
         }
-        FormControlKind::Unknown { raw_properties, .. } => {
-            for (name, value) in raw_properties {
-                if name != "objectType" && name != "xmlns" && !name.starts_with("xmlns:") {
-                    attrs.push((name.as_str(), value.clone()));
-                }
-            }
-        }
+        FormControlKind::Unknown { .. } => {}
     }
     if let Some(caption) = control.caption() {
         if let Some(alignment) = caption.horizontal_alignment {
@@ -265,18 +314,16 @@ pub(super) fn write_ctrl_prop_part<W: Write + Seek>(
             duke_sheets_vml::encode_macro_formula(macro_name),
         ));
     }
-
-    let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n");
-    xml.push_str(&format!(
-        "<formControlPr xmlns=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\" objectType=\"{}\"",
-        ctrl_prop_object_type(&control.kind)
-    ));
-    for (name, value) in &attrs {
-        xml.push_str(&format!(" {name}=\"{}\"", escape_attr(value)));
+    for (name, value) in &control.raw_properties {
+        if name == "objectType" || name == "xmlns" || name.starts_with("xmlns:") {
+            continue;
+        }
+        if attrs.iter().any(|(existing, _)| existing == name) {
+            continue;
+        }
+        attrs.push((name.as_str(), value.clone()));
     }
-    xml.push_str("/>");
-    zip.write_all(xml.as_bytes()).map_err(XlsxError::from)?;
-    Ok(())
+    attrs
 }
 
 /// Build the worksheet `<mc:AlternateContent><mc:Choice

@@ -687,14 +687,6 @@ enum WasmFormControlKind {
         legacy_object_type: Option<u16>,
         #[serde(default)]
         caption: WasmDrawingText,
-        /// Internal passthrough of unmodeled XLSX `formControlPr`
-        /// attributes; echoed back unchanged on write.
-        #[serde(default)]
-        raw_properties: Vec<(String, String)>,
-        /// Internal passthrough of the original BIFF OBJ body (byte
-        /// array in JS), required for XLS rewrite.
-        #[serde(default, deserialize_with = "de_opt_bytes")]
-        raw_obj: Option<Vec<u8>>,
     },
 }
 
@@ -795,14 +787,10 @@ impl From<&core::FormControlKind> for WasmFormControlKind {
                 object_type,
                 legacy_object_type,
                 caption,
-                raw_properties,
-                raw_obj,
             } => Self::Unknown {
                 object_type: object_type.clone(),
                 legacy_object_type: *legacy_object_type,
                 caption: WasmDrawingText::from(caption),
-                raw_properties: raw_properties.clone(),
-                raw_obj: raw_obj.clone(),
             },
         }
     }
@@ -907,14 +895,10 @@ impl TryFrom<WasmFormControlKind> for core::FormControlKind {
                 object_type,
                 legacy_object_type,
                 caption,
-                raw_properties,
-                raw_obj,
             } => Self::Unknown {
                 object_type,
                 legacy_object_type,
                 caption: caption.try_into()?,
-                raw_properties,
-                raw_obj,
             },
         })
     }
@@ -930,6 +914,14 @@ struct WasmFormControl {
     /// preserved on any control kind; echoed back unchanged on write.
     #[serde(default, deserialize_with = "de_bytes_vec")]
     raw_client_data: Vec<Vec<u8>>,
+    /// Unmodeled XLSX `formControlPr` attributes preserved on any
+    /// control kind; echoed back unchanged on write.
+    #[serde(default)]
+    raw_properties: Vec<(String, String)>,
+    /// Original BIFF OBJ body (byte array in JS) for XLS passthrough
+    /// of Unknown controls.
+    #[serde(default, deserialize_with = "de_opt_bytes")]
+    raw_obj: Option<Vec<u8>>,
 }
 
 impl From<&core::FormControl> for WasmFormControl {
@@ -938,6 +930,8 @@ impl From<&core::FormControl> for WasmFormControl {
             kind: WasmFormControlKind::from(&control.kind),
             macro_name: control.macro_name.clone(),
             raw_client_data: control.raw_client_data.clone(),
+            raw_properties: control.raw_properties.clone(),
+            raw_obj: control.raw_obj.clone(),
         }
     }
 }
@@ -950,6 +944,8 @@ impl TryFrom<WasmFormControl> for core::FormControl {
             kind: control.kind.try_into()?,
             macro_name: control.macro_name,
             raw_client_data: control.raw_client_data,
+            raw_properties: control.raw_properties,
+            raw_obj: control.raw_obj,
         };
         result.validate().map_err(|error| error.to_string())?;
         Ok(result)
