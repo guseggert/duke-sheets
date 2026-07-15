@@ -1561,7 +1561,7 @@ mod tests {
             },
         ];
         for kind in kinds {
-            ws.add_drawing(DrawingObject::form_control(FormControl::new(kind)));
+            ws.add_drawing(DrawingObject::form_control(FormControl::new(kind))).unwrap();
         }
 
         assert_eq!(wb.sync_form_control_links(), 9);
@@ -1606,7 +1606,7 @@ mod tests {
                 state: CheckState::Checked,
                 cell_link: Some(link.into()),
                 no_3d: false,
-            })));
+            }))).unwrap();
         }
 
         assert_eq!(wb.sync_form_control_links(), 1);
@@ -1651,7 +1651,7 @@ mod tests {
                 max: 100,
                 increment: 1,
                 cell_link: Some(link.into()),
-            })));
+            }))).unwrap();
         }
 
         assert_eq!(wb.sync_form_control_links(), 2);
@@ -1740,7 +1740,7 @@ mod tests {
             checkbox("$A$9", CheckState::Checked),
         ];
         for kind in kinds {
-            ws.add_drawing(DrawingObject::form_control(FormControl::new(kind)));
+            ws.add_drawing(DrawingObject::form_control(FormControl::new(kind))).unwrap();
         }
 
         assert_eq!(wb.sync_form_controls_from_linked_cells(), 8);
@@ -1788,13 +1788,13 @@ mod tests {
             max: 10,
             increment: 1,
             cell_link: Some("$A$1".into()),
-        })));
+        }))).unwrap();
         ws.add_drawing(DrawingObject::form_control(FormControl::new(FormControlKind::Checkbox {
             caption: "later".into(),
             state: CheckState::Checked,
             cell_link: Some("$A$1".into()),
             no_3d: false,
-        })));
+        }))).unwrap();
 
         assert_eq!(wb.sync_form_control_links(), 1);
         assert_eq!(

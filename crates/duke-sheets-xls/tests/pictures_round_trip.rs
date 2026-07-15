@@ -139,7 +139,7 @@ fn large_images_round_trip_via_continue_records() {
 
         let mut wb = Workbook::new();
         let ws = wb.worksheet_mut(0).unwrap();
-        ws.add_drawing(test_image_with_format("Big", 1, 1, ImageFormat::Png, &data));
+        ws.add_drawing(test_image_with_format("Big", 1, 1, ImageFormat::Png, &data)).unwrap();
 
         let parsed = write_then_read(&wb);
         let images = images_of(parsed.worksheet(0).unwrap());
@@ -157,7 +157,7 @@ fn single_picture_round_trips() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "anchor").expect("A1");
-    ws.add_drawing(test_image("Picture 1", 2, 3));
+    ws.add_drawing(test_image("Picture 1", 2, 3)).unwrap();
 
     let parsed = write_then_read(&wb);
     let images = images_of(parsed.worksheet(0).unwrap());
@@ -219,7 +219,7 @@ fn xls_top_level_width_emu_does_not_survive_user_value() {
         DrawingObject::image(payload)
             .with_anchor(anchor)
             .with_name("Pic"),
-    );
+    ).unwrap();
 
     let parsed = write_then_read(&wb);
     let images = images_of(parsed.worksheet(0).unwrap());
@@ -256,7 +256,7 @@ fn rotation_and_flip_flags_round_trip() {
         DrawingObject::image(payload)
             .with_anchor(test_anchor(1, 2))
             .with_name("Picture 1"),
-    );
+    ).unwrap();
 
     let parsed = write_then_read(&wb);
     let images = images_of(parsed.worksheet(0).unwrap());
@@ -272,7 +272,7 @@ fn no_rotation_no_flip_round_trips_clean() {
     // flip_h=false, flip_v=false (FOPT 0x0004 entry must be omitted).
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
-    ws.add_drawing(test_image("Picture 1", 0, 0));
+    ws.add_drawing(test_image("Picture 1", 0, 0)).unwrap();
 
     let parsed = write_then_read(&wb);
     let images = images_of(parsed.worksheet(0).unwrap());
@@ -304,7 +304,7 @@ fn twocell_anchor_edit_as_collapses_to_default() {
             row_offset_emu: 0,
         },
         edit_as: Some(EditAs::TwoCell),
-    }));
+    })).unwrap();
 
     let parsed = write_then_read(&wb);
     let images = images_of(parsed.worksheet(0).unwrap());
@@ -336,7 +336,7 @@ fn onecell_anchor_round_trips_with_visual_area_preserved() {
         // Exactly 3 columns × 2 rows worth of default cells.
         width_emu: 3 * COL_EMU,
         height_emu: 2 * ROW_EMU,
-    }));
+    })).unwrap();
 
     let parsed = write_then_read(&wb);
     let images = images_of(parsed.worksheet(0).unwrap());
@@ -374,7 +374,7 @@ fn absolute_anchor_round_trips_with_visual_area_preserved() {
         y_emu: 3 * ROW_EMU,
         width_emu: 2 * COL_EMU,
         height_emu: 4 * ROW_EMU,
-    }));
+    })).unwrap();
 
     let parsed = write_then_read(&wb);
     let images = images_of(parsed.worksheet(0).unwrap());
@@ -422,7 +422,7 @@ fn picture_anchor_within_cell_offsets_round_trip() {
             row_offset_emu: to_row_off,
         },
         edit_as: None,
-    }));
+    })).unwrap();
 
     let parsed = write_then_read(&wb);
     let images = images_of(parsed.worksheet(0).unwrap());
@@ -481,7 +481,7 @@ fn picture_anchor_over_hidden_rows_and_columns_survives() {
     for row in 3..=5 {
         ws.set_row_hidden(row, true);
     }
-    ws.add_drawing(test_image("Picture 1", 0, 0).with_anchor(custom.clone()));
+    ws.add_drawing(test_image("Picture 1", 0, 0).with_anchor(custom.clone())).unwrap();
 
     let parsed = write_then_read(&wb);
     let images = images_of(parsed.worksheet(0).unwrap());
@@ -521,7 +521,7 @@ fn negative_anchor_offsets_clamp_to_zero() {
             row_offset_emu: 0,
         },
         edit_as: None,
-    }));
+    })).unwrap();
 
     let parsed = write_then_read(&wb);
     let images = images_of(parsed.worksheet(0).unwrap());
@@ -560,7 +560,7 @@ fn single_bmp_picture_round_trips() {
         2,
         ImageFormat::Bmp,
         TEST_BMP_1X1,
-    ));
+    )).unwrap();
 
     let parsed = write_then_read(&wb);
     let images = images_of(parsed.worksheet(0).unwrap());
@@ -641,7 +641,7 @@ fn tiff_blip_wrapper_round_trips_in_process() {
         1,
         ImageFormat::Tiff,
         TEST_TIFF_BYTES,
-    ));
+    )).unwrap();
 
     let parsed = write_then_read(&wb);
     let images = images_of(parsed.worksheet(0).unwrap());
@@ -673,7 +673,7 @@ fn gif_input_is_routed_through_png_blip_and_format_tag_flips() {
         1,
         ImageFormat::Gif,
         TEST_GIF_BYTES,
-    ));
+    )).unwrap();
 
     let parsed = write_then_read(&wb);
     let images = images_of(parsed.worksheet(0).unwrap());
@@ -705,7 +705,7 @@ fn emf_blip_wrapper_round_trips_opaque_bytes_in_process() {
         1,
         ImageFormat::Emf,
         TEST_EMF_BYTES,
-    ));
+    )).unwrap();
 
     let parsed = write_then_read(&wb);
     let images = images_of(parsed.worksheet(0).unwrap());
@@ -732,7 +732,7 @@ fn wmf_blip_wrapper_round_trips_opaque_bytes_in_process() {
         1,
         ImageFormat::Wmf,
         TEST_EMF_BYTES,
-    ));
+    )).unwrap();
 
     let parsed = write_then_read(&wb);
     let images = images_of(parsed.worksheet(0).unwrap());
@@ -749,14 +749,14 @@ fn wmf_blip_wrapper_round_trips_opaque_bytes_in_process() {
 fn png_and_bmp_coexist_on_one_sheet() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
-    ws.add_drawing(test_image("PngPic", 0, 0));
+    ws.add_drawing(test_image("PngPic", 0, 0)).unwrap();
     ws.add_drawing(test_image_with_format(
         "BmpPic",
         5,
         5,
         ImageFormat::Bmp,
         TEST_BMP_1X1,
-    ));
+    )).unwrap();
 
     let parsed = write_then_read(&wb);
     let images = images_of(parsed.worksheet(0).unwrap());
@@ -776,7 +776,7 @@ fn single_jpeg_picture_round_trips() {
         2,
         ImageFormat::Jpeg,
         TEST_JPEG_1X1,
-    ));
+    )).unwrap();
 
     let parsed = write_then_read(&wb);
     let images = images_of(parsed.worksheet(0).unwrap());
@@ -793,14 +793,14 @@ fn single_jpeg_picture_round_trips() {
 fn png_and_jpeg_coexist_on_one_sheet() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
-    ws.add_drawing(test_image("PngPic", 0, 0));
+    ws.add_drawing(test_image("PngPic", 0, 0)).unwrap();
     ws.add_drawing(test_image_with_format(
         "JpegPic",
         5,
         5,
         ImageFormat::Jpeg,
         TEST_JPEG_1X1,
-    ));
+    )).unwrap();
 
     let parsed = write_then_read(&wb);
     let images = images_of(parsed.worksheet(0).unwrap());
@@ -816,9 +816,9 @@ fn png_and_jpeg_coexist_on_one_sheet() {
 fn multiple_pictures_round_trip_on_one_sheet() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
-    ws.add_drawing(test_image("Picture 1", 0, 0));
-    ws.add_drawing(test_image("Picture 2", 4, 4));
-    ws.add_drawing(test_image("Picture 3", 8, 8));
+    ws.add_drawing(test_image("Picture 1", 0, 0)).unwrap();
+    ws.add_drawing(test_image("Picture 2", 4, 4)).unwrap();
+    ws.add_drawing(test_image("Picture 3", 8, 8)).unwrap();
 
     let parsed = write_then_read(&wb);
     let images = images_of(parsed.worksheet(0).unwrap());
@@ -838,7 +838,7 @@ fn picture_and_comment_coexist_on_same_sheet() {
 
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
-    ws.add_drawing(test_image("Picture 1", 1, 1));
+    ws.add_drawing(test_image("Picture 1", 1, 1)).unwrap();
     ws.set_comment_at(3, 3, CellComment::new("Alice", "A note"))
         .expect("set comment");
 
@@ -861,10 +861,10 @@ fn pictures_on_multiple_sheets_round_trip() {
 
     wb.worksheet_mut(0)
         .unwrap()
-        .add_drawing(test_image("Pic on First", 0, 0));
+        .add_drawing(test_image("Pic on First", 0, 0)).unwrap();
     wb.worksheet_mut(1)
         .unwrap()
-        .add_drawing(test_image("Pic on Second", 2, 2));
+        .add_drawing(test_image("Pic on Second", 2, 2)).unwrap();
 
     let parsed = write_then_read(&wb);
     assert_eq!(parsed.worksheet(0).unwrap().image_count(), 1);
@@ -902,7 +902,7 @@ fn lo_can_open_xls_with_picture_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", 42.0).expect("A1");
-    ws.add_drawing(test_image("Picture 1", 2, 3));
+    ws.add_drawing(test_image("Picture 1", 2, 3)).unwrap();
     // A second image past the 8224-byte record cap, so the
     // MSODRAWINGGROUP → CONTINUE split is validated by a real
     // consumer's loader, not just our own reader.
@@ -917,7 +917,7 @@ fn lo_can_open_xls_with_picture_we_emit() {
         3,
         ImageFormat::Png,
         &big_data,
-    ));
+    )).unwrap();
 
     let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
     std::fs::create_dir_all(SHARED_DIR).expect("shared dir");
@@ -977,8 +977,8 @@ fn msodrawinggroup_split_across_multiple_records_round_trips() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "anchor").expect("A1");
-    ws.add_drawing(test_image("First", 1, 1));
-    ws.add_drawing(test_image("Second", 6, 10));
+    ws.add_drawing(test_image("First", 1, 1)).unwrap();
+    ws.add_drawing(test_image("Second", 6, 10)).unwrap();
 
     let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
 

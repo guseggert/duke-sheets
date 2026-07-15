@@ -64,7 +64,7 @@ fn probe_workbook() -> Workbook {
     object.meta.title = Some("Visual probe title".into());
 
     let mut workbook = Workbook::new();
-    workbook.worksheet_mut(0).unwrap().add_drawing(object);
+    workbook.worksheet_mut(0).unwrap().add_drawing(object).unwrap();
     workbook
 }
 

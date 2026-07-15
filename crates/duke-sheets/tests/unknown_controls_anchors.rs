@@ -44,7 +44,7 @@ fn unknown_workbook() -> Workbook {
         edit_as: None,
     });
     object.meta.name = Some("Legacy editor".to_string());
-    workbook.worksheet_mut(0).unwrap().add_drawing(object);
+    workbook.worksheet_mut(0).unwrap().add_drawing(object).unwrap();
     workbook
 }
 
@@ -198,7 +198,7 @@ fn xls_unknown_edit_box_obj_body_survives_rewrite() {
     object.meta.printable = false;
 
     let mut workbook = Workbook::new();
-    workbook.worksheet_mut(0).unwrap().add_drawing(object);
+    workbook.worksheet_mut(0).unwrap().add_drawing(object).unwrap();
     let first_bytes = XlsWriter::write_to_bytes(&workbook).expect("write first xls");
     let first = XlsReader::read(Cursor::new(first_bytes)).expect("read first xls");
     assert_xls_unknown(&first, &raw_obj);
@@ -285,7 +285,7 @@ fn xls_unknown_control_embedded_macro_is_replaced_not_replayed() {
         edit_as: None,
     });
     let mut workbook = Workbook::new();
-    workbook.worksheet_mut(0).unwrap().add_drawing(object);
+    workbook.worksheet_mut(0).unwrap().add_drawing(object).unwrap();
 
     let bytes = XlsWriter::write_to_bytes(&workbook).expect("write xls");
     let reread = XlsReader::read(Cursor::new(bytes)).expect("read xls");
@@ -401,7 +401,7 @@ fn checkbox_and_comment_workbook() -> Workbook {
             },
             edit_as: None,
         },
-    );
+    ).unwrap();
     sheet
         .set_comment_at(
             4,
@@ -538,7 +538,7 @@ fn unmodeled_client_data_round_trips_on_checkbox_xlsx() {
             no_3d: true,
         }),
         DrawingAnchor::default(),
-    );
+    ).unwrap();
     let mut bytes = Cursor::new(Vec::new());
     XlsxWriter::write(&workbook, &mut bytes).expect("write xlsx");
     let spliced = splice_into_client_data(
@@ -575,7 +575,7 @@ fn unmodeled_client_data_round_trips_on_button_xlsb() {
             caption: "OK".into(),
         }),
         DrawingAnchor::default(),
-    );
+    ).unwrap();
     let mut bytes = Cursor::new(Vec::new());
     XlsbWriter::write(&workbook, &mut bytes).expect("write xlsb");
     let spliced = splice_into_client_data(
@@ -617,7 +617,7 @@ fn uiobj_marker_wins_over_a_ctrlprops_twin_xlsx() {
             no_3d: true,
         }),
         DrawingAnchor::default(),
-    );
+    ).unwrap();
     let mut bytes = Cursor::new(Vec::new());
     XlsxWriter::write(&workbook, &mut bytes).expect("write xlsx");
     let spliced = splice_into_client_data(bytes.into_inner(), "Checkbox", "   <x:UIObj/>\n  ");
@@ -643,7 +643,7 @@ fn malformed_raw_client_data_is_rejected_at_write() {
     workbook
         .worksheet_mut(0)
         .unwrap()
-        .add_form_control(control, DrawingAnchor::default());
+        .add_form_control(control, DrawingAnchor::default()).unwrap();
 
     let xlsx_err = XlsxWriter::write(&workbook, &mut Cursor::new(Vec::new()))
         .expect_err("unbalanced raw ClientData must not produce a corrupt XLSX part");
@@ -711,7 +711,7 @@ fn malformed_raw_client_data_is_rejected_at_write() {
         workbook
             .worksheet_mut(0)
             .unwrap()
-            .add_form_control(control, DrawingAnchor::default());
+            .add_form_control(control, DrawingAnchor::default()).unwrap();
         let error = XlsxWriter::write(&workbook, &mut Cursor::new(Vec::new())).expect_err(
             &format!(
                 "hostile fragment must be rejected: {}",
@@ -774,10 +774,13 @@ fn pict_vml_is_not_exposed_as_unknown_form_control() {
     });
     assert!(pict.validate().is_err());
     let mut pict_workbook = Workbook::new();
+    // Unchecked: the control fails validation on purpose; the writer
+    // must still reject it for files read permissively.
     pict_workbook
         .worksheet_mut(0)
         .unwrap()
-        .add_form_control(pict, DrawingAnchor::default());
+        .drawings_mut()
+        .push(DrawingObject::form_control(pict).with_anchor(DrawingAnchor::default()));
     let mut output = Cursor::new(Vec::new());
     let error = XlsbWriter::write(&pict_workbook, &mut output).unwrap_err();
     assert!(error.to_string().contains("ActiveX/OLE"));
@@ -809,7 +812,7 @@ fn metric_anchor_workbook() -> Workbook {
             width_emu: 609_600,
             height_emu: 190_500,
         },
-    );
+    ).unwrap();
     sheet.add_form_control(
         FormControl::new(FormControlKind::Label {
             caption: "absolute".into(),
@@ -820,7 +823,7 @@ fn metric_anchor_workbook() -> Workbook {
             width_emu: 95_250,
             height_emu: 95_250,
         },
-    );
+    ).unwrap();
     workbook
 }
 
@@ -999,7 +1002,7 @@ fn radio_grouping_uses_custom_sheet_dimensions() {
             width_emu: 1_000_000,
             height_emu: 1_000_000,
         }),
-    );
+    ).unwrap();
     sheet.add_drawing(radio(
         "outside with custom width",
         DrawingAnchor::TwoCell {
@@ -1017,7 +1020,7 @@ fn radio_grouping_uses_custom_sheet_dimensions() {
             },
             edit_as: None,
         },
-    ));
+    )).unwrap();
     sheet.add_drawing(radio(
         "inside",
         DrawingAnchor::Absolute {
@@ -1026,7 +1029,7 @@ fn radio_grouping_uses_custom_sheet_dimensions() {
             width_emu: 100_000,
             height_emu: 100_000,
         },
-    ));
+    )).unwrap();
 
     let placed = sheet.placed_form_controls();
     assert_eq!(placed[1].rect_emu.x_emu, 1_381_125);

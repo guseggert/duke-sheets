@@ -896,6 +896,25 @@ impl DrawingObject {
     }
 }
 
+/// Validate a shape-group child: non-negative extents, a kind that
+/// formats can nest inside a group, and a valid payload.
+pub fn validate_group_child(child: &GroupChild) -> Result<()> {
+    if child.transform.cx_emu < 0 || child.transform.cy_emu < 0 {
+        return Err(Error::other("group child extents cannot be negative"));
+    }
+    if matches!(child.kind, DrawingKind::Comment { .. }) {
+        // Comments are cell-keyed top-level objects; no format nests
+        // them in shape groups.
+        return Err(Error::other("comments cannot be group children"));
+    }
+    if matches!(child.kind, DrawingKind::Raw(_)) {
+        // Raw payloads are whole anchor elements; no format can nest
+        // them inside a grpSp, and no reader produces them there.
+        return Err(Error::other("raw drawings cannot be group children"));
+    }
+    validate_kind(&child.kind)
+}
+
 fn validate_kind(kind: &DrawingKind) -> Result<()> {
     match kind {
         DrawingKind::FormControl(control) => control.validate()?,
@@ -909,21 +928,7 @@ fn validate_kind(kind: &DrawingKind) -> Result<()> {
         }
         DrawingKind::Group(group) => {
             for child in &group.children {
-                if child.transform.cx_emu < 0 || child.transform.cy_emu < 0 {
-                    return Err(Error::other("group child extents cannot be negative"));
-                }
-                if matches!(child.kind, DrawingKind::Comment { .. }) {
-                    // Comments are cell-keyed top-level objects; no
-                    // format nests them in shape groups.
-                    return Err(Error::other("comments cannot be group children"));
-                }
-                if matches!(child.kind, DrawingKind::Raw(_)) {
-                    // Raw payloads are whole anchor elements; no format
-                    // can nest them inside a grpSp, and no reader
-                    // produces them there.
-                    return Err(Error::other("raw drawings cannot be group children"));
-                }
-                validate_kind(&child.kind)?;
+                validate_group_child(child)?;
             }
         }
         DrawingKind::Shape(shape) => {

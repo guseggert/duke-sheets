@@ -90,7 +90,7 @@ fn custom_comment_anchor_round_trips() {
     wb.worksheet_mut(0).unwrap().add_drawing(
         DrawingObject::comment(1, 1, CellComment::new("Alice", "moved popup"))
             .with_anchor(custom.clone()),
-    );
+    ).unwrap();
 
     let parsed = write_then_read(&wb);
     let ws_in = parsed.worksheet(0).unwrap();

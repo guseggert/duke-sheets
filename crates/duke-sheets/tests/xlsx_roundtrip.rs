@@ -2489,7 +2489,7 @@ fn test_roundtrip_chart_bar() {
     chart.category_axis = Some(Axis::new().with_title("Quarter"));
     chart.value_axis = Some(Axis::new().with_title("Amount").with_bounds(0.0, 50000.0));
     chart.legend = Some(Legend::new(LegendPosition::Bottom));
-    sheet.add_chart(chart, anchor);
+    sheet.add_chart(chart, anchor).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -2549,7 +2549,7 @@ fn test_roundtrip_chart_line() {
     chart.category_axis = Some(Axis::new().with_title("Time"));
     chart.value_axis = Some(Axis::new().with_title("Value"));
     chart.legend = Some(Legend::new(LegendPosition::Right));
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -2583,7 +2583,7 @@ fn test_roundtrip_chart_pie() {
         .with_name("Shares")
         .with_categories(DataReference::formula("Sheet1!$A$1:$A$4"));
     chart.add_series(s);
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -2608,7 +2608,7 @@ fn test_roundtrip_chart_scatter() {
     let s = DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$5"))
         .with_categories(DataReference::formula("Sheet1!$A$1:$A$5"));
     chart.add_series(s);
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -2636,7 +2636,7 @@ fn test_roundtrip_chart_no_series() {
     let mut wb = Workbook::new();
     let sheet = wb.worksheet_mut(0).unwrap();
     let chart = Chart::new(ChartType::Area);
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -2657,12 +2657,12 @@ fn test_roundtrip_multiple_charts() {
     let mut c1 = Chart::new(ChartType::BarClustered);
     c1.title = Some("Bar".to_string());
     c1.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(c1, DrawingAnchor::default());
+    sheet.add_chart(c1, DrawingAnchor::default()).unwrap();
 
     let mut c2 = Chart::new(ChartType::Doughnut);
     c2.title = Some("Donut".to_string());
     c2.add_series(DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$5")));
-    sheet.add_chart(c2, DrawingAnchor::default());
+    sheet.add_chart(c2, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -2709,7 +2709,7 @@ fn test_roundtrip_chart_anchor_offsets() {
         edit_as: None,
     };
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart, anchor);
+    sheet.add_chart(chart, anchor).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -2748,7 +2748,7 @@ fn test_roundtrip_chart_data_labels() {
         ..Default::default()
     });
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -2780,7 +2780,7 @@ fn test_roundtrip_chart_series_data_labels() {
         ..Default::default()
     });
     chart.add_series(s);
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -2819,7 +2819,7 @@ fn test_roundtrip_chart_trendline() {
         label: None,
     });
     chart.add_series(s);
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -2859,7 +2859,7 @@ fn test_roundtrip_chart_error_bars() {
         minus: None,
     });
     chart.add_series(s);
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -2890,7 +2890,7 @@ fn test_roundtrip_chart_markers() {
         size: Some(8),
     });
     chart.add_series(s);
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -2926,7 +2926,7 @@ fn test_roundtrip_chart_data_points() {
         }),
     }];
     chart.add_series(s);
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -2958,7 +2958,7 @@ fn test_roundtrip_chart_series_smooth() {
     let mut s = DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5"));
     s.smooth = Some(true);
     chart.add_series(s);
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3017,7 +3017,7 @@ fn test_roundtrip_chart_axis_enhancements() {
     cat_axis.crosses = Some(AxisCrosses::AutoZero);
     chart.category_axis = Some(cat_axis);
     chart.value_axis = Some(Axis::new());
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3072,7 +3072,7 @@ fn test_roundtrip_chart_view_3d() {
         perspective: Some(30),
         ..Default::default()
     });
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3100,7 +3100,7 @@ fn test_roundtrip_chart_data_table() {
         show_outline: Some(true),
         show_keys: Some(true),
     });
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3125,7 +3125,7 @@ fn test_roundtrip_chart_display_blanks_and_plot_visible() {
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
     chart.display_blanks_as = Some(DisplayBlanksAs::Gap);
     chart.plot_visible_only = Some(true);
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3153,7 +3153,7 @@ fn test_roundtrip_chart_layout() {
             height: Some(0.6),
         }),
     });
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3179,7 +3179,7 @@ fn test_roundtrip_column_stacked() {
     let sheet = wb.worksheet_mut(0).unwrap();
     let mut chart = Chart::new(ChartType::ColumnStacked);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3196,7 +3196,7 @@ fn test_roundtrip_column_percent_stacked() {
     let sheet = wb.worksheet_mut(0).unwrap();
     let mut chart = Chart::new(ChartType::ColumnPercentStacked);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3213,7 +3213,7 @@ fn test_roundtrip_bar_stacked() {
     let sheet = wb.worksheet_mut(0).unwrap();
     let mut chart = Chart::new(ChartType::BarStacked);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3230,7 +3230,7 @@ fn test_roundtrip_bar_percent_stacked() {
     let sheet = wb.worksheet_mut(0).unwrap();
     let mut chart = Chart::new(ChartType::BarPercentStacked);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3247,7 +3247,7 @@ fn test_roundtrip_line_stacked() {
     let sheet = wb.worksheet_mut(0).unwrap();
     let mut chart = Chart::new(ChartType::LineStacked);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3266,7 +3266,7 @@ fn test_roundtrip_pie_exploded() {
     let mut s = DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5"));
     s.explosion = Some(25);
     chart.add_series(s);
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3284,7 +3284,7 @@ fn test_roundtrip_area_stacked() {
     let sheet = wb.worksheet_mut(0).unwrap();
     let mut chart = Chart::new(ChartType::AreaStacked);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3301,7 +3301,7 @@ fn test_roundtrip_area_percent_stacked() {
     let sheet = wb.worksheet_mut(0).unwrap();
     let mut chart = Chart::new(ChartType::AreaPercentStacked);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3320,7 +3320,7 @@ fn test_roundtrip_scatter_lines() {
     let s = DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$5"))
         .with_categories(DataReference::formula("Sheet1!$A$1:$A$5"));
     chart.add_series(s);
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3340,7 +3340,7 @@ fn test_roundtrip_scatter_smooth() {
     let s = DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$5"))
         .with_categories(DataReference::formula("Sheet1!$A$1:$A$5"));
     chart.add_series(s);
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3360,7 +3360,7 @@ fn test_roundtrip_bubble() {
     let s = DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$5"))
         .with_categories(DataReference::formula("Sheet1!$A$1:$A$5"));
     chart.add_series(s);
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3378,7 +3378,7 @@ fn test_roundtrip_radar() {
     let sheet = wb.worksheet_mut(0).unwrap();
     let mut chart = Chart::new(ChartType::Radar);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3395,7 +3395,7 @@ fn test_roundtrip_stock() {
     let sheet = wb.worksheet_mut(0).unwrap();
     let mut chart = Chart::new(ChartType::Stock);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3412,7 +3412,7 @@ fn test_roundtrip_surface() {
     let sheet = wb.worksheet_mut(0).unwrap();
     let mut chart = Chart::new(ChartType::Surface);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3447,7 +3447,7 @@ fn test_roundtrip_shape_properties() {
         }),
     });
     chart.add_series(s);
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3477,7 +3477,7 @@ fn test_roundtrip_vary_colors_gap_overlap() {
     chart.gap_width = Some(150);
     chart.overlap = Some(-25);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3501,7 +3501,7 @@ fn test_roundtrip_rounded_corners_auto_title() {
     chart.auto_title_deleted = Some(true);
     chart.show_dlbls_over_max = Some(true);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3524,7 +3524,7 @@ fn test_roundtrip_invert_if_negative() {
     let mut s = DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5"));
     s.invert_if_negative = Some(true);
     chart.add_series(s);
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3545,7 +3545,7 @@ fn test_roundtrip_first_slice_angle_hole_size() {
     chart.first_slice_angle = Some(90);
     chart.hole_size = Some(50);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3567,7 +3567,7 @@ fn test_roundtrip_bubble_scale() {
     chart.bubble_scale = Some(200);
     chart.show_negative_bubbles = Some(false);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3588,7 +3588,7 @@ fn test_roundtrip_radar_style() {
     let mut chart = Chart::new(ChartType::Radar);
     chart.radar_style = Some("filled".to_string());
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3608,7 +3608,7 @@ fn test_roundtrip_surface_wireframe() {
     let mut chart = Chart::new(ChartType::Surface);
     chart.wireframe = Some(true);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3627,7 +3627,7 @@ fn test_roundtrip_data_reference_numbers() {
 
     let mut chart = Chart::new(ChartType::ColumnClustered);
     chart.add_series(DataSeries::new(DataReference::Numbers(vec![1.0, 2.0, 3.0])));
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3651,7 +3651,7 @@ fn test_roundtrip_data_reference_strings() {
     let s = DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5"))
         .with_categories(DataReference::Strings(vec!["A".into(), "B".into()]));
     chart.add_series(s);
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3680,7 +3680,7 @@ fn test_roundtrip_axis_cross_between_major_minor() {
     vax.minor_unit = Some(1.0);
     chart.value_axis = Some(vax);
     chart.category_axis = Some(Axis::new());
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3714,7 +3714,7 @@ fn test_roundtrip_legend_shape_properties() {
         line: None,
     });
     chart.legend = Some(legend);
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3740,7 +3740,7 @@ fn test_roundtrip_3d_chart() {
     let mut chart = Chart::new(ChartType::ColumnClustered);
     chart.is_3d = true;
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3760,13 +3760,13 @@ fn test_roundtrip_charts_on_multiple_sheets() {
     let sheet1 = wb.worksheet_mut(0).unwrap();
     let mut c1 = Chart::new(ChartType::Line);
     c1.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet1.add_chart(c1, DrawingAnchor::default());
+    sheet1.add_chart(c1, DrawingAnchor::default()).unwrap();
 
     wb.add_worksheet_with_name("Sheet2").unwrap();
     let sheet2 = wb.worksheet_mut(1).unwrap();
     let mut c2 = Chart::new(ChartType::Pie);
     c2.add_series(DataSeries::new(DataReference::formula("Sheet2!$A$1:$A$5")));
-    sheet2.add_chart(c2, DrawingAnchor::default());
+    sheet2.add_chart(c2, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3914,7 +3914,7 @@ fn test_roundtrip_kitchen_sink() {
         line: None,
     });
     chart.add_series(s);
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -4112,7 +4112,7 @@ fn test_roundtrip_combo_bar_line() {
         },
     ];
 
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -4160,7 +4160,7 @@ fn test_roundtrip_combo_preserves_legacy() {
     // No type_groups set => legacy mode
     assert!(chart.type_groups.is_empty());
 
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -4271,7 +4271,7 @@ fn test_roundtrip_combo_axes() {
         },
     ];
 
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -4354,7 +4354,7 @@ fn test_roundtrip_single_type_group_uses_legacy() {
             axis: val_ax,
         },
     ];
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -4468,7 +4468,7 @@ fn test_roundtrip_combo_secondary_axis_position() {
             axis: val_ax2,
         },
     ];
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -4494,7 +4494,7 @@ fn test_roundtrip_vary_colors_false() {
     let mut chart = Chart::new(ChartType::ColumnClustered);
     chart.vary_colors = Some(false);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -4523,7 +4523,7 @@ fn test_roundtrip_drop_lines() {
             ..Default::default()
         }),
     });
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -4545,7 +4545,7 @@ fn test_roundtrip_high_low_lines() {
     let mut chart = Chart::new(ChartType::Stock);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
     chart.high_low_lines = Some(ChartLines::default());
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -4568,7 +4568,7 @@ fn test_roundtrip_series_lines_legacy() {
     let mut chart = Chart::new(ChartType::BarStacked);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
     chart.series_lines = Some(ChartLines::default());
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -4668,7 +4668,7 @@ fn test_roundtrip_series_lines() {
             },
         },
     ];
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -4696,7 +4696,7 @@ fn test_roundtrip_up_down_bars() {
         up_bars: Some(ChartLines::default()),
         down_bars: Some(ChartLines::default()),
     });
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -4726,7 +4726,7 @@ fn test_roundtrip_leader_lines() {
         leader_lines: Some(ChartLines::default()),
         ..DataLabels::default()
     });
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -4818,7 +4818,7 @@ fn test_roundtrip_chartsheet_with_worksheet_charts() {
     ws_chart.title = Some("Embedded".to_string());
     ws_chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
     let sheet = wb.worksheet_mut(0).unwrap();
-    sheet.add_chart(ws_chart, DrawingAnchor::default());
+    sheet.add_chart(ws_chart, DrawingAnchor::default()).unwrap();
 
     // Add a separate chartsheet
     let mut cs_chart = Chart::new(ChartType::BarClustered);
@@ -5000,7 +5000,7 @@ fn test_roundtrip_chart_style_color_passthrough() {
     let mut chart = Chart::new(ChartType::ColumnClustered);
     chart.raw_chart_style = Some(style_bytes.clone());
     chart.raw_chart_color_style = Some(color_bytes.clone());
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -5030,7 +5030,7 @@ fn test_roundtrip_axis_delete() {
     let mut val_axis = Axis::new();
     val_axis.delete = Some(false);
     chart.value_axis = Some(val_axis);
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -5059,7 +5059,7 @@ fn test_roundtrip_axis_label_positions() {
         cat_axis.label_position = Some(pos);
         chart.category_axis = Some(cat_axis);
         chart.value_axis = Some(Axis::new());
-        sheet.add_chart(chart, DrawingAnchor::default());
+        sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
         let mut buf = Vec::new();
         XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -5089,7 +5089,7 @@ fn test_roundtrip_axis_crosses_min_max() {
         cat_axis.crosses = Some(crosses);
         chart.category_axis = Some(cat_axis);
         chart.value_axis = Some(Axis::new());
-        sheet.add_chart(chart, DrawingAnchor::default());
+        sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
         let mut buf = Vec::new();
         XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -5129,7 +5129,7 @@ fn test_roundtrip_trendline_polynomial() {
         label: None,
     });
     chart.add_series(s);
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -5171,7 +5171,7 @@ fn test_roundtrip_trendline_moving_average() {
         label: None,
     });
     chart.add_series(s);
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -5211,7 +5211,7 @@ fn test_roundtrip_trendline_logarithmic_power() {
             label: None,
         });
         chart.add_series(s);
-        sheet.add_chart(chart, DrawingAnchor::default());
+        sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
         let mut buf = Vec::new();
         XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -5258,7 +5258,7 @@ fn test_roundtrip_error_bars_percentage_stddev() {
             minus: None,
         });
         chart.add_series(s);
-        sheet.add_chart(chart, DrawingAnchor::default());
+        sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
         let mut buf = Vec::new();
         XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -5304,7 +5304,7 @@ fn test_roundtrip_marker_symbols() {
             size: Some(6),
         });
         chart.add_series(s);
-        sheet.add_chart(chart, DrawingAnchor::default());
+        sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
         let mut buf = Vec::new();
         XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -5344,7 +5344,7 @@ fn test_roundtrip_data_label_positions() {
             ..Default::default()
         });
         chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-        sheet.add_chart(chart, DrawingAnchor::default());
+        sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
         let mut buf = Vec::new();
         XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -5371,7 +5371,7 @@ fn test_roundtrip_display_blanks_as_span() {
     let mut chart = Chart::new(ChartType::Line);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
     chart.display_blanks_as = Some(DisplayBlanksAs::Span);
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -5392,7 +5392,7 @@ fn test_roundtrip_legend_positions() {
         let mut chart = Chart::new(ChartType::ColumnClustered);
         chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
         chart.legend = Some(Legend::new(pos));
-        sheet.add_chart(chart, DrawingAnchor::default());
+        sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
         let mut buf = Vec::new();
         XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -5420,7 +5420,7 @@ fn test_roundtrip_legend_overlay() {
     let mut legend = Legend::new(LegendPosition::Right);
     legend.overlay = true;
     chart.legend = Some(legend);
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -5444,7 +5444,7 @@ fn test_roundtrip_axis_date_type() {
     cat_axis.axis_type = AxisType::Date;
     chart.category_axis = Some(cat_axis);
     chart.value_axis = Some(Axis::new());
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -5470,7 +5470,7 @@ fn test_roundtrip_axis_series_type() {
     chart.series_axis = Some(ser_axis);
     chart.category_axis = Some(Axis::new());
     chart.value_axis = Some(Axis::new());
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -5500,7 +5500,7 @@ fn test_roundtrip_view3d_all_fields() {
         perspective: Some(45),
         right_angle_axes: Some(false),
     });
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -5527,7 +5527,7 @@ fn test_roundtrip_chart_no_title() {
     chart.title = None;
     chart.auto_title_deleted = Some(true);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -5553,7 +5553,7 @@ fn test_roundtrip_chart_empty_series_name() {
     let mut s = DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5"));
     s.name = Some("".into());
     chart.add_series(s);
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -5658,7 +5658,7 @@ fn test_roundtrip_axis_tick_marks_cross_none() {
     cat_axis.minor_tick_mark = Some(TickMark::None);
     chart.category_axis = Some(cat_axis);
     chart.value_axis = Some(Axis::new());
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -5693,7 +5693,7 @@ fn test_roundtrip_error_bars_direction_x() {
         minus: None,
     });
     chart.add_series(s);
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -5730,7 +5730,7 @@ fn test_roundtrip_error_bars_minus_type() {
         minus: None,
     });
     chart.add_series(s);
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -5764,7 +5764,7 @@ fn test_roundtrip_data_label_number_format() {
         ..Default::default()
     });
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -5794,7 +5794,7 @@ fn test_roundtrip_data_label_show_leader_lines() {
         ..Default::default()
     });
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -5820,7 +5820,7 @@ fn test_roundtrip_chart_shape_properties_no_fill() {
         line: None,
     });
     chart.add_series(s);
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -5857,7 +5857,7 @@ fn test_roundtrip_chart_line_no_fill() {
         }),
     });
     chart.add_series(s);
-    sheet.add_chart(chart, DrawingAnchor::default());
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -5889,7 +5889,7 @@ fn test_roundtrip_data_label_position_pie() {
             ..Default::default()
         });
         chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-        sheet.add_chart(chart, DrawingAnchor::default());
+        sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
         let mut buf = Vec::new();
         XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -5982,7 +5982,7 @@ fn xlsx_png_image_round_trips() {
     ws.set_cell_value("A1", "anchor").unwrap();
     let mut img = test_two_cell_image("Pic1", 1, 2, 5, 10);
     img.meta.alt_text = Some("Test image".into());
-    ws.add_drawing(img);
+    ws.add_drawing(img).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
@@ -6041,7 +6041,7 @@ fn xlsx_onecell_anchor_round_trips() {
             height_emu: 800_000,
         })
         .with_name("OneCellPic"),
-    );
+    ).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
@@ -6095,7 +6095,7 @@ fn xlsx_absolute_anchor_round_trips() {
             height_emu: 900_000,
         })
         .with_name("AbsolutePic"),
-    );
+    ).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
@@ -6160,7 +6160,7 @@ fn xlsx_twocell_anchor_editas_round_trips() {
                 edit_as: Some(ea.clone()),
             })
             .with_name(format!("Pic-{:?}", ea)),
-        );
+        ).unwrap();
 
         let mut buf = Vec::new();
         XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
@@ -6192,7 +6192,7 @@ fn xlsx_multiple_images_round_trip_on_same_sheet() {
             DrawingKind::Image(image) => image.data.push(i as u8),
             other => panic!("expected image kind, got {other:?}"),
         }
-        ws.add_drawing(img);
+        ws.add_drawing(img).unwrap();
     }
 
     let mut buf = Vec::new();
@@ -6226,7 +6226,7 @@ fn xlsx_images_round_trip_across_multiple_sheets() {
                 DrawingKind::Image(image) => image.data.push((sheet * 10 + i as usize) as u8),
                 other => panic!("expected image kind, got {other:?}"),
             }
-            ws.add_drawing(img);
+            ws.add_drawing(img).unwrap();
         }
     }
 
@@ -6357,7 +6357,7 @@ fn xlsx_form_controls_round_trip() {
         ws.add_form_control(
             FormControl::new(kind),
             control_anchor_2c(1, row, 3, row + 1),
-        );
+        ).unwrap();
     }
 
     let mut buf = Vec::new();
@@ -6403,7 +6403,7 @@ fn xlsx_form_controls_emit_expected_parts() {
             no_3d: false,
         }),
         control_anchor_2c(1, 1, 3, 2),
-    );
+    ).unwrap();
     ws.add_form_control(
         FormControl::new(FormControlKind::ListBox {
             input_range: Some("$H$1:$H$4".to_string()),
@@ -6413,7 +6413,7 @@ fn xlsx_form_controls_emit_expected_parts() {
             no_3d: false,
         }),
         control_anchor_2c(1, 4, 3, 6),
-    );
+    ).unwrap();
     ws.add_form_control(
         FormControl::new(FormControlKind::Dropdown {
             input_range: Some("$H$1:$H$4".to_string()),
@@ -6423,7 +6423,7 @@ fn xlsx_form_controls_emit_expected_parts() {
             no_3d: false,
         }),
         control_anchor_2c(1, 7, 3, 8),
-    );
+    ).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
@@ -6486,7 +6486,7 @@ fn xlsx_controls_without_comments_round_trip() {
             cell_link: None,
         }),
         control_anchor_2c(0, 0, 1, 3),
-    );
+    ).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
@@ -6506,7 +6506,7 @@ fn xlsx_control_named_and_flagged_round_trips() {
     .with_name("My Button");
     object.meta.locked = false;
     object.meta.printable = false;
-    ws.add_drawing(object);
+    ws.add_drawing(object).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");

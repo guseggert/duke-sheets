@@ -15,7 +15,7 @@ use crate::comment::CellComment;
 use crate::conditional_format::ConditionalFormatRule;
 use crate::drawing::{
     anchor_rect_emu_with_metrics, map_child_rect, CommentRef, DrawingKind, DrawingNodeMut,
-    DrawingNodeRef, DrawingObject, DrawingPath, Drawn, Shape,
+    DrawingNodeRef, DrawingObject, DrawingPath, Drawn, GroupChild, Shape,
 };
 use crate::error::{Error, Result};
 use crate::form_control::{radio_groups, CheckState, FormControl, FormControlKind, PlacedControl};
@@ -1425,28 +1425,17 @@ impl Worksheet {
         &mut self.drawings
     }
 
-    /// Append a drawing object without validating it, returning its
-    /// index. Readers use this to preserve out-of-spec content from
-    /// existing files; prefer [`Self::try_add_drawing`] when
-    /// constructing objects programmatically.
-    pub fn add_drawing(&mut self, object: DrawingObject) -> usize {
-        self.drawings.push(object);
-        self.drawings.len() - 1
-    }
-
     /// Validate and append a drawing object, returning its zero-based
     /// index (= z-position). Rejects a comment for a cell that
-    /// already has one.
-    pub fn try_add_drawing(&mut self, object: DrawingObject) -> Result<usize> {
+    /// already has one anywhere in the drawing tree. Use
+    /// [`Self::drawings_mut`] to append without validation, as
+    /// readers do to preserve out-of-spec content from existing
+    /// files.
+    pub fn add_drawing(&mut self, object: DrawingObject) -> Result<usize> {
         object.validate()?;
-        if let DrawingKind::Comment { row, col, .. } = &object.kind {
-            if self.has_comment_at(*row, *col) {
-                return Err(Error::other(format!(
-                    "cell ({row}, {col}) already has a comment"
-                )));
-            }
-        }
-        Ok(self.add_drawing(object))
+        self.ensure_comment_cell_free(&object.kind, None)?;
+        self.drawings.push(object);
+        Ok(self.drawings.len() - 1)
     }
 
     /// Validate and insert a drawing object at `index`, shifting
@@ -1459,15 +1448,53 @@ impl Worksheet {
             )));
         }
         object.validate()?;
-        if let DrawingKind::Comment { row, col, .. } = &object.kind {
-            if self.has_comment_at(*row, *col) {
-                return Err(Error::other(format!(
-                    "cell ({row}, {col}) already has a comment"
-                )));
-            }
-        }
+        self.ensure_comment_cell_free(&object.kind, None)?;
         self.drawings.insert(index, object);
         Ok(())
+    }
+
+    /// Validate and replace the top-level drawing at `index`. A
+    /// comment may keep its own cell; it only conflicts with comments
+    /// elsewhere in the drawing tree.
+    pub fn set_drawing(&mut self, index: usize, object: DrawingObject) -> Result<()> {
+        if index >= self.drawings.len() {
+            return Err(Error::other(format!(
+                "drawing index {index} out of bounds (count: {})",
+                self.drawings.len()
+            )));
+        }
+        object.validate()?;
+        self.ensure_comment_cell_free(&object.kind, Some(&[index]))?;
+        self.drawings[index] = object;
+        Ok(())
+    }
+
+    /// Validate and replace the group child at `path`: a top-level
+    /// group index followed by child indices (at least two elements).
+    pub fn set_group_child(&mut self, path: &[usize], child: GroupChild) -> Result<()> {
+        crate::drawing::validate_group_child(&child)?;
+        let (children, index) = self.group_children_mut(path)?;
+        if index >= children.len() {
+            return Err(Error::other(format!(
+                "drawing path {path:?} out of bounds (child count: {})",
+                children.len()
+            )));
+        }
+        children[index] = child;
+        Ok(())
+    }
+
+    /// Remove and return the group child at `path`: a top-level group
+    /// index followed by child indices (at least two elements).
+    pub fn remove_group_child(&mut self, path: &[usize]) -> Result<GroupChild> {
+        let (children, index) = self.group_children_mut(path)?;
+        if index >= children.len() {
+            return Err(Error::other(format!(
+                "drawing path {path:?} out of bounds (child count: {})",
+                children.len()
+            )));
+        }
+        Ok(children.remove(index))
     }
 
     /// Remove and return the drawing object at `index`.
@@ -1479,6 +1506,51 @@ impl Worksheet {
             )));
         }
         Ok(self.drawings.remove(index))
+    }
+
+    /// Reject a comment whose cell already has one anywhere in the
+    /// drawing tree (group-nested comments only arise from permissive
+    /// reads), ignoring drawings at or under `exclude`.
+    fn ensure_comment_cell_free(
+        &self,
+        kind: &DrawingKind,
+        exclude: Option<&[usize]>,
+    ) -> Result<()> {
+        let DrawingKind::Comment { row, col, .. } = kind else {
+            return Ok(());
+        };
+        for (path, node) in self.drawings_flat() {
+            if exclude.is_some_and(|prefix| path.starts_with(prefix)) {
+                continue;
+            }
+            if matches!(node.kind, DrawingKind::Comment { row: r, col: c, .. } if (r, c) == (row, col))
+            {
+                return Err(Error::other(format!(
+                    "cell ({row}, {col}) already has a comment"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// The child list and final index addressed by a group-child
+    /// `path` (at least a top-level index plus one child index).
+    fn group_children_mut(&mut self, path: &[usize]) -> Result<(&mut Vec<GroupChild>, usize)> {
+        let (&child_index, parent_path) = path
+            .split_last()
+            .ok_or_else(|| Error::other("drawing path cannot be empty"))?;
+        if parent_path.is_empty() {
+            return Err(Error::other(
+                "group child path needs at least two elements (group, then child)",
+            ));
+        }
+        let parent = self
+            .drawing_at_path_mut(parent_path)
+            .ok_or_else(|| Error::other(format!("no drawing at path {parent_path:?}")))?;
+        let DrawingKind::Group(group) = parent.kind else {
+            return Err(Error::other("drawing parent is not a group"));
+        };
+        Ok((&mut group.children, child_index))
     }
 
     /// Move the drawing object at `from` to position `to`, shifting
@@ -1576,8 +1648,9 @@ impl Worksheet {
         out
     }
 
-    /// Add a chart at the given anchor. Returns the drawing index.
-    pub fn add_chart(&mut self, chart: Chart, anchor: DrawingAnchor) -> usize {
+    /// Validate and add a chart at the given anchor. Returns the
+    /// drawing index.
+    pub fn add_chart(&mut self, chart: Chart, anchor: DrawingAnchor) -> Result<usize> {
         self.add_drawing(DrawingObject::chart(chart).with_anchor(anchor))
     }
 
@@ -1611,8 +1684,9 @@ impl Worksheet {
         self.charts().count()
     }
 
-    /// Add a ChartEx chart at the given anchor. Returns the drawing index.
-    pub fn add_chart_ex(&mut self, chart: ChartEx, anchor: DrawingAnchor) -> usize {
+    /// Validate and add a ChartEx chart at the given anchor. Returns
+    /// the drawing index.
+    pub fn add_chart_ex(&mut self, chart: ChartEx, anchor: DrawingAnchor) -> Result<usize> {
         self.add_drawing(DrawingObject::chart_ex(chart).with_anchor(anchor))
     }
 
@@ -1636,8 +1710,9 @@ impl Worksheet {
         self.charts_ex().count()
     }
 
-    /// Add an embedded image at the given anchor. Returns the drawing index.
-    pub fn add_image(&mut self, image: EmbeddedImage, anchor: DrawingAnchor) -> usize {
+    /// Validate and add an embedded image at the given anchor.
+    /// Returns the drawing index.
+    pub fn add_image(&mut self, image: EmbeddedImage, anchor: DrawingAnchor) -> Result<usize> {
         self.add_drawing(DrawingObject::image(image).with_anchor(anchor))
     }
 
@@ -1661,8 +1736,9 @@ impl Worksheet {
         self.images().count()
     }
 
-    /// Add a basic worksheet shape at the given anchor. Returns the drawing index.
-    pub fn add_shape(&mut self, shape: Shape, anchor: DrawingAnchor) -> usize {
+    /// Validate and add a basic worksheet shape at the given anchor.
+    /// Returns the drawing index.
+    pub fn add_shape(&mut self, shape: Shape, anchor: DrawingAnchor) -> Result<usize> {
         self.add_drawing(DrawingObject::shape(shape).with_anchor(anchor))
     }
 
@@ -1686,9 +1762,9 @@ impl Worksheet {
         self.shapes().count()
     }
 
-    /// Add a form control at the given anchor without validating it.
-    /// Returns the drawing index.
-    pub fn add_form_control(&mut self, control: FormControl, anchor: DrawingAnchor) -> usize {
+    /// Validate and add a form control at the given anchor. Returns
+    /// the drawing index.
+    pub fn add_form_control(&mut self, control: FormControl, anchor: DrawingAnchor) -> Result<usize> {
         self.add_drawing(DrawingObject::form_control(control).with_anchor(anchor))
     }
 
@@ -2588,7 +2664,7 @@ mod tests {
                 },
                 edit_as: None,
             },
-        );
+        ).unwrap();
         ws.add_drawing(DrawingObject::group(Group {
             transform: GroupTransform {
                 x_emu: 100_000,
@@ -2613,7 +2689,7 @@ mod tests {
                 },
                 kind: DrawingKind::FormControl(checkbox()),
             }],
-        }));
+        })).unwrap();
 
         let placed = ws.placed_form_controls();
         assert_eq!(placed.len(), 2);
@@ -2639,6 +2715,161 @@ mod tests {
         assert_eq!(ws.drawing_rect_emu(&[7]), None);
         assert_eq!(ws.drawing_rect_emu(&[1, 3]), None);
         assert_eq!(ws.drawing_rect_emu(&[]), None);
+    }
+
+    fn drawing_test_button() -> crate::drawing::DrawingObject {
+        use crate::{FormControl, FormControlKind};
+        crate::drawing::DrawingObject::form_control(FormControl::new(FormControlKind::Button {
+            caption: "b".into(),
+        }))
+    }
+
+    fn reversed_anchor_object() -> crate::drawing::DrawingObject {
+        use duke_sheets_chart::{CellMarker, DrawingAnchor};
+        drawing_test_button().with_anchor(DrawingAnchor::TwoCell {
+            from: CellMarker {
+                col: 4,
+                col_offset_emu: 0,
+                row: 4,
+                row_offset_emu: 0,
+            },
+            to: CellMarker {
+                col: 1,
+                col_offset_emu: 0,
+                row: 1,
+                row_offset_emu: 0,
+            },
+            edit_as: None,
+        })
+    }
+
+    fn group_with_button() -> crate::drawing::DrawingObject {
+        use crate::drawing::{
+            ChildTransform, DrawingMeta, DrawingObject, Group, GroupChild, GroupTransform,
+        };
+        DrawingObject::group(Group {
+            transform: GroupTransform::default(),
+            children: vec![GroupChild {
+                meta: DrawingMeta::default(),
+                transform: ChildTransform::default(),
+                kind: drawing_test_button().kind,
+            }],
+        })
+    }
+
+    #[test]
+    fn add_drawing_validates_and_enforces_comment_uniqueness() {
+        use crate::drawing::{DrawingMeta, DrawingObject, Group, GroupChild};
+        use crate::CellComment;
+
+        let mut ws = Worksheet::new("Test");
+        assert!(ws.add_drawing(reversed_anchor_object()).is_err());
+        assert!(ws.drawings().is_empty());
+
+        let comment = |row, col| {
+            DrawingObject::comment(row, col, CellComment::new("a", "t"))
+                .with_anchor(crate::drawing::default_comment_anchor(row, col))
+        };
+        assert_eq!(ws.add_drawing(comment(1, 1)).unwrap(), 0);
+        assert!(ws
+            .add_drawing(comment(1, 1))
+            .unwrap_err()
+            .to_string()
+            .contains("already has a comment"));
+
+        // A group-nested comment (only permissive reads produce them)
+        // still blocks its cell.
+        let hostile = DrawingObject::group(Group {
+            transform: Default::default(),
+            children: vec![GroupChild {
+                meta: DrawingMeta::default(),
+                transform: Default::default(),
+                kind: comment(5, 5).kind,
+            }],
+        });
+        ws.drawings_mut().push(hostile);
+        assert!(ws.add_drawing(comment(5, 5)).is_err());
+        assert!(ws.insert_drawing(0, comment(5, 5)).is_err());
+    }
+
+    #[test]
+    fn set_drawing_replaces_top_level_with_validation() {
+        use crate::drawing::{DrawingKind, DrawingObject};
+        use crate::CellComment;
+
+        let mut ws = Worksheet::new("Test");
+        let comment = |row, col| {
+            DrawingObject::comment(row, col, CellComment::new("a", "t"))
+                .with_anchor(crate::drawing::default_comment_anchor(row, col))
+        };
+        ws.add_drawing(comment(1, 1)).unwrap();
+        ws.add_drawing(comment(2, 2)).unwrap();
+
+        assert!(ws.set_drawing(5, drawing_test_button()).is_err());
+        assert!(ws.set_drawing(0, reversed_anchor_object()).is_err());
+        // Conflicts with the *other* comment's cell.
+        assert!(ws.set_drawing(0, comment(2, 2)).is_err());
+        // Replacing a comment with one on the same cell excludes itself.
+        ws.set_drawing(0, comment(1, 1)).unwrap();
+        // Moving the comment to a free cell works.
+        ws.set_drawing(0, comment(3, 3)).unwrap();
+        let DrawingKind::Comment { row, col, .. } = ws.drawings()[0].kind else {
+            panic!("expected a comment at index 0");
+        };
+        assert_eq!((row, col), (3, 3));
+    }
+
+    #[test]
+    fn set_group_child_replaces_nested_children_with_validation() {
+        use crate::drawing::{
+            ChildTransform, DrawingKind, DrawingMeta, GroupChild, RawDrawing,
+        };
+
+        let mut ws = Worksheet::new("Test");
+        ws.add_drawing(group_with_button()).unwrap();
+
+        let group_child = || GroupChild {
+            meta: DrawingMeta::default(),
+            transform: ChildTransform::default(),
+            kind: DrawingKind::Group(Box::new(crate::drawing::Group::default())),
+        };
+        ws.set_group_child(&[0, 0], group_child()).unwrap();
+        assert!(matches!(
+            ws.drawing_at_path(&[0, 0]).unwrap().kind,
+            DrawingKind::Group(_)
+        ));
+
+        // Raw payloads cannot be group children.
+        let raw_child = GroupChild {
+            meta: DrawingMeta::default(),
+            transform: ChildTransform::default(),
+            kind: DrawingKind::Raw(RawDrawing::default()),
+        };
+        assert!(ws.set_group_child(&[0, 0], raw_child).is_err());
+
+        assert!(ws.set_group_child(&[0, 7], group_child()).is_err());
+        assert!(ws.set_group_child(&[3, 0], group_child()).is_err());
+        assert!(ws.set_group_child(&[0], group_child()).is_err());
+        // Parent is not a group.
+        ws.add_drawing(drawing_test_button()).unwrap();
+        assert!(ws.set_group_child(&[1, 0], group_child()).is_err());
+    }
+
+    #[test]
+    fn remove_group_child_removes_nested_children() {
+        use crate::drawing::DrawingKind;
+
+        let mut ws = Worksheet::new("Test");
+        ws.add_drawing(group_with_button()).unwrap();
+
+        assert!(ws.remove_group_child(&[0, 7]).is_err());
+        assert!(ws.remove_group_child(&[0]).is_err());
+        let removed = ws.remove_group_child(&[0, 0]).unwrap();
+        assert!(matches!(removed.kind, DrawingKind::FormControl(_)));
+        let DrawingKind::Group(group) = &ws.drawings()[0].kind else {
+            panic!("expected the group to remain");
+        };
+        assert!(group.children.is_empty());
     }
 
     #[test]

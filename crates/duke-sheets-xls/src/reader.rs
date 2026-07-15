@@ -2916,10 +2916,10 @@ impl XlsReader {
                     &mut hoisted,
                     ws,
                 ) {
-                    ws.add_drawing(object);
+                    ws.drawings_mut().push(object);
                 }
                 for object in hoisted {
-                    ws.add_drawing(object);
+                    ws.drawings_mut().push(object);
                 }
             }
         } else {
@@ -2941,7 +2941,7 @@ impl XlsReader {
             for node in flat {
                 if let Some(payload) = Self::image_payload_from_node(node, blip_store) {
                     let object = Self::top_level_image(node, payload, None, ws);
-                    ws.add_drawing(object);
+                    ws.drawings_mut().push(object);
                 }
             }
             // Comments straight from their NOTE records.
@@ -2959,7 +2959,7 @@ impl XlsReader {
                     let mut object = duke_sheets_core::DrawingObject::form_control(control);
                     object.meta.locked = parsed.grbit & obj::cmo_flags::LOCKED != 0;
                     object.meta.printable = parsed.grbit & obj::cmo_flags::PRINT != 0;
-                    ws.add_drawing(object);
+                    ws.drawings_mut().push(object);
                 }
             }
         }

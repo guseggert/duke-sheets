@@ -97,7 +97,7 @@ fn build(with_image: bool) -> Workbook {
             duke_sheets_core::DrawingObject::image(image)
                 .with_anchor(anchor)
                 .with_name("FixturePic"),
-        );
+        ).unwrap();
     }
 
     wb

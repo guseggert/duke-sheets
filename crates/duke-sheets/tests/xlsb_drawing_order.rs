@@ -130,10 +130,10 @@ fn raw_link(col: u16, cnv_id: u32, rel_id: &str, url: &str) -> DrawingObject {
 fn xlsb_conflicting_raw_rel_ids_are_remapped() {
     let mut workbook = Workbook::new();
     let sheet = workbook.worksheet_mut(0).unwrap();
-    sheet.add_drawing(png("Pic").with_anchor(two_cell(8, 8, 9, 9)));
-    sheet.add_drawing(raw_link(0, 11, "rId1", "https://one.example/"));
-    sheet.add_drawing(raw_link(2, 12, "rId1", "https://two.example/"));
-    sheet.add_drawing(raw_link(4, 13, "rId1", "https://one.example/"));
+    sheet.add_drawing(png("Pic").with_anchor(two_cell(8, 8, 9, 9))).unwrap();
+    sheet.add_drawing(raw_link(0, 11, "rId1", "https://one.example/")).unwrap();
+    sheet.add_drawing(raw_link(2, 12, "rId1", "https://two.example/")).unwrap();
+    sheet.add_drawing(raw_link(4, 13, "rId1", "https://one.example/")).unwrap();
 
     let read = round_trip(&workbook);
     assert_eq!(kind_tags(&read), vec!["image", "raw", "raw", "raw"]);
@@ -182,7 +182,7 @@ fn xlsb_model_image_round_trips() {
     workbook
         .worksheet_mut(0)
         .unwrap()
-        .add_drawing(png("Pic").with_anchor(two_cell(1, 1, 3, 3)));
+        .add_drawing(png("Pic").with_anchor(two_cell(1, 1, 3, 3))).unwrap();
 
     let read = round_trip(&workbook);
     assert_eq!(kind_tags(&read), vec!["image"]);
@@ -208,7 +208,7 @@ fn xlsb_one_cell_and_absolute_image_anchors_round_trip() {
             width_emu: 1_200_000,
             height_emu: 700_000,
         }),
-    );
+    ).unwrap();
     sheet.add_drawing(
         png("Absolute").with_anchor(DrawingAnchor::Absolute {
             x_emu: 2_000_000,
@@ -216,7 +216,7 @@ fn xlsb_one_cell_and_absolute_image_anchors_round_trip() {
             width_emu: 900_000,
             height_emu: 500_000,
         }),
-    );
+    ).unwrap();
 
     let read = round_trip(&workbook);
     let images: Vec<_> = read.worksheet(0).unwrap().images().collect();
@@ -258,7 +258,7 @@ fn xlsb_chart_edits_persist() {
     let mut chart = Chart::new(ChartType::ColumnClustered);
     chart.title = Some("Original".to_string());
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$3")));
-    sheet.add_chart(chart, two_cell(2, 2, 8, 12));
+    sheet.add_chart(chart, two_cell(2, 2, 8, 12)).unwrap();
 
     let mut read = round_trip(&workbook);
     {
@@ -279,11 +279,11 @@ fn xlsb_chart_edits_persist() {
 fn xlsb_control_z_order_between_images_round_trips() {
     let mut workbook = Workbook::new();
     let sheet = workbook.worksheet_mut(0).unwrap();
-    sheet.add_drawing(png("Below").with_anchor(two_cell(0, 0, 2, 2)));
+    sheet.add_drawing(png("Below").with_anchor(two_cell(0, 0, 2, 2))).unwrap();
     sheet.add_drawing(
         DrawingObject::form_control(checkbox("Middle")).with_anchor(two_cell(1, 1, 3, 3)),
-    );
-    sheet.add_drawing(png("Above").with_anchor(two_cell(2, 2, 4, 4)));
+    ).unwrap();
+    sheet.add_drawing(png("Above").with_anchor(two_cell(2, 2, 4, 4))).unwrap();
 
     let read = round_trip(&workbook);
     assert_eq!(kind_tags(&read), vec!["image", "control", "image"]);
@@ -303,7 +303,7 @@ fn xlsb_control_name_round_trips() {
         DrawingObject::form_control(checkbox("Named"))
             .with_anchor(two_cell(1, 1, 3, 3))
             .with_name("Check Box 9"),
-    );
+    ).unwrap();
 
     let read = round_trip(&workbook);
     let control = read
@@ -323,15 +323,15 @@ fn xlsb_comment_control_relative_order_round_trips() {
     let sheet = workbook.worksheet_mut(0).unwrap();
     sheet.add_drawing(
         DrawingObject::form_control(checkbox("First")).with_anchor(two_cell(0, 0, 2, 2)),
-    );
+    ).unwrap();
     sheet.add_drawing(DrawingObject::comment(
         4,
         4,
         CellComment::new("a", "between the controls"),
-    ));
+    )).unwrap();
     sheet.add_drawing(
         DrawingObject::form_control(checkbox("Second")).with_anchor(two_cell(6, 6, 8, 8)),
-    );
+    ).unwrap();
 
     let read = round_trip(&workbook);
     assert_eq!(kind_tags(&read), vec!["control", "comment", "control"]);
@@ -386,7 +386,7 @@ fn xlsb_group_of_images_round_trips() {
         })
         .with_anchor(two_cell(1, 1, 4, 2))
         .with_name("Group 1"),
-    );
+    ).unwrap();
 
     let read = round_trip(&workbook);
     assert_eq!(kind_tags(&read), vec!["group"]);
@@ -406,7 +406,7 @@ fn xlsb_comment_anchor_round_trips() {
     workbook.worksheet_mut(0).unwrap().add_drawing(
         DrawingObject::comment(1, 1, CellComment::new("a", "moved popup"))
             .with_anchor(custom.clone()),
-    );
+    ).unwrap();
 
     let read = round_trip(&workbook);
     let comment = read
@@ -550,7 +550,7 @@ fn xlsb_group_nested_control_keeps_drawing_and_vml_rels_aligned() {
             }],
         })
         .with_anchor(two_cell(0, 0, 3, 3)),
-    );
+    ).unwrap();
     let bytes = write_bytes(&workbook);
 
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes.clone())).unwrap();
@@ -660,7 +660,7 @@ fn xlsb_smartart_rel_ids_attributes_are_captured_and_round_trip() {
     workbook
         .worksheet_mut(0)
         .unwrap()
-        .add_drawing(png("Pic").with_anchor(two_cell(0, 0, 2, 2)));
+        .add_drawing(png("Pic").with_anchor(two_cell(0, 0, 2, 2))).unwrap();
     let bytes = write_bytes(&workbook);
 
     // Rebuild the package with the anchor spliced into drawing1.xml,

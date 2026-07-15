@@ -2475,10 +2475,10 @@ mod tests {
             0,
             0,
             CellComment::new("a", "hidden note"),
-        ));
+        )).unwrap();
         sheet.add_drawing(
             DrawingObject::comment(5, 2, CellComment::new("a", "shown note")).with_hidden(false),
-        );
+        ).unwrap();
 
         let xml = build_legacy_vml(&sheet, 0).expect("vml part");
         let shapes: Vec<&str> = xml.split("<v:shape ").skip(1).collect();

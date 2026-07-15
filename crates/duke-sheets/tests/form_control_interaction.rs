@@ -67,9 +67,9 @@ fn checking_radio_updates_group_and_linked_cell() {
             no_3d: false,
         }))
         .with_anchor(anchor(0, 0, 4, 8)),
-    );
-    sheet.add_drawing(radio("One", true, Some("$F$2")).with_anchor(anchor(1, 1, 3, 2)));
-    sheet.add_drawing(radio("Two", false, None).with_anchor(anchor(1, 3, 3, 4)));
+    ).unwrap();
+    sheet.add_drawing(radio("One", true, Some("$F$2")).with_anchor(anchor(1, 1, 3, 2))).unwrap();
+    sheet.add_drawing(radio("Two", false, None).with_anchor(anchor(1, 3, 3, 4))).unwrap();
 
     let result = workbook
         .set_form_control_check_state(0, &[2], CheckState::Checked)
@@ -107,7 +107,7 @@ fn interaction_sync_is_scoped_to_the_affected_controls() {
             no_3d: false,
         }))
         .with_anchor(anchor(0, 0, 2, 1)),
-    );
+    ).unwrap();
     sheet.add_drawing(
         DrawingObject::form_control(FormControl::new(FormControlKind::Checkbox {
             caption: "unrelated".into(),
@@ -116,7 +116,7 @@ fn interaction_sync_is_scoped_to_the_affected_controls() {
             no_3d: false,
         }))
         .with_anchor(anchor(0, 2, 2, 3)),
-    );
+    ).unwrap();
     // B1 disagrees with the unrelated unchecked checkbox; Excel would
     // only reconcile it on load/save, never on another control's click.
     sheet.set_cell_value("B1", true).unwrap();
@@ -151,13 +151,13 @@ fn checkbox_and_invalid_targets_use_semantic_validation() {
             no_3d: false,
         }))
         .with_anchor(anchor(0, 0, 2, 1)),
-    );
+    ).unwrap();
     sheet.add_drawing(
         DrawingObject::form_control(FormControl::new(FormControlKind::Button {
             caption: "Run".into(),
         }))
         .with_anchor(anchor(0, 2, 2, 3)),
-    );
+    ).unwrap();
 
     let result = workbook
         .set_form_control_check_state(0, &[0], CheckState::Mixed)
@@ -185,10 +185,10 @@ fn toggling_a_shared_link_checkbox_reconciles_its_peers() {
     let sheet = workbook.worksheet_mut(0).unwrap();
     sheet.add_drawing(
         checkbox("X", CheckState::Checked, Some("$A$1")).with_anchor(anchor(0, 0, 2, 1)),
-    );
+    ).unwrap();
     sheet.add_drawing(
         checkbox("Y", CheckState::Checked, Some("$A$1")).with_anchor(anchor(0, 2, 2, 3)),
-    );
+    ).unwrap();
     sheet.set_cell_value("A1", true).unwrap();
 
     let result = workbook
@@ -227,11 +227,11 @@ fn shared_link_reconciliation_follows_cross_sheet_links() {
     sheet1.add_drawing(
         checkbox("remote", CheckState::Checked, Some("Sheet2!$A$1"))
             .with_anchor(anchor(0, 0, 2, 1)),
-    );
+    ).unwrap();
     let sheet2 = workbook.worksheet_mut(1).unwrap();
     sheet2.add_drawing(
         checkbox("local", CheckState::Checked, Some("$A$1")).with_anchor(anchor(0, 0, 2, 1)),
-    );
+    ).unwrap();
     sheet2.set_cell_value("A1", true).unwrap();
 
     let result = workbook
@@ -300,7 +300,7 @@ fn checking_nested_radio_by_path_updates_group_and_linked_cell() {
             ],
         })
         .with_anchor(anchor(0, 0, 4, 8)),
-    );
+    ).unwrap();
 
     let result = workbook
         .set_form_control_check_state(0, &[0, 1], CheckState::Checked)

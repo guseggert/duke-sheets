@@ -1294,100 +1294,16 @@ pub struct PyFormControlInteractionResult {
     linked_cells_changed: usize,
 }
 
-fn path_starts_with(path: &[usize], prefix: &[usize]) -> bool {
-    path.len() >= prefix.len() && path[..prefix.len()] == *prefix
-}
-
-/// The cell keyed by `replacement` when it is a comment. Validation
-/// already rejected comments nested in groups, so only a top-level
-/// comment kind can claim a cell.
-// core candidate: comment-cell uniqueness belongs in core's worksheet
-// drawing mutation APIs; this check is triplicated across bindings.
-fn replacement_comment_cell(kind: &core::DrawingKind) -> Option<(u32, u16)> {
-    match kind {
-        core::DrawingKind::Comment { row, col, .. } => Some((*row, *col)),
-        _ => None,
+/// Map a core drawing-mutation error to the Python exception type the
+/// binding has always raised: positional problems (bad index or path)
+/// as `IndexError`, content problems as `ValueError`.
+fn drawing_mutation_err(error: core::Error) -> PyErr {
+    let text = error.to_string();
+    if text.contains("out of bounds") || text.contains("path") || text.contains("not a group") {
+        PyIndexError::new_err(text)
+    } else {
+        PyValueError::new_err(text)
     }
-}
-
-/// Enforce one comment per cell: reject a comment `replacement` whose
-/// cell already has a comment elsewhere on the sheet, ignoring
-/// drawings at or under `replaced_path`.
-fn ensure_comment_cells_available(
-    worksheet: &core::Worksheet,
-    replacement: &core::DrawingKind,
-    replaced_path: Option<&[usize]>,
-) -> PyResult<()> {
-    let Some(new_cell) = replacement_comment_cell(replacement) else {
-        return Ok(());
-    };
-    for (path, node) in worksheet.drawings_flat() {
-        if replaced_path.is_some_and(|prefix| path_starts_with(&path, prefix)) {
-            continue;
-        }
-        if let core::DrawingKind::Comment { row, col, .. } = node.kind {
-            if (*row, *col) == new_cell {
-                return Err(PyValueError::new_err(format!(
-                    "cell ({row}, {col}) already has a comment"
-                )));
-            }
-        }
-    }
-    Ok(())
-}
-
-fn replace_group_child(
-    kind: &mut core::DrawingKind,
-    path: &[usize],
-    replacement: core::GroupChild,
-) -> PyResult<()> {
-    let (&index, rest) = path
-        .split_first()
-        .ok_or_else(|| PyIndexError::new_err("drawing path cannot be empty"))?;
-    let core::DrawingKind::Group(group) = kind else {
-        return Err(PyIndexError::new_err(
-            "drawing path descends through a non-group drawing",
-        ));
-    };
-    if rest.is_empty() {
-        let count = group.children.len();
-        let child = group.children.get_mut(index).ok_or_else(|| {
-            PyIndexError::new_err(format!(
-                "group child index {index} out of bounds (count: {count})"
-            ))
-        })?;
-        *child = replacement;
-        return Ok(());
-    }
-    let count = group.children.len();
-    let child = group.children.get_mut(index).ok_or_else(|| {
-        PyIndexError::new_err(format!(
-            "group child index {index} out of bounds (count: {count})"
-        ))
-    })?;
-    replace_group_child(&mut child.kind, rest, replacement)
-}
-
-fn remove_group_child(kind: &mut core::DrawingKind, path: &[usize]) -> PyResult<()> {
-    let (&index, rest) = path
-        .split_first()
-        .ok_or_else(|| PyIndexError::new_err("drawing path cannot be empty"))?;
-    let core::DrawingKind::Group(group) = kind else {
-        return Err(PyIndexError::new_err(
-            "drawing path descends through a non-group drawing",
-        ));
-    };
-    if index >= group.children.len() {
-        return Err(PyIndexError::new_err(format!(
-            "group child index {index} out of bounds (count: {})",
-            group.children.len()
-        )));
-    }
-    if rest.is_empty() {
-        group.children.remove(index);
-        return Ok(());
-    }
-    remove_group_child(&mut group.children[index].kind, rest)
 }
 
 fn collect_filtered_drawings(
@@ -1628,10 +1544,7 @@ impl PyWorksheet {
         let worksheet = workbook
             .worksheet_mut(self.sheet_index)
             .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
-        ensure_comment_cells_available(worksheet, &object.kind, None)?;
-        worksheet
-            .try_add_drawing(object)
-            .map_err(|error| PyValueError::new_err(error.to_string()))
+        worksheet.add_drawing(object).map_err(drawing_mutation_err)
     }
 
     /// Insert a top-level drawing at a z-order index. Drawing paths
@@ -1643,10 +1556,9 @@ impl PyWorksheet {
         let worksheet = workbook
             .worksheet_mut(self.sheet_index)
             .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
-        ensure_comment_cells_available(worksheet, &object.kind, None)?;
         worksheet
             .insert_drawing(index, object)
-            .map_err(|error| PyIndexError::new_err(error.to_string()))
+            .map_err(drawing_mutation_err)
     }
 
     /// Replace a top-level drawing or nested group child by path.
@@ -1663,30 +1575,15 @@ impl PyWorksheet {
 
         if rest.is_empty() {
             let object = drawing.to_top_level()?;
-            if top_index >= worksheet.drawings().len() {
-                return Err(PyIndexError::new_err(format!(
-                    "drawing index {top_index} out of bounds (count: {})",
-                    worksheet.drawings().len()
-                )));
-            }
-            ensure_comment_cells_available(worksheet, &object.kind, Some(&path))?;
-            worksheet.drawings_mut()[top_index] = object;
-            return Ok(());
+            return worksheet
+                .set_drawing(top_index, object)
+                .map_err(drawing_mutation_err);
         }
 
         let child = drawing.to_group_child()?;
-        if top_index >= worksheet.drawings().len() {
-            return Err(PyIndexError::new_err(format!(
-                "drawing index {top_index} out of bounds (count: {})",
-                worksheet.drawings().len()
-            )));
-        }
-        ensure_comment_cells_available(worksheet, &child.kind, Some(&path))?;
-        replace_group_child(
-            &mut worksheet.drawings_mut()[top_index].kind,
-            rest,
-            child,
-        )
+        worksheet
+            .set_group_child(&path, child)
+            .map_err(drawing_mutation_err)
     }
 
     /// Remove a top-level drawing or nested group child by path.
@@ -1706,13 +1603,10 @@ impl PyWorksheet {
                 .map(|_| ())
                 .map_err(|error| PyIndexError::new_err(error.to_string()));
         }
-        let count = worksheet.drawings().len();
-        let object = worksheet.drawings_mut().get_mut(top_index).ok_or_else(|| {
-            PyIndexError::new_err(format!(
-                "drawing index {top_index} out of bounds (count: {count})"
-            ))
-        })?;
-        remove_group_child(&mut object.kind, rest)
+        worksheet
+            .remove_group_child(&path)
+            .map(|_| ())
+            .map_err(drawing_mutation_err)
     }
 
     /// Move a top-level drawing within the z-order list. Drawing

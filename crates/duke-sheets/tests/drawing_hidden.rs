@@ -91,20 +91,20 @@ fn round_trip_xls(workbook: &Workbook) -> Workbook {
 fn build_mixed_workbook() -> Workbook {
     let mut workbook = Workbook::new();
     let sheet = workbook.worksheet_mut(0).unwrap();
-    sheet.add_drawing(png("Shown").with_anchor(two_cell(0, 0, 2, 2)));
+    sheet.add_drawing(png("Shown").with_anchor(two_cell(0, 0, 2, 2))).unwrap();
     sheet.add_drawing(
         png("Ghost")
             .with_anchor(two_cell(2, 2, 4, 4))
             .with_hidden(true),
-    );
+    ).unwrap();
     sheet.add_drawing(
         DrawingObject::form_control(checkbox("Visible box")).with_anchor(two_cell(4, 4, 6, 6)),
-    );
+    ).unwrap();
     sheet.add_drawing(
         DrawingObject::form_control(checkbox("Cloaked box"))
             .with_anchor(two_cell(6, 6, 8, 8))
             .with_hidden(true),
-    );
+    ).unwrap();
     workbook
 }
 
@@ -179,10 +179,10 @@ fn comment_shown_state_round_trips() {
         0,
         0,
         CellComment::new("a", "hidden popup"),
-    ));
+    )).unwrap();
     sheet.add_drawing(
         DrawingObject::comment(5, 2, CellComment::new("a", "shown popup")).with_hidden(false),
-    );
+    ).unwrap();
 
     for (format, read) in [
         ("xlsx", round_trip_xlsx(&workbook)),
@@ -255,7 +255,7 @@ fn xlsx_hidden_group_child_round_trips() {
         DrawingObject::group(group)
             .with_anchor(two_cell(1, 1, 4, 2))
             .with_name("Group 1"),
-    );
+    ).unwrap();
 
     let read = round_trip_xlsx(&workbook);
     let object = &read.worksheet(0).unwrap().drawings()[0];

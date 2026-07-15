@@ -63,7 +63,8 @@ pub use conditional_format::{
     IconSetStyle, TimePeriod,
 };
 pub use drawing::{
-    default_comment_anchor, validate_anchor, ChildTransform, CommentRef, DrawingKind, DrawingMeta,
+    default_comment_anchor, validate_anchor, validate_group_child, ChildTransform, CommentRef,
+    DrawingKind, DrawingMeta,
     DrawingNodeMut, DrawingNodeRef, DrawingObject, DrawingPath, DrawingText, Drawn, Group,
     GroupChild, GroupTransform, RawDrawing, RawRel, RectEmu, Shape, ShapeFill, ShapeGeometry,
     ShapeLine,

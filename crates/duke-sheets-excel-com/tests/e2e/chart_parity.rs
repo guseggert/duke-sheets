@@ -175,7 +175,7 @@ fn build_chart_parity_workbook() -> Workbook {
     val_axis.shape_properties = Some(line_fill("878787"));
     c.value_axis = Some(val_axis);
     c.legend = Some(Legend::new(LegendPosition::Bottom));
-    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1));
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 2. ColumnStacked
@@ -184,7 +184,7 @@ fn build_chart_parity_workbook() -> Workbook {
     c.add_series(sample_series("Data", "B"));
     c.add_series(sample_series("Data", "C"));
     c.add_series(sample_series("Data", "D"));
-    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1));
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 3. ColumnPercentStacked
@@ -192,7 +192,7 @@ fn build_chart_parity_workbook() -> Workbook {
     c.title = Some("ColumnPercentStacked".into());
     c.add_series(sample_series("Data", "B"));
     c.add_series(sample_series("Data", "C"));
-    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1));
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 4. BarClustered
@@ -201,7 +201,7 @@ fn build_chart_parity_workbook() -> Workbook {
     c.add_series(sample_series("Data", "B"));
     c.add_series(sample_series("Data", "C"));
     c.legend = Some(Legend::new(LegendPosition::Right));
-    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1));
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 5. BarStacked
@@ -209,7 +209,7 @@ fn build_chart_parity_workbook() -> Workbook {
     c.title = Some("BarStacked".into());
     c.add_series(sample_series("Data", "B"));
     c.add_series(sample_series("Data", "C"));
-    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1));
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 6. BarPercentStacked
@@ -217,7 +217,7 @@ fn build_chart_parity_workbook() -> Workbook {
     c.title = Some("BarPercentStacked".into());
     c.add_series(sample_series("Data", "B"));
     c.add_series(sample_series("Data", "C"));
-    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1));
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 7. Line
@@ -227,7 +227,7 @@ fn build_chart_parity_workbook() -> Workbook {
     c.add_series(sample_series("Data", "C"));
     c.category_axis = Some(Axis::new());
     c.value_axis = Some(Axis::new());
-    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1));
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 8. LineStacked
@@ -235,7 +235,7 @@ fn build_chart_parity_workbook() -> Workbook {
     c.title = Some("LineStacked".into());
     c.add_series(sample_series("Data", "B"));
     c.add_series(sample_series("Data", "C"));
-    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1));
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 9. Pie
@@ -265,7 +265,7 @@ fn build_chart_parity_workbook() -> Workbook {
     ];
     c.add_series(s);
     c.legend = Some(Legend::new(LegendPosition::Right));
-    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1));
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 10. PieExploded
@@ -274,7 +274,7 @@ fn build_chart_parity_workbook() -> Workbook {
     let mut s = sample_series("Data", "B");
     s.explosion = Some(25); // must have explosion for Excel to preserve PieExploded
     c.add_series(s);
-    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1));
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 11. Doughnut
@@ -282,7 +282,7 @@ fn build_chart_parity_workbook() -> Workbook {
     c.title = Some("Doughnut".into());
     c.add_series(sample_series("Data", "B"));
     c.hole_size = Some(50);
-    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1));
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 12. Area
@@ -290,7 +290,7 @@ fn build_chart_parity_workbook() -> Workbook {
     c.title = Some("Area".into());
     c.add_series(sample_series("Data", "B"));
     c.add_series(sample_series("Data", "C"));
-    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1));
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 13. AreaStacked
@@ -298,7 +298,7 @@ fn build_chart_parity_workbook() -> Workbook {
     c.title = Some("AreaStacked".into());
     c.add_series(sample_series("Data", "B"));
     c.add_series(sample_series("Data", "C"));
-    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1));
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 14. AreaPercentStacked
@@ -306,7 +306,7 @@ fn build_chart_parity_workbook() -> Workbook {
     c.title = Some("AreaPercentStacked".into());
     c.add_series(sample_series("Data", "B"));
     c.add_series(sample_series("Data", "C"));
-    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1));
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 15. ScatterLines
@@ -316,7 +316,7 @@ fn build_chart_parity_workbook() -> Workbook {
         .with_name("Data!$F$1")
         .with_categories(DataReference::formula("Data!$E$2:$E$7"));
     c.add_series(s);
-    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1));
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 16. ScatterSmooth
@@ -326,7 +326,7 @@ fn build_chart_parity_workbook() -> Workbook {
         .with_name("Data!$F$1")
         .with_categories(DataReference::formula("Data!$E$2:$E$7"));
     c.add_series(s);
-    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1));
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 17. ScatterMarkers
@@ -341,7 +341,7 @@ fn build_chart_parity_workbook() -> Workbook {
         ..Default::default()
     });
     c.add_series(s);
-    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1));
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 18. Bubble
@@ -350,7 +350,7 @@ fn build_chart_parity_workbook() -> Workbook {
     let s = DataSeries::new(DataReference::formula("Data!$F$2:$F$7"))
         .with_categories(DataReference::formula("Data!$E$2:$E$7"));
     c.add_series(s);
-    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1));
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 19. Radar
@@ -358,7 +358,7 @@ fn build_chart_parity_workbook() -> Workbook {
     c.title = Some("Radar".into());
     c.add_series(sample_series("Data", "B"));
     c.add_series(sample_series("Data", "C"));
-    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1));
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 20. Stock (HLC)
@@ -371,7 +371,7 @@ fn build_chart_parity_workbook() -> Workbook {
                 .with_categories(DataReference::formula("Data!$A$2:$A$7".to_string())),
         );
     }
-    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1));
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 21. Line with trendline + data labels
@@ -395,7 +395,7 @@ fn build_chart_parity_workbook() -> Workbook {
         show_value: Some(true),
         ..Default::default()
     });
-    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1));
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 22. Surface
@@ -404,7 +404,7 @@ fn build_chart_parity_workbook() -> Workbook {
     c.add_series(sample_series("Data", "B"));
     c.add_series(sample_series("Data", "C"));
     c.add_series(sample_series("Data", "D"));
-    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1));
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
 
     let mut cs_chart = Chart::new(ChartType::ColumnClustered);
     cs_chart.title = Some("ChartSheet: Column".into());
@@ -1004,7 +1004,7 @@ fn chart_minimal_excel_open() {
             },
             edit_as: None,
         },
-    );
+    ).unwrap();
 
     let fixture = temp_fixture();
     let mut buf = Vec::new();
@@ -1137,7 +1137,7 @@ fn chart_types_bisect() {
                 c.category_axis = Some(Axis::new().with_title("Month"));
                 c.value_axis = Some(Axis::new().with_title("Value"));
                 c.legend = Some(Legend::new(LegendPosition::Bottom));
-                sheet.add_chart(c, default_anchor(0, 15));
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1149,7 +1149,7 @@ fn chart_types_bisect() {
                 c.add_series(sample_series("Data", "B"));
                 c.add_series(sample_series("Data", "C"));
                 c.add_series(sample_series("Data", "D"));
-                sheet.add_chart(c, default_anchor(0, 15));
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1160,7 +1160,7 @@ fn chart_types_bisect() {
                 c.title = Some("ColumnPercentStacked".into());
                 c.add_series(sample_series("Data", "B"));
                 c.add_series(sample_series("Data", "C"));
-                sheet.add_chart(c, default_anchor(0, 15));
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1172,7 +1172,7 @@ fn chart_types_bisect() {
                 c.add_series(sample_series("Data", "B"));
                 c.add_series(sample_series("Data", "C"));
                 c.legend = Some(Legend::new(LegendPosition::Right));
-                sheet.add_chart(c, default_anchor(0, 15));
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1183,7 +1183,7 @@ fn chart_types_bisect() {
                 c.title = Some("BarStacked".into());
                 c.add_series(sample_series("Data", "B"));
                 c.add_series(sample_series("Data", "C"));
-                sheet.add_chart(c, default_anchor(0, 15));
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1194,7 +1194,7 @@ fn chart_types_bisect() {
                 c.title = Some("BarPercentStacked".into());
                 c.add_series(sample_series("Data", "B"));
                 c.add_series(sample_series("Data", "C"));
-                sheet.add_chart(c, default_anchor(0, 15));
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1207,7 +1207,7 @@ fn chart_types_bisect() {
                 c.add_series(sample_series("Data", "C"));
                 c.category_axis = Some(Axis::new());
                 c.value_axis = Some(Axis::new());
-                sheet.add_chart(c, default_anchor(0, 15));
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1218,7 +1218,7 @@ fn chart_types_bisect() {
                 c.title = Some("LineStacked".into());
                 c.add_series(sample_series("Data", "B"));
                 c.add_series(sample_series("Data", "C"));
-                sheet.add_chart(c, default_anchor(0, 15));
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1229,7 +1229,7 @@ fn chart_types_bisect() {
                 c.title = Some("Pie".into());
                 c.add_series(sample_series("Data", "B"));
                 c.legend = Some(Legend::new(LegendPosition::Right));
-                sheet.add_chart(c, default_anchor(0, 15));
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1239,7 +1239,7 @@ fn chart_types_bisect() {
                 let mut c = Chart::new(ChartType::PieExploded);
                 c.title = Some("PieExploded".into());
                 c.add_series(sample_series("Data", "B"));
-                sheet.add_chart(c, default_anchor(0, 15));
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1250,7 +1250,7 @@ fn chart_types_bisect() {
                 c.title = Some("Doughnut".into());
                 c.add_series(sample_series("Data", "B"));
                 c.hole_size = Some(50);
-                sheet.add_chart(c, default_anchor(0, 15));
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1261,7 +1261,7 @@ fn chart_types_bisect() {
                 c.title = Some("Area".into());
                 c.add_series(sample_series("Data", "B"));
                 c.add_series(sample_series("Data", "C"));
-                sheet.add_chart(c, default_anchor(0, 15));
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1272,7 +1272,7 @@ fn chart_types_bisect() {
                 c.title = Some("AreaStacked".into());
                 c.add_series(sample_series("Data", "B"));
                 c.add_series(sample_series("Data", "C"));
-                sheet.add_chart(c, default_anchor(0, 15));
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1283,7 +1283,7 @@ fn chart_types_bisect() {
                 c.title = Some("AreaPercentStacked".into());
                 c.add_series(sample_series("Data", "B"));
                 c.add_series(sample_series("Data", "C"));
-                sheet.add_chart(c, default_anchor(0, 15));
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1296,7 +1296,7 @@ fn chart_types_bisect() {
                     .with_name("Data!$F$1")
                     .with_categories(DataReference::formula("Data!$E$2:$E$7"));
                 c.add_series(s);
-                sheet.add_chart(c, default_anchor(0, 15));
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1309,7 +1309,7 @@ fn chart_types_bisect() {
                     .with_name("Data!$F$1")
                     .with_categories(DataReference::formula("Data!$E$2:$E$7"));
                 c.add_series(s);
-                sheet.add_chart(c, default_anchor(0, 15));
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1327,7 +1327,7 @@ fn chart_types_bisect() {
                     ..Default::default()
                 });
                 c.add_series(s);
-                sheet.add_chart(c, default_anchor(0, 15));
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1339,7 +1339,7 @@ fn chart_types_bisect() {
                 let s = DataSeries::new(DataReference::formula("Data!$F$2:$F$7"))
                     .with_categories(DataReference::formula("Data!$E$2:$E$7"));
                 c.add_series(s);
-                sheet.add_chart(c, default_anchor(0, 15));
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1350,7 +1350,7 @@ fn chart_types_bisect() {
                 c.title = Some("Radar".into());
                 c.add_series(sample_series("Data", "B"));
                 c.add_series(sample_series("Data", "C"));
-                sheet.add_chart(c, default_anchor(0, 15));
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1366,7 +1366,7 @@ fn chart_types_bisect() {
                             .with_categories(DataReference::formula("Data!$A$2:$A$7")),
                     );
                 }
-                sheet.add_chart(c, default_anchor(0, 15));
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1393,7 +1393,7 @@ fn chart_types_bisect() {
                     show_value: Some(true),
                     ..Default::default()
                 });
-                sheet.add_chart(c, default_anchor(0, 15));
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1405,7 +1405,7 @@ fn chart_types_bisect() {
                 c.add_series(sample_series("Data", "B"));
                 c.add_series(sample_series("Data", "C"));
                 c.add_series(sample_series("Data", "D"));
-                sheet.add_chart(c, default_anchor(0, 15));
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
     ];

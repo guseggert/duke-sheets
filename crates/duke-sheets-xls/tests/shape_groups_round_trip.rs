@@ -125,7 +125,7 @@ fn grouped_captioned_control_round_trips() {
     };
     wb.worksheet_mut(0)
         .unwrap()
-        .add_drawing(DrawingObject::group(group).with_anchor(anchor(1, 1, 4, 2)));
+        .add_drawing(DrawingObject::group(group).with_anchor(anchor(1, 1, 4, 2))).unwrap();
 
     let parsed = write_then_read(&wb);
     let sheet = parsed.worksheet(0).unwrap();
@@ -165,7 +165,7 @@ fn nested_group_round_trips() {
     let mut wb = Workbook::new();
     wb.worksheet_mut(0)
         .unwrap()
-        .add_drawing(DrawingObject::group(outer).with_anchor(anchor(1, 1, 4, 2)));
+        .add_drawing(DrawingObject::group(outer).with_anchor(anchor(1, 1, 4, 2))).unwrap();
 
     let parsed = write_then_read(&wb);
     let sheet = parsed.worksheet(0).unwrap();
@@ -208,7 +208,7 @@ fn group_and_grouped_picture_rotation_round_trip_in_model_units() {
     let mut wb = Workbook::new();
     wb.worksheet_mut(0)
         .unwrap()
-        .add_drawing(DrawingObject::group(group).with_anchor(anchor(1, 1, 4, 2)));
+        .add_drawing(DrawingObject::group(group).with_anchor(anchor(1, 1, 4, 2))).unwrap();
 
     let parsed = write_then_read(&wb);
     let sheet = parsed.worksheet(0).unwrap();
@@ -235,7 +235,7 @@ fn group_locked_printable_flags_round_trip() {
     let mut object = DrawingObject::group(group).with_anchor(anchor(1, 1, 2, 2));
     object.meta.locked = false;
     object.meta.printable = false;
-    wb.worksheet_mut(0).unwrap().add_drawing(object);
+    wb.worksheet_mut(0).unwrap().add_drawing(object).unwrap();
 
     let parsed = write_then_read(&wb);
     let object = &parsed.worksheet(0).unwrap().drawings()[0];
@@ -271,12 +271,12 @@ fn radio_chain_spans_grouped_and_top_level_radios() {
             DrawingKind::FormControl(FormControl::new(radio("Grouped"))),
         )],
     };
-    ws.add_drawing(DrawingObject::group(group).with_anchor(anchor(0, 0, 3, 4)));
+    ws.add_drawing(DrawingObject::group(group).with_anchor(anchor(0, 0, 3, 4))).unwrap();
     // A top-level radio elsewhere on the sheet.
     ws.add_drawing(
         DrawingObject::form_control(FormControl::new(radio("Loose")))
             .with_anchor(anchor(6, 6, 8, 8)),
-    );
+    ).unwrap();
 
     let parsed = write_then_read(&wb);
     let sheet = parsed.worksheet(0).unwrap();
@@ -305,7 +305,7 @@ fn shape_text_default_alignment_round_trips_to_none() {
     let mut wb = Workbook::new();
     wb.worksheet_mut(0)
         .unwrap()
-        .add_shape(shape, anchor(1, 1, 3, 3));
+        .add_shape(shape, anchor(1, 1, 3, 3)).unwrap();
 
     let parsed = write_then_read(&wb);
     let sheet = parsed.worksheet(0).unwrap();
@@ -341,9 +341,12 @@ fn unmodelable_group_children_are_dropped_not_the_group() {
         children,
     };
     let mut wb = Workbook::new();
+    // Unchecked: a comment group child fails validation on purpose;
+    // the writer must still drop it for files read permissively.
     wb.worksheet_mut(0)
         .unwrap()
-        .add_drawing(DrawingObject::group(group).with_anchor(anchor(1, 1, 2, 2)));
+        .drawings_mut()
+        .push(DrawingObject::group(group).with_anchor(anchor(1, 1, 2, 2)));
 
     let parsed = write_then_read(&wb);
     let sheet = parsed.worksheet(0).unwrap();
@@ -384,13 +387,13 @@ fn lo_can_open_xls_with_shape_group_we_emit() {
         DrawingObject::group(group)
             .with_anchor(anchor(1, 1, 4, 2))
             .with_name("Group 1"),
-    );
+    ).unwrap();
     ws.set_comment_at(3, 3, duke_sheets_core::CellComment::new("a", "note"))
         .expect("set comment");
     ws.add_drawing(
         DrawingObject::form_control(FormControl::new(checkbox("Top level")))
             .with_anchor(anchor(5, 5, 7, 7)),
-    );
+    ).unwrap();
 
     let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
     std::fs::create_dir_all(SHARED_DIR).expect("shared dir");

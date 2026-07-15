@@ -96,11 +96,11 @@ fn kind_tags(workbook: &Workbook) -> Vec<&'static str> {
 fn xls_control_z_order_between_images_round_trips() {
     let mut workbook = Workbook::new();
     let sheet = workbook.worksheet_mut(0).unwrap();
-    sheet.add_drawing(png("Below").with_anchor(two_cell(0, 0, 2, 2)));
+    sheet.add_drawing(png("Below").with_anchor(two_cell(0, 0, 2, 2))).unwrap();
     sheet.add_drawing(
         DrawingObject::form_control(checkbox("Middle")).with_anchor(two_cell(1, 1, 3, 3)),
-    );
-    sheet.add_drawing(png("Above").with_anchor(two_cell(2, 2, 4, 4)));
+    ).unwrap();
+    sheet.add_drawing(png("Above").with_anchor(two_cell(2, 2, 4, 4))).unwrap();
 
     let read = round_trip(&workbook);
     assert_eq!(kind_tags(&read), vec!["image", "control", "image"]);
@@ -116,16 +116,16 @@ fn xls_control_z_order_between_images_round_trips() {
 fn xls_full_interleave_round_trips() {
     let mut workbook = Workbook::new();
     let sheet = workbook.worksheet_mut(0).unwrap();
-    sheet.add_drawing(png("Bottom").with_anchor(two_cell(0, 0, 2, 2)));
+    sheet.add_drawing(png("Bottom").with_anchor(two_cell(0, 0, 2, 2))).unwrap();
     sheet.add_drawing(DrawingObject::comment(
         3,
         3,
         CellComment::new("a", "note between"),
-    ));
+    )).unwrap();
     sheet.add_drawing(
         DrawingObject::form_control(checkbox("Check")).with_anchor(two_cell(4, 4, 6, 6)),
-    );
-    sheet.add_drawing(png("Top").with_anchor(two_cell(6, 6, 8, 8)));
+    ).unwrap();
+    sheet.add_drawing(png("Top").with_anchor(two_cell(6, 6, 8, 8))).unwrap();
 
     let read = round_trip(&workbook);
     assert_eq!(
@@ -185,12 +185,12 @@ fn xls_group_of_images_round_trips_and_keeps_later_shapes_paired() {
         DrawingObject::group(group)
             .with_anchor(two_cell(1, 1, 4, 2))
             .with_name("Group 1"),
-    );
+    ).unwrap();
     // A control AFTER the group: the old deferred-children walk would
     // mispair its OBJ record.
     sheet.add_drawing(
         DrawingObject::form_control(checkbox("After group")).with_anchor(two_cell(5, 5, 7, 7)),
-    );
+    ).unwrap();
 
     let read = round_trip(&workbook);
     assert_eq!(kind_tags(&read), vec!["group", "control"]);
@@ -219,7 +219,7 @@ fn xls_control_name_round_trips() {
         DrawingObject::form_control(checkbox("Named"))
             .with_anchor(two_cell(1, 1, 3, 3))
             .with_name("Check Box 7"),
-    );
+    ).unwrap();
 
     let read = round_trip(&workbook);
     let sheet = read.worksheet(0).unwrap();
@@ -234,7 +234,7 @@ fn xls_image_alt_text_round_trips() {
     let sheet = workbook.worksheet_mut(0).unwrap();
     let mut object = png("Pic").with_anchor(two_cell(0, 0, 2, 2));
     object.meta.alt_text = Some("a tiny transparent pixel".to_string());
-    sheet.add_drawing(object);
+    sheet.add_drawing(object).unwrap();
 
     let read = round_trip(&workbook);
     let image = read.worksheet(0).unwrap().images().next().expect("image");
@@ -252,7 +252,7 @@ fn xls_image_locked_printable_round_trips() {
     let mut object = png("Pic").with_anchor(two_cell(0, 0, 2, 2));
     object.meta.locked = false;
     object.meta.printable = false;
-    sheet.add_drawing(object);
+    sheet.add_drawing(object).unwrap();
 
     let read = round_trip(&workbook);
     let image = read.worksheet(0).unwrap().images().next().expect("image");
@@ -263,7 +263,7 @@ fn xls_image_locked_printable_round_trips() {
     workbook
         .worksheet_mut(0)
         .unwrap()
-        .add_drawing(png("Pic").with_anchor(two_cell(0, 0, 2, 2)));
+        .add_drawing(png("Pic").with_anchor(two_cell(0, 0, 2, 2))).unwrap();
     let read = round_trip(&workbook);
     let image = read.worksheet(0).unwrap().images().next().unwrap();
     assert!(image.object.meta.locked);

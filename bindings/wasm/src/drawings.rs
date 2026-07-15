@@ -1744,48 +1744,6 @@ fn deserialize_path(value: JsValue) -> Result<Vec<usize>, JsError> {
     Ok(path)
 }
 
-fn path_starts_with(path: &[usize], prefix: &[usize]) -> bool {
-    path.len() >= prefix.len() && path[..prefix.len()] == *prefix
-}
-
-/// The cell keyed by `replacement` when it is a comment. Validation
-/// already rejected comments nested in groups, so only a top-level
-/// comment kind can claim a cell.
-// core candidate: comment-cell uniqueness belongs in core's worksheet
-// drawing mutation APIs; this check is triplicated across bindings.
-fn replacement_comment_cell(kind: &core::DrawingKind) -> Option<(u32, u16)> {
-    match kind {
-        core::DrawingKind::Comment { row, col, .. } => Some((*row, *col)),
-        _ => None,
-    }
-}
-
-/// Enforce one comment per cell: reject a comment `replacement` whose
-/// cell already has a comment elsewhere on the sheet, ignoring
-/// drawings at or under `replaced_path`.
-fn ensure_comment_cells_available(
-    sheet: &core::Worksheet,
-    replacement: &core::DrawingKind,
-    replaced_path: Option<&[usize]>,
-) -> Result<(), JsError> {
-    let Some(new_cell) = replacement_comment_cell(replacement) else {
-        return Ok(());
-    };
-    for (path, node) in sheet.drawings_flat() {
-        if replaced_path.is_some_and(|prefix| path_starts_with(&path, prefix)) {
-            continue;
-        }
-        if let core::DrawingKind::Comment { row, col, .. } = node.kind {
-            if (*row, *col) == new_cell {
-                return Err(JsError::new(&format!(
-                    "cell ({row}, {col}) already has a comment"
-                )));
-            }
-        }
-    }
-    Ok(())
-}
-
 fn drawing_tree(sheet: &core::Worksheet) -> Vec<WasmDrawing> {
     sheet
         .drawings()
@@ -1933,8 +1891,7 @@ impl Worksheet {
         let sheet = workbook
             .worksheet_mut(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
-        ensure_comment_cells_available(sheet, &object.kind, None)?;
-        let index = sheet.try_add_drawing(object).map_err(to_js_error)?;
+        let index = sheet.add_drawing(object).map_err(to_js_error)?;
         u32::try_from(index).map_err(|_| JsError::new("drawing index exceeds u32"))
     }
 
@@ -1948,7 +1905,6 @@ impl Worksheet {
         let sheet = workbook
             .worksheet_mut(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
-        ensure_comment_cells_available(sheet, &object.kind, None)?;
         sheet
             .insert_drawing(index as usize, object)
             .map_err(to_js_error)
@@ -1967,38 +1923,13 @@ impl Worksheet {
             let object = input
                 .into_object()
                 .map_err(|error| JsError::new(&error))?;
-            let count = sheet.drawings().len();
-            if path[0] >= count {
-                return Err(JsError::new(&format!(
-                    "drawing path {path:?} out of bounds (count: {count})"
-                )));
-            }
-            ensure_comment_cells_available(sheet, &object.kind, Some(&path))?;
-            sheet.drawings_mut()[path[0]] = object;
-            return Ok(());
+            return sheet.set_drawing(path[0], object).map_err(to_js_error);
         }
 
         let child = input
             .into_child()
             .map_err(|error| JsError::new(&error))?;
-        ensure_comment_cells_available(sheet, &child.kind, Some(&path))?;
-        let (&child_index, parent_path) = path
-            .split_last()
-            .ok_or_else(|| JsError::new("drawing path cannot be empty"))?;
-        let parent = sheet
-            .drawing_at_path_mut(parent_path)
-            .ok_or_else(|| JsError::new(&format!("drawing path {parent_path:?} not found")))?;
-        let core::DrawingKind::Group(group) = parent.kind else {
-            return Err(JsError::new("nested drawing parent is not a group"));
-        };
-        let count = group.children.len();
-        let Some(slot) = group.children.get_mut(child_index) else {
-            return Err(JsError::new(&format!(
-                "drawing path {path:?} out of bounds (child count: {count})"
-            )));
-        };
-        *slot = child;
-        Ok(())
+        sheet.set_group_child(&path, child).map_err(to_js_error)
     }
 
     /// Remove a top-level drawing or nested group child.
@@ -2016,23 +1947,10 @@ impl Worksheet {
                 .map_err(to_js_error);
         }
 
-        let (&child_index, parent_path) = path
-            .split_last()
-            .ok_or_else(|| JsError::new("drawing path cannot be empty"))?;
-        let parent = sheet
-            .drawing_at_path_mut(parent_path)
-            .ok_or_else(|| JsError::new(&format!("drawing path {parent_path:?} not found")))?;
-        let core::DrawingKind::Group(group) = parent.kind else {
-            return Err(JsError::new("nested drawing parent is not a group"));
-        };
-        if child_index >= group.children.len() {
-            return Err(JsError::new(&format!(
-                "drawing path {path:?} out of bounds (child count: {})",
-                group.children.len()
-            )));
-        }
-        group.children.remove(child_index);
-        Ok(())
+        sheet
+            .remove_group_child(&path)
+            .map(|_| ())
+            .map_err(to_js_error)
     }
 
     /// Move a top-level drawing to another z-order index.

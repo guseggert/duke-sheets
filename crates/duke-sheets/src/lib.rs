@@ -53,6 +53,7 @@ pub use duke_sheets_core::{
     radio_groups,
     rich_text_to_plain,
     validate_anchor,
+    validate_group_child,
     Alignment,
     AutoFilter,
     BorderEdge,

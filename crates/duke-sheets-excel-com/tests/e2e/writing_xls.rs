@@ -1549,7 +1549,7 @@ fn excel_can_read_xls_picture_and_comment_on_same_sheet_we_emit() {
             },
             edit_as: None,
         },
-    );
+    ).unwrap();
     ws.set_comment_at(
         7,
         5,
@@ -1622,10 +1622,10 @@ fn excel_can_read_xls_pictures_across_multiple_sheets_we_emit() {
     // cluster entries with non-contiguous drawing IDs.
     wb.worksheet_mut(0)
         .unwrap()
-        .add_drawing(pic("Pic on Alpha", 1, 1));
+        .add_drawing(pic("Pic on Alpha", 1, 1)).unwrap();
     wb.worksheet_mut(2)
         .unwrap()
-        .add_drawing(pic("Pic on Gamma", 3, 3));
+        .add_drawing(pic("Pic on Gamma", 3, 3)).unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     assert_eq!(
@@ -1791,7 +1791,7 @@ fn excel_can_read_xls_png_image_we_emit() {
             },
             edit_as: None,
         },
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
@@ -1925,7 +1925,7 @@ fn excel_can_read_xls_picture_rotation_and_flip_we_emit() {
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "rotated").unwrap();
     // 45 degrees clockwise: outside Excel's rasterization cases.
-    ws.add_image(image(Some(2_700_000), true), anchor());
+    ws.add_image(image(Some(2_700_000), true), anchor()).unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
@@ -1945,7 +1945,7 @@ fn excel_can_read_xls_picture_rotation_and_flip_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "quarter-turn").unwrap();
-    ws.add_image(image(Some(5_400_000), false), anchor());
+    ws.add_image(image(Some(5_400_000), false), anchor()).unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
@@ -1996,7 +1996,7 @@ fn excel_can_read_xls_onecell_image_we_emit() {
             width_emu: 2 * COL_EMU,
             height_emu: 3 * ROW_EMU,
         },
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
@@ -2055,7 +2055,7 @@ fn excel_can_read_xls_absolute_image_we_emit() {
             width_emu: 2 * COL_EMU,
             height_emu: 4 * ROW_EMU,
         },
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
@@ -2130,7 +2130,7 @@ fn excel_can_read_xls_bmp_image_we_emit() {
             },
             edit_as: None,
         },
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
@@ -2187,7 +2187,7 @@ fn excel_can_read_xls_jpeg_image_we_emit() {
             },
             edit_as: None,
         },
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
@@ -2569,7 +2569,7 @@ fn excel_can_read_form_controls_we_emit() {
     let count = kinds.len();
     for (i, kind) in kinds.into_iter().enumerate() {
         let row = 1 + 2 * i as u32;
-        ws.add_form_control(FormControl::new(kind), control_anchor(1, row, 3, row + 1));
+        ws.add_form_control(FormControl::new(kind), control_anchor(1, row, 3, row + 1)).unwrap();
     }
     assert_eq!(wb.sync_form_control_links(), 6);
 
@@ -2778,7 +2778,7 @@ fn excel_preserves_xls_control_visual_metadata_we_emit() {
     object.meta.alt_text = Some("Visual probe alternative".into());
     object.meta.title = Some("Not carried by XLS".into());
     let mut workbook = Workbook::new();
-    workbook.worksheet_mut(0).unwrap().add_drawing(object);
+    workbook.worksheet_mut(0).unwrap().add_drawing(object).unwrap();
 
     let result = roundtrip_through_excel_xls(&workbook);
     let drawn = result.worksheet(0).unwrap().form_controls().next().unwrap();
@@ -2830,7 +2830,7 @@ fn excel_preserves_xls_custom_metric_control_anchor_we_emit() {
             width_emu: 609_600,
             height_emu: 190_500,
         },
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel_xls(&workbook);
     let drawn = result.worksheet(0).unwrap().form_controls().next().unwrap();
@@ -2879,7 +2879,7 @@ fn excel_interprets_xls_list_selections_one_based() {
             no_3d: false,
         }),
         control_anchor(1, 1, 3, 3),
-    );
+    ).unwrap();
     ws.add_form_control(
         FormControl::new(FormControlKind::Dropdown {
             input_range: Some("$H$1:$H$4".to_string()),
@@ -2889,7 +2889,7 @@ fn excel_interprets_xls_list_selections_one_based() {
             no_3d: false,
         }),
         control_anchor(1, 5, 3, 6),
-    );
+    ).unwrap();
 
     let fixture = temp_fixture_xls();
     let bytes = XlsWriter::write_to_bytes(&wb).expect("write xls");
@@ -3680,7 +3680,7 @@ fn excel_preserves_unselected_radio_group_over_stale_link() {
                 no_3d: true,
             }),
             control_anchor(1, row, 2, row + 1),
-        );
+        ).unwrap();
     }
     assert_eq!(wb.sync_form_control_links(), 1);
     assert_eq!(
@@ -3732,31 +3732,31 @@ fn excel_can_read_radio_groups_we_emit() {
     ws.add_form_control(
         FormControl::new(group_box("Box A")),
         control_anchor(0, 0, 2, 6),
-    );
+    ).unwrap();
     ws.add_form_control(
         FormControl::new(group_box("Box B")),
         control_anchor(4, 0, 6, 6),
-    );
+    ).unwrap();
     ws.add_form_control(
         FormControl::new(radio("A1", CheckState::Checked)),
         control_anchor(1, 1, 2, 2),
-    );
+    ).unwrap();
     ws.add_form_control(
         FormControl::new(radio("B1", CheckState::Unchecked)),
         control_anchor(5, 1, 6, 2),
-    );
+    ).unwrap();
     ws.add_form_control(
         FormControl::new(radio("A2", CheckState::Unchecked)),
         control_anchor(1, 3, 2, 4),
-    );
+    ).unwrap();
     ws.add_form_control(
         FormControl::new(radio("B2", CheckState::Checked)),
         control_anchor(5, 3, 6, 4),
-    );
+    ).unwrap();
     ws.add_form_control(
         FormControl::new(radio("Loose", CheckState::Unchecked)),
         control_anchor(8, 1, 9, 2),
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     let sheet = result.worksheet(0).unwrap();
@@ -3821,7 +3821,7 @@ fn excel_can_read_mixed_control_comment_picture_we_emit() {
             svg_data: None,
         },
         control_anchor(6, 1, 8, 4),
-    );
+    ).unwrap();
     ws.set_comment_at(0, 0, duke_sheets_core::CellComment::new("Author", "a note")).unwrap();
     ws.add_form_control(
         FormControl::new(FormControlKind::Checkbox {
@@ -3831,7 +3831,7 @@ fn excel_can_read_mixed_control_comment_picture_we_emit() {
             no_3d: true,
         }),
         control_anchor(1, 1, 3, 2),
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     let sheet = result.worksheet(0).unwrap();
@@ -3886,7 +3886,7 @@ fn excel_can_read_large_xls_list_control_we_emit() {
             },
             edit_as: None,
         },
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     let sheet = result.worksheet(0).unwrap();
@@ -3948,7 +3948,7 @@ fn excel_preserves_xls_drawing_z_order_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "anchor").unwrap();
-    ws.add_drawing(png("Below").with_anchor(two_cell(0, 0, 2, 2)));
+    ws.add_drawing(png("Below").with_anchor(two_cell(0, 0, 2, 2))).unwrap();
     ws.add_drawing(
         DrawingObject::form_control(FormControl::new(FormControlKind::Checkbox {
             caption: "Middle".into(),
@@ -3957,8 +3957,8 @@ fn excel_preserves_xls_drawing_z_order_we_emit() {
             no_3d: true,
         }))
         .with_anchor(two_cell(1, 1, 3, 3)),
-    );
-    ws.add_drawing(png("Above").with_anchor(two_cell(2, 2, 4, 4)));
+    ).unwrap();
+    ws.add_drawing(png("Above").with_anchor(two_cell(2, 2, 4, 4))).unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     let sheet = result.worksheet(0).unwrap();
@@ -4040,18 +4040,18 @@ fn excel_preserves_hidden_drawing_flags_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "anchor").unwrap();
-    ws.add_drawing(png("Shown").with_anchor(two_cell(0, 0, 2, 2)));
+    ws.add_drawing(png("Shown").with_anchor(two_cell(0, 0, 2, 2))).unwrap();
     ws.add_drawing(
         png("Ghost")
             .with_anchor(two_cell(2, 2, 4, 4))
             .with_hidden(true),
-    );
-    ws.add_drawing(checkbox("Visible box").with_anchor(two_cell(4, 4, 6, 6)));
+    ).unwrap();
+    ws.add_drawing(checkbox("Visible box").with_anchor(two_cell(4, 4, 6, 6))).unwrap();
     ws.add_drawing(
         checkbox("Cloaked box")
             .with_anchor(two_cell(6, 6, 8, 8))
             .with_hidden(true),
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     let sheet = result.worksheet(0).unwrap();
@@ -4154,7 +4154,7 @@ fn excel_preserves_xls_basic_shape_we_emit() {
     object.meta.name = Some("Status panel".into());
     object.meta.alt_text = Some("red status rectangle".into());
     let mut workbook = Workbook::new();
-    workbook.worksheet_mut(0).unwrap().add_drawing(object);
+    workbook.worksheet_mut(0).unwrap().add_drawing(object).unwrap();
 
     let result = roundtrip_through_excel_xls(&workbook);
     let drawn = result.worksheet(0).unwrap().shapes().next().expect("shape");

@@ -43,7 +43,7 @@
 //! let mut workbook = Workbook::new();
 //! let sheet = workbook.worksheet_mut(0).unwrap();
 //!
-//! sheet.try_add_drawing(DrawingObject::form_control(FormControl::new(
+//! sheet.add_drawing(DrawingObject::form_control(FormControl::new(
 //!     FormControlKind::Checkbox {
 //!         caption: "Enable feature".into(),
 //!         state: CheckState::Checked,
@@ -594,7 +594,9 @@ mod tests {
     fn placed(objects: &[DrawingObject]) -> Vec<PlacedControl<'_>> {
         let mut sheet = crate::Worksheet::new("t");
         for object in objects {
-            sheet.add_drawing(object.clone());
+            // Unchecked: extreme-anchor tests exercise traversal with
+            // content that validation would reject.
+            sheet.drawings_mut().push(object.clone());
         }
         // Re-borrow from the slice we were given: rebuild placements
         // through a worksheet to exercise the real traversal.
@@ -853,14 +855,14 @@ mod tests {
     fn worksheet_drawing_mutations_validate_and_shift_indices() {
         let mut worksheet = crate::Worksheet::new("Sheet1");
         let first = worksheet
-            .try_add_drawing(DrawingObject::form_control(FormControl::new(
+            .add_drawing(DrawingObject::form_control(FormControl::new(
                 FormControlKind::Button {
                     caption: "one".into(),
                 },
             )))
             .unwrap();
         let second = worksheet
-            .try_add_drawing(DrawingObject::form_control(FormControl::new(
+            .add_drawing(DrawingObject::form_control(FormControl::new(
                 FormControlKind::Label {
                     caption: "two".into(),
                 },

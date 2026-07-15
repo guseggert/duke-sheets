@@ -97,7 +97,7 @@ fn lo_can_open_xlsx_with_form_controls_we_emit() {
             control.raw_client_data =
                 vec![b"<x:Disabled/>".to_vec(), b"<x:Accel>65</x:Accel>".to_vec()];
         }
-        ws.add_form_control(control, anchor(1, row, 3, row + 1));
+        ws.add_form_control(control, anchor(1, row, 3, row + 1)).unwrap();
     }
     assert_eq!(wb.sync_form_control_links(), 1);
 

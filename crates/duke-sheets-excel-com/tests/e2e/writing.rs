@@ -1291,7 +1291,7 @@ fn excel_can_read_xlsx_onecell_picture_we_emit() {
             width_emu: 1_500_000,
             height_emu: 800_000,
         },
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel(&wb);
     let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
@@ -1341,7 +1341,7 @@ fn excel_can_read_xlsx_absolute_picture_we_emit() {
             width_emu: 1_000_000,
             height_emu: 900_000,
         },
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel(&wb);
     let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
@@ -1402,7 +1402,7 @@ fn excel_can_read_xlsx_png_image_we_emit() {
             },
             edit_as: None,
         },
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel(&wb);
     let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
@@ -1459,7 +1459,7 @@ fn excel_preserves_xlsx_drawing_z_order_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "anchor").unwrap();
-    ws.add_drawing(png("Below").with_anchor(two_cell(0, 0, 2, 2)));
+    ws.add_drawing(png("Below").with_anchor(two_cell(0, 0, 2, 2))).unwrap();
     ws.add_drawing(
         DrawingObject::form_control(FormControl::new(FormControlKind::Checkbox {
             caption: "Middle".into(),
@@ -1468,8 +1468,8 @@ fn excel_preserves_xlsx_drawing_z_order_we_emit() {
             no_3d: true,
         }))
         .with_anchor(two_cell(1, 1, 3, 3)),
-    );
-    ws.add_drawing(png("Above").with_anchor(two_cell(2, 2, 4, 4)));
+    ).unwrap();
+    ws.add_drawing(png("Above").with_anchor(two_cell(2, 2, 4, 4))).unwrap();
 
     let result = roundtrip_through_excel(&wb);
     let sheet = result.worksheet(0).unwrap();
@@ -1614,7 +1614,7 @@ fn excel_can_read_xlsx_form_controls_we_emit() {
     let expected = kinds.clone();
     for (i, kind) in kinds.into_iter().enumerate() {
         let row = 1 + 2 * i as u32;
-        ws.add_form_control(FormControl::new(kind), anchor(1, row, 3, row + 1));
+        ws.add_form_control(FormControl::new(kind), anchor(1, row, 3, row + 1)).unwrap();
     }
     assert_eq!(wb.sync_form_control_links(), 6);
 
@@ -1663,7 +1663,7 @@ fn excel_preserves_xlsx_custom_metric_control_anchor_we_emit() {
             width_emu: 609_600,
             height_emu: 190_500,
         },
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel(&workbook);
     let drawn = result.worksheet(0).unwrap().form_controls().next().unwrap();
@@ -1741,7 +1741,7 @@ fn excel_preserves_xlsx_control_visual_metadata_we_emit() {
     object.meta.alt_text = Some("Visual probe alternative".into());
     object.meta.title = Some("Visual probe title".into());
     let mut workbook = Workbook::new();
-    workbook.worksheet_mut(0).unwrap().add_drawing(object);
+    workbook.worksheet_mut(0).unwrap().add_drawing(object).unwrap();
 
     let result = roundtrip_through_excel(&workbook);
     let drawn = result.worksheet(0).unwrap().form_controls().next().unwrap();
@@ -1828,18 +1828,18 @@ fn excel_preserves_hidden_drawing_flags_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "anchor").unwrap();
-    ws.add_drawing(png("Shown").with_anchor(two_cell(0, 0, 2, 2)));
+    ws.add_drawing(png("Shown").with_anchor(two_cell(0, 0, 2, 2))).unwrap();
     ws.add_drawing(
         png("Ghost")
             .with_anchor(two_cell(2, 2, 4, 4))
             .with_hidden(true),
-    );
-    ws.add_drawing(checkbox("Visible box").with_anchor(two_cell(4, 4, 6, 6)));
+    ).unwrap();
+    ws.add_drawing(checkbox("Visible box").with_anchor(two_cell(4, 4, 6, 6))).unwrap();
     ws.add_drawing(
         checkbox("Cloaked box")
             .with_anchor(two_cell(6, 6, 8, 8))
             .with_hidden(true),
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel(&wb);
     let sheet = result.worksheet(0).unwrap();
@@ -1897,7 +1897,7 @@ fn excel_can_read_xlsx_comment_we_emit() {
     ws.add_drawing(
         DrawingObject::comment(3, 3, CellComment::new("Reviewer", "Always shown"))
             .with_hidden(false),
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel(&wb);
     let sheet = result.worksheet(0).unwrap();
@@ -1990,7 +1990,7 @@ fn excel_preserves_xlsx_basic_shape_we_emit() {
     object.meta.alt_text = Some("red status rectangle".into());
     object.meta.title = Some("Status".into());
     let mut workbook = Workbook::new();
-    workbook.worksheet_mut(0).unwrap().add_drawing(object);
+    workbook.worksheet_mut(0).unwrap().add_drawing(object).unwrap();
 
     let result = roundtrip_through_excel(&workbook);
     let drawn = result.worksheet(0).unwrap().shapes().next().expect("shape");
@@ -2072,7 +2072,7 @@ fn excel_preserves_unmodeled_client_data_we_emit() {
             },
             edit_as: None,
         },
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel(&wb);
     let control = result
