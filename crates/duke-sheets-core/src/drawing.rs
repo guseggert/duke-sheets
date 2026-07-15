@@ -16,7 +16,7 @@
 //! Group children are positioned in their group's child coordinate
 //! space, not with sheet anchors, so they are represented by
 //! [`GroupChild`] (meta + [`ChildTransform`] + kind) rather than
-//! [`DrawingObject`]. Use [`crate::Worksheet::placed_form_controls`]
+//! [`DrawingObject`]. Use [`crate::Worksheet::form_controls`]
 //! or [`crate::Worksheet::drawings_flat`] to traverse nested content
 //! with paths and resolved on-sheet rectangles.
 //!
@@ -762,17 +762,24 @@ impl RectEmu {
 /// overflowing before the final [`RectEmu`] saturation.
 pub(crate) type CornersEmu = (i128, i128, i128, i128);
 
-/// A filtered view item: a typed payload together with its wrapper
-/// object and position in the drawing list. Yielded by the
-/// [`crate::Worksheet::images`]/[`crate::Worksheet::charts`]/
-/// [`crate::Worksheet::form_controls`] family, which cover top-level
-/// objects only (group children have no list index).
+/// A typed drawing-tree view item: a payload anywhere in the tree
+/// (top-level or nested in groups) with its path, resolved on-sheet
+/// rectangle, and shared metadata. Yielded in depth-first order by
+/// the [`crate::Worksheet::images`]/[`crate::Worksheet::charts`]/
+/// [`crate::Worksheet::form_controls`] view family.
 #[derive(Debug)]
-pub struct Drawn<'a, T> {
-    /// Index into the worksheet's drawing list (= z-position).
-    pub index: usize,
-    /// The wrapper object (meta + anchor).
-    pub object: &'a DrawingObject,
+pub struct Placed<'a, T: ?Sized> {
+    /// Path to the node: drawing-list index, then group child indices.
+    pub path: DrawingPath,
+    /// Absolute EMU rectangle using the worksheet's row and column
+    /// metrics: the anchor rectangle for top-level nodes, the
+    /// group-mapped (rotation/flip aware) rectangle for children.
+    pub rect_emu: RectEmu,
+    /// Shared non-visual properties.
+    pub meta: &'a DrawingMeta,
+    /// The top-level wrapper (anchor etc.) when the node is
+    /// top-level; `None` for group children.
+    pub object: Option<&'a DrawingObject>,
     /// The typed payload.
     pub payload: &'a T,
 }

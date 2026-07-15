@@ -46,9 +46,9 @@ fn check_states(workbook: &Workbook, sheet: usize) -> Vec<CheckState> {
     workbook
         .worksheet(sheet)
         .unwrap()
-        .placed_form_controls()
+        .form_controls().collect::<Vec<_>>()
         .iter()
-        .filter_map(|placed| match placed.control.kind {
+        .filter_map(|placed| match placed.payload.kind {
             FormControlKind::Checkbox { state, .. }
             | FormControlKind::OptionButton { state, .. } => Some(state),
             _ => None,
@@ -77,10 +77,10 @@ fn checking_radio_updates_group_and_linked_cell() {
     assert_eq!(result.controls_changed, 2);
     assert_eq!(result.linked_cells_changed, 1);
 
-    let controls = workbook.worksheet(0).unwrap().placed_form_controls();
+    let controls = workbook.worksheet(0).unwrap().form_controls().collect::<Vec<_>>();
     let states: Vec<_> = controls
         .iter()
-        .filter_map(|placed| match placed.control.kind {
+        .filter_map(|placed| match placed.payload.kind {
             FormControlKind::OptionButton { state, .. } => Some(state),
             _ => None,
         })
@@ -308,10 +308,10 @@ fn checking_nested_radio_by_path_updates_group_and_linked_cell() {
     assert_eq!(result.controls_changed, 2);
     assert_eq!(result.linked_cells_changed, 1);
 
-    let controls = workbook.worksheet(0).unwrap().placed_form_controls();
+    let controls = workbook.worksheet(0).unwrap().form_controls().collect::<Vec<_>>();
     let states: Vec<_> = controls
         .iter()
-        .map(|placed| match placed.control.kind {
+        .map(|placed| match placed.payload.kind {
             FormControlKind::OptionButton { state, .. } => (placed.path.clone(), state),
             _ => panic!("expected option buttons"),
         })

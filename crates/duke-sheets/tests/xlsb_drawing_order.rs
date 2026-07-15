@@ -188,8 +188,8 @@ fn xlsb_model_image_round_trips() {
     assert_eq!(kind_tags(&read), vec!["image"]);
     let image = read.worksheet(0).unwrap().images().next().expect("image");
     assert_eq!(image.payload.data, PNG_1PX);
-    assert_eq!(image.object.meta.name.as_deref(), Some("Pic"));
-    assert_eq!(image.object.anchor, two_cell(1, 1, 3, 3));
+    assert_eq!(image.object.unwrap().meta.name.as_deref(), Some("Pic"));
+    assert_eq!(image.object.unwrap().anchor, two_cell(1, 1, 3, 3));
 }
 
 // features: Image positioning (one-cell anchor); Image positioning (absolute anchor); Image editAs (move/size with cells)
@@ -222,7 +222,7 @@ fn xlsb_one_cell_and_absolute_image_anchors_round_trip() {
     let images: Vec<_> = read.worksheet(0).unwrap().images().collect();
     assert_eq!(images.len(), 2);
     assert_eq!(
-        images[0].object.anchor,
+        images[0].object.unwrap().anchor,
         DrawingAnchor::OneCell {
             from: CellMarker {
                 col: 1,
@@ -235,7 +235,7 @@ fn xlsb_one_cell_and_absolute_image_anchors_round_trip() {
         }
     );
     assert_eq!(
-        images[1].object.anchor,
+        images[1].object.unwrap().anchor,
         DrawingAnchor::Absolute {
             x_emu: 2_000_000,
             y_emu: 1_000_000,
@@ -269,7 +269,7 @@ fn xlsb_chart_edits_persist() {
     let again = round_trip(&read);
     let chart = again.worksheet(0).unwrap().charts().next().expect("chart");
     assert_eq!(chart.payload.title.as_deref(), Some("Edited"));
-    assert_eq!(chart.object.anchor, two_cell(2, 2, 8, 12));
+    assert_eq!(chart.object.unwrap().anchor, two_cell(2, 2, 8, 12));
 }
 
 /// Control z-position among native objects survives via the
@@ -290,7 +290,7 @@ fn xlsb_control_z_order_between_images_round_trips() {
     let sheet = read.worksheet(0).unwrap();
     let control = sheet.form_controls().next().unwrap();
     assert_eq!(control.payload.caption_text().as_deref(), Some("Middle"));
-    assert_eq!(control.object.anchor, two_cell(1, 1, 3, 3));
+    assert_eq!(control.object.unwrap().anchor, two_cell(1, 1, 3, 3));
 }
 
 /// Control names ride the twin's cNvPr and survive the round trip
@@ -312,7 +312,7 @@ fn xlsb_control_name_round_trips() {
         .form_controls()
         .next()
         .expect("control");
-    assert_eq!(control.object.meta.name.as_deref(), Some("Check Box 9"));
+    assert_eq!(control.object.unwrap().meta.name.as_deref(), Some("Check Box 9"));
 }
 
 /// Comments keep their order relative to controls via the shared
@@ -613,7 +613,7 @@ fn xlsb_group_nested_control_keeps_drawing_and_vml_rels_aligned() {
 
     let read = XlsbReader::read(Cursor::new(bytes)).expect("read");
     let sheet = read.worksheet(0).unwrap();
-    let controls = sheet.placed_form_controls();
+    let controls = sheet.form_controls().collect::<Vec<_>>();
     assert_eq!(controls.len(), 1, "group-nested control survives");
 }
 

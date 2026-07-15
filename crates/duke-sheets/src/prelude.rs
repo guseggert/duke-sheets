@@ -55,7 +55,7 @@ pub use crate::{
     DrawingObject,
     DrawingPath,
     DrawingText,
-    Drawn,
+    Placed,
     EmbeddedImage,
     // Error types
     Error,

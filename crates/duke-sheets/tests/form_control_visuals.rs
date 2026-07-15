@@ -75,14 +75,14 @@ fn assert_visuals(workbook: &Workbook, title_supported: bool) {
         .form_controls()
         .next()
         .expect("control survives");
-    assert_eq!(drawn.object.meta.name.as_deref(), Some("Visual Probe"));
+    assert_eq!(drawn.object.unwrap().meta.name.as_deref(), Some("Visual Probe"));
     assert_eq!(
-        drawn.object.meta.alt_text.as_deref(),
+        drawn.object.unwrap().meta.alt_text.as_deref(),
         Some("Visual probe alternative")
     );
     if title_supported {
         assert_eq!(
-            drawn.object.meta.title.as_deref(),
+            drawn.object.unwrap().meta.title.as_deref(),
             Some("Visual probe title")
         );
     }

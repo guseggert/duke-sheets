@@ -92,17 +92,17 @@ fn basic_workbook() -> Workbook {
 fn assert_basic_shape(sheet: &Worksheet, format: &str, has_title: bool) {
     assert_eq!(sheet.shape_count(), 1, "{format}: shape count");
     let drawn = sheet.shapes().next().expect("shape");
-    assert_eq!(drawn.index, 0);
-    assert_eq!(drawn.object.meta.name.as_deref(), Some("Status panel"));
+    assert_eq!(drawn.path, vec![0]);
+    assert_eq!(drawn.object.unwrap().meta.name.as_deref(), Some("Status panel"));
     assert_eq!(
-        drawn.object.meta.alt_text.as_deref(),
+        drawn.object.unwrap().meta.alt_text.as_deref(),
         Some("red status rectangle")
     );
     assert_eq!(
-        drawn.object.meta.title.as_deref(),
+        drawn.object.unwrap().meta.title.as_deref(),
         has_title.then_some("Status")
     );
-    assert_eq!(drawn.object.anchor, anchor(1, 2, 5, 8));
+    assert_eq!(drawn.object.unwrap().anchor, anchor(1, 2, 5, 8));
 
     let shape = drawn.payload;
     assert_eq!(shape.geometry, ShapeGeometry::Preset("rect".to_string()));

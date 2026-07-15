@@ -1920,6 +1920,6 @@ mod tests {
         assert_eq!(ws.form_control_count(), 1);
         let control = ws.form_controls().next().unwrap();
         assert_eq!(control.payload.caption_text().as_deref(), Some("tick"));
-        assert_eq!(control.object.meta.name.as_deref(), Some("Check Box 1"));
+        assert_eq!(control.object.unwrap().meta.name.as_deref(), Some("Check Box 1"));
     }
 }

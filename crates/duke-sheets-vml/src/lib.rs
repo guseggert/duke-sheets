@@ -709,12 +709,12 @@ pub fn write_control_shape_with_metrics(
 }
 
 /// One control in a sheet's emission sequence: every form control in
-/// the drawing tree, in [`Worksheet::placed_form_controls`]
+/// the drawing tree, in [`Worksheet::form_controls`]
 /// (depth-first) order. This order drives shape ids, VML shapes, the
 /// drawing-part twins, and (in XLSX) ctrlProp part numbering and
 /// `<controls>` entries.
 ///
-/// [`Worksheet::placed_form_controls`]: duke_sheets_core::Worksheet::placed_form_controls
+/// [`Worksheet::form_controls`]: duke_sheets_core::Worksheet::form_controls
 pub struct SheetControl<'a> {
     pub payload: &'a FormControl,
     pub meta: &'a DrawingMeta,
@@ -726,27 +726,25 @@ pub struct SheetControl<'a> {
 /// The sheet's control sequence in placed (depth-first) order.
 pub fn sheet_controls(sheet: &duke_sheets_core::Worksheet) -> Vec<SheetControl<'_>> {
     sheet
-        .placed_form_controls()
-        .into_iter()
+        .form_controls()
         .map(|placed| {
-            let meta = sheet
-                .drawing_at_path(&placed.path)
-                .map(|node| node.meta)
-                .expect("placed control path is valid");
-            let anchor = if let [index] = placed.path.as_slice() {
-                sheet.drawings()[*index].anchor.clone()
-            } else {
-                let rect = placed.rect_emu;
-                DrawingAnchor::Absolute {
-                    x_emu: rect.x_emu.max(0),
-                    y_emu: rect.y_emu.max(0),
-                    width_emu: rect.width_emu.max(0),
-                    height_emu: rect.height_emu.max(0),
+            let anchor = match placed.object {
+                Some(object) => object.anchor.clone(),
+                // Group children have no anchor of their own; flatten
+                // the resolved rectangle into an absolute one.
+                None => {
+                    let rect = placed.rect_emu;
+                    DrawingAnchor::Absolute {
+                        x_emu: rect.x_emu.max(0),
+                        y_emu: rect.y_emu.max(0),
+                        width_emu: rect.width_emu.max(0),
+                        height_emu: rect.height_emu.max(0),
+                    }
                 }
             };
             SheetControl {
-                payload: placed.control,
-                meta,
+                payload: placed.payload,
+                meta: placed.meta,
                 anchor,
             }
         })
@@ -757,7 +755,7 @@ pub fn sheet_controls(sheet: &duke_sheets_core::Worksheet) -> Vec<SheetControl<'
 /// (depth-first) control order, derived from the spatial grouping in
 /// [`duke_sheets_core::radio_groups`].
 pub fn radio_head_flags(sheet: &duke_sheets_core::Worksheet) -> Vec<bool> {
-    let placed = sheet.placed_form_controls();
+    let placed = sheet.form_controls().collect::<Vec<_>>();
     let mut flags = vec![false; placed.len()];
     for group in duke_sheets_core::radio_groups(&placed) {
         if let Some(&head) = group.first() {

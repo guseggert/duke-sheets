@@ -428,25 +428,7 @@ pub(super) fn sheet_has_drawing_content(sheet: &duke_sheets_core::Worksheet) -> 
 pub(super) fn sheet_image_payloads(
     sheet: &duke_sheets_core::Worksheet,
 ) -> Vec<&duke_sheets_chart::EmbeddedImage> {
-    fn walk<'a>(
-        kind: &'a duke_sheets_core::DrawingKind,
-        out: &mut Vec<&'a duke_sheets_chart::EmbeddedImage>,
-    ) {
-        match kind {
-            duke_sheets_core::DrawingKind::Image(image) => out.push(image),
-            duke_sheets_core::DrawingKind::Group(group) => {
-                for child in &group.children {
-                    walk(&child.kind, out);
-                }
-            }
-            _ => {}
-        }
-    }
-    let mut out = Vec::new();
-    for object in sheet.drawings() {
-        walk(&object.kind, &mut out);
-    }
-    out
+    sheet.images().map(|placed| placed.payload).collect()
 }
 
 /// Raw relationships preserved on a worksheet's raw drawing entries
@@ -727,7 +709,7 @@ impl XlsxWriter {
         // drawing tree, groups included).
         let control_counts: Vec<usize> = workbook
             .worksheets()
-            .map(|sheet| sheet.placed_form_controls().len())
+            .map(|sheet| sheet.form_control_count())
             .collect();
 
         // Sheets needing a legacy VML drawing part (comment shapes
@@ -4086,7 +4068,7 @@ mod tests {
         assert_eq!(val_ax.minimum, Some(0.0));
         assert_eq!(val_ax.maximum, Some(100.0));
         assert_eq!(c.legend.as_ref().unwrap().position, LegendPosition::Bottom);
-        if let DrawingAnchor::TwoCell { from, to, .. } = &drawn.object.anchor {
+        if let DrawingAnchor::TwoCell { from, to, .. } = &drawn.object.unwrap().anchor {
             assert_eq!(from.col, 2);
             assert_eq!(from.row, 3);
             assert_eq!(from.col_offset_emu, 100);

@@ -1297,7 +1297,7 @@ fn excel_can_read_xlsx_onecell_picture_we_emit() {
     let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
     assert_eq!(images.len(), 1, "OneCell picture must survive Excel");
     let img = &images[0];
-    match &img.object.anchor {
+    match &img.object.unwrap().anchor {
         DrawingAnchor::OneCell {
             from,
             width_emu,
@@ -1347,7 +1347,7 @@ fn excel_can_read_xlsx_absolute_picture_we_emit() {
     let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
     assert_eq!(images.len(), 1, "Absolute picture must survive Excel");
     let img = &images[0];
-    match &img.object.anchor {
+    match &img.object.unwrap().anchor {
         DrawingAnchor::Absolute {
             x_emu,
             y_emu,
@@ -1488,8 +1488,8 @@ fn excel_preserves_xlsx_drawing_z_order_we_emit() {
         "z-order must survive Excel re-save"
     );
     let images: Vec<_> = sheet.images().collect();
-    assert_eq!(images[0].object.meta.name.as_deref(), Some("Below"));
-    assert_eq!(images[1].object.meta.name.as_deref(), Some("Above"));
+    assert_eq!(images[0].object.unwrap().meta.name.as_deref(), Some("Below"));
+    assert_eq!(images[1].object.unwrap().meta.name.as_deref(), Some("Above"));
     assert_eq!(
         sheet
             .form_controls()
@@ -1667,7 +1667,7 @@ fn excel_preserves_xlsx_custom_metric_control_anchor_we_emit() {
 
     let result = roundtrip_through_excel(&workbook);
     let drawn = result.worksheet(0).unwrap().form_controls().next().unwrap();
-    match &drawn.object.anchor {
+    match &drawn.object.unwrap().anchor {
         DrawingAnchor::TwoCell { from, to, .. } => {
             assert_eq!((from.col, from.col_offset_emu), (0, 0));
             assert_eq!((from.row, from.row_offset_emu), (0, 0));
@@ -1745,13 +1745,13 @@ fn excel_preserves_xlsx_control_visual_metadata_we_emit() {
 
     let result = roundtrip_through_excel(&workbook);
     let drawn = result.worksheet(0).unwrap().form_controls().next().unwrap();
-    assert_eq!(drawn.object.meta.name.as_deref(), Some("Visual Probe"));
+    assert_eq!(drawn.object.unwrap().meta.name.as_deref(), Some("Visual Probe"));
     assert_eq!(
-        drawn.object.meta.alt_text.as_deref(),
+        drawn.object.unwrap().meta.alt_text.as_deref(),
         Some("Visual probe alternative")
     );
     assert_eq!(
-        drawn.object.meta.title.as_deref(),
+        drawn.object.unwrap().meta.title.as_deref(),
         Some("Visual probe title")
     );
     assert_eq!(drawn.payload.caption_text().as_deref(), Some("Red Blue"));
@@ -1849,9 +1849,8 @@ fn excel_preserves_hidden_drawing_flags_we_emit() {
     let image_hidden = |name: &str| {
         images
             .iter()
-            .find(|i| i.object.meta.name.as_deref() == Some(name))
+            .find(|i| i.object.unwrap().meta.name.as_deref() == Some(name))
             .unwrap_or_else(|| panic!("image {name:?} lost in Excel re-save"))
-            .object
             .meta
             .hidden
     };
@@ -1868,7 +1867,6 @@ fn excel_preserves_hidden_drawing_flags_we_emit() {
             .iter()
             .find(|c| c.payload.caption_text().as_deref() == Some(caption))
             .unwrap_or_else(|| panic!("control {caption:?} lost in Excel re-save"))
-            .object
             .meta
             .hidden
     };
@@ -1994,12 +1992,12 @@ fn excel_preserves_xlsx_basic_shape_we_emit() {
 
     let result = roundtrip_through_excel(&workbook);
     let drawn = result.worksheet(0).unwrap().shapes().next().expect("shape");
-    assert_eq!(drawn.object.meta.name.as_deref(), Some("Status panel"));
+    assert_eq!(drawn.object.unwrap().meta.name.as_deref(), Some("Status panel"));
     assert_eq!(
-        drawn.object.meta.alt_text.as_deref(),
+        drawn.object.unwrap().meta.alt_text.as_deref(),
         Some("red status rectangle")
     );
-    assert_eq!(drawn.object.meta.title.as_deref(), Some("Status"));
+    assert_eq!(drawn.object.unwrap().meta.title.as_deref(), Some("Status"));
     assert_eq!(drawn.payload.geometry, ShapeGeometry::Preset("rect".into()));
     assert_eq!(drawn.payload.fill, ShapeFill::Solid(Color::rgb(255, 0, 0)));
     assert_eq!(drawn.payload.line.color, Some(Color::rgb(0, 0, 255)));

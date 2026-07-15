@@ -1789,7 +1789,7 @@ impl Worksheet {
         let sheet = workbook
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
-        u32::try_from(sheet.placed_form_controls().len())
+        u32::try_from(sheet.form_control_count())
             .map_err(|_| JsError::new("form control count exceeds u32"))
     }
 

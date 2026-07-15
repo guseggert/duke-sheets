@@ -97,7 +97,7 @@ pub use duke_sheets_core::{
     DrawingObject,
     DrawingPath,
     DrawingText,
-    Drawn,
+    Placed,
     // Error types
     Error,
     FillStyle,

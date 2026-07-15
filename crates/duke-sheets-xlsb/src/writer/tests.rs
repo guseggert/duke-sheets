@@ -3037,7 +3037,7 @@ mod tests {
             }
             assert_eq!(drawn.payload.kind, expected, "control {i} kind mismatch");
         }
-        match &controls[0].object.anchor {
+        match &controls[0].object.unwrap().anchor {
             DrawingAnchor::TwoCell { from, to, .. } => {
                 assert_eq!((from.col, from.row), (1, 1));
                 assert_eq!((to.col, to.row), (3, 2));

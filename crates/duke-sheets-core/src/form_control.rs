@@ -55,7 +55,7 @@
 //! assert_eq!(sheet.form_control_count(), 1);
 //! ```
 
-use crate::drawing::{DrawingPath, RectEmu};
+use crate::drawing::{Placed, RectEmu};
 use crate::{Error, Result};
 
 /// Caption text, rich formatting, and alignment for a form control.
@@ -484,21 +484,11 @@ impl FormControl {
     }
 }
 
-/// A form control located in the worksheet's drawing tree: its path,
-/// its resolved on-sheet rectangle, and the control payload.
-///
-/// Produced by [`crate::Worksheet::placed_form_controls`] in
-/// depth-first order (top-level objects in z-order, group children
-/// within their group).
-#[derive(Debug)]
-pub struct PlacedControl<'a> {
-    /// Path to the control in the drawing tree.
-    pub path: DrawingPath,
-    /// Absolute EMU rectangle using the worksheet's row and column metrics.
-    pub rect_emu: RectEmu,
-    /// The control payload.
-    pub control: &'a FormControl,
-}
+/// A form control located in the worksheet's drawing tree, as
+/// produced by [`crate::Worksheet::form_controls`] in depth-first
+/// order (top-level objects in z-order, group children within their
+/// group).
+pub type PlacedControl<'a> = Placed<'a, FormControl>;
 
 /// Result of applying an interactive form-control state change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -516,7 +506,7 @@ pub struct FormControlInteractionResult {
 /// radios outside every box form the sheet-level group.
 ///
 /// Takes the sheet's controls as produced by
-/// [`crate::Worksheet::placed_form_controls`] and returns groups of
+/// [`crate::Worksheet::form_controls`] and returns groups of
 /// indices into that slice, in traversal order (both across groups
 /// and within each group). Non-radio controls never appear in the
 /// result.
@@ -525,7 +515,7 @@ pub struct FormControlInteractionResult {
 pub fn radio_groups(controls: &[PlacedControl<'_>]) -> Vec<Vec<usize>> {
     let box_rects: Vec<RectEmu> = controls
         .iter()
-        .filter(|placed| matches!(placed.control.kind, FormControlKind::GroupBox { .. }))
+        .filter(|placed| matches!(placed.payload.kind, FormControlKind::GroupBox { .. }))
         .map(|placed| placed.rect_emu)
         .collect();
 
@@ -545,7 +535,7 @@ pub fn radio_groups(controls: &[PlacedControl<'_>]) -> Vec<Vec<usize>> {
 
     let mut groups: Vec<(Option<usize>, Vec<usize>)> = Vec::new();
     for (idx, placed) in controls.iter().enumerate() {
-        if !matches!(placed.control.kind, FormControlKind::OptionButton { .. }) {
+        if !matches!(placed.payload.kind, FormControlKind::OptionButton { .. }) {
             continue;
         }
         let key = containing_box(placed.rect_emu);
@@ -616,7 +606,9 @@ mod tests {
                 object.kind.as_form_control().map(|control| PlacedControl {
                     path: vec![i],
                     rect_emu: crate::drawing::anchor_rect_emu(&object.anchor),
-                    control,
+                    meta: &object.meta,
+                    object: Some(object),
+                    payload: control,
                 })
             })
             .collect()

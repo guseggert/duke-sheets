@@ -1802,7 +1802,7 @@ fn excel_can_read_xls_png_image_we_emit() {
         img.data, TEST_PNG_1X1,
         "PNG bytes must round-trip through Excel verbatim"
     );
-    match &images[0].object.anchor {
+    match &images[0].object.unwrap().anchor {
         DrawingAnchor::TwoCell { from, to, .. } => {
             // Excel may adjust within-cell EMU offsets when it
             // re-saves; we only assert the cell *range* is preserved
@@ -2007,7 +2007,7 @@ fn excel_can_read_xls_onecell_image_we_emit() {
     );
     let img = images[0].payload;
     assert_eq!(img.format, ImageFormat::Png);
-    match &images[0].object.anchor {
+    match &images[0].object.unwrap().anchor {
         DrawingAnchor::TwoCell { from, to, .. } => {
             // OneCell at (col=2, row=3) + 2 cols × 3 rows of default
             // cells means the picture spans columns 2..4 and rows
@@ -2066,7 +2066,7 @@ fn excel_can_read_xls_absolute_image_we_emit() {
     );
     let img = images[0].payload;
     assert_eq!(img.format, ImageFormat::Png);
-    match &images[0].object.anchor {
+    match &images[0].object.unwrap().anchor {
         DrawingAnchor::TwoCell { from, to, .. } => {
             // Absolute (x=3 cols, y=2 rows) + (2 cols × 4 rows) at
             // default cell sizes lands the picture starting at col=3
@@ -2724,7 +2724,7 @@ fn excel_can_read_form_controls_we_emit() {
 
     // Anchors survive (cell coordinates; offsets are requantised by
     // Excel and asserted in the in-process layer instead).
-    match &controls[0].object.anchor {
+    match &controls[0].object.unwrap().anchor {
         DrawingAnchor::TwoCell { from, to, .. } => {
             assert_eq!((from.col, from.row), (1, 1), "button anchor from");
             assert_eq!((to.col, to.row), (3, 2), "button anchor to");
@@ -2782,9 +2782,9 @@ fn excel_preserves_xls_control_visual_metadata_we_emit() {
 
     let result = roundtrip_through_excel_xls(&workbook);
     let drawn = result.worksheet(0).unwrap().form_controls().next().unwrap();
-    assert_eq!(drawn.object.meta.name.as_deref(), Some("Visual Probe"));
+    assert_eq!(drawn.object.unwrap().meta.name.as_deref(), Some("Visual Probe"));
     assert_eq!(
-        drawn.object.meta.alt_text.as_deref(),
+        drawn.object.unwrap().meta.alt_text.as_deref(),
         Some("Visual probe alternative")
     );
     assert_eq!(drawn.payload.caption_text().as_deref(), Some("Red Blue"));
@@ -2834,7 +2834,7 @@ fn excel_preserves_xls_custom_metric_control_anchor_we_emit() {
 
     let result = roundtrip_through_excel_xls(&workbook);
     let drawn = result.worksheet(0).unwrap().form_controls().next().unwrap();
-    match &drawn.object.anchor {
+    match &drawn.object.unwrap().anchor {
         DrawingAnchor::TwoCell { from, to, .. } => {
             assert_eq!((from.col, from.col_offset_emu), (0, 0));
             assert_eq!((from.row, from.row_offset_emu), (0, 0));
@@ -4061,9 +4061,8 @@ fn excel_preserves_hidden_drawing_flags_we_emit() {
     let image_hidden = |name: &str| {
         images
             .iter()
-            .find(|i| i.object.meta.name.as_deref() == Some(name))
+            .find(|i| i.object.unwrap().meta.name.as_deref() == Some(name))
             .unwrap_or_else(|| panic!("image {name:?} lost in Excel re-save"))
-            .object
             .meta
             .hidden
     };
@@ -4080,7 +4079,6 @@ fn excel_preserves_hidden_drawing_flags_we_emit() {
             .iter()
             .find(|c| c.payload.caption_text().as_deref() == Some(caption))
             .unwrap_or_else(|| panic!("control {caption:?} lost in Excel re-save"))
-            .object
             .meta
             .hidden
     };
@@ -4158,9 +4156,9 @@ fn excel_preserves_xls_basic_shape_we_emit() {
 
     let result = roundtrip_through_excel_xls(&workbook);
     let drawn = result.worksheet(0).unwrap().shapes().next().expect("shape");
-    assert_eq!(drawn.object.meta.name.as_deref(), Some("Status panel"));
+    assert_eq!(drawn.object.unwrap().meta.name.as_deref(), Some("Status panel"));
     assert_eq!(
-        drawn.object.meta.alt_text.as_deref(),
+        drawn.object.unwrap().meta.alt_text.as_deref(),
         Some("red status rectangle")
     );
     assert_eq!(drawn.payload.geometry, ShapeGeometry::Preset("rect".into()));

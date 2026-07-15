@@ -576,7 +576,7 @@ fn chart_roundtrip_through_excel() {
                 to: orig_to,
                 ..
             },
-        ) = (&drawn.object.anchor, &orig_charts[i].object.anchor)
+        ) = (&drawn.object.unwrap().anchor, &orig_charts[i].object.unwrap().anchor)
         {
             assert_eq!(
                 from.col, orig_from.col,
@@ -590,8 +590,8 @@ fn chart_roundtrip_through_excel() {
             assert_eq!(to.row, orig_to.row, "chart {i} ({label}) anchor to_row");
         } else {
             assert_eq!(
-                std::mem::discriminant(&drawn.object.anchor),
-                std::mem::discriminant(&orig_charts[i].object.anchor),
+                std::mem::discriminant(&drawn.object.unwrap().anchor),
+                std::mem::discriminant(&orig_charts[i].object.unwrap().anchor),
                 "chart {i} ({label}) anchor type mismatch"
             );
         }

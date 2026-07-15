@@ -127,8 +127,8 @@ fn xlsx_control_z_order_between_images_round_trips() {
 
     let sheet = read.worksheet(0).unwrap();
     let images: Vec<_> = sheet.images().collect();
-    assert_eq!(images[0].object.meta.name.as_deref(), Some("Below"));
-    assert_eq!(images[1].object.meta.name.as_deref(), Some("Above"));
+    assert_eq!(images[0].object.unwrap().meta.name.as_deref(), Some("Below"));
+    assert_eq!(images[1].object.unwrap().meta.name.as_deref(), Some("Above"));
     let control = sheet.form_controls().next().unwrap();
     assert_eq!(control.payload.caption_text().as_deref(), Some("Middle"));
     assert_eq!(
@@ -136,7 +136,7 @@ fn xlsx_control_z_order_between_images_round_trips() {
         Some("$D$2"),
         "control state still comes from ctrlProps"
     );
-    assert_eq!(control.object.anchor, two_cell(1, 1, 3, 3));
+    assert_eq!(control.object.unwrap().anchor, two_cell(1, 1, 3, 3));
 }
 
 /// Comments keep their order relative to form controls (the shared
@@ -252,8 +252,8 @@ fn xlsx_image_locked_printable_round_trips() {
     let read = round_trip(&workbook);
     let sheet = read.worksheet(0).unwrap();
     let image = sheet.images().next().expect("image");
-    assert!(!image.object.meta.locked);
-    assert!(!image.object.meta.printable);
+    assert!(!image.object.unwrap().meta.locked);
+    assert!(!image.object.unwrap().meta.printable);
 
     // And the defaults still read back as true.
     let mut workbook = Workbook::new();
@@ -263,8 +263,8 @@ fn xlsx_image_locked_printable_round_trips() {
         .add_drawing(png("Pic").with_anchor(two_cell(0, 0, 2, 2))).unwrap();
     let read = round_trip(&workbook);
     let image = read.worksheet(0).unwrap().images().next().unwrap();
-    assert!(image.object.meta.locked);
-    assert!(image.object.meta.printable);
+    assert!(image.object.unwrap().meta.locked);
+    assert!(image.object.unwrap().meta.printable);
 }
 
 /// A customized comment popup anchor survives a round trip instead of
@@ -419,11 +419,11 @@ fn xlsx_twin_text_on_captionless_control_is_ignored() {
 
     let read = XlsxReader::read(Cursor::new(patched_bytes)).expect("read patched");
     let sheet = read.worksheet(0).unwrap();
-    let controls = sheet.placed_form_controls();
+    let controls = sheet.form_controls().collect::<Vec<_>>();
     assert_eq!(controls.len(), 1);
     assert!(
         matches!(
-            controls[0].control.kind,
+            controls[0].payload.kind,
             FormControlKind::Scrollbar { value: 5, .. }
         ),
         "scrollbar survives with its state"
@@ -710,7 +710,7 @@ fn xlsx_group_nested_control_emits_controls_block_and_vml() {
     // And the control survives the round trip inside the group.
     let read = XlsxReader::read(Cursor::new(bytes)).expect("read");
     let sheet = read.worksheet(0).unwrap();
-    let controls: Vec<_> = sheet.placed_form_controls();
+    let controls: Vec<_> = sheet.form_controls().collect::<Vec<_>>();
     assert_eq!(controls.len(), 1, "group-nested control survives");
     let group = sheet
         .drawings()
@@ -969,11 +969,11 @@ fn xlsx_chart_one_cell_and_edit_as_anchors_round_trip() {
     let charts: Vec<_> = read.worksheet(0).unwrap().charts().collect();
     assert_eq!(charts.len(), 2);
     assert_eq!(
-        charts[0].object.anchor, one_cell,
+        charts[0].object.unwrap().anchor, one_cell,
         "OneCell chart anchor survives with its extent"
     );
     assert_eq!(
-        charts[1].object.anchor, pinned,
+        charts[1].object.unwrap().anchor, pinned,
         "TwoCell chart anchor keeps editAs"
     );
 }

@@ -477,8 +477,8 @@ impl StyleTables {
         }
 
         for sheet in workbook.worksheets() {
-            for placed in sheet.placed_form_controls() {
-                let Some(caption) = placed.control.caption() else {
+            for placed in sheet.form_controls() {
+                let Some(caption) = placed.payload.caption() else {
                     continue;
                 };
                 for run in &caption.runs {
@@ -2102,8 +2102,8 @@ fn user_names_in_xls_emit_order(
 fn macro_names_in_xls_emit_order(workbook: &Workbook) -> Vec<String> {
     let mut names = workbook
         .worksheets()
-        .flat_map(|sheet| sheet.placed_form_controls())
-        .filter_map(|placed| placed.control.macro_name.clone())
+        .flat_map(|sheet| sheet.form_controls())
+        .filter_map(|placed| placed.payload.macro_name.clone())
         .collect::<Vec<_>>();
     names.sort_by_key(|name| name.to_ascii_lowercase());
     names.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
@@ -5315,11 +5315,11 @@ fn chain_option_buttons(shapes: &mut [SheetShape], sheet: &Worksheet) {
     }
     let mut controls: Vec<&mut ControlShape> = Vec::new();
     collect(shapes, &mut controls);
-    let placed = sheet.placed_form_controls();
+    let placed = sheet.form_controls().collect::<Vec<_>>();
     debug_assert_eq!(
         placed.len(),
         controls.len(),
-        "placed_form_controls() must walk the same control set as the built shapes"
+        "form_controls().collect::<Vec<_>>() must walk the same control set as the built shapes"
     );
     if placed.len() != controls.len() {
         // Positional pairing is broken; in release, degrade to

@@ -2521,7 +2521,7 @@ fn test_roundtrip_chart_bar() {
     assert_eq!(vax.minimum, Some(0.0));
     assert_eq!(vax.maximum, Some(50000.0));
     assert_eq!(c.legend.as_ref().unwrap().position, LegendPosition::Bottom);
-    if let DrawingAnchor::TwoCell { from, to, .. } = &drawn.object.anchor {
+    if let DrawingAnchor::TwoCell { from, to, .. } = &drawn.object.unwrap().anchor {
         assert_eq!(from.col, 1);
         assert_eq!(from.row, 5);
         assert_eq!(to.col, 10);
@@ -2716,7 +2716,7 @@ fn test_roundtrip_chart_anchor_offsets() {
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
     let c = wb2.worksheet(0).unwrap().charts().next().unwrap();
 
-    if let DrawingAnchor::TwoCell { from, to, .. } = &c.object.anchor {
+    if let DrawingAnchor::TwoCell { from, to, .. } = &c.object.unwrap().anchor {
         assert_eq!(from.col, 3);
         assert_eq!(from.row, 7);
         assert_eq!(from.col_offset_emu, 152400);
@@ -5992,8 +5992,8 @@ fn xlsx_png_image_round_trips() {
     assert_eq!(images.len(), 1, "exactly one image must round-trip");
 
     let img = &images[0];
-    assert_eq!(img.object.meta.name.as_deref(), Some("Pic1"));
-    assert_eq!(img.object.meta.alt_text.as_deref(), Some("Test image"));
+    assert_eq!(img.object.unwrap().meta.name.as_deref(), Some("Pic1"));
+    assert_eq!(img.object.unwrap().meta.alt_text.as_deref(), Some("Test image"));
     assert_eq!(img.payload.format, ImageFormat::Png);
     assert_eq!(
         img.payload.data, TEST_PNG_1X1,
@@ -6001,13 +6001,13 @@ fn xlsx_png_image_round_trips() {
     );
     assert_eq!(img.payload.width_emu, 1_000_000);
     assert_eq!(img.payload.height_emu, 2_000_000);
-    if let DrawingAnchor::TwoCell { from, to, .. } = &img.object.anchor {
+    if let DrawingAnchor::TwoCell { from, to, .. } = &img.object.unwrap().anchor {
         assert_eq!(from.col, 1);
         assert_eq!(from.row, 2);
         assert_eq!(to.col, 5);
         assert_eq!(to.row, 10);
     } else {
-        panic!("expected TwoCell anchor, got {:?}", img.object.anchor);
+        panic!("expected TwoCell anchor, got {:?}", img.object.unwrap().anchor);
     }
 }
 
@@ -6051,7 +6051,7 @@ fn xlsx_onecell_anchor_round_trips() {
         from,
         width_emu,
         height_emu,
-    } = &img.object.anchor
+    } = &img.object.unwrap().anchor
     {
         assert_eq!(from.col, 2);
         assert_eq!(from.col_offset_emu, 50_000);
@@ -6062,7 +6062,7 @@ fn xlsx_onecell_anchor_round_trips() {
     } else {
         panic!(
             "expected OneCell anchor after round-trip, got {:?}",
-            img.object.anchor
+            img.object.unwrap().anchor
         );
     }
     assert_eq!(img.payload.format, ImageFormat::Png);
@@ -6106,7 +6106,7 @@ fn xlsx_absolute_anchor_round_trips() {
         y_emu,
         width_emu,
         height_emu,
-    } = &img.object.anchor
+    } = &img.object.unwrap().anchor
     {
         assert_eq!(*x_emu, 2_500_000);
         assert_eq!(*y_emu, 1_200_000);
@@ -6115,7 +6115,7 @@ fn xlsx_absolute_anchor_round_trips() {
     } else {
         panic!(
             "expected Absolute anchor after round-trip, got {:?}",
-            img.object.anchor
+            img.object.unwrap().anchor
         );
     }
     assert_eq!(img.payload.format, ImageFormat::Png);
@@ -6166,7 +6166,7 @@ fn xlsx_twocell_anchor_editas_round_trips() {
         XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
         let rt = XlsxReader::read(Cursor::new(&buf)).expect("read");
         let img = rt.worksheet(0).unwrap().images().next().unwrap();
-        if let DrawingAnchor::TwoCell { edit_as, .. } = &img.object.anchor {
+        if let DrawingAnchor::TwoCell { edit_as, .. } = &img.object.unwrap().anchor {
             assert_eq!(
                 edit_as.as_ref(),
                 Some(&ea),
@@ -6201,7 +6201,7 @@ fn xlsx_multiple_images_round_trip_on_same_sheet() {
     let images: Vec<_> = rt.worksheet(0).unwrap().images().collect();
     assert_eq!(images.len(), 3);
     for i in 0..3usize {
-        assert_eq!(images[i].object.meta.name, Some(format!("Pic{i}")));
+        assert_eq!(images[i].object.unwrap().meta.name, Some(format!("Pic{i}")));
         assert_eq!(
             images[i].payload.data().last().copied(),
             Some(i as u8),
@@ -6237,7 +6237,7 @@ fn xlsx_images_round_trip_across_multiple_sheets() {
         let images: Vec<_> = rt.worksheet(sheet).unwrap().images().collect();
         assert_eq!(images.len(), 2, "sheet {sheet} image count");
         for i in 0..2usize {
-            assert_eq!(images[i].object.meta.name, Some(format!("S{sheet}Pic{i}")));
+            assert_eq!(images[i].object.unwrap().meta.name, Some(format!("S{sheet}Pic{i}")));
             assert_eq!(
                 images[i].payload.data().last().copied(),
                 Some((sheet * 10 + i) as u8),
@@ -6374,11 +6374,11 @@ fn xlsx_form_controls_round_trip() {
             *first_in_group = i == 3;
         }
         assert_eq!(control.payload.kind, expected, "control {i} kind mismatch");
-        assert!(control.object.meta.locked);
-        assert!(control.object.meta.printable);
+        assert!(control.object.unwrap().meta.locked);
+        assert!(control.object.unwrap().meta.printable);
     }
     // Anchors survive exactly (EMU in controlPr).
-    match &controls[0].object.anchor {
+    match &controls[0].object.unwrap().anchor {
         DrawingAnchor::TwoCell { from, to, .. } => {
             assert_eq!((from.col, from.row), (1, 1));
             assert_eq!((to.col, to.row), (3, 2));
@@ -6386,7 +6386,7 @@ fn xlsx_form_controls_round_trip() {
         other => panic!("expected TwoCell anchor, got {other:?}"),
     }
     // Names are persisted (defaulted by the writer).
-    assert_eq!(controls[0].object.meta.name.as_deref(), Some("Button 1"));
+    assert_eq!(controls[0].object.unwrap().meta.name.as_deref(), Some("Button 1"));
 }
 
 #[test]
@@ -6512,9 +6512,9 @@ fn xlsx_control_named_and_flagged_round_trips() {
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
     let rt = XlsxReader::read(Cursor::new(&buf)).expect("read");
     let controls: Vec<_> = rt.worksheet(0).unwrap().form_controls().collect();
-    assert_eq!(controls[0].object.meta.name.as_deref(), Some("My Button"));
-    assert!(!controls[0].object.meta.locked);
-    assert!(!controls[0].object.meta.printable);
+    assert_eq!(controls[0].object.unwrap().meta.name.as_deref(), Some("My Button"));
+    assert!(!controls[0].object.unwrap().meta.locked);
+    assert!(!controls[0].object.unwrap().meta.printable);
     assert_eq!(
         controls[0].payload.caption_text().as_deref(),
         Some("Do <it> & more")

@@ -123,7 +123,7 @@ pub(crate) fn write_worksheet<W: Write + Seek>(
     // VML presence must match write_legacy_vml's gate, which walks
     // placed controls (including group children), not just top-level
     // ones; a mismatch pairs BrtDrawing with the wrong relationship.
-    let has_vml = has_comments || !ws.placed_form_controls().is_empty();
+    let has_vml = has_comments || !ws.form_controls().collect::<Vec<_>>().is_empty();
     // `write_sheet_rels` writes hyperlinks/tables first, then
     // comments, VML, and Drawing. `rid_counter` only includes the
     // hyperlink rels here; table rels occupy the next `table_count`

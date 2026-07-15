@@ -241,14 +241,14 @@ impl Workbook {
                     continue;
                 }
             }
-            let controls = self.worksheets[source_sheet].placed_form_controls();
+            let controls = self.worksheets[source_sheet].form_controls().collect::<Vec<_>>();
             let mut radio_values = vec![None; controls.len()];
             for group in radio_groups(&controls) {
                 let value = group
                     .iter()
                     .position(|&index| {
                         matches!(
-                            controls[index].control.kind,
+                            controls[index].payload.kind,
                             FormControlKind::OptionButton {
                                 state: CheckState::Checked,
                                 ..
@@ -268,7 +268,7 @@ impl Workbook {
                         continue;
                     }
                 }
-                let (link, value) = match &placed.control.kind {
+                let (link, value) = match &placed.payload.kind {
                     FormControlKind::Checkbox {
                         state, cell_link, ..
                     } => {
@@ -332,7 +332,7 @@ impl Workbook {
                     let existing = self.worksheets[sheet].get_value_at(address.row, address.col);
                     let fresh_blank = existing == CellValue::Empty && !has_formula;
                     let value = if matches!(
-                        &placed.control.kind,
+                        &placed.payload.kind,
                         FormControlKind::Checkbox {
                             state: CheckState::Unchecked,
                             ..
@@ -387,7 +387,7 @@ impl Workbook {
         }
         let mut planned: Vec<(usize, DrawingPath, CheckState)> = Vec::new();
         for source_sheet in 0..self.worksheets.len() {
-            let controls = self.worksheets[source_sheet].placed_form_controls();
+            let controls = self.worksheets[source_sheet].form_controls().collect::<Vec<_>>();
             let excluded =
                 |path: &DrawingPath| source_sheet == exclude_sheet && exclude.contains(path);
             let shared_cell_value = |link: Option<&str>| -> Option<CellValue> {
@@ -403,7 +403,7 @@ impl Workbook {
                 }
                 let Some(value) = group
                     .iter()
-                    .find_map(|&index| shared_cell_value(controls[index].control.cell_link()))
+                    .find_map(|&index| shared_cell_value(controls[index].payload.cell_link()))
                 else {
                     continue;
                 };
@@ -421,12 +421,12 @@ impl Workbook {
             }
 
             for placed in &controls {
-                if !matches!(placed.control.kind, FormControlKind::Checkbox { .. })
+                if !matches!(placed.payload.kind, FormControlKind::Checkbox { .. })
                     || excluded(&placed.path)
                 {
                     continue;
                 }
-                let Some(value) = shared_cell_value(placed.control.cell_link()) else {
+                let Some(value) = shared_cell_value(placed.payload.cell_link()) else {
                     continue;
                 };
                 // The same truthiness Excel applies when a cell drives a
@@ -512,13 +512,13 @@ impl Workbook {
 
         let mut planned: Vec<(usize, DrawingPath, Driven)> = Vec::new();
         for source_sheet in 0..self.worksheets.len() {
-            let controls = self.worksheets[source_sheet].placed_form_controls();
+            let controls = self.worksheets[source_sheet].form_controls().collect::<Vec<_>>();
 
             for group in radio_groups(&controls) {
                 // Excel persists the group's link on the first radio.
                 let Some(value) = group.iter().find_map(|&index| {
                     controls[index]
-                        .control
+                        .payload
                         .cell_link()
                         .and_then(|link| driving_value(self, source_sheet, link))
                 }) else {
@@ -538,7 +538,7 @@ impl Workbook {
             }
 
             for placed in &controls {
-                match &placed.control.kind {
+                match &placed.payload.kind {
                     FormControlKind::Checkbox { cell_link, .. } => {
                         let Some(value) = cell_link
                             .as_deref()
@@ -667,9 +667,9 @@ impl Workbook {
     pub fn synchronized_for_save(&self) -> Option<Self> {
         if !self.worksheets.iter().any(|sheet| {
             sheet
-                .placed_form_controls()
+                .form_controls().collect::<Vec<_>>()
                 .iter()
-                .any(|placed| placed.control.cell_link().is_some())
+                .any(|placed| placed.payload.cell_link().is_some())
         }) {
             return None;
         }

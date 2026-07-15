@@ -65,8 +65,9 @@ pub use conditional_format::{
 pub use drawing::{
     default_comment_anchor, validate_anchor, validate_group_child, ChildTransform, CommentRef,
     DrawingKind, DrawingMeta,
-    DrawingNodeMut, DrawingNodeRef, DrawingObject, DrawingPath, DrawingText, Drawn, Group,
-    GroupChild, GroupTransform, RawDrawing, RawRel, RectEmu, Shape, ShapeFill, ShapeGeometry,
+    DrawingNodeMut, DrawingNodeRef, DrawingObject, DrawingPath, DrawingText, Group,
+    GroupChild, GroupTransform, Placed, RawDrawing, RawRel, RectEmu, Shape, ShapeFill,
+    ShapeGeometry,
     ShapeLine,
 };
 pub use error::{Error, Result};

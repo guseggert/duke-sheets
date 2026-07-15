@@ -55,11 +55,11 @@ fn assert_unknown_edit_box(workbook: &Workbook, expect_ctrl_props: bool) {
         .form_controls()
         .next()
         .expect("unknown control survives");
-    assert_eq!(drawn.object.meta.name.as_deref(), Some("Legacy editor"));
+    assert_eq!(drawn.object.unwrap().meta.name.as_deref(), Some("Legacy editor"));
     assert_eq!(drawn.payload.macro_name.as_deref(), Some("RunUnknown"));
     assert_eq!(drawn.payload.caption_text().as_deref(), Some("Unsupported editor"));
     assert_eq!(
-        drawn.object.anchor,
+        drawn.object.unwrap().anchor,
         DrawingAnchor::TwoCell {
             from: CellMarker {
                 col: 1,
@@ -146,10 +146,10 @@ fn assert_xls_unknown(workbook: &Workbook, original_raw: &[u8]) {
         .form_controls()
         .next()
         .expect("XLS unknown control survives");
-    assert_eq!(drawn.object.meta.name.as_deref(), Some("Edit field"));
-    assert!(drawn.object.meta.hidden);
-    assert!(!drawn.object.meta.locked);
-    assert!(!drawn.object.meta.printable);
+    assert_eq!(drawn.object.unwrap().meta.name.as_deref(), Some("Edit field"));
+    assert!(drawn.object.unwrap().meta.hidden);
+    assert!(!drawn.object.unwrap().meta.locked);
+    assert!(!drawn.object.unwrap().meta.printable);
     assert_eq!(drawn.payload.caption_text().as_deref(), Some("Raw edit box"));
     let FormControlKind::Unknown {
         object_type,
@@ -928,7 +928,7 @@ fn assert_metric_anchors(workbook: &Workbook, tolerance_emu: i64) {
     };
     let controls: Vec<_> = workbook.worksheet(0).unwrap().form_controls().collect();
     assert_eq!(controls.len(), 2);
-    match &controls[0].object.anchor {
+    match &controls[0].object.unwrap().anchor {
         DrawingAnchor::TwoCell { from, to, .. } => {
             assert_eq!((from.col, from.col_offset_emu), (0, 0));
             assert_eq!((from.row, from.row_offset_emu), (0, 0));
@@ -939,7 +939,7 @@ fn assert_metric_anchors(workbook: &Workbook, tolerance_emu: i64) {
         }
         other => panic!("expected flattened one-cell control anchor, got {other:?}"),
     }
-    match &controls[1].object.anchor {
+    match &controls[1].object.unwrap().anchor {
         DrawingAnchor::TwoCell { from, .. } => {
             assert_eq!(from.col, 0);
             close(from.col_offset_emu, 609_600);
@@ -1123,7 +1123,7 @@ fn radio_grouping_uses_custom_sheet_dimensions() {
         },
     )).unwrap();
 
-    let placed = sheet.placed_form_controls();
+    let placed = sheet.form_controls().collect::<Vec<_>>();
     assert_eq!(placed[1].rect_emu.x_emu, 1_381_125);
     assert_eq!(radio_groups(&placed), vec![vec![1], vec![2]]);
 }

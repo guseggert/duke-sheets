@@ -107,7 +107,7 @@ fn xls_control_z_order_between_images_round_trips() {
     let sheet = read.worksheet(0).unwrap();
     let control = sheet.form_controls().next().unwrap();
     assert_eq!(control.payload.caption_text().as_deref(), Some("Middle"));
-    assert_eq!(control.object.anchor, two_cell(1, 1, 3, 3));
+    assert_eq!(control.object.unwrap().anchor, two_cell(1, 1, 3, 3));
 }
 
 /// XLS comments are shapes in the same container, so full cross-kind
@@ -206,7 +206,7 @@ fn xls_group_of_images_round_trips_and_keeps_later_shapes_paired() {
         Some("After group"),
         "control after a group must keep its own OBJ pairing"
     );
-    assert_eq!(control.object.anchor, two_cell(5, 5, 7, 7));
+    assert_eq!(control.object.unwrap().anchor, two_cell(5, 5, 7, 7));
 }
 
 /// Control shape names round-trip through the FOPT wzName property
@@ -224,7 +224,7 @@ fn xls_control_name_round_trips() {
     let read = round_trip(&workbook);
     let sheet = read.worksheet(0).unwrap();
     let control = sheet.form_controls().next().expect("control");
-    assert_eq!(control.object.meta.name.as_deref(), Some("Check Box 7"));
+    assert_eq!(control.object.unwrap().meta.name.as_deref(), Some("Check Box 7"));
 }
 
 /// Image alt text round-trips through FOPT wzDescription.
@@ -239,7 +239,7 @@ fn xls_image_alt_text_round_trips() {
     let read = round_trip(&workbook);
     let image = read.worksheet(0).unwrap().images().next().expect("image");
     assert_eq!(
-        image.object.meta.alt_text.as_deref(),
+        image.object.unwrap().meta.alt_text.as_deref(),
         Some("a tiny transparent pixel")
     );
 }
@@ -256,8 +256,8 @@ fn xls_image_locked_printable_round_trips() {
 
     let read = round_trip(&workbook);
     let image = read.worksheet(0).unwrap().images().next().expect("image");
-    assert!(!image.object.meta.locked);
-    assert!(!image.object.meta.printable);
+    assert!(!image.object.unwrap().meta.locked);
+    assert!(!image.object.unwrap().meta.printable);
 
     let mut workbook = Workbook::new();
     workbook
@@ -266,6 +266,6 @@ fn xls_image_locked_printable_round_trips() {
         .add_drawing(png("Pic").with_anchor(two_cell(0, 0, 2, 2))).unwrap();
     let read = round_trip(&workbook);
     let image = read.worksheet(0).unwrap().images().next().unwrap();
-    assert!(image.object.meta.locked);
-    assert!(image.object.meta.printable);
+    assert!(image.object.unwrap().meta.locked);
+    assert!(image.object.unwrap().meta.printable);
 }

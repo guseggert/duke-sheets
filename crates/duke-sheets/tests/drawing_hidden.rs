@@ -113,14 +113,14 @@ fn build_mixed_workbook() -> Workbook {
 fn assert_mixed_hidden_flags(sheet: &Worksheet, format: &str) {
     let images: Vec<_> = sheet.images().collect();
     assert_eq!(images.len(), 2, "{format}: both images survive");
-    assert_eq!(images[0].object.meta.name.as_deref(), Some("Shown"));
+    assert_eq!(images[0].object.unwrap().meta.name.as_deref(), Some("Shown"));
     assert!(
-        !images[0].object.meta.hidden,
+        !images[0].object.unwrap().meta.hidden,
         "{format}: default image must read back hidden == false"
     );
-    assert_eq!(images[1].object.meta.name.as_deref(), Some("Ghost"));
+    assert_eq!(images[1].object.unwrap().meta.name.as_deref(), Some("Ghost"));
     assert!(
-        images[1].object.meta.hidden,
+        images[1].object.unwrap().meta.hidden,
         "{format}: hidden image must read back hidden == true"
     );
 
@@ -131,7 +131,7 @@ fn assert_mixed_hidden_flags(sheet: &Worksheet, format: &str) {
         Some("Visible box")
     );
     assert!(
-        !controls[0].object.meta.hidden,
+        !controls[0].object.unwrap().meta.hidden,
         "{format}: default control must read back hidden == false"
     );
     assert_eq!(
@@ -139,7 +139,7 @@ fn assert_mixed_hidden_flags(sheet: &Worksheet, format: &str) {
         Some("Cloaked box")
     );
     assert!(
-        controls[1].object.meta.hidden,
+        controls[1].object.unwrap().meta.hidden,
         "{format}: hidden control must read back hidden == true"
     );
 }

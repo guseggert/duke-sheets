@@ -8,7 +8,7 @@
 use std::io::Cursor;
 
 use duke_sheets_chart::{CellMarker, DrawingAnchor, EditAs, EmbeddedImage, ImageFormat};
-use duke_sheets_core::{DrawingObject, Drawn, Workbook, Worksheet};
+use duke_sheets_core::{DrawingObject, Placed, Workbook, Worksheet};
 use duke_sheets_xls::{XlsReader, XlsWriter};
 
 /// A 68-byte 1x1 transparent PNG with verified chunk CRCs, used as
@@ -26,7 +26,7 @@ fn write_then_read(wb: &Workbook) -> Workbook {
     XlsReader::read(Cursor::new(&bytes)).expect("read back")
 }
 
-fn images_of(ws: &Worksheet) -> Vec<Drawn<'_, EmbeddedImage>> {
+fn images_of(ws: &Worksheet) -> Vec<Placed<'_, EmbeddedImage>> {
     ws.images().collect()
 }
 
@@ -169,14 +169,14 @@ fn single_picture_round_trips() {
         img.payload.data, TEST_PNG_1X1,
         "PNG bytes must round-trip verbatim"
     );
-    assert_eq!(img.object.meta.name.as_deref(), Some("Picture 1"));
-    if let DrawingAnchor::TwoCell { from, to, .. } = &img.object.anchor {
+    assert_eq!(img.object.unwrap().meta.name.as_deref(), Some("Picture 1"));
+    if let DrawingAnchor::TwoCell { from, to, .. } = &img.object.unwrap().anchor {
         assert_eq!(from.col, 2);
         assert_eq!(from.row, 3);
         assert_eq!(to.col, 5);
         assert_eq!(to.row, 8);
     } else {
-        panic!("expected TwoCell anchor, got {:?}", img.object.anchor);
+        panic!("expected TwoCell anchor, got {:?}", img.object.unwrap().anchor);
     }
 }
 
@@ -308,7 +308,7 @@ fn twocell_anchor_edit_as_collapses_to_default() {
 
     let parsed = write_then_read(&wb);
     let images = images_of(parsed.worksheet(0).unwrap());
-    if let DrawingAnchor::TwoCell { edit_as, .. } = &images[0].object.anchor {
+    if let DrawingAnchor::TwoCell { edit_as, .. } = &images[0].object.unwrap().anchor {
         assert_eq!(*edit_as, None);
     } else {
         panic!("expected TwoCell");
@@ -341,7 +341,7 @@ fn onecell_anchor_round_trips_with_visual_area_preserved() {
     let parsed = write_then_read(&wb);
     let images = images_of(parsed.worksheet(0).unwrap());
     let img = &images[0];
-    match &img.object.anchor {
+    match &img.object.unwrap().anchor {
         DrawingAnchor::TwoCell {
             from,
             to,
@@ -378,7 +378,7 @@ fn absolute_anchor_round_trips_with_visual_area_preserved() {
 
     let parsed = write_then_read(&wb);
     let images = images_of(parsed.worksheet(0).unwrap());
-    match &images[0].object.anchor {
+    match &images[0].object.unwrap().anchor {
         DrawingAnchor::TwoCell {
             from,
             to,
@@ -427,7 +427,7 @@ fn picture_anchor_within_cell_offsets_round_trip() {
     let parsed = write_then_read(&wb);
     let images = images_of(parsed.worksheet(0).unwrap());
     assert_eq!(images.len(), 1);
-    if let DrawingAnchor::TwoCell { from, to, .. } = &images[0].object.anchor {
+    if let DrawingAnchor::TwoCell { from, to, .. } = &images[0].object.unwrap().anchor {
         assert_eq!(from.col_offset_emu, from_col_off);
         assert_eq!(from.row_offset_emu, from_row_off);
         assert_eq!(to.col_offset_emu, to_col_off);
@@ -486,10 +486,10 @@ fn picture_anchor_over_hidden_rows_and_columns_survives() {
     let parsed = write_then_read(&wb);
     let images = images_of(parsed.worksheet(0).unwrap());
     assert_eq!(images.len(), 1);
-    let DrawingAnchor::TwoCell { from, to, .. } = &images[0].object.anchor else {
+    let DrawingAnchor::TwoCell { from, to, .. } = &images[0].object.unwrap().anchor else {
         panic!("expected TwoCell anchor");
     };
-    assert_eq!(images[0].object.anchor, custom, "anchor survives verbatim");
+    assert_eq!(images[0].object.unwrap().anchor, custom, "anchor survives verbatim");
     assert!(
         (to.col, to.col_offset_emu) >= (from.col, from.col_offset_emu),
         "column endpoints stay ordered"
@@ -525,7 +525,7 @@ fn negative_anchor_offsets_clamp_to_zero() {
 
     let parsed = write_then_read(&wb);
     let images = images_of(parsed.worksheet(0).unwrap());
-    let DrawingAnchor::TwoCell { from, .. } = &images[0].object.anchor else {
+    let DrawingAnchor::TwoCell { from, .. } = &images[0].object.unwrap().anchor else {
         panic!("expected TwoCell anchor");
     };
     assert_eq!(
@@ -848,7 +848,7 @@ fn picture_and_comment_coexist_on_same_sheet() {
     assert_eq!(ws_in.comment_count(), 1, "comment must survive");
     assert_eq!(ws_in.comment_at(3, 3).unwrap().text, "A note");
     assert_eq!(
-        images_of(ws_in)[0].object.meta.name.as_deref(),
+        images_of(ws_in)[0].object.unwrap().meta.name.as_deref(),
         Some("Picture 1")
     );
 }
@@ -871,7 +871,6 @@ fn pictures_on_multiple_sheets_round_trip() {
     assert_eq!(parsed.worksheet(1).unwrap().image_count(), 1);
     assert_eq!(
         images_of(parsed.worksheet(0).unwrap())[0]
-            .object
             .meta
             .name
             .as_deref(),
@@ -879,7 +878,6 @@ fn pictures_on_multiple_sheets_round_trip() {
     );
     assert_eq!(
         images_of(parsed.worksheet(1).unwrap())[0]
-            .object
             .meta
             .name
             .as_deref(),

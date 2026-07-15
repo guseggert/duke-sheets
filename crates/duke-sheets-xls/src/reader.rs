@@ -5162,7 +5162,7 @@ mod tests {
         assert_eq!(ws.form_control_count(), 1);
         let control = ws.form_controls().next().unwrap();
         assert_eq!(
-            control.object.anchor,
+            control.object.unwrap().anchor,
             duke_sheets_chart::DrawingAnchor::default(),
             "mismatched pairing falls back to the default anchor"
         );

@@ -8,7 +8,7 @@ use std::io::Cursor;
 
 use duke_sheets_chart::{CellMarker, DrawingAnchor};
 use duke_sheets_core::{
-    CheckState, ControlText, DrawingObject, Drawn, FormControl, FormControlKind, ListSelection,
+    CheckState, ControlText, DrawingObject, FormControl, FormControlKind, ListSelection, Placed,
     RichTextRun, RunFont, Workbook, Worksheet,
 };
 use duke_sheets_xls::{XlsReader, XlsWriter};
@@ -40,7 +40,7 @@ fn control_at(kind: FormControlKind, anchor: DrawingAnchor) -> DrawingObject {
     DrawingObject::form_control(FormControl::new(kind)).with_anchor(anchor)
 }
 
-fn controls_of(ws: &Worksheet) -> Vec<Drawn<'_, FormControl>> {
+fn controls_of(ws: &Worksheet) -> Vec<Placed<'_, FormControl>> {
     ws.form_controls().collect()
 }
 
@@ -349,7 +349,7 @@ fn control_anchor_round_trips() {
 
     let parsed = write_then_read(&wb);
     let controls = controls_of(parsed.worksheet(0).unwrap());
-    match &controls[0].object.anchor {
+    match &controls[0].object.unwrap().anchor {
         DrawingAnchor::TwoCell { from, to, .. } => {
             assert_eq!(from.col, 2);
             assert_eq!(from.row, 3);
@@ -379,8 +379,8 @@ fn locked_and_printable_flags_round_trip() {
 
     let parsed = write_then_read(&wb);
     let controls = controls_of(parsed.worksheet(0).unwrap());
-    assert!(!controls[0].object.meta.locked);
-    assert!(!controls[0].object.meta.printable);
+    assert!(!controls[0].object.unwrap().meta.locked);
+    assert!(!controls[0].object.unwrap().meta.printable);
 }
 
 #[test]
