@@ -279,7 +279,13 @@ fn default_text_alignment(kind: &FormControlKind) -> (HorizontalAlignment, Verti
     }
 }
 
-fn write_vml_run(xml: &mut String, text: &str, font: Option<&RunFont>, default_size: u16) {
+fn write_vml_run(
+    xml: &mut String,
+    text: &str,
+    font: Option<&RunFont>,
+    default_size: u16,
+    palette: &duke_sheets_core::ThemePalette,
+) {
     let name = font
         .and_then(|font| font.name.as_deref())
         .unwrap_or("Segoe UI");
@@ -287,12 +293,9 @@ fn write_vml_run(xml: &mut String, text: &str, font: Option<&RunFont>, default_s
         .and_then(|font| font.size)
         .map(|size| (size * 20.0).round().clamp(1.0, u16::MAX as f64) as u16)
         .unwrap_or(default_size);
-    let color = match font.and_then(|font| font.color) {
-        Some(Color::Auto) | None => "auto".to_string(),
-        Some(color) => {
-            let (r, g, b) = color.to_rgb();
-            format!("#{r:02X}{g:02X}{b:02X}")
-        }
+    let color = match font.and_then(|font| font.color).and_then(|color| palette.resolve(&color)) {
+        None => "auto".to_string(),
+        Some((r, g, b)) => format!("#{r:02X}{g:02X}{b:02X}"),
     };
     xml.push_str(&format!(
         "<font face=\"{}\" size=\"{size}\" color=\"{color}\">",
@@ -359,6 +362,7 @@ pub fn write_control_shape_with_metrics(
     control: &FormControl,
     first_button: bool,
     metrics: &(impl DrawingMetrics + ?Sized),
+    palette: &duke_sheets_core::ThemePalette,
 ) {
     use FormControlKind as K;
     let kind = &control.kind;
@@ -469,10 +473,10 @@ pub fn write_control_shape_with_metrics(
         for line in caption_lines(caption) {
             xml.push_str(&format!("   <div style='text-align:{align}'>"));
             if line.is_empty() {
-                write_vml_run(xml, "", None, size);
+                write_vml_run(xml, "", None, size, palette);
             }
             for (text, font) in line {
-                write_vml_run(xml, &text, font.as_ref(), size);
+                write_vml_run(xml, &text, font.as_ref(), size, palette);
             }
             xml.push_str("</div>\n");
         }
@@ -705,12 +709,12 @@ pub fn write_control_shape_with_metrics(
 }
 
 /// One control in a sheet's emission sequence: every form control in
-/// the drawing tree, in [`Worksheet::placed_form_controls`]
+/// the drawing tree, in [`Worksheet::form_controls`]
 /// (depth-first) order. This order drives shape ids, VML shapes, the
 /// drawing-part twins, and (in XLSX) ctrlProp part numbering and
 /// `<controls>` entries.
 ///
-/// [`Worksheet::placed_form_controls`]: duke_sheets_core::Worksheet::placed_form_controls
+/// [`Worksheet::form_controls`]: duke_sheets_core::Worksheet::form_controls
 pub struct SheetControl<'a> {
     pub payload: &'a FormControl,
     pub meta: &'a DrawingMeta,
@@ -722,28 +726,25 @@ pub struct SheetControl<'a> {
 /// The sheet's control sequence in placed (depth-first) order.
 pub fn sheet_controls(sheet: &duke_sheets_core::Worksheet) -> Vec<SheetControl<'_>> {
     sheet
-        .placed_form_controls()
-        .into_iter()
+        .form_controls()
         .map(|placed| {
-            let meta = sheet
-                .drawing_at_path(&placed.path)
-                .map(|node| node.meta)
-                .expect("placed control path is valid");
-            let anchor = if let [index] = placed.path.as_slice() {
-                sheet.drawings()[*index].anchor.clone()
-            } else {
-                let (x1, y1, x2, y2) = placed.rect_emu;
-                let clamp = |v: i128| v.clamp(0, i64::MAX as i128) as i64;
-                DrawingAnchor::Absolute {
-                    x_emu: clamp(x1),
-                    y_emu: clamp(y1),
-                    width_emu: clamp((x2 - x1).max(0)),
-                    height_emu: clamp((y2 - y1).max(0)),
+            let anchor = match placed.object {
+                Some(object) => object.anchor.clone(),
+                // Group children have no anchor of their own; flatten
+                // the resolved rectangle into an absolute one.
+                None => {
+                    let rect = placed.rect_emu;
+                    DrawingAnchor::Absolute {
+                        x_emu: rect.x_emu.max(0),
+                        y_emu: rect.y_emu.max(0),
+                        width_emu: rect.width_emu.max(0),
+                        height_emu: rect.height_emu.max(0),
+                    }
                 }
             };
             SheetControl {
-                payload: placed.control,
-                meta,
+                payload: placed.payload,
+                meta: placed.meta,
                 anchor,
             }
         })
@@ -754,7 +755,7 @@ pub fn sheet_controls(sheet: &duke_sheets_core::Worksheet) -> Vec<SheetControl<'
 /// (depth-first) control order, derived from the spatial grouping in
 /// [`duke_sheets_core::radio_groups`].
 pub fn radio_head_flags(sheet: &duke_sheets_core::Worksheet) -> Vec<bool> {
-    let placed = sheet.placed_form_controls();
+    let placed = sheet.form_controls().collect::<Vec<_>>();
     let mut flags = vec![false; placed.len()];
     for group in duke_sheets_core::radio_groups(&placed) {
         if let Some(&head) = group.first() {
@@ -775,6 +776,7 @@ pub fn radio_head_flags(sheet: &duke_sheets_core::Worksheet) -> Vec<bool> {
 pub fn build_legacy_vml(
     sheet: &duke_sheets_core::Worksheet,
     sheet_index: usize,
+    palette: &duke_sheets_core::ThemePalette,
 ) -> Option<String> {
     use duke_sheets_core::DrawingKind;
 
@@ -826,6 +828,7 @@ pub fn build_legacy_vml(
     let mut z_index = 0usize;
     let mut ordinal = 0usize;
 
+    #[allow(clippy::too_many_arguments)]
     fn walk_controls(
         kind: &duke_sheets_core::DrawingKind,
         xml: &mut String,
@@ -835,6 +838,7 @@ pub fn build_legacy_vml(
         z_index: &mut usize,
         ordinal: &mut usize,
         metrics: &duke_sheets_core::Worksheet,
+        palette: &duke_sheets_core::ThemePalette,
     ) {
         match kind {
             duke_sheets_core::DrawingKind::FormControl(_) => {
@@ -849,6 +853,7 @@ pub fn build_legacy_vml(
                     control.payload,
                     heads[*ordinal],
                     metrics,
+                    palette,
                 );
                 *ordinal += 1;
             }
@@ -863,6 +868,7 @@ pub fn build_legacy_vml(
                         z_index,
                         ordinal,
                         metrics,
+                        palette,
                     );
                 }
             }
@@ -894,6 +900,7 @@ pub fn build_legacy_vml(
                 &mut z_index,
                 &mut ordinal,
                 sheet,
+                palette,
             ),
         }
     }
@@ -1239,8 +1246,6 @@ impl VmlControl {
                 object_type: object_type.to_string(),
                 legacy_object_type: None,
                 caption: caption(),
-                raw_properties: Vec::new(),
-                raw_obj: None,
             },
         };
 
@@ -1894,16 +1899,6 @@ fn validate_raw_client_data_fragment(fragment: &[u8]) -> Result<(), String> {
                 }
             }
             Event::Eof => break,
-            other => {
-                // Anything else outside the element would defeat the
-                // element-name guard.
-                if depth == 0 {
-                    return Err(format!(
-                        "raw ClientData fragment must start with its element, found {other:?}: {}",
-                        display()
-                    ));
-                }
-            }
         }
         buf.clear();
     }
@@ -2268,6 +2263,7 @@ mod tests {
             control,
             first,
             &DefaultDrawingMetrics,
+            &duke_sheets_core::ThemePalette::default(),
         );
         xml
     }
@@ -2486,12 +2482,13 @@ mod tests {
             0,
             0,
             CellComment::new("a", "hidden note"),
-        ));
+        )).unwrap();
         sheet.add_drawing(
             DrawingObject::comment(5, 2, CellComment::new("a", "shown note")).with_hidden(false),
-        );
+        ).unwrap();
 
-        let xml = build_legacy_vml(&sheet, 0).expect("vml part");
+        let xml = build_legacy_vml(&sheet, 0, &duke_sheets_core::ThemePalette::default())
+            .expect("vml part");
         let shapes: Vec<&str> = xml.split("<v:shape ").skip(1).collect();
         assert_eq!(shapes.len(), 2);
         let hidden = shapes

@@ -31,6 +31,60 @@ function shape(name: string, drawingAnchor: DrawingAnchor): TopLevelDrawingInput
 }
 
 describe("unified drawings", () => {
+  it("resolves absoluteRectEmu for top-level drawings and group children", () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    sheet.addDrawing({
+      anchor: anchor(0, 0, 1, 1),
+      kind: "formControl",
+      formControl: { kind: { kind: "label", caption: text("top") } },
+    });
+    sheet.addDrawing({
+      anchor: anchor(0, 0, 4, 4),
+      kind: "group",
+      group: {
+        groupTransform: { childXEmu: 0, childYEmu: 0, childCxEmu: 1000, childCyEmu: 1000 },
+        children: [
+          {
+            transform: { xEmu: 250, yEmu: 500, cxEmu: 500, cyEmu: 250 },
+            kind: "formControl",
+            formControl: { kind: { kind: "label", caption: text("nested") } },
+          },
+        ],
+      },
+    });
+
+    const drawings = sheet.drawings;
+    const top = drawings[0].absoluteRectEmu;
+    expect(top.xEmu).toBe(0);
+    expect(top.yEmu).toBe(0);
+    expect(top.widthEmu).toBeGreaterThan(0);
+    expect(top.heightEmu).toBeGreaterThan(0);
+
+    const groupRect = drawings[1].absoluteRectEmu;
+    const controls = sheet.formControls;
+    expect(controls).toHaveLength(2);
+    const child = controls[1].absoluteRectEmu;
+    expect(child.xEmu).toBe(groupRect.xEmu + groupRect.widthEmu * 0.25);
+    expect(child.yEmu).toBe(groupRect.yEmu + groupRect.heightEmu * 0.5);
+    expect(child.widthEmu).toBe(groupRect.widthEmu * 0.5);
+    expect(child.heightEmu).toBe(groupRect.heightEmu * 0.25);
+
+    const drawn = drawings[1];
+    if (drawn.kind !== "group") throw new Error("expected group");
+    expect(drawn.group.children[0].absoluteRectEmu).toEqual(child);
+  });
+
+  it("exposes the theme palette and resolves colors against it", () => {
+    const wb = new Workbook();
+    expect(wb.themePalette).toHaveLength(12);
+    expect(wb.themePalette[4]).toBe("4F81BD");
+    expect(wb.resolveColor({ colorType: "theme", index: 4, tint: 0 })).toBe("4F81BD");
+    expect(wb.resolveColor({ colorType: "theme", index: 4, tint: 0.5 })).toBe("A7C0DE");
+    expect(wb.resolveColor({ colorType: "rgb", r: 1, g: 2, b: 3 })).toBe("010203");
+    expect(wb.resolveColor({ colorType: "auto" })).toBeNull();
+  });
+
   it("preserves z-order, recursive paths, metadata, and lazy image bytes", () => {
     const wb = new Workbook();
     const sheet = wb.getSheet(0);
@@ -254,12 +308,12 @@ describe("unified drawings", () => {
             kind: "unknown",
             objectType: "EditBox",
             caption: text("Unsupported editor"),
-            rawProperties: [
-              ["customFlag", "kept"],
-              ["val", "17"],
-              ["fmlaLink", "$A$1"],
-            ],
           },
+          rawProperties: [
+            ["customFlag", "kept"],
+            ["val", "17"],
+            ["fmlaLink", "$A$1"],
+          ],
           rawClientData: [Buffer.from("<x:Val>17</x:Val>")],
         },
       });
@@ -275,8 +329,8 @@ describe("unified drawings", () => {
       const first = Workbook.fromBytes(fs.readFileSync(filePath));
       const { control, kind } = readUnknown(first);
       expect(kind.objectType).toBe("EditBox");
-      expect(kind.rawProperties).toContainEqual(["customFlag", "kept"]);
-      const propertyCount = kind.rawProperties.length;
+      expect(control.formControl.rawProperties).toContainEqual(["customFlag", "kept"]);
+      const propertyCount = control.formControl.rawProperties.length;
       expect(propertyCount).toBeGreaterThanOrEqual(3);
       expect(control.formControl.rawClientData.length).toBeGreaterThanOrEqual(1);
 
@@ -290,8 +344,8 @@ describe("unified drawings", () => {
 
       const second = readUnknown(Workbook.fromBytes(fs.readFileSync(filePath)));
       expect(second.kind.objectType).toBe("EditBox");
-      expect(second.kind.rawProperties.length).toBe(propertyCount);
-      expect(second.kind.rawProperties).toContainEqual(["customFlag", "kept"]);
+      expect(second.control.formControl.rawProperties.length).toBe(propertyCount);
+      expect(second.control.formControl.rawProperties).toContainEqual(["customFlag", "kept"]);
       expect(
         second.control.formControl.rawClientData.some((fragment) =>
           Buffer.from(fragment).toString("utf8").includes("<x:Val>17</x:Val>"),

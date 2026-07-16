@@ -41,11 +41,42 @@ pub struct TwinRunFont {
     pub baseline: Option<i32>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub enum TwinColor {
-    Rgb { r: u8, g: u8, b: u8 },
-    Theme { index: u8, tint: i8 },
+    Rgb {
+        r: u8,
+        g: u8,
+        b: u8,
+    },
+    /// Theme slot with an OOXML tint fraction (-1.0..=1.0), mapped to
+    /// DrawingML `lumMod`/`lumOff` on the wire.
+    Theme {
+        index: u8,
+        tint: f64,
+    },
 }
+
+/// Equality compares `Theme::tint` bitwise so containers keep their
+/// derived `Eq`.
+impl PartialEq for TwinColor {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (TwinColor::Rgb { r, g, b }, TwinColor::Rgb { r: r2, g: g2, b: b2 }) => {
+                (r, g, b) == (r2, g2, b2)
+            }
+            (
+                TwinColor::Theme { index, tint },
+                TwinColor::Theme {
+                    index: index2,
+                    tint: tint2,
+                },
+            ) => index == index2 && tint.to_bits() == tint2.to_bits(),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for TwinColor {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TwinUnderline {

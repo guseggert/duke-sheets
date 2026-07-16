@@ -1424,7 +1424,7 @@ fn excel_can_read_comment_we_emit() {
         .comment_at(0, 0)
         .expect("comment must survive Excel re-save");
     assert!(
-        c.text.contains("Hello from duke-sheets"),
+        c.plain_text().contains("Hello from duke-sheets"),
         "comment text lost after Excel round-trip: {:?}",
         c.text
     );
@@ -1432,6 +1432,64 @@ fn excel_can_read_comment_we_emit() {
         c.author.contains("Alice"),
         "comment author lost after Excel round-trip: {:?}",
         c.author
+    );
+}
+
+/// Excel parity for rich comment text: our TXO formatting runs must
+/// survive Excel's re-save with their run boundary and bold flag.
+// features: Rich text in comments
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_rich_comment_runs_we_emit_xls() {
+    use duke_sheets_core::rich_text::{RichTextRun, RunFont};
+    use duke_sheets_core::{CellComment, DrawingText};
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "anchor").unwrap();
+    ws.set_comment_at(
+        0,
+        0,
+        CellComment {
+            author: "Reviewer".to_string(),
+            text: DrawingText {
+                runs: vec![
+                    RichTextRun {
+                        text: "Bold lead".to_string(),
+                        font: Some(RunFont {
+                            bold: Some(true),
+                            ..RunFont::default()
+                        }),
+                    },
+                    RichTextRun {
+                        text: " then plain".to_string(),
+                        font: None,
+                    },
+                ],
+                ..DrawingText::default()
+            },
+        },
+    )
+    .unwrap();
+
+    let result = roundtrip_through_excel_xls(&wb);
+    let comment = result
+        .worksheet(0)
+        .unwrap()
+        .comment_at(0, 0)
+        .expect("comment must survive Excel re-save");
+    assert_eq!(comment.plain_text(), "Bold lead then plain");
+    let bold_run = comment
+        .text
+        .runs
+        .iter()
+        .find(|run| run.text.contains("Bold lead"))
+        .expect("bold run boundary survives Excel re-save");
+    assert_eq!(
+        bold_run.font.as_ref().and_then(|font| font.bold),
+        Some(true),
+        "bold formatting lost: {:?}",
+        comment.text.runs
     );
 }
 
@@ -1461,19 +1519,19 @@ fn excel_can_read_multiple_comments_we_emit() {
     // Without per-author assertion, the test would silently pass if
     // Excel scrambled the author–text mapping during NOTE re-save.
     let c1 = s.comment_at(0, 0).unwrap();
-    assert!(c1.text.contains("Comment one"), "A1 text: {:?}", c1.text);
+    assert!(c1.plain_text().contains("Comment one"), "A1 text: {:?}", c1.plain_text());
     assert!(c1.author.contains("Alice"), "A1 author: {:?}", c1.author);
 
     let c2 = s.comment_at(2, 2).unwrap();
     assert!(
-        c2.text.contains("Comment two body"),
+        c2.plain_text().contains("Comment two body"),
         "C3 text: {:?}",
         c2.text
     );
     assert!(c2.author.contains("Bob"), "C3 author: {:?}", c2.author);
 
     let c3 = s.comment_at(4, 4).unwrap();
-    assert!(c3.text.contains("Comment three"), "E5 text: {:?}", c3.text);
+    assert!(c3.plain_text().contains("Comment three"), "E5 text: {:?}", c3.plain_text());
     assert!(c3.author.contains("Carol"), "E5 author: {:?}", c3.author);
 }
 
@@ -1494,7 +1552,7 @@ fn excel_can_read_unicode_comment_we_emit() {
     let result = roundtrip_through_excel_xls(&wb);
     let c = result.worksheet(0).unwrap().comment_at(0, 0).unwrap();
     assert!(
-        c.text.contains("こんにちは"),
+        c.plain_text().contains("こんにちは"),
         "Japanese text lost: {:?}",
         c.text
     );
@@ -1549,7 +1607,7 @@ fn excel_can_read_xls_picture_and_comment_on_same_sheet_we_emit() {
             },
             edit_as: None,
         },
-    );
+    ).unwrap();
     ws.set_comment_at(
         7,
         5,
@@ -1565,7 +1623,7 @@ fn excel_can_read_xls_picture_and_comment_on_same_sheet_we_emit() {
     assert_eq!(img.data, TEST_PNG_1X1, "PNG bytes preserved");
     let c = s.comment_at(7, 5).expect("comment at G8 must exist");
     assert!(
-        c.text.contains("Mixed-with-picture comment"),
+        c.plain_text().contains("Mixed-with-picture comment"),
         "comment text lost: {:?}",
         c.text
     );
@@ -1622,10 +1680,10 @@ fn excel_can_read_xls_pictures_across_multiple_sheets_we_emit() {
     // cluster entries with non-contiguous drawing IDs.
     wb.worksheet_mut(0)
         .unwrap()
-        .add_drawing(pic("Pic on Alpha", 1, 1));
+        .add_drawing(pic("Pic on Alpha", 1, 1)).unwrap();
     wb.worksheet_mut(2)
         .unwrap()
-        .add_drawing(pic("Pic on Gamma", 3, 3));
+        .add_drawing(pic("Pic on Gamma", 3, 3)).unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     assert_eq!(
@@ -1705,7 +1763,7 @@ fn excel_can_read_comments_across_multiple_sheets_we_emit() {
     // sheets would be caught.
     let alpha_a1 = result.worksheet(0).unwrap().comment_at(0, 0).unwrap();
     assert!(
-        alpha_a1.text.contains("Alpha A1"),
+        alpha_a1.plain_text().contains("Alpha A1"),
         "Alpha A1 text: {:?}",
         alpha_a1.text
     );
@@ -1717,7 +1775,7 @@ fn excel_can_read_comments_across_multiple_sheets_we_emit() {
 
     let alpha_d4 = result.worksheet(0).unwrap().comment_at(3, 3).unwrap();
     assert!(
-        alpha_d4.text.contains("Alpha D4"),
+        alpha_d4.plain_text().contains("Alpha D4"),
         "Alpha D4 text: {:?}",
         alpha_d4.text
     );
@@ -1729,7 +1787,7 @@ fn excel_can_read_comments_across_multiple_sheets_we_emit() {
 
     let gamma_f6 = result.worksheet(2).unwrap().comment_at(5, 5).unwrap();
     assert!(
-        gamma_f6.text.contains("Gamma F6"),
+        gamma_f6.plain_text().contains("Gamma F6"),
         "Gamma F6 text: {:?}",
         gamma_f6.text
     );
@@ -1791,7 +1849,7 @@ fn excel_can_read_xls_png_image_we_emit() {
             },
             edit_as: None,
         },
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
@@ -1802,7 +1860,7 @@ fn excel_can_read_xls_png_image_we_emit() {
         img.data, TEST_PNG_1X1,
         "PNG bytes must round-trip through Excel verbatim"
     );
-    match &images[0].object.anchor {
+    match &images[0].object.unwrap().anchor {
         DrawingAnchor::TwoCell { from, to, .. } => {
             // Excel may adjust within-cell EMU offsets when it
             // re-saves; we only assert the cell *range* is preserved
@@ -1925,7 +1983,7 @@ fn excel_can_read_xls_picture_rotation_and_flip_we_emit() {
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "rotated").unwrap();
     // 45 degrees clockwise: outside Excel's rasterization cases.
-    ws.add_image(image(Some(2_700_000), true), anchor());
+    ws.add_image(image(Some(2_700_000), true), anchor()).unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
@@ -1945,7 +2003,7 @@ fn excel_can_read_xls_picture_rotation_and_flip_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "quarter-turn").unwrap();
-    ws.add_image(image(Some(5_400_000), false), anchor());
+    ws.add_image(image(Some(5_400_000), false), anchor()).unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
@@ -1996,7 +2054,7 @@ fn excel_can_read_xls_onecell_image_we_emit() {
             width_emu: 2 * COL_EMU,
             height_emu: 3 * ROW_EMU,
         },
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
@@ -2007,7 +2065,7 @@ fn excel_can_read_xls_onecell_image_we_emit() {
     );
     let img = images[0].payload;
     assert_eq!(img.format, ImageFormat::Png);
-    match &images[0].object.anchor {
+    match &images[0].object.unwrap().anchor {
         DrawingAnchor::TwoCell { from, to, .. } => {
             // OneCell at (col=2, row=3) + 2 cols × 3 rows of default
             // cells means the picture spans columns 2..4 and rows
@@ -2055,7 +2113,7 @@ fn excel_can_read_xls_absolute_image_we_emit() {
             width_emu: 2 * COL_EMU,
             height_emu: 4 * ROW_EMU,
         },
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
@@ -2066,7 +2124,7 @@ fn excel_can_read_xls_absolute_image_we_emit() {
     );
     let img = images[0].payload;
     assert_eq!(img.format, ImageFormat::Png);
-    match &images[0].object.anchor {
+    match &images[0].object.unwrap().anchor {
         DrawingAnchor::TwoCell { from, to, .. } => {
             // Absolute (x=3 cols, y=2 rows) + (2 cols × 4 rows) at
             // default cell sizes lands the picture starting at col=3
@@ -2130,7 +2188,7 @@ fn excel_can_read_xls_bmp_image_we_emit() {
             },
             edit_as: None,
         },
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
@@ -2187,7 +2245,7 @@ fn excel_can_read_xls_jpeg_image_we_emit() {
             },
             edit_as: None,
         },
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
@@ -2569,7 +2627,7 @@ fn excel_can_read_form_controls_we_emit() {
     let count = kinds.len();
     for (i, kind) in kinds.into_iter().enumerate() {
         let row = 1 + 2 * i as u32;
-        ws.add_form_control(FormControl::new(kind), control_anchor(1, row, 3, row + 1));
+        ws.add_form_control(FormControl::new(kind), control_anchor(1, row, 3, row + 1)).unwrap();
     }
     assert_eq!(wb.sync_form_control_links(), 6);
 
@@ -2724,7 +2782,7 @@ fn excel_can_read_form_controls_we_emit() {
 
     // Anchors survive (cell coordinates; offsets are requantised by
     // Excel and asserted in the in-process layer instead).
-    match &controls[0].object.anchor {
+    match &controls[0].object.unwrap().anchor {
         DrawingAnchor::TwoCell { from, to, .. } => {
             assert_eq!((from.col, from.row), (1, 1), "button anchor from");
             assert_eq!((to.col, to.row), (3, 2), "button anchor to");
@@ -2778,13 +2836,13 @@ fn excel_preserves_xls_control_visual_metadata_we_emit() {
     object.meta.alt_text = Some("Visual probe alternative".into());
     object.meta.title = Some("Not carried by XLS".into());
     let mut workbook = Workbook::new();
-    workbook.worksheet_mut(0).unwrap().add_drawing(object);
+    workbook.worksheet_mut(0).unwrap().add_drawing(object).unwrap();
 
     let result = roundtrip_through_excel_xls(&workbook);
     let drawn = result.worksheet(0).unwrap().form_controls().next().unwrap();
-    assert_eq!(drawn.object.meta.name.as_deref(), Some("Visual Probe"));
+    assert_eq!(drawn.object.unwrap().meta.name.as_deref(), Some("Visual Probe"));
     assert_eq!(
-        drawn.object.meta.alt_text.as_deref(),
+        drawn.object.unwrap().meta.alt_text.as_deref(),
         Some("Visual probe alternative")
     );
     assert_eq!(drawn.payload.caption_text().as_deref(), Some("Red Blue"));
@@ -2830,11 +2888,11 @@ fn excel_preserves_xls_custom_metric_control_anchor_we_emit() {
             width_emu: 609_600,
             height_emu: 190_500,
         },
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel_xls(&workbook);
     let drawn = result.worksheet(0).unwrap().form_controls().next().unwrap();
-    match &drawn.object.anchor {
+    match &drawn.object.unwrap().anchor {
         DrawingAnchor::TwoCell { from, to, .. } => {
             assert_eq!((from.col, from.col_offset_emu), (0, 0));
             assert_eq!((from.row, from.row_offset_emu), (0, 0));
@@ -2879,7 +2937,7 @@ fn excel_interprets_xls_list_selections_one_based() {
             no_3d: false,
         }),
         control_anchor(1, 1, 3, 3),
-    );
+    ).unwrap();
     ws.add_form_control(
         FormControl::new(FormControlKind::Dropdown {
             input_range: Some("$H$1:$H$4".to_string()),
@@ -2889,7 +2947,7 @@ fn excel_interprets_xls_list_selections_one_based() {
             no_3d: false,
         }),
         control_anchor(1, 5, 3, 6),
-    );
+    ).unwrap();
 
     let fixture = temp_fixture_xls();
     let bytes = XlsWriter::write_to_bytes(&wb).expect("write xls");
@@ -3680,7 +3738,7 @@ fn excel_preserves_unselected_radio_group_over_stale_link() {
                 no_3d: true,
             }),
             control_anchor(1, row, 2, row + 1),
-        );
+        ).unwrap();
     }
     assert_eq!(wb.sync_form_control_links(), 1);
     assert_eq!(
@@ -3732,31 +3790,31 @@ fn excel_can_read_radio_groups_we_emit() {
     ws.add_form_control(
         FormControl::new(group_box("Box A")),
         control_anchor(0, 0, 2, 6),
-    );
+    ).unwrap();
     ws.add_form_control(
         FormControl::new(group_box("Box B")),
         control_anchor(4, 0, 6, 6),
-    );
+    ).unwrap();
     ws.add_form_control(
         FormControl::new(radio("A1", CheckState::Checked)),
         control_anchor(1, 1, 2, 2),
-    );
+    ).unwrap();
     ws.add_form_control(
         FormControl::new(radio("B1", CheckState::Unchecked)),
         control_anchor(5, 1, 6, 2),
-    );
+    ).unwrap();
     ws.add_form_control(
         FormControl::new(radio("A2", CheckState::Unchecked)),
         control_anchor(1, 3, 2, 4),
-    );
+    ).unwrap();
     ws.add_form_control(
         FormControl::new(radio("B2", CheckState::Checked)),
         control_anchor(5, 3, 6, 4),
-    );
+    ).unwrap();
     ws.add_form_control(
         FormControl::new(radio("Loose", CheckState::Unchecked)),
         control_anchor(8, 1, 9, 2),
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     let sheet = result.worksheet(0).unwrap();
@@ -3821,7 +3879,7 @@ fn excel_can_read_mixed_control_comment_picture_we_emit() {
             svg_data: None,
         },
         control_anchor(6, 1, 8, 4),
-    );
+    ).unwrap();
     ws.set_comment_at(0, 0, duke_sheets_core::CellComment::new("Author", "a note")).unwrap();
     ws.add_form_control(
         FormControl::new(FormControlKind::Checkbox {
@@ -3831,7 +3889,7 @@ fn excel_can_read_mixed_control_comment_picture_we_emit() {
             no_3d: true,
         }),
         control_anchor(1, 1, 3, 2),
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     let sheet = result.worksheet(0).unwrap();
@@ -3886,7 +3944,7 @@ fn excel_can_read_large_xls_list_control_we_emit() {
             },
             edit_as: None,
         },
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     let sheet = result.worksheet(0).unwrap();
@@ -3948,7 +4006,7 @@ fn excel_preserves_xls_drawing_z_order_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "anchor").unwrap();
-    ws.add_drawing(png("Below").with_anchor(two_cell(0, 0, 2, 2)));
+    ws.add_drawing(png("Below").with_anchor(two_cell(0, 0, 2, 2))).unwrap();
     ws.add_drawing(
         DrawingObject::form_control(FormControl::new(FormControlKind::Checkbox {
             caption: "Middle".into(),
@@ -3957,8 +4015,8 @@ fn excel_preserves_xls_drawing_z_order_we_emit() {
             no_3d: true,
         }))
         .with_anchor(two_cell(1, 1, 3, 3)),
-    );
-    ws.add_drawing(png("Above").with_anchor(two_cell(2, 2, 4, 4)));
+    ).unwrap();
+    ws.add_drawing(png("Above").with_anchor(two_cell(2, 2, 4, 4))).unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     let sheet = result.worksheet(0).unwrap();
@@ -4040,18 +4098,18 @@ fn excel_preserves_hidden_drawing_flags_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "anchor").unwrap();
-    ws.add_drawing(png("Shown").with_anchor(two_cell(0, 0, 2, 2)));
+    ws.add_drawing(png("Shown").with_anchor(two_cell(0, 0, 2, 2))).unwrap();
     ws.add_drawing(
         png("Ghost")
             .with_anchor(two_cell(2, 2, 4, 4))
             .with_hidden(true),
-    );
-    ws.add_drawing(checkbox("Visible box").with_anchor(two_cell(4, 4, 6, 6)));
+    ).unwrap();
+    ws.add_drawing(checkbox("Visible box").with_anchor(two_cell(4, 4, 6, 6))).unwrap();
     ws.add_drawing(
         checkbox("Cloaked box")
             .with_anchor(two_cell(6, 6, 8, 8))
             .with_hidden(true),
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     let sheet = result.worksheet(0).unwrap();
@@ -4061,9 +4119,8 @@ fn excel_preserves_hidden_drawing_flags_we_emit() {
     let image_hidden = |name: &str| {
         images
             .iter()
-            .find(|i| i.object.meta.name.as_deref() == Some(name))
+            .find(|i| i.object.unwrap().meta.name.as_deref() == Some(name))
             .unwrap_or_else(|| panic!("image {name:?} lost in Excel re-save"))
-            .object
             .meta
             .hidden
     };
@@ -4080,7 +4137,6 @@ fn excel_preserves_hidden_drawing_flags_we_emit() {
             .iter()
             .find(|c| c.payload.caption_text().as_deref() == Some(caption))
             .unwrap_or_else(|| panic!("control {caption:?} lost in Excel re-save"))
-            .object
             .meta
             .hidden
     };
@@ -4154,13 +4210,13 @@ fn excel_preserves_xls_basic_shape_we_emit() {
     object.meta.name = Some("Status panel".into());
     object.meta.alt_text = Some("red status rectangle".into());
     let mut workbook = Workbook::new();
-    workbook.worksheet_mut(0).unwrap().add_drawing(object);
+    workbook.worksheet_mut(0).unwrap().add_drawing(object).unwrap();
 
     let result = roundtrip_through_excel_xls(&workbook);
     let drawn = result.worksheet(0).unwrap().shapes().next().expect("shape");
-    assert_eq!(drawn.object.meta.name.as_deref(), Some("Status panel"));
+    assert_eq!(drawn.object.unwrap().meta.name.as_deref(), Some("Status panel"));
     assert_eq!(
-        drawn.object.meta.alt_text.as_deref(),
+        drawn.object.unwrap().meta.alt_text.as_deref(),
         Some("red status rectangle")
     );
     assert_eq!(drawn.payload.geometry, ShapeGeometry::Preset("rect".into()));

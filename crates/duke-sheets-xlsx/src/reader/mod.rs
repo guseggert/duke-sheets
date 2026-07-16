@@ -29,7 +29,7 @@ use duke_sheets_core::{
 use formulas::{
     parse_cell_formula_state, resolve_cell_formula, CellFormulaKind, SharedFormulaMaster,
 };
-use theme::{read_theme_palette, resolve_style_theme_colors};
+use theme::read_theme_palette;
 
 mod archive;
 pub(crate) mod chart;
@@ -49,7 +49,7 @@ mod workbook;
 pub(crate) use archive::archive_by_name;
 pub(crate) use formulas::CellFormulaState;
 use shared_strings::SharedStringEntry;
-pub(crate) use theme::ThemePalette;
+
 use workbook::{read_sheet_rels, read_workbook_rels, read_workbook_xml, SheetRelationship};
 
 /// Resolve a relative path from a drawing's .rels against the drawing's own path.
@@ -61,7 +61,7 @@ use workbook::{read_sheet_rels, read_workbook_rels, read_workbook_xml, SheetRela
 /// - `_x000a_` = LF (line feed)
 /// - `_x0009_` = Tab
 /// - `_x005f_` = Underscore (escaped underscore)
-fn decode_excel_escapes(s: &str) -> String {
+pub(crate) fn decode_excel_escapes(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
 
@@ -454,6 +454,20 @@ fn capture_raw_rels<R: Read + Seek>(
     rels
 }
 
+/// Options for opening an XLSX/XLSM workbook.
+#[derive(Debug, Clone, Default)]
+pub struct XlsxReadOptions {
+    /// Password for encrypted workbooks.
+    pub password: Option<String>,
+    /// Retry encrypted workbooks with Excel's well-known
+    /// `VelvetSweatshop` sentinel when no password is supplied,
+    /// before reporting them as encrypted.
+    pub try_velvet_sweatshop: bool,
+    /// Skip the post-decrypt HMAC integrity check; default-off
+    /// (false) matches Office.
+    pub skip_integrity_check: bool,
+}
+
 /// XLSX file reader
 pub struct XlsxReader;
 
@@ -515,65 +529,35 @@ impl XlsxReader {
         Self::read(file)
     }
 
-    /// Read a workbook from a file path, supplying a password for
-    /// encrypted files. When `password` is `None` and
-    /// `try_velvet_sweatshop` is true, encrypted files are
-    /// transparently retried with the well-known `VelvetSweatshop`
-    /// password before reporting them as encrypted.
-    pub fn read_file_with_password<P: AsRef<Path>>(
+    /// Read a workbook from a file path with explicit open options
+    /// (password, encrypted-workbook handling).
+    pub fn read_file_with<P: AsRef<Path>>(
         path: P,
-        password: Option<&str>,
-        try_velvet_sweatshop: bool,
-    ) -> XlsxResult<Workbook> {
-        Self::read_file_with_options(path, password, try_velvet_sweatshop, false)
-    }
-
-    /// Read a workbook from a file path with full open-options control.
-    /// `skip_integrity_check` opts out of the post-decrypt HMAC check;
-    /// default-off (false) matches Office.
-    pub fn read_file_with_options<P: AsRef<Path>>(
-        path: P,
-        password: Option<&str>,
-        try_velvet_sweatshop: bool,
-        skip_integrity_check: bool,
+        options: &XlsxReadOptions,
     ) -> XlsxResult<Workbook> {
         let bytes = std::fs::read(path)?;
-        Self::read_bytes_with_options(&bytes, password, try_velvet_sweatshop, skip_integrity_check)
+        Self::read_bytes_with(&bytes, options)
     }
 
-    /// Read a workbook from raw bytes with an optional password.
+    /// Read a workbook from raw bytes with explicit open options.
     ///
     /// Encrypted XLSX files are CFB envelopes (not plain ZIPs); when
     /// the leading magic bytes match CFB we delegate to
     /// `duke_sheets_crypto::ooxml::decrypt` and then proceed with the
     /// resulting plaintext ZIP.
-    pub fn read_bytes_with_password(
-        bytes: &[u8],
-        password: Option<&str>,
-        try_velvet_sweatshop: bool,
-    ) -> XlsxResult<Workbook> {
-        Self::read_bytes_with_options(bytes, password, try_velvet_sweatshop, false)
-    }
-
-    /// Read a workbook from raw bytes with full open-options control.
-    /// `skip_integrity_check` opts out of the post-decrypt HMAC check.
-    pub fn read_bytes_with_options(
-        bytes: &[u8],
-        password: Option<&str>,
-        try_velvet_sweatshop: bool,
-        skip_integrity_check: bool,
-    ) -> XlsxResult<Workbook> {
+    pub fn read_bytes_with(bytes: &[u8], options: &XlsxReadOptions) -> XlsxResult<Workbook> {
+        let password = options.password.as_deref();
         if is_cfb_envelope(bytes) {
             let try_pw = match password {
                 Some(p) => p,
-                None if try_velvet_sweatshop => "VelvetSweatshop",
+                None if options.try_velvet_sweatshop => "VelvetSweatshop",
                 None => {
                     return Err(XlsxError::Encrypted(
                         "workbook is encrypted but no password was supplied".into(),
                     ));
                 }
             };
-            return match decrypt_ooxml_envelope(bytes, try_pw, skip_integrity_check) {
+            return match decrypt_ooxml_envelope(bytes, try_pw, options.skip_integrity_check) {
                 Ok(decrypted) => Self::read(std::io::Cursor::new(decrypted)),
                 Err(XlsxError::BadPassword) if password.is_none() => Err(XlsxError::Encrypted(
                     "workbook is encrypted but no password was supplied".into(),
@@ -599,21 +583,15 @@ impl XlsxReader {
         let shared_strings = shared_strings::read_shared_strings(&mut archive)?;
 
         // Read styles (if present)
-        let mut parsed_styles = Self::read_styles(&mut archive)?;
+        let parsed_styles = Self::read_styles(&mut archive)?;
         let roundtrip_style_data = parsed_styles.roundtrip_data();
         // Read workbook.xml.rels to get sheet/theme paths
         let workbook_rels = read_workbook_rels(&mut archive)?;
-        // Read workbook theme (if present) and resolve theme colors in styles
+        // Read the workbook theme (if present). Style colors keep
+        // their Color::Theme form; consumers resolve display RGB
+        // through Workbook::resolve_color.
         let (theme_palette, raw_theme_xml) =
             read_theme_palette(&mut archive, workbook_rels.theme_path.as_deref())?;
-        if let Some(theme) = theme_palette {
-            for style in &mut parsed_styles.cell_styles {
-                resolve_style_theme_colors(style, &theme);
-            }
-            for style in &mut parsed_styles.dxf_styles {
-                resolve_style_theme_colors(style, &theme);
-            }
-        }
         let cell_styles = parsed_styles.cell_styles;
         let dxf_styles = parsed_styles.dxf_styles;
 
@@ -664,7 +642,6 @@ impl XlsxReader {
                     &shared_strings,
                     &cell_styles,
                     &dxf_styles,
-                    theme_palette.as_ref(),
                     &sheet_rels,
                 )?);
 
@@ -816,6 +793,9 @@ impl XlsxReader {
         }
 
         register_roundtrip_style_data(&workbook, roundtrip_style_data);
+        if let Some(theme) = theme_palette {
+            workbook.set_theme_palette(theme);
+        }
         if let Some(theme_bytes) = raw_theme_xml {
             register_roundtrip_theme_data(&workbook, theme_bytes);
         }
@@ -1132,7 +1112,6 @@ impl XlsxReader {
         shared_strings: &[SharedStringEntry],
         cell_styles: &[Style],
         dxf_styles: &[Style],
-        theme_palette: Option<&ThemePalette>,
         sheet_rels: &HashMap<String, SheetRelationship>,
     ) -> XlsxResult<Vec<form_controls::PendingControl>> {
         let file = archive
@@ -2716,7 +2695,7 @@ impl XlsxReader {
                         }
                         // Parse color elements for colorScale and dataBar
                         b"color" if in_color_scale || in_data_bar => {
-                            let color = parse_color_element(&e, theme_palette);
+                            let color = parse_color_element(&e);
                             if in_color_scale {
                                 cf_colors.push(color);
                             } else if in_data_bar {
@@ -4229,6 +4208,6 @@ mod tests {
         let sheet = workbook.worksheet(0).unwrap();
         let comment = sheet.comment("A1").unwrap().expect("comment via rels path");
         assert_eq!(comment.author, "Alice");
-        assert_eq!(comment.text, "Custom path comment");
+        assert_eq!(comment.plain_text(), "Custom path comment");
     }
 }

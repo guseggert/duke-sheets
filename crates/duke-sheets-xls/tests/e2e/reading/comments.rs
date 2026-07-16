@@ -24,9 +24,9 @@ fn test_xls_comment_basic_text() {
     let sheet = workbook.worksheet(0).unwrap();
     let comment = sheet.comment_at(0, 0).expect("A1 should have a comment");
     assert!(
-        comment.text.contains("This is a comment"),
+        comment.plain_text().contains("This is a comment"),
         "Comment text should contain our text, got: {}",
-        comment.text
+        comment.plain_text()
     );
 
     cleanup_fixture(&path);
@@ -53,9 +53,9 @@ fn test_xls_comment_unicode() {
     let sheet = workbook.worksheet(0).unwrap();
     let comment = sheet.comment_at(0, 0).expect("A1 should have a comment");
     assert!(
-        comment.text.contains("日本語のコメント"),
+        comment.plain_text().contains("日本語のコメント"),
         "Comment should contain Japanese text, got: {}",
-        comment.text
+        comment.plain_text()
     );
 
     cleanup_fixture(&path);

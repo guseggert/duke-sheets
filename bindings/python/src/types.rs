@@ -20,8 +20,10 @@ use crate::{PyCalculationImage, PyDrawingText};
 pub struct PyColor {
     #[pyo3(get)]
     pub color_type: String,
+    /// Context-free hex string; ``None`` for auto and theme colors,
+    /// which resolve through :meth:`Workbook.resolve_color`.
     #[pyo3(get)]
-    pub hex: String,
+    pub hex: Option<String>,
     #[pyo3(get)]
     pub r: Option<u32>,
     #[pyo3(get)]
@@ -33,9 +35,80 @@ pub struct PyColor {
     #[pyo3(get)]
     pub theme_index: Option<u32>,
     #[pyo3(get)]
-    pub tint: Option<i32>,
+    pub tint: Option<f64>,
     #[pyo3(get)]
     pub palette_index: Option<u32>,
+}
+
+#[pymethods]
+impl PyColor {
+    /// Build a color for :meth:`Workbook.resolve_color`, e.g.
+    /// ``Color("theme", theme_index=4, tint=0.5)`` or
+    /// ``Color("rgb", r=255, g=0, b=0)``.
+    #[new]
+    #[pyo3(signature=(color_type, *, r=None, g=None, b=None, a=None, theme_index=None, tint=None, palette_index=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        color_type: String,
+        r: Option<u32>,
+        g: Option<u32>,
+        b: Option<u32>,
+        a: Option<u32>,
+        theme_index: Option<u32>,
+        tint: Option<f64>,
+        palette_index: Option<u32>,
+    ) -> PyResult<Self> {
+        let color = Self {
+            color_type,
+            hex: None,
+            r,
+            g,
+            b,
+            a,
+            theme_index,
+            tint,
+            palette_index,
+        };
+        // Validate eagerly and stamp the context-free hex.
+        let core = color.to_core()?;
+        Ok(Self {
+            hex: core.to_hex(),
+            ..color
+        })
+    }
+}
+
+impl PyColor {
+    /// Reconstruct the core color this DTO was built from.
+    pub(crate) fn to_core(&self) -> PyResult<CoreColor> {
+        let channel = |value: Option<u32>, name: &str| -> PyResult<u8> {
+            let value = value
+                .ok_or_else(|| PyValueError::new_err(format!("color is missing {name}")))?;
+            u8::try_from(value)
+                .map_err(|_| PyValueError::new_err(format!("color {name} out of range")))
+        };
+        match self.color_type.as_str() {
+            "auto" => Ok(CoreColor::Auto),
+            "rgb" => Ok(CoreColor::Rgb {
+                r: channel(self.r, "r")?,
+                g: channel(self.g, "g")?,
+                b: channel(self.b, "b")?,
+            }),
+            "argb" => Ok(CoreColor::Argb {
+                a: channel(self.a, "a")?,
+                r: channel(self.r, "r")?,
+                g: channel(self.g, "g")?,
+                b: channel(self.b, "b")?,
+            }),
+            "theme" => {
+                let index = channel(self.theme_index, "theme_index")?;
+                let tint = tint_fraction(self.tint)?;
+                Ok(CoreColor::Theme { index, tint })
+            }
+            "indexed" => Ok(CoreColor::Indexed(channel(self.palette_index, "palette_index")?)),
+            other => Err(PyValueError::new_err(format!("unknown color type {other:?}"))),
+        }
+    }
 }
 
 impl From<&CoreColor> for PyColor {
@@ -83,7 +156,7 @@ impl From<&CoreColor> for PyColor {
                 b: None,
                 a: None,
                 theme_index: Some(*index as u32),
-                tint: Some(*tint as i32),
+                tint: Some(*tint),
                 palette_index: None,
             },
             CoreColor::Indexed(i) => Self {
@@ -555,9 +628,12 @@ fn u32_to_u8(value: u32, field: &str) -> PyResult<u8> {
     u8::try_from(value).map_err(|_| style_input_error(format!("{field} must be between 0 and 255")))
 }
 
-fn i32_to_i8(value: i32, field: &str) -> PyResult<i8> {
-    i8::try_from(value)
-        .map_err(|_| style_input_error(format!("{field} must be between -128 and 127")))
+fn tint_fraction(value: Option<f64>) -> PyResult<f64> {
+    let tint = value.unwrap_or(0.0);
+    if !tint.is_finite() || !(-1.0..=1.0).contains(&tint) {
+        return Err(style_input_error("tint must be between -1.0 and 1.0"));
+    }
+    Ok(tint)
 }
 
 fn parse_color_hex(hex: &str) -> PyResult<CoreColor> {
@@ -590,7 +666,7 @@ fn color_parts_to_core(
     b: Option<u32>,
     a: Option<u32>,
     theme_index: Option<u32>,
-    tint: Option<i32>,
+    tint: Option<f64>,
     palette_index: Option<u32>,
 ) -> PyResult<CoreColor> {
     match color_type {
@@ -641,7 +717,7 @@ fn color_parts_to_core(
                 theme_index.ok_or_else(|| style_input_error("theme color requires theme_index"))?,
                 "theme_index",
             )?,
-            tint: i32_to_i8(tint.unwrap_or(0), "tint")?,
+            tint: tint_fraction(tint)?,
         }),
         Some("indexed") => Ok(CoreColor::Indexed(u32_to_u8(
             palette_index
@@ -670,7 +746,7 @@ fn color_parts_to_core(
             } else if let Some(theme_index) = theme_index {
                 Ok(CoreColor::Theme {
                     index: u32_to_u8(theme_index, "theme_index")?,
-                    tint: i32_to_i8(tint.unwrap_or(0), "tint")?,
+                    tint: tint_fraction(tint)?,
                 })
             } else if let Some(palette_index) = palette_index {
                 Ok(CoreColor::Indexed(u32_to_u8(
@@ -689,7 +765,7 @@ fn color_parts_to_core(
 pub(crate) fn py_color_to_core(color: &PyColor) -> PyResult<CoreColor> {
     color_parts_to_core(
         Some(color.color_type.as_str()),
-        Some(color.hex.as_str()),
+        color.hex.as_deref(),
         color.r,
         color.g,
         color.b,
@@ -718,7 +794,7 @@ pub(crate) fn color_input_to_core(input: &Bound<'_, PyAny>) -> PyResult<CoreColo
         dict_get_u32(dict, "b")?,
         dict_get_u32(dict, "a")?,
         dict_get_u32(dict, "theme_index")?,
-        dict_get_i32(dict, "tint")?,
+        dict_get_f64(dict, "tint")?,
         dict_get_u32(dict, "palette_index")?,
     )
 }
@@ -1407,7 +1483,7 @@ impl From<&core::CellComment> for PyComment {
     fn from(c: &core::CellComment) -> Self {
         Self {
             author: c.author.clone(),
-            text: c.text.clone(),
+            text: c.plain_text(),
         }
     }
 }
@@ -3074,8 +3150,6 @@ impl PyFormControl {
                 object_type,
                 legacy_object_type,
                 caption: drawing_text_input_to_core(caption)?,
-                raw_properties: Vec::new(),
-                raw_obj: None,
             },
             macro_name,
         )
@@ -3124,21 +3198,21 @@ impl PyFormControl {
     fn object_type(&self) -> Option<String> { match &self.inner.kind { core::FormControlKind::Unknown { object_type, .. } => Some(object_type.clone()), _ => None } }
     #[getter]
     fn legacy_object_type(&self) -> Option<u16> { match &self.inner.kind { core::FormControlKind::Unknown { legacy_object_type, .. } => *legacy_object_type, _ => None } }
-    /// Unmodeled XLSX `formControlPr` attributes carried by an unknown
-    /// control; read-only passthrough echoed back on write.
+    /// Unmodeled XLSX `formControlPr` attributes preserved on any
+    /// control kind; read-only passthrough echoed back on write.
     #[getter]
-    fn raw_properties(&self) -> Option<Vec<(String, String)>> { match &self.inner.kind { core::FormControlKind::Unknown { raw_properties, .. } => Some(raw_properties.clone()), _ => None } }
+    fn raw_properties(&self) -> Vec<(String, String)> { self.inner.raw_properties.clone() }
     /// Unmodeled VML `ClientData` fragments preserved on any control
     /// kind; read-only passthrough echoed back on write.
     #[getter]
     fn raw_client_data(&self, py: Python<'_>) -> Vec<Py<PyBytes>> { self.inner.raw_client_data.iter().map(|bytes| PyBytes::new_bound(py, bytes).unbind()).collect() }
-    /// Original BIFF OBJ body carried by an unknown control, required
-    /// for XLS rewrite; read-only passthrough echoed back on write.
+    /// Original BIFF OBJ body for XLS passthrough of unknown
+    /// controls; read-only passthrough echoed back on write.
     #[getter]
-    fn raw_obj(&self, py: Python<'_>) -> Option<Py<PyBytes>> { match &self.inner.kind { core::FormControlKind::Unknown { raw_obj, .. } => raw_obj.as_ref().map(|bytes| PyBytes::new_bound(py, bytes).unbind()), _ => None } }
+    fn raw_obj(&self, py: Python<'_>) -> Option<Py<PyBytes>> { self.inner.raw_obj.as_ref().map(|bytes| PyBytes::new_bound(py, bytes).unbind()) }
 }
 
-fn drawing_text_input_to_core(value: &Bound<'_, PyAny>) -> PyResult<core::DrawingText> {
+pub(crate) fn drawing_text_input_to_core(value: &Bound<'_, PyAny>) -> PyResult<core::DrawingText> {
     if let Ok(text) = value.extract::<String>() {
         return Ok(core::DrawingText::plain(text));
     }

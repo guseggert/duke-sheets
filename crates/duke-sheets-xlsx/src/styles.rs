@@ -493,8 +493,8 @@ fn write_color_xml(w: &mut XmlWriter, tag: &str, color: &Color) -> std::io::Resu
         Color::Theme { index, tint } => {
             let v = index.to_string();
             el.push_attribute(("theme", v.as_str()));
-            if *tint != 0 {
-                let t = ((*tint as f64) / 100.0).to_string();
+            if *tint != 0.0 {
+                let t = tint.to_string();
                 el.push_attribute(("tint", t.as_str()));
             }
         }
@@ -2156,10 +2156,9 @@ fn parse_color_attrs(e: &quick_xml::events::BytesStart<'_>) -> Color {
     }
 
     if let Some(index) = theme {
-        let tint_i8 = tint.map(|t| (t * 100.0).round() as i8).unwrap_or(0);
         return Color::Theme {
             index,
-            tint: tint_i8,
+            tint: tint.unwrap_or(0.0),
         };
     }
 

@@ -91,20 +91,20 @@ fn round_trip_xls(workbook: &Workbook) -> Workbook {
 fn build_mixed_workbook() -> Workbook {
     let mut workbook = Workbook::new();
     let sheet = workbook.worksheet_mut(0).unwrap();
-    sheet.add_drawing(png("Shown").with_anchor(two_cell(0, 0, 2, 2)));
+    sheet.add_drawing(png("Shown").with_anchor(two_cell(0, 0, 2, 2))).unwrap();
     sheet.add_drawing(
         png("Ghost")
             .with_anchor(two_cell(2, 2, 4, 4))
             .with_hidden(true),
-    );
+    ).unwrap();
     sheet.add_drawing(
         DrawingObject::form_control(checkbox("Visible box")).with_anchor(two_cell(4, 4, 6, 6)),
-    );
+    ).unwrap();
     sheet.add_drawing(
         DrawingObject::form_control(checkbox("Cloaked box"))
             .with_anchor(two_cell(6, 6, 8, 8))
             .with_hidden(true),
-    );
+    ).unwrap();
     workbook
 }
 
@@ -113,14 +113,14 @@ fn build_mixed_workbook() -> Workbook {
 fn assert_mixed_hidden_flags(sheet: &Worksheet, format: &str) {
     let images: Vec<_> = sheet.images().collect();
     assert_eq!(images.len(), 2, "{format}: both images survive");
-    assert_eq!(images[0].object.meta.name.as_deref(), Some("Shown"));
+    assert_eq!(images[0].object.unwrap().meta.name.as_deref(), Some("Shown"));
     assert!(
-        !images[0].object.meta.hidden,
+        !images[0].object.unwrap().meta.hidden,
         "{format}: default image must read back hidden == false"
     );
-    assert_eq!(images[1].object.meta.name.as_deref(), Some("Ghost"));
+    assert_eq!(images[1].object.unwrap().meta.name.as_deref(), Some("Ghost"));
     assert!(
-        images[1].object.meta.hidden,
+        images[1].object.unwrap().meta.hidden,
         "{format}: hidden image must read back hidden == true"
     );
 
@@ -131,7 +131,7 @@ fn assert_mixed_hidden_flags(sheet: &Worksheet, format: &str) {
         Some("Visible box")
     );
     assert!(
-        !controls[0].object.meta.hidden,
+        !controls[0].object.unwrap().meta.hidden,
         "{format}: default control must read back hidden == false"
     );
     assert_eq!(
@@ -139,7 +139,7 @@ fn assert_mixed_hidden_flags(sheet: &Worksheet, format: &str) {
         Some("Cloaked box")
     );
     assert!(
-        controls[1].object.meta.hidden,
+        controls[1].object.unwrap().meta.hidden,
         "{format}: hidden control must read back hidden == true"
     );
 }
@@ -179,10 +179,10 @@ fn comment_shown_state_round_trips() {
         0,
         0,
         CellComment::new("a", "hidden popup"),
-    ));
+    )).unwrap();
     sheet.add_drawing(
         DrawingObject::comment(5, 2, CellComment::new("a", "shown popup")).with_hidden(false),
-    );
+    ).unwrap();
 
     for (format, read) in [
         ("xlsx", round_trip_xlsx(&workbook)),
@@ -255,7 +255,7 @@ fn xlsx_hidden_group_child_round_trips() {
         DrawingObject::group(group)
             .with_anchor(two_cell(1, 1, 4, 2))
             .with_name("Group 1"),
-    );
+    ).unwrap();
 
     let read = round_trip_xlsx(&workbook);
     let object = &read.worksheet(0).unwrap().drawings()[0];

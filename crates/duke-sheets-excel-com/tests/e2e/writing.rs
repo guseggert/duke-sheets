@@ -103,7 +103,7 @@ fn test_write_font_color() {
     let result = roundtrip_through_excel(&wb);
     let s = result.worksheet(0).unwrap();
     let style = s.cell_style_at(0, 0).expect("A1 should have style");
-    let (r, g, b) = style.font.color.to_rgb();
+    let (r, g, b) = style.font.color.to_rgb().unwrap();
     assert!(
         r > 200 && g < 50 && b < 50,
         "Expected red font, got ({r}, {g}, {b})"
@@ -159,7 +159,7 @@ fn test_write_font_combination() {
     assert!(st.font.bold, "Should be bold");
     assert!(st.font.italic, "Should be italic");
     assert_eq!(st.font.underline, Underline::Single);
-    let (r, g, b) = st.font.color.to_rgb();
+    let (r, g, b) = st.font.color.to_rgb().unwrap();
     assert!(b > 200 && r < 50, "Should be blue, got ({r}, {g}, {b})");
     assert!(
         (st.font.size - 14.0).abs() < 0.5,
@@ -184,7 +184,7 @@ fn test_write_solid_fill() {
     let style = s.cell_style_at(0, 0).expect("A1 should have style");
     match &style.fill {
         FillStyle::Solid { color } => {
-            let (r, g, b) = color.to_rgb();
+            let (r, g, b) = color.to_rgb().unwrap();
             assert!(
                 r > 200 && g < 50 && b < 50,
                 "Expected red fill, got ({r}, {g}, {b})"
@@ -214,12 +214,12 @@ fn test_write_fill_with_font_color() {
 
     match &style.fill {
         FillStyle::Solid { color } => {
-            let (_, _, b) = color.to_rgb();
+            let (_, _, b) = color.to_rgb().unwrap();
             assert!(b > 200, "Expected blue fill");
         }
         other => panic!("Expected Solid fill, got {other:?}"),
     }
-    let (r, g, b) = style.font.color.to_rgb();
+    let (r, g, b) = style.font.color.to_rgb().unwrap();
     assert!(
         r > 200 && g > 200 && b > 200,
         "Expected white font, got ({r}, {g}, {b})"
@@ -271,7 +271,7 @@ fn test_write_border_color() {
     let s = result.worksheet(0).unwrap();
     let style = s.cell_style_at(0, 0).expect("A1 should have style");
     let edge = style.border.left.as_ref().expect("left border");
-    let (_, _, b) = edge.color.to_rgb();
+    let (_, _, b) = edge.color.to_rgb().unwrap();
     assert!(b > 200, "Expected blue border color, got b={b}");
 }
 
@@ -1291,13 +1291,13 @@ fn excel_can_read_xlsx_onecell_picture_we_emit() {
             width_emu: 1_500_000,
             height_emu: 800_000,
         },
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel(&wb);
     let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
     assert_eq!(images.len(), 1, "OneCell picture must survive Excel");
     let img = &images[0];
-    match &img.object.anchor {
+    match &img.object.unwrap().anchor {
         DrawingAnchor::OneCell {
             from,
             width_emu,
@@ -1341,13 +1341,13 @@ fn excel_can_read_xlsx_absolute_picture_we_emit() {
             width_emu: 1_000_000,
             height_emu: 900_000,
         },
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel(&wb);
     let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
     assert_eq!(images.len(), 1, "Absolute picture must survive Excel");
     let img = &images[0];
-    match &img.object.anchor {
+    match &img.object.unwrap().anchor {
         DrawingAnchor::Absolute {
             x_emu,
             y_emu,
@@ -1402,7 +1402,7 @@ fn excel_can_read_xlsx_png_image_we_emit() {
             },
             edit_as: None,
         },
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel(&wb);
     let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
@@ -1459,7 +1459,7 @@ fn excel_preserves_xlsx_drawing_z_order_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "anchor").unwrap();
-    ws.add_drawing(png("Below").with_anchor(two_cell(0, 0, 2, 2)));
+    ws.add_drawing(png("Below").with_anchor(two_cell(0, 0, 2, 2))).unwrap();
     ws.add_drawing(
         DrawingObject::form_control(FormControl::new(FormControlKind::Checkbox {
             caption: "Middle".into(),
@@ -1468,8 +1468,8 @@ fn excel_preserves_xlsx_drawing_z_order_we_emit() {
             no_3d: true,
         }))
         .with_anchor(two_cell(1, 1, 3, 3)),
-    );
-    ws.add_drawing(png("Above").with_anchor(two_cell(2, 2, 4, 4)));
+    ).unwrap();
+    ws.add_drawing(png("Above").with_anchor(two_cell(2, 2, 4, 4))).unwrap();
 
     let result = roundtrip_through_excel(&wb);
     let sheet = result.worksheet(0).unwrap();
@@ -1488,8 +1488,8 @@ fn excel_preserves_xlsx_drawing_z_order_we_emit() {
         "z-order must survive Excel re-save"
     );
     let images: Vec<_> = sheet.images().collect();
-    assert_eq!(images[0].object.meta.name.as_deref(), Some("Below"));
-    assert_eq!(images[1].object.meta.name.as_deref(), Some("Above"));
+    assert_eq!(images[0].object.unwrap().meta.name.as_deref(), Some("Below"));
+    assert_eq!(images[1].object.unwrap().meta.name.as_deref(), Some("Above"));
     assert_eq!(
         sheet
             .form_controls()
@@ -1614,7 +1614,7 @@ fn excel_can_read_xlsx_form_controls_we_emit() {
     let expected = kinds.clone();
     for (i, kind) in kinds.into_iter().enumerate() {
         let row = 1 + 2 * i as u32;
-        ws.add_form_control(FormControl::new(kind), anchor(1, row, 3, row + 1));
+        ws.add_form_control(FormControl::new(kind), anchor(1, row, 3, row + 1)).unwrap();
     }
     assert_eq!(wb.sync_form_control_links(), 6);
 
@@ -1663,11 +1663,11 @@ fn excel_preserves_xlsx_custom_metric_control_anchor_we_emit() {
             width_emu: 609_600,
             height_emu: 190_500,
         },
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel(&workbook);
     let drawn = result.worksheet(0).unwrap().form_controls().next().unwrap();
-    match &drawn.object.anchor {
+    match &drawn.object.unwrap().anchor {
         DrawingAnchor::TwoCell { from, to, .. } => {
             assert_eq!((from.col, from.col_offset_emu), (0, 0));
             assert_eq!((from.row, from.row_offset_emu), (0, 0));
@@ -1741,17 +1741,17 @@ fn excel_preserves_xlsx_control_visual_metadata_we_emit() {
     object.meta.alt_text = Some("Visual probe alternative".into());
     object.meta.title = Some("Visual probe title".into());
     let mut workbook = Workbook::new();
-    workbook.worksheet_mut(0).unwrap().add_drawing(object);
+    workbook.worksheet_mut(0).unwrap().add_drawing(object).unwrap();
 
     let result = roundtrip_through_excel(&workbook);
     let drawn = result.worksheet(0).unwrap().form_controls().next().unwrap();
-    assert_eq!(drawn.object.meta.name.as_deref(), Some("Visual Probe"));
+    assert_eq!(drawn.object.unwrap().meta.name.as_deref(), Some("Visual Probe"));
     assert_eq!(
-        drawn.object.meta.alt_text.as_deref(),
+        drawn.object.unwrap().meta.alt_text.as_deref(),
         Some("Visual probe alternative")
     );
     assert_eq!(
-        drawn.object.meta.title.as_deref(),
+        drawn.object.unwrap().meta.title.as_deref(),
         Some("Visual probe title")
     );
     assert_eq!(drawn.payload.caption_text().as_deref(), Some("Red Blue"));
@@ -1828,18 +1828,18 @@ fn excel_preserves_hidden_drawing_flags_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "anchor").unwrap();
-    ws.add_drawing(png("Shown").with_anchor(two_cell(0, 0, 2, 2)));
+    ws.add_drawing(png("Shown").with_anchor(two_cell(0, 0, 2, 2))).unwrap();
     ws.add_drawing(
         png("Ghost")
             .with_anchor(two_cell(2, 2, 4, 4))
             .with_hidden(true),
-    );
-    ws.add_drawing(checkbox("Visible box").with_anchor(two_cell(4, 4, 6, 6)));
+    ).unwrap();
+    ws.add_drawing(checkbox("Visible box").with_anchor(two_cell(4, 4, 6, 6))).unwrap();
     ws.add_drawing(
         checkbox("Cloaked box")
             .with_anchor(two_cell(6, 6, 8, 8))
             .with_hidden(true),
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel(&wb);
     let sheet = result.worksheet(0).unwrap();
@@ -1849,9 +1849,8 @@ fn excel_preserves_hidden_drawing_flags_we_emit() {
     let image_hidden = |name: &str| {
         images
             .iter()
-            .find(|i| i.object.meta.name.as_deref() == Some(name))
+            .find(|i| i.object.unwrap().meta.name.as_deref() == Some(name))
             .unwrap_or_else(|| panic!("image {name:?} lost in Excel re-save"))
-            .object
             .meta
             .hidden
     };
@@ -1868,7 +1867,6 @@ fn excel_preserves_hidden_drawing_flags_we_emit() {
             .iter()
             .find(|c| c.payload.caption_text().as_deref() == Some(caption))
             .unwrap_or_else(|| panic!("control {caption:?} lost in Excel re-save"))
-            .object
             .meta
             .hidden
     };
@@ -1897,16 +1895,16 @@ fn excel_can_read_xlsx_comment_we_emit() {
     ws.add_drawing(
         DrawingObject::comment(3, 3, CellComment::new("Reviewer", "Always shown"))
             .with_hidden(false),
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel(&wb);
     let sheet = result.worksheet(0).unwrap();
 
     let hidden = sheet.comment_at(1, 1).expect("comment survives at B2");
     assert!(
-        hidden.text.contains("Check this figure"),
+        hidden.plain_text().contains("Check this figure"),
         "comment text lost: {:?}",
-        hidden.text
+        hidden.plain_text()
     );
     assert!(
         hidden.author.contains("Reviewer"),
@@ -1990,16 +1988,16 @@ fn excel_preserves_xlsx_basic_shape_we_emit() {
     object.meta.alt_text = Some("red status rectangle".into());
     object.meta.title = Some("Status".into());
     let mut workbook = Workbook::new();
-    workbook.worksheet_mut(0).unwrap().add_drawing(object);
+    workbook.worksheet_mut(0).unwrap().add_drawing(object).unwrap();
 
     let result = roundtrip_through_excel(&workbook);
     let drawn = result.worksheet(0).unwrap().shapes().next().expect("shape");
-    assert_eq!(drawn.object.meta.name.as_deref(), Some("Status panel"));
+    assert_eq!(drawn.object.unwrap().meta.name.as_deref(), Some("Status panel"));
     assert_eq!(
-        drawn.object.meta.alt_text.as_deref(),
+        drawn.object.unwrap().meta.alt_text.as_deref(),
         Some("red status rectangle")
     );
-    assert_eq!(drawn.object.meta.title.as_deref(), Some("Status"));
+    assert_eq!(drawn.object.unwrap().meta.title.as_deref(), Some("Status"));
     assert_eq!(drawn.payload.geometry, ShapeGeometry::Preset("rect".into()));
     assert_eq!(drawn.payload.fill, ShapeFill::Solid(Color::rgb(255, 0, 0)));
     assert_eq!(drawn.payload.line.color, Some(Color::rgb(0, 0, 255)));
@@ -2072,7 +2070,7 @@ fn excel_preserves_unmodeled_client_data_we_emit() {
             },
             edit_as: None,
         },
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel(&wb);
     let control = result
@@ -2096,4 +2094,118 @@ fn excel_preserves_unmodeled_client_data_we_emit() {
             .any(|raw| raw.contains("Accel") && raw.contains("65")),
         "x:Accel value survives Excel's re-save: {raws:?}"
     );
+}
+
+/// Excel parity for rich comment text in XLSX: the `<r>/<rPr>` runs
+/// we emit in the comments part must survive Excel's re-save with
+/// their run boundary and bold flag.
+// features: Rich text in comments
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_rich_comment_runs_we_emit() {
+    use duke_sheets_core::rich_text::{RichTextRun, RunFont};
+    use duke_sheets_core::{CellComment, DrawingText};
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "anchor").unwrap();
+    ws.set_comment_at(
+        0,
+        0,
+        CellComment {
+            author: "Reviewer".to_string(),
+            text: DrawingText {
+                runs: vec![
+                    RichTextRun {
+                        text: "Bold lead".to_string(),
+                        font: Some(RunFont {
+                            bold: Some(true),
+                            ..RunFont::default()
+                        }),
+                    },
+                    RichTextRun {
+                        text: " then plain".to_string(),
+                        font: None,
+                    },
+                ],
+                ..DrawingText::default()
+            },
+        },
+    )
+    .unwrap();
+
+    let result = roundtrip_through_excel(&wb);
+    let comment = result
+        .worksheet(0)
+        .unwrap()
+        .comment_at(0, 0)
+        .expect("comment must survive Excel re-save");
+    assert_eq!(comment.plain_text(), "Bold lead then plain");
+    let bold_run = comment
+        .text
+        .runs
+        .iter()
+        .find(|run| run.text.contains("Bold lead"))
+        .expect("bold run boundary survives Excel re-save");
+    assert_eq!(
+        bold_run.font.as_ref().and_then(|font| font.bold),
+        Some(true),
+        "bold formatting lost: {:?}",
+        comment.text.runs
+    );
+}
+
+/// Excel parity for unmodeled `formControlPr` attribute passthrough
+/// on a modeled kind: our emit must not trip the Repaired dialog and
+/// the control must stay modeled. Attribute survival itself is
+/// Excel's call; this is a spec-compliance smoke check for the raw
+/// emission path.
+// features: Form control unmodeled ctrlProps passthrough
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_accepts_unmodeled_ctrl_props_we_emit() {
+    use duke_sheets_chart::{CellMarker, DrawingAnchor};
+    use duke_sheets_core::{CheckState, FormControl, FormControlKind};
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 1.0).expect("A1");
+    let mut control = FormControl::new(FormControlKind::Checkbox {
+        caption: "Audit".into(),
+        state: CheckState::Checked,
+        cell_link: None,
+        no_3d: true,
+    });
+    control.raw_properties = vec![("customFlag".to_string(), "kept".to_string())];
+    ws.add_form_control(
+        control,
+        DrawingAnchor::TwoCell {
+            from: CellMarker {
+                col: 1,
+                col_offset_emu: 0,
+                row: 1,
+                row_offset_emu: 0,
+            },
+            to: CellMarker {
+                col: 3,
+                col_offset_emu: 0,
+                row: 3,
+                row_offset_emu: 0,
+            },
+            edit_as: None,
+        },
+    )
+    .unwrap();
+
+    let result = roundtrip_through_excel(&wb);
+    let control = result
+        .worksheet(0)
+        .unwrap()
+        .form_controls()
+        .next()
+        .expect("checkbox survives");
+    let FormControlKind::Checkbox { state, .. } = &control.payload.kind else {
+        panic!("checkbox must stay modeled, got {:?}", control.payload.kind);
+    };
+    assert_eq!(*state, CheckState::Checked);
 }

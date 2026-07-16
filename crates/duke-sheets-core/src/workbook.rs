@@ -45,6 +45,8 @@ pub struct Workbook {
     active_sheet: usize,
     /// Named ranges (defined names)
     named_ranges: NamedRangeCollection,
+    /// Theme color scheme parsed from the file's theme part, when any.
+    theme_palette: Option<crate::style::ThemePalette>,
     /// Opaque calculation cache, populated and consumed by the calculation engine.
     /// Stored as type-erased `Box<dyn Any>` so the core crate needs no dependency
     /// on `duke-sheets-formula`.
@@ -67,6 +69,7 @@ impl Workbook {
             workbook_protection: None,
             active_sheet: 0,
             named_ranges: NamedRangeCollection::new(),
+            theme_palette: None,
             calc_cache: None,
             structural_generation: 0,
             nonce: NEXT_WORKBOOK_NONCE.fetch_add(1, Ordering::Relaxed),
@@ -85,6 +88,7 @@ impl Workbook {
             workbook_protection: None,
             active_sheet: 0,
             named_ranges: NamedRangeCollection::new(),
+            theme_palette: None,
             calc_cache: None,
             structural_generation: 0,
             nonce: NEXT_WORKBOOK_NONCE.fetch_add(1, Ordering::Relaxed),
@@ -237,14 +241,14 @@ impl Workbook {
                     continue;
                 }
             }
-            let controls = self.worksheets[source_sheet].placed_form_controls();
+            let controls = self.worksheets[source_sheet].form_controls().collect::<Vec<_>>();
             let mut radio_values = vec![None; controls.len()];
             for group in radio_groups(&controls) {
                 let value = group
                     .iter()
                     .position(|&index| {
                         matches!(
-                            controls[index].control.kind,
+                            controls[index].payload.kind,
                             FormControlKind::OptionButton {
                                 state: CheckState::Checked,
                                 ..
@@ -264,7 +268,7 @@ impl Workbook {
                         continue;
                     }
                 }
-                let (link, value) = match &placed.control.kind {
+                let (link, value) = match &placed.payload.kind {
                     FormControlKind::Checkbox {
                         state, cell_link, ..
                     } => {
@@ -328,7 +332,7 @@ impl Workbook {
                     let existing = self.worksheets[sheet].get_value_at(address.row, address.col);
                     let fresh_blank = existing == CellValue::Empty && !has_formula;
                     let value = if matches!(
-                        &placed.control.kind,
+                        &placed.payload.kind,
                         FormControlKind::Checkbox {
                             state: CheckState::Unchecked,
                             ..
@@ -383,7 +387,7 @@ impl Workbook {
         }
         let mut planned: Vec<(usize, DrawingPath, CheckState)> = Vec::new();
         for source_sheet in 0..self.worksheets.len() {
-            let controls = self.worksheets[source_sheet].placed_form_controls();
+            let controls = self.worksheets[source_sheet].form_controls().collect::<Vec<_>>();
             let excluded =
                 |path: &DrawingPath| source_sheet == exclude_sheet && exclude.contains(path);
             let shared_cell_value = |link: Option<&str>| -> Option<CellValue> {
@@ -399,7 +403,7 @@ impl Workbook {
                 }
                 let Some(value) = group
                     .iter()
-                    .find_map(|&index| shared_cell_value(controls[index].control.cell_link()))
+                    .find_map(|&index| shared_cell_value(controls[index].payload.cell_link()))
                 else {
                     continue;
                 };
@@ -417,12 +421,12 @@ impl Workbook {
             }
 
             for placed in &controls {
-                if !matches!(placed.control.kind, FormControlKind::Checkbox { .. })
+                if !matches!(placed.payload.kind, FormControlKind::Checkbox { .. })
                     || excluded(&placed.path)
                 {
                     continue;
                 }
-                let Some(value) = shared_cell_value(placed.control.cell_link()) else {
+                let Some(value) = shared_cell_value(placed.payload.cell_link()) else {
                     continue;
                 };
                 // The same truthiness Excel applies when a cell drives a
@@ -508,13 +512,13 @@ impl Workbook {
 
         let mut planned: Vec<(usize, DrawingPath, Driven)> = Vec::new();
         for source_sheet in 0..self.worksheets.len() {
-            let controls = self.worksheets[source_sheet].placed_form_controls();
+            let controls = self.worksheets[source_sheet].form_controls().collect::<Vec<_>>();
 
             for group in radio_groups(&controls) {
                 // Excel persists the group's link on the first radio.
                 let Some(value) = group.iter().find_map(|&index| {
                     controls[index]
-                        .control
+                        .payload
                         .cell_link()
                         .and_then(|link| driving_value(self, source_sheet, link))
                 }) else {
@@ -534,7 +538,7 @@ impl Workbook {
             }
 
             for placed in &controls {
-                match &placed.control.kind {
+                match &placed.payload.kind {
                     FormControlKind::Checkbox { cell_link, .. } => {
                         let Some(value) = cell_link
                             .as_deref()
@@ -663,9 +667,9 @@ impl Workbook {
     pub fn synchronized_for_save(&self) -> Option<Self> {
         if !self.worksheets.iter().any(|sheet| {
             sheet
-                .placed_form_controls()
+                .form_controls().collect::<Vec<_>>()
                 .iter()
-                .any(|placed| placed.control.cell_link().is_some())
+                .any(|placed| placed.payload.cell_link().is_some())
         }) {
             return None;
         }
@@ -676,6 +680,7 @@ impl Workbook {
             settings: self.settings.clone(),
             active_sheet: self.active_sheet,
             named_ranges: self.named_ranges.clone(),
+            theme_palette: self.theme_palette,
             workbook_protection: self.workbook_protection.clone(),
             calc_cache: None,
             structural_generation: self.structural_generation,
@@ -927,6 +932,25 @@ impl Workbook {
     /// Get mutable workbook settings
     pub fn settings_mut(&mut self) -> &mut WorkbookSettings {
         &mut self.settings
+    }
+
+    /// The workbook's theme color scheme: the file's `clrScheme` when
+    /// one was read, otherwise the default Office palette.
+    pub fn theme_palette(&self) -> crate::style::ThemePalette {
+        self.theme_palette.unwrap_or_default()
+    }
+
+    /// Record the theme color scheme parsed from a file's theme part.
+    pub fn set_theme_palette(&mut self, palette: crate::style::ThemePalette) {
+        self.theme_palette = Some(palette);
+    }
+
+    /// Resolve a color to display RGB against this workbook's theme
+    /// palette. [`Color::Auto`] resolves to `None`.
+    ///
+    /// [`Color::Auto`]: crate::style::Color::Auto
+    pub fn resolve_color(&self, color: &crate::style::Color) -> Option<(u8, u8, u8)> {
+        self.theme_palette().resolve(color)
     }
 
     /// Get workbook protection settings, honoring legacy `WorkbookSettings`
@@ -1537,7 +1561,7 @@ mod tests {
             },
         ];
         for kind in kinds {
-            ws.add_drawing(DrawingObject::form_control(FormControl::new(kind)));
+            ws.add_drawing(DrawingObject::form_control(FormControl::new(kind))).unwrap();
         }
 
         assert_eq!(wb.sync_form_control_links(), 9);
@@ -1582,7 +1606,7 @@ mod tests {
                 state: CheckState::Checked,
                 cell_link: Some(link.into()),
                 no_3d: false,
-            })));
+            }))).unwrap();
         }
 
         assert_eq!(wb.sync_form_control_links(), 1);
@@ -1627,7 +1651,7 @@ mod tests {
                 max: 100,
                 increment: 1,
                 cell_link: Some(link.into()),
-            })));
+            }))).unwrap();
         }
 
         assert_eq!(wb.sync_form_control_links(), 2);
@@ -1716,7 +1740,7 @@ mod tests {
             checkbox("$A$9", CheckState::Checked),
         ];
         for kind in kinds {
-            ws.add_drawing(DrawingObject::form_control(FormControl::new(kind)));
+            ws.add_drawing(DrawingObject::form_control(FormControl::new(kind))).unwrap();
         }
 
         assert_eq!(wb.sync_form_controls_from_linked_cells(), 8);
@@ -1764,13 +1788,13 @@ mod tests {
             max: 10,
             increment: 1,
             cell_link: Some("$A$1".into()),
-        })));
+        }))).unwrap();
         ws.add_drawing(DrawingObject::form_control(FormControl::new(FormControlKind::Checkbox {
             caption: "later".into(),
             state: CheckState::Checked,
             cell_link: Some("$A$1".into()),
             no_3d: false,
-        })));
+        }))).unwrap();
 
         assert_eq!(wb.sync_form_control_links(), 1);
         assert_eq!(

@@ -370,13 +370,8 @@ export type FormControlKind =
   | { kind: 'dropdown'; inputRange?: string; cellLink?: string; selected?: number; lines: number; no3D: boolean }
   | { kind: 'scrollbar'; value: number; min: number; max: number; increment: number; page: number; horizontal: boolean; cellLink?: string }
   | { kind: 'spinner'; value: number; min: number; max: number; increment: number; cellLink?: string }
-  /**
-   * Unsupported legacy control. `rawProperties` (unmodeled XLSX
-   * formControlPr attributes) and `rawObj` (original BIFF OBJ body) are
-   * opaque internal passthrough data; echo them back unchanged so a
-   * read -> setDrawing round trip preserves the control on rewrite.
-   */
-  | { kind: 'unknown'; objectType: string; legacyObjectType?: number; caption: DrawingText; rawProperties: Array<[string, string]>; rawObj?: Buffer }
+  /** Unsupported legacy control, preserved for passthrough. */
+  | { kind: 'unknown'; objectType: string; legacyObjectType?: number; caption: DrawingText }
 
 export type FormControlKindInput =
   | { kind: 'button'; caption: DrawingText }
@@ -389,12 +384,7 @@ export type FormControlKindInput =
   | { kind: 'dropdown'; inputRange?: string; cellLink?: string; selected?: number; lines: number; no3D?: boolean }
   | { kind: 'scrollbar'; value: number; min: number; max: number; increment: number; page: number; horizontal?: boolean; cellLink?: string }
   | { kind: 'spinner'; value: number; min: number; max: number; increment: number; cellLink?: string }
-  /**
-   * The raw* fields are opaque internal passthrough data (see
-   * FormControlKind); omit them for hand-authored controls and echo them
-   * back unchanged when rewriting a control read from a file.
-   */
-  | { kind: 'unknown'; objectType: string; legacyObjectType?: number; caption?: DrawingText; rawProperties?: Array<[string, string]>; rawObj?: Buffer }
+  | { kind: 'unknown'; objectType: string; legacyObjectType?: number; caption?: DrawingText }
 
 export interface FormControlPayload {
   kind: FormControlKind
@@ -405,13 +395,22 @@ export interface FormControlPayload {
    * internal passthrough echoed back unchanged on write.
    */
   rawClientData: Buffer[]
+  /**
+   * Unmodeled XLSX formControlPr attributes preserved on any control
+   * kind; opaque internal passthrough echoed back unchanged on write.
+   */
+  rawProperties: Array<[string, string]>
+  /** Original BIFF OBJ body for XLS passthrough of unknown controls. */
+  rawObj?: Buffer
 }
 
 export interface FormControlInputPayload {
   kind: FormControlKindInput
   macroName?: string
-  /** Echo back `rawClientData` unchanged when rewriting a control read from a file. */
+  /** Echo back the raw* fields unchanged when rewriting a control read from a file. */
   rawClientData?: Buffer[]
+  rawProperties?: Array<[string, string]>
+  rawObj?: Buffer
 }
 
 export interface DrawingImage {
@@ -455,7 +454,13 @@ export interface DrawingComment {
   row: number
   col: number
   author: string
+  /** Plain text (runs concatenated). */
   text: string
+  /**
+   * Rich runs; present on output when any run is formatted, and wins
+   * over `text` on input when supplied.
+   */
+  richText?: DrawingText
 }
 
 export type ChartDataReferenceInput =
@@ -509,7 +514,14 @@ export interface RawDrawingMetadata {
   relationships: RawDrawingRelationshipMetadata[]
 }
 
-type DrawingNode = DrawingMeta & DrawingPlacement & { drawingPath: number[] }
+/**
+ * Resolved on-sheet placement in EMU: the anchor rectangle for
+ * top-level drawings, the group-mapped (rotation/flip aware)
+ * rectangle for group children.
+ */
+export type RectEmu = { xEmu: number; yEmu: number; widthEmu: number; heightEmu: number }
+
+type DrawingNode = DrawingMeta & DrawingPlacement & { drawingPath: number[]; absoluteRectEmu: RectEmu }
 
 export type DrawnImage = DrawingNode & { kind: 'image'; image: DrawingImage }
 export type DrawnChart = DrawingNode & { kind: 'chart'; chart: JsChart }
@@ -604,12 +616,17 @@ export declare const Worksheet: {
 
 export type Workbook = Omit<
   Generated.Workbook,
-  'getSheet' | 'chartsheets' | 'syncFormControls' | 'syncFormControlsFromLinkedCells'
+  'getSheet' | 'chartsheets' | 'syncFormControls' | 'syncFormControlsFromLinkedCells' | 'resolveColor'
 > & {
   getSheet(indexOrName: number | string): Worksheet
   readonly chartsheets: JsChartSheet[]
   syncFormControls(): number
   syncFormControlsFromLinkedCells(): number
+  /**
+   * Resolve a drawing color to display RGB ("RRGGBB" hex) against
+   * this workbook's theme palette; `auto` resolves to null.
+   */
+  resolveColor(color: DrawingColor): string | null
 }
 
 export declare const Workbook: {

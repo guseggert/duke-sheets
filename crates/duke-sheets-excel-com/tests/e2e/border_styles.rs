@@ -63,7 +63,7 @@ fn test_border_color() {
         .as_ref()
         .or(style.border.left.as_ref())
         .expect("Should have a border");
-    let (r, _, _) = edge.color.to_rgb();
+    let (r, _, _) = edge.color.to_rgb().unwrap();
     assert!(r > 200, "Expected red border color");
 
     cleanup_fixture(&fixture);
@@ -133,11 +133,11 @@ fn test_mixed_border_sides() {
     assert!(style.border.bottom.is_some(), "Should have bottom border");
 
     let top = style.border.top.as_ref().unwrap();
-    let (r, _, _) = top.color.to_rgb();
+    let (r, _, _) = top.color.to_rgb().unwrap();
     assert!(r > 200, "Top border should be red");
 
     let bottom = style.border.bottom.as_ref().unwrap();
-    let (_, _, b) = bottom.color.to_rgb();
+    let (_, _, b) = bottom.color.to_rgb().unwrap();
     assert!(b > 200, "Bottom border should be blue");
 
     cleanup_fixture(&fixture);

@@ -20,7 +20,7 @@ mod comments;
 mod conditional_format;
 mod data_validation;
 mod drawing;
-mod form_controls;
+pub(crate) mod form_controls;
 mod tables;
 
 const NS_SPREADSHEET: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
@@ -401,8 +401,8 @@ pub(super) fn write_color_element(w: &mut XmlWriter, tag: &str, color: &Color) -
         Color::Theme { index, tint } => {
             let v = index.to_string();
             el.push_attribute(("theme", v.as_str()));
-            if *tint != 0 {
-                let t = ((*tint as f64) / 100.0).to_string();
+            if *tint != 0.0 {
+                let t = tint.to_string();
                 el.push_attribute(("tint", t.as_str()));
             }
         }
@@ -428,25 +428,7 @@ pub(super) fn sheet_has_drawing_content(sheet: &duke_sheets_core::Worksheet) -> 
 pub(super) fn sheet_image_payloads(
     sheet: &duke_sheets_core::Worksheet,
 ) -> Vec<&duke_sheets_chart::EmbeddedImage> {
-    fn walk<'a>(
-        kind: &'a duke_sheets_core::DrawingKind,
-        out: &mut Vec<&'a duke_sheets_chart::EmbeddedImage>,
-    ) {
-        match kind {
-            duke_sheets_core::DrawingKind::Image(image) => out.push(image),
-            duke_sheets_core::DrawingKind::Group(group) => {
-                for child in &group.children {
-                    walk(&child.kind, out);
-                }
-            }
-            _ => {}
-        }
-    }
-    let mut out = Vec::new();
-    for object in sheet.drawings() {
-        walk(&object.kind, &mut out);
-    }
-    out
+    sheet.images().map(|placed| placed.payload).collect()
 }
 
 /// Raw relationships preserved on a worksheet's raw drawing entries
@@ -727,7 +709,7 @@ impl XlsxWriter {
         // drawing tree, groups included).
         let control_counts: Vec<usize> = workbook
             .worksheets()
-            .map(|sheet| sheet.placed_form_controls().len())
+            .map(|sheet| sheet.form_control_count())
             .collect();
 
         // Sheets needing a legacy VML drawing part (comment shapes
@@ -2741,7 +2723,7 @@ impl XlsxWriter {
     }
 
     /// Write a sequence of rich text runs as `<r>` elements.
-    fn write_rich_text_runs(
+    pub(super) fn write_rich_text_runs(
         w: &mut XmlWriter,
         runs: &[duke_sheets_core::RichTextRun],
     ) -> XlsxResult<()> {
@@ -2873,9 +2855,8 @@ impl XlsxWriter {
             }
             duke_sheets_core::Color::Theme { index, tint } => {
                 tag.push_attribute(("theme", index.to_string().as_str()));
-                if *tint != 0 {
-                    let tint_f = *tint as f64 / 100.0;
-                    tag.push_attribute(("tint", tint_f.to_string().as_str()));
+                if *tint != 0.0 {
+                    tag.push_attribute(("tint", tint.to_string().as_str()));
                 }
             }
             duke_sheets_core::Color::Indexed(idx) => {
@@ -3445,7 +3426,7 @@ mod tests {
         let mut wb = Workbook::new();
         wb.worksheet_mut(0)
             .unwrap()
-            .set_tab_color(Some(Color::theme(4, 50)));
+            .set_tab_color(Some(Color::theme(4, 0.5)));
 
         let mut out = Cursor::new(Vec::new());
         XlsxWriter::write(&wb, &mut out).expect("write workbook");
@@ -3462,7 +3443,7 @@ mod tests {
         sheet.set_cell_value("A2", 2.0).unwrap();
         sheet.set_cell_value("A3", 3.0).unwrap();
 
-        let rule = ConditionalFormatRule::color_scale_2(Color::theme(4, -25), Color::Indexed(12))
+        let rule = ConditionalFormatRule::color_scale_2(Color::theme(4, -0.25), Color::Indexed(12))
             .with_range(CellRange::parse("A1:A3").unwrap());
         sheet.add_conditional_format(rule);
 
@@ -3995,7 +3976,7 @@ mod tests {
                 no_3d: false,
             }),
             duke_sheets_chart::DrawingAnchor::default(),
-        );
+        ).unwrap();
         let snapshot = wb.synchronized_for_save().unwrap();
 
         // Write a linked-cell-synchronized snapshot back out.
@@ -4055,7 +4036,7 @@ mod tests {
         chart.category_axis = Some(Axis::new().with_title("Category"));
         chart.value_axis = Some(Axis::new().with_title("Value").with_bounds(0.0, 100.0));
         chart.legend = Some(Legend::new(LegendPosition::Bottom));
-        sheet.add_chart(chart, anchor);
+        sheet.add_chart(chart, anchor).unwrap();
 
         let mut out = Cursor::new(Vec::new());
         XlsxWriter::write(&wb, &mut out).unwrap();
@@ -4087,7 +4068,7 @@ mod tests {
         assert_eq!(val_ax.minimum, Some(0.0));
         assert_eq!(val_ax.maximum, Some(100.0));
         assert_eq!(c.legend.as_ref().unwrap().position, LegendPosition::Bottom);
-        if let DrawingAnchor::TwoCell { from, to, .. } = &drawn.object.anchor {
+        if let DrawingAnchor::TwoCell { from, to, .. } = &drawn.object.unwrap().anchor {
             assert_eq!(from.col, 2);
             assert_eq!(from.row, 3);
             assert_eq!(from.col_offset_emu, 100);
@@ -4111,7 +4092,7 @@ mod tests {
         chart.title = Some("Pie Chart".to_string());
         let s = DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$3")).with_name("Slices");
         chart.add_series(s);
-        sheet.add_chart(chart, duke_sheets_chart::DrawingAnchor::default());
+        sheet.add_chart(chart, duke_sheets_chart::DrawingAnchor::default()).unwrap();
 
         let mut out = Cursor::new(Vec::new());
         XlsxWriter::write(&wb, &mut out).unwrap();
@@ -4137,7 +4118,7 @@ mod tests {
         let s = DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$5"))
             .with_categories(DataReference::formula("Sheet1!$A$1:$A$5"));
         chart.add_series(s);
-        sheet.add_chart(chart, duke_sheets_chart::DrawingAnchor::default());
+        sheet.add_chart(chart, duke_sheets_chart::DrawingAnchor::default()).unwrap();
 
         let mut out = Cursor::new(Vec::new());
         XlsxWriter::write(&wb, &mut out).unwrap();
@@ -4171,12 +4152,12 @@ mod tests {
         c1.title = Some("Line Chart".to_string());
         c1.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
         c1.legend = Some(Legend::new(LegendPosition::Right));
-        sheet.add_chart(c1, duke_sheets_chart::DrawingAnchor::default());
+        sheet.add_chart(c1, duke_sheets_chart::DrawingAnchor::default()).unwrap();
 
         let mut c2 = Chart::new(ChartType::BarClustered);
         c2.title = Some("Bar Chart".to_string());
         c2.add_series(DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$5")));
-        sheet.add_chart(c2, duke_sheets_chart::DrawingAnchor::default());
+        sheet.add_chart(c2, duke_sheets_chart::DrawingAnchor::default()).unwrap();
 
         let mut out = Cursor::new(Vec::new());
         XlsxWriter::write(&wb, &mut out).unwrap();
@@ -4201,7 +4182,7 @@ mod tests {
         let mut wb = Workbook::new();
         let sheet = wb.worksheet_mut(0).unwrap();
         let chart = Chart::new(ChartType::Area);
-        sheet.add_chart(chart, duke_sheets_chart::DrawingAnchor::default());
+        sheet.add_chart(chart, duke_sheets_chart::DrawingAnchor::default()).unwrap();
 
         let mut out = Cursor::new(Vec::new());
         XlsxWriter::write(&wb, &mut out).unwrap();
@@ -4223,10 +4204,10 @@ mod tests {
 
         let mut good = Chart::new(ChartType::Line);
         good.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-        sheet.add_chart(good, duke_sheets_chart::DrawingAnchor::default());
+        sheet.add_chart(good, duke_sheets_chart::DrawingAnchor::default()).unwrap();
 
         let unsupported = Chart::new(ChartType::Unsupported("c:ofPieChart".into()));
-        sheet.add_chart(unsupported, duke_sheets_chart::DrawingAnchor::default());
+        sheet.add_chart(unsupported, duke_sheets_chart::DrawingAnchor::default()).unwrap();
 
         let mut out = Cursor::new(Vec::new());
         XlsxWriter::write(&wb, &mut out).unwrap();
@@ -4266,7 +4247,7 @@ mod tests {
 
         let mut chart = Chart::new(ChartType::ColumnClustered);
         chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$B$2:$B$3")));
-        sheet.add_chart(chart, duke_sheets_chart::DrawingAnchor::default());
+        sheet.add_chart(chart, duke_sheets_chart::DrawingAnchor::default()).unwrap();
 
         let mut out = Cursor::new(Vec::new());
         XlsxWriter::write(&wb, &mut out).unwrap();
@@ -4287,7 +4268,7 @@ mod tests {
         let sheet = wb.worksheet_mut(0).unwrap();
         let mut chart = Chart::new(ChartType::Line);
         chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-        sheet.add_chart(chart, duke_sheets_chart::DrawingAnchor::default());
+        sheet.add_chart(chart, duke_sheets_chart::DrawingAnchor::default()).unwrap();
 
         let mut out = Cursor::new(Vec::new());
         XlsxWriter::write(&wb, &mut out).unwrap();

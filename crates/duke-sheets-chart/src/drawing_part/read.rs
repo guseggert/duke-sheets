@@ -1023,7 +1023,7 @@ fn parse_twin_text<R: std::io::BufRead>(reader: &mut Reader<R>) -> ChartParseRes
                 });
                 if let Some(index) = index {
                     run_font.get_or_insert_with(TwinRunFont::default).color =
-                        Some(TwinColor::Theme { index, tint: 0 });
+                        Some(TwinColor::Theme { index, tint: 0.0 });
                 }
             }
             b"lumMod" if in_run => {
@@ -1031,7 +1031,7 @@ fn parse_twin_text<R: std::io::BufRead>(reader: &mut Reader<R>) -> ChartParseRes
                     if let Some(TwinColor::Theme { index, .. }) =
                         run_font.as_ref().and_then(|font| font.color)
                     {
-                        let tint = ((value - 100_000) / 1_000).clamp(-100, 0) as i8;
+                        let tint = ((value - 100_000) as f64 / 100_000.0).clamp(-1.0, 0.0);
                         run_font.get_or_insert_with(TwinRunFont::default).color =
                             Some(TwinColor::Theme { index, tint });
                     }
@@ -1042,7 +1042,7 @@ fn parse_twin_text<R: std::io::BufRead>(reader: &mut Reader<R>) -> ChartParseRes
                     if let Some(TwinColor::Theme { index, .. }) =
                         run_font.as_ref().and_then(|font| font.color)
                     {
-                        let tint = (value / 1_000).clamp(0, 100) as i8;
+                        let tint = (value as f64 / 100_000.0).clamp(0.0, 1.0);
                         run_font.get_or_insert_with(TwinRunFont::default).color =
                             Some(TwinColor::Theme { index, tint });
                     }
@@ -1390,7 +1390,7 @@ fn parse_drawing_color(bytes: &[u8]) -> Option<TwinColor> {
                 }
                 b"schemeClr" => {
                     let index = scheme_color_index(&attr_string(e, b"val")?)?;
-                    color = Some(TwinColor::Theme { index, tint: 0 });
+                    color = Some(TwinColor::Theme { index, tint: 0.0 });
                 }
                 b"lumMod" => {
                     if let (Some(value), Some(TwinColor::Theme { index, .. })) =
@@ -1398,7 +1398,7 @@ fn parse_drawing_color(bytes: &[u8]) -> Option<TwinColor> {
                     {
                         color = Some(TwinColor::Theme {
                             index,
-                            tint: ((value - 100_000) / 1_000).clamp(-100, 0) as i8,
+                            tint: ((value - 100_000) as f64 / 100_000.0).clamp(-1.0, 0.0),
                         });
                     }
                 }
@@ -1408,7 +1408,7 @@ fn parse_drawing_color(bytes: &[u8]) -> Option<TwinColor> {
                     {
                         color = Some(TwinColor::Theme {
                             index,
-                            tint: (value / 1_000).clamp(0, 100) as i8,
+                            tint: (value as f64 / 100_000.0).clamp(0.0, 1.0),
                         });
                     }
                 }

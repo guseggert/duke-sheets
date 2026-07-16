@@ -6,23 +6,23 @@ use duke_sheets::{
     Worksheet, XlsReader, XlsWriter, XlsbReader, XlsbWriter, XlsxReader, XlsxWriter,
 };
 
-fn unknown_edit_box() -> FormControlKind {
-    FormControlKind::Unknown {
+fn unknown_edit_box() -> FormControl {
+    let mut control = FormControl::new(FormControlKind::Unknown {
         object_type: "EditBox".to_string(),
         legacy_object_type: None,
         caption: "Unsupported editor".into(),
-        raw_properties: vec![
-            ("customFlag".to_string(), "kept".to_string()),
-            ("val".to_string(), "17".to_string()),
-            ("fmlaLink".to_string(), "$A$1".to_string()),
-        ],
-        raw_obj: None,
-    }
+    });
+    control.raw_properties = vec![
+        ("customFlag".to_string(), "kept".to_string()),
+        ("val".to_string(), "17".to_string()),
+        ("fmlaLink".to_string(), "$A$1".to_string()),
+    ];
+    control
 }
 
 fn unknown_workbook() -> Workbook {
     let mut workbook = Workbook::new();
-    let mut control = FormControl::new(unknown_edit_box()).with_macro_name("RunUnknown");
+    let mut control = unknown_edit_box().with_macro_name("RunUnknown");
     control.raw_client_data = vec![
         b"<x:CustomState mode=\"alpha\"/>".to_vec(),
         b"<x:Val>17</x:Val>".to_vec(),
@@ -44,7 +44,7 @@ fn unknown_workbook() -> Workbook {
         edit_as: None,
     });
     object.meta.name = Some("Legacy editor".to_string());
-    workbook.worksheet_mut(0).unwrap().add_drawing(object);
+    workbook.worksheet_mut(0).unwrap().add_drawing(object).unwrap();
     workbook
 }
 
@@ -55,11 +55,11 @@ fn assert_unknown_edit_box(workbook: &Workbook, expect_ctrl_props: bool) {
         .form_controls()
         .next()
         .expect("unknown control survives");
-    assert_eq!(drawn.object.meta.name.as_deref(), Some("Legacy editor"));
+    assert_eq!(drawn.object.unwrap().meta.name.as_deref(), Some("Legacy editor"));
     assert_eq!(drawn.payload.macro_name.as_deref(), Some("RunUnknown"));
     assert_eq!(drawn.payload.caption_text().as_deref(), Some("Unsupported editor"));
     assert_eq!(
-        drawn.object.anchor,
+        drawn.object.unwrap().anchor,
         DrawingAnchor::TwoCell {
             from: CellMarker {
                 col: 1,
@@ -77,11 +77,10 @@ fn assert_unknown_edit_box(workbook: &Workbook, expect_ctrl_props: bool) {
         }
     );
     let raw_client_data = &drawn.payload.raw_client_data;
+    let raw_properties = &drawn.payload.raw_properties;
     let FormControlKind::Unknown {
         object_type,
         legacy_object_type,
-        raw_properties,
-        raw_obj,
         ..
     } = &drawn.payload.kind
     else {
@@ -89,7 +88,7 @@ fn assert_unknown_edit_box(workbook: &Workbook, expect_ctrl_props: bool) {
     };
     assert_eq!(object_type, "EditBox");
     assert_eq!(*legacy_object_type, None);
-    assert_eq!(raw_obj, &None);
+    assert_eq!(drawn.payload.raw_obj, None);
     if expect_ctrl_props {
         assert!(raw_properties.contains(&("customFlag".to_string(), "kept".to_string())));
         assert!(raw_properties.contains(&("val".to_string(), "17".to_string())));
@@ -147,15 +146,14 @@ fn assert_xls_unknown(workbook: &Workbook, original_raw: &[u8]) {
         .form_controls()
         .next()
         .expect("XLS unknown control survives");
-    assert_eq!(drawn.object.meta.name.as_deref(), Some("Edit field"));
-    assert!(drawn.object.meta.hidden);
-    assert!(!drawn.object.meta.locked);
-    assert!(!drawn.object.meta.printable);
+    assert_eq!(drawn.object.unwrap().meta.name.as_deref(), Some("Edit field"));
+    assert!(drawn.object.unwrap().meta.hidden);
+    assert!(!drawn.object.unwrap().meta.locked);
+    assert!(!drawn.object.unwrap().meta.printable);
     assert_eq!(drawn.payload.caption_text().as_deref(), Some("Raw edit box"));
     let FormControlKind::Unknown {
         object_type,
         legacy_object_type,
-        raw_obj: Some(raw_obj),
         ..
     } = &drawn.payload.kind
     else {
@@ -163,6 +161,7 @@ fn assert_xls_unknown(workbook: &Workbook, original_raw: &[u8]) {
     };
     assert_eq!(object_type, "EditBox");
     assert_eq!(*legacy_object_type, Some(0x000D));
+    let raw_obj = drawn.payload.raw_obj.as_deref().expect("raw OBJ body captured");
     assert_eq!(&raw_obj[10..], &original_raw[10..]);
 }
 
@@ -170,13 +169,12 @@ fn assert_xls_unknown(workbook: &Workbook, original_raw: &[u8]) {
 #[test]
 fn xls_unknown_edit_box_obj_body_survives_rewrite() {
     let raw_obj = raw_edit_box_obj();
-    let control = FormControl::new(FormControlKind::Unknown {
+    let mut control = FormControl::new(FormControlKind::Unknown {
         object_type: "EditBox".to_string(),
         legacy_object_type: Some(0x000D),
         caption: "Raw edit box".into(),
-        raw_properties: Vec::new(),
-        raw_obj: Some(raw_obj.clone()),
     });
+    control.raw_obj = Some(raw_obj.clone());
     let mut object = DrawingObject::form_control(control).with_anchor(DrawingAnchor::TwoCell {
         from: CellMarker {
             col: 0,
@@ -198,7 +196,7 @@ fn xls_unknown_edit_box_obj_body_survives_rewrite() {
     object.meta.printable = false;
 
     let mut workbook = Workbook::new();
-    workbook.worksheet_mut(0).unwrap().add_drawing(object);
+    workbook.worksheet_mut(0).unwrap().add_drawing(object).unwrap();
     let first_bytes = XlsWriter::write_to_bytes(&workbook).expect("write first xls");
     let first = XlsReader::read(Cursor::new(first_bytes)).expect("read first xls");
     assert_xls_unknown(&first, &raw_obj);
@@ -261,14 +259,13 @@ fn raw_edit_box_obj_with_macro() -> Vec<u8> {
 // features: Unknown legacy Forms controls
 #[test]
 fn xls_unknown_control_embedded_macro_is_replaced_not_replayed() {
-    let control = FormControl::new(FormControlKind::Unknown {
+    let mut control = FormControl::new(FormControlKind::Unknown {
         object_type: "EditBox".to_string(),
         legacy_object_type: Some(0x000D),
         caption: "Macro edit box".into(),
-        raw_properties: Vec::new(),
-        raw_obj: Some(raw_edit_box_obj_with_macro()),
     })
     .with_macro_name("RunEdit");
+    control.raw_obj = Some(raw_edit_box_obj_with_macro());
     let object = DrawingObject::form_control(control).with_anchor(DrawingAnchor::TwoCell {
         from: CellMarker {
             col: 0,
@@ -285,7 +282,7 @@ fn xls_unknown_control_embedded_macro_is_replaced_not_replayed() {
         edit_as: None,
     });
     let mut workbook = Workbook::new();
-    workbook.worksheet_mut(0).unwrap().add_drawing(object);
+    workbook.worksheet_mut(0).unwrap().add_drawing(object).unwrap();
 
     let bytes = XlsWriter::write_to_bytes(&workbook).expect("write xls");
     let reread = XlsReader::read(Cursor::new(bytes)).expect("read xls");
@@ -300,13 +297,11 @@ fn xls_unknown_control_embedded_macro_is_replaced_not_replayed() {
         Some("RunEdit"),
         "macro must reference this file's Lbl, not the source workbook's stale index"
     );
-    let FormControlKind::Unknown {
-        raw_obj: Some(raw_obj),
-        ..
-    } = &drawn.payload.kind
-    else {
-        panic!("expected raw-backed XLS unknown control");
-    };
+    assert!(matches!(
+        drawn.payload.kind,
+        FormControlKind::Unknown { .. }
+    ));
+    let raw_obj = drawn.payload.raw_obj.as_deref().expect("raw OBJ body captured");
     assert_eq!(
         count_macro_subrecords(raw_obj),
         1,
@@ -401,7 +396,7 @@ fn checkbox_and_comment_workbook() -> Workbook {
             },
             edit_as: None,
         },
-    );
+    ).unwrap();
     sheet
         .set_comment_at(
             4,
@@ -425,7 +420,7 @@ fn assert_aux_ui_shape_skipped(workbook: &Workbook) {
         FormControlKind::Checkbox { .. }
     ));
     let comment = sheet.comment_at(4, 4).expect("comment survives");
-    assert_eq!(comment.text, "still here");
+    assert_eq!(comment.plain_text(), "still here");
 }
 
 // features: Form control: dropdown (combo box)
@@ -512,6 +507,107 @@ fn vml_parts(bytes: &[u8]) -> String {
     out
 }
 
+/// Insert extra attributes into every ctrlProps `formControlPr`
+/// element of an XLSX zip.
+fn splice_ctrl_prop_attrs(bytes: Vec<u8>, insert: &str) -> Vec<u8> {
+    let mut input = zip::ZipArchive::new(Cursor::new(bytes)).expect("open zip");
+    let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let mut spliced = false;
+    for index in 0..input.len() {
+        let mut file = input.by_index(index).expect("zip entry");
+        let name = file.name().to_string();
+        let is_dir = file.is_dir();
+        let mut data = Vec::new();
+        file.read_to_end(&mut data).expect("read zip entry");
+        drop(file);
+
+        if is_dir {
+            output
+                .add_directory(name, zip::write::SimpleFileOptions::default())
+                .expect("copy directory");
+            continue;
+        }
+        if name.contains("ctrlProps") {
+            let xml = String::from_utf8(data).expect("ctrlProps is UTF-8");
+            data = xml
+                .replace("<formControlPr ", &format!("<formControlPr {insert} "))
+                .into_bytes();
+            spliced = true;
+        }
+        output
+            .start_file(name, zip::write::SimpleFileOptions::default())
+            .expect("copy file");
+        output.write_all(&data).expect("write zip entry");
+    }
+    assert!(spliced, "no ctrlProps part found to splice into");
+    output.finish().expect("finish zip").into_inner()
+}
+
+// features: Form control unmodeled ctrlProps passthrough
+#[test]
+fn unmodeled_ctrl_props_attributes_round_trip_on_modeled_kinds_xlsx() {
+    let mut workbook = Workbook::new();
+    workbook
+        .worksheet_mut(0)
+        .unwrap()
+        .add_form_control(
+            FormControl::new(FormControlKind::Scrollbar {
+                value: 50,
+                min: 5,
+                max: 100,
+                increment: 2,
+                page: 10,
+                horizontal: false,
+                cell_link: None,
+            }),
+            DrawingAnchor::default(),
+        )
+        .unwrap();
+    let mut bytes = Cursor::new(Vec::new());
+    XlsxWriter::write(&workbook, &mut bytes).expect("write xlsx");
+    let spliced = splice_ctrl_prop_attrs(bytes.into_inner(), "customFlag=\"kept\"");
+
+    let reopened = XlsxReader::read(Cursor::new(spliced)).expect("read spliced xlsx");
+    {
+        let sheet = reopened.worksheet(0).unwrap();
+        let drawn = sheet.form_controls().next().expect("control survives");
+        let FormControlKind::Scrollbar { min, .. } = &drawn.payload.kind else {
+            panic!("expected the scrollbar to stay modeled");
+        };
+        assert_eq!(*min, 5);
+        assert_eq!(
+            drawn.payload.raw_properties,
+            vec![("customFlag".to_string(), "kept".to_string())],
+            "unmodeled attribute captured without duplicating modeled ones"
+        );
+    }
+
+    // Editing the model must win over stale raw copies: min drops to
+    // its (omitted-at-write) default while the raw attribute stays.
+    let mut edited = reopened;
+    {
+        let sheet = edited.worksheet_mut(0).unwrap();
+        let control = sheet.form_control_at_path_mut(&[0]).expect("control");
+        let FormControlKind::Scrollbar { min, .. } = &mut control.kind else {
+            panic!("expected scrollbar");
+        };
+        *min = 0;
+    }
+    let mut rewritten = Cursor::new(Vec::new());
+    XlsxWriter::write(&edited, &mut rewritten).expect("rewrite xlsx");
+    let reread = XlsxReader::read(Cursor::new(rewritten.into_inner())).expect("reread xlsx");
+    let sheet = reread.worksheet(0).unwrap();
+    let drawn = sheet.form_controls().next().expect("control survives");
+    let FormControlKind::Scrollbar { min, .. } = &drawn.payload.kind else {
+        panic!("expected scrollbar");
+    };
+    assert_eq!(*min, 0, "model edit must not be shadowed by a stale raw attr");
+    assert_eq!(
+        drawn.payload.raw_properties,
+        vec![("customFlag".to_string(), "kept".to_string())]
+    );
+}
+
 fn control_raws(workbook: &Workbook) -> Vec<String> {
     workbook
         .worksheet(0)
@@ -538,7 +634,7 @@ fn unmodeled_client_data_round_trips_on_checkbox_xlsx() {
             no_3d: true,
         }),
         DrawingAnchor::default(),
-    );
+    ).unwrap();
     let mut bytes = Cursor::new(Vec::new());
     XlsxWriter::write(&workbook, &mut bytes).expect("write xlsx");
     let spliced = splice_into_client_data(
@@ -575,7 +671,7 @@ fn unmodeled_client_data_round_trips_on_button_xlsb() {
             caption: "OK".into(),
         }),
         DrawingAnchor::default(),
-    );
+    ).unwrap();
     let mut bytes = Cursor::new(Vec::new());
     XlsbWriter::write(&workbook, &mut bytes).expect("write xlsb");
     let spliced = splice_into_client_data(
@@ -617,7 +713,7 @@ fn uiobj_marker_wins_over_a_ctrlprops_twin_xlsx() {
             no_3d: true,
         }),
         DrawingAnchor::default(),
-    );
+    ).unwrap();
     let mut bytes = Cursor::new(Vec::new());
     XlsxWriter::write(&workbook, &mut bytes).expect("write xlsx");
     let spliced = splice_into_client_data(bytes.into_inner(), "Checkbox", "   <x:UIObj/>\n  ");
@@ -643,7 +739,7 @@ fn malformed_raw_client_data_is_rejected_at_write() {
     workbook
         .worksheet_mut(0)
         .unwrap()
-        .add_form_control(control, DrawingAnchor::default());
+        .add_form_control(control, DrawingAnchor::default()).unwrap();
 
     let xlsx_err = XlsxWriter::write(&workbook, &mut Cursor::new(Vec::new()))
         .expect_err("unbalanced raw ClientData must not produce a corrupt XLSX part");
@@ -711,7 +807,7 @@ fn malformed_raw_client_data_is_rejected_at_write() {
         workbook
             .worksheet_mut(0)
             .unwrap()
-            .add_form_control(control, DrawingAnchor::default());
+            .add_form_control(control, DrawingAnchor::default()).unwrap();
         let error = XlsxWriter::write(&workbook, &mut Cursor::new(Vec::new())).expect_err(
             &format!(
                 "hostile fragment must be rejected: {}",
@@ -769,15 +865,16 @@ fn pict_vml_is_not_exposed_as_unknown_form_control() {
         object_type: "Pict".to_string(),
         legacy_object_type: None,
         caption: "ActiveX placeholder".into(),
-        raw_properties: Vec::new(),
-        raw_obj: None,
     });
     assert!(pict.validate().is_err());
     let mut pict_workbook = Workbook::new();
+    // Unchecked: the control fails validation on purpose; the writer
+    // must still reject it for files read permissively.
     pict_workbook
         .worksheet_mut(0)
         .unwrap()
-        .add_form_control(pict, DrawingAnchor::default());
+        .drawings_mut()
+        .push(DrawingObject::form_control(pict).with_anchor(DrawingAnchor::default()));
     let mut output = Cursor::new(Vec::new());
     let error = XlsbWriter::write(&pict_workbook, &mut output).unwrap_err();
     assert!(error.to_string().contains("ActiveX/OLE"));
@@ -786,8 +883,6 @@ fn pict_vml_is_not_exposed_as_unknown_form_control() {
         object_type: "  ".to_string(),
         legacy_object_type: None,
         caption: "blank type".into(),
-        raw_properties: Vec::new(),
-        raw_obj: None,
     });
     assert!(blank.validate().is_err());
 }
@@ -809,7 +904,7 @@ fn metric_anchor_workbook() -> Workbook {
             width_emu: 609_600,
             height_emu: 190_500,
         },
-    );
+    ).unwrap();
     sheet.add_form_control(
         FormControl::new(FormControlKind::Label {
             caption: "absolute".into(),
@@ -820,7 +915,7 @@ fn metric_anchor_workbook() -> Workbook {
             width_emu: 95_250,
             height_emu: 95_250,
         },
-    );
+    ).unwrap();
     workbook
 }
 
@@ -833,7 +928,7 @@ fn assert_metric_anchors(workbook: &Workbook, tolerance_emu: i64) {
     };
     let controls: Vec<_> = workbook.worksheet(0).unwrap().form_controls().collect();
     assert_eq!(controls.len(), 2);
-    match &controls[0].object.anchor {
+    match &controls[0].object.unwrap().anchor {
         DrawingAnchor::TwoCell { from, to, .. } => {
             assert_eq!((from.col, from.col_offset_emu), (0, 0));
             assert_eq!((from.row, from.row_offset_emu), (0, 0));
@@ -844,7 +939,7 @@ fn assert_metric_anchors(workbook: &Workbook, tolerance_emu: i64) {
         }
         other => panic!("expected flattened one-cell control anchor, got {other:?}"),
     }
-    match &controls[1].object.anchor {
+    match &controls[1].object.unwrap().anchor {
         DrawingAnchor::TwoCell { from, .. } => {
             assert_eq!(from.col, 0);
             close(from.col_offset_emu, 609_600);
@@ -999,7 +1094,7 @@ fn radio_grouping_uses_custom_sheet_dimensions() {
             width_emu: 1_000_000,
             height_emu: 1_000_000,
         }),
-    );
+    ).unwrap();
     sheet.add_drawing(radio(
         "outside with custom width",
         DrawingAnchor::TwoCell {
@@ -1017,7 +1112,7 @@ fn radio_grouping_uses_custom_sheet_dimensions() {
             },
             edit_as: None,
         },
-    ));
+    )).unwrap();
     sheet.add_drawing(radio(
         "inside",
         DrawingAnchor::Absolute {
@@ -1026,9 +1121,9 @@ fn radio_grouping_uses_custom_sheet_dimensions() {
             width_emu: 100_000,
             height_emu: 100_000,
         },
-    ));
+    )).unwrap();
 
-    let placed = sheet.placed_form_controls();
-    assert_eq!(placed[1].rect_emu.0, 1_381_125);
+    let placed = sheet.form_controls().collect::<Vec<_>>();
+    assert_eq!(placed[1].rect_emu.x_emu, 1_381_125);
     assert_eq!(radio_groups(&placed), vec![vec![1], vec![2]]);
 }

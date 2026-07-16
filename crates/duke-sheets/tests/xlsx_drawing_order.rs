@@ -99,7 +99,7 @@ fn kind_tags(workbook: &Workbook) -> Vec<&'static str> {
 fn xlsx_image_double_round_trip_does_not_duplicate() {
     let mut workbook = Workbook::new();
     let sheet = workbook.worksheet_mut(0).unwrap();
-    sheet.add_drawing(png("Pic").with_anchor(two_cell(1, 1, 3, 3)));
+    sheet.add_drawing(png("Pic").with_anchor(two_cell(1, 1, 3, 3))).unwrap();
 
     let once = round_trip(&workbook);
     assert_eq!(kind_tags(&once), vec!["image"], "first round trip");
@@ -115,20 +115,20 @@ fn xlsx_image_double_round_trip_does_not_duplicate() {
 fn xlsx_control_z_order_between_images_round_trips() {
     let mut workbook = Workbook::new();
     let sheet = workbook.worksheet_mut(0).unwrap();
-    sheet.add_drawing(png("Below").with_anchor(two_cell(0, 0, 2, 2)));
+    sheet.add_drawing(png("Below").with_anchor(two_cell(0, 0, 2, 2))).unwrap();
     sheet.add_drawing(
         DrawingObject::form_control(checkbox("Middle", Some("$D$2")))
             .with_anchor(two_cell(1, 1, 3, 3)),
-    );
-    sheet.add_drawing(png("Above").with_anchor(two_cell(2, 2, 4, 4)));
+    ).unwrap();
+    sheet.add_drawing(png("Above").with_anchor(two_cell(2, 2, 4, 4))).unwrap();
 
     let read = round_trip(&workbook);
     assert_eq!(kind_tags(&read), vec!["image", "control", "image"]);
 
     let sheet = read.worksheet(0).unwrap();
     let images: Vec<_> = sheet.images().collect();
-    assert_eq!(images[0].object.meta.name.as_deref(), Some("Below"));
-    assert_eq!(images[1].object.meta.name.as_deref(), Some("Above"));
+    assert_eq!(images[0].object.unwrap().meta.name.as_deref(), Some("Below"));
+    assert_eq!(images[1].object.unwrap().meta.name.as_deref(), Some("Above"));
     let control = sheet.form_controls().next().unwrap();
     assert_eq!(control.payload.caption_text().as_deref(), Some("Middle"));
     assert_eq!(
@@ -136,7 +136,7 @@ fn xlsx_control_z_order_between_images_round_trips() {
         Some("$D$2"),
         "control state still comes from ctrlProps"
     );
-    assert_eq!(control.object.anchor, two_cell(1, 1, 3, 3));
+    assert_eq!(control.object.unwrap().anchor, two_cell(1, 1, 3, 3));
 }
 
 /// Comments keep their order relative to form controls (the shared
@@ -148,15 +148,15 @@ fn xlsx_comment_control_relative_order_round_trips() {
     let sheet = workbook.worksheet_mut(0).unwrap();
     sheet.add_drawing(
         DrawingObject::form_control(checkbox("First", None)).with_anchor(two_cell(0, 0, 2, 2)),
-    );
+    ).unwrap();
     sheet.add_drawing(DrawingObject::comment(
         4,
         4,
         CellComment::new("a", "between the controls"),
-    ));
+    )).unwrap();
     sheet.add_drawing(
         DrawingObject::form_control(checkbox("Second", None)).with_anchor(two_cell(6, 6, 8, 8)),
-    );
+    ).unwrap();
 
     let read = round_trip(&workbook);
     assert_eq!(kind_tags(&read), vec!["control", "comment", "control"]);
@@ -167,7 +167,7 @@ fn xlsx_comment_control_relative_order_round_trips() {
         controls[1].payload.caption_text().as_deref(),
         Some("Second")
     );
-    assert_eq!(sheet.comment_at(4, 4).unwrap().text, "between the controls");
+    assert_eq!(sheet.comment_at(4, 4).unwrap().plain_text(), "between the controls");
 }
 
 /// A shape group containing two pictures round-trips as a Group with
@@ -218,7 +218,7 @@ fn xlsx_group_of_images_round_trips() {
         DrawingObject::group(group)
             .with_anchor(two_cell(1, 1, 4, 2))
             .with_name("Group 1"),
-    );
+    ).unwrap();
 
     let read = round_trip(&workbook);
     assert_eq!(kind_tags(&read), vec!["group"]);
@@ -247,24 +247,24 @@ fn xlsx_image_locked_printable_round_trips() {
     let mut object = png("Pic").with_anchor(two_cell(0, 0, 2, 2));
     object.meta.locked = false;
     object.meta.printable = false;
-    sheet.add_drawing(object);
+    sheet.add_drawing(object).unwrap();
 
     let read = round_trip(&workbook);
     let sheet = read.worksheet(0).unwrap();
     let image = sheet.images().next().expect("image");
-    assert!(!image.object.meta.locked);
-    assert!(!image.object.meta.printable);
+    assert!(!image.object.unwrap().meta.locked);
+    assert!(!image.object.unwrap().meta.printable);
 
     // And the defaults still read back as true.
     let mut workbook = Workbook::new();
     workbook
         .worksheet_mut(0)
         .unwrap()
-        .add_drawing(png("Pic").with_anchor(two_cell(0, 0, 2, 2)));
+        .add_drawing(png("Pic").with_anchor(two_cell(0, 0, 2, 2))).unwrap();
     let read = round_trip(&workbook);
     let image = read.worksheet(0).unwrap().images().next().unwrap();
-    assert!(image.object.meta.locked);
-    assert!(image.object.meta.printable);
+    assert!(image.object.unwrap().meta.locked);
+    assert!(image.object.unwrap().meta.printable);
 }
 
 /// A customized comment popup anchor survives a round trip instead of
@@ -278,7 +278,7 @@ fn xlsx_comment_anchor_round_trips() {
     sheet.add_drawing(
         DrawingObject::comment(1, 1, CellComment::new("a", "moved popup"))
             .with_anchor(custom.clone()),
-    );
+    ).unwrap();
 
     let read = round_trip(&workbook);
     let sheet = read.worksheet(0).unwrap();
@@ -318,10 +318,10 @@ fn raw_link(col: u16, cnv_id: u32, rel_id: &str, url: &str) -> DrawingObject {
 fn xlsx_conflicting_raw_rel_ids_are_remapped() {
     let mut workbook = Workbook::new();
     let sheet = workbook.worksheet_mut(0).unwrap();
-    sheet.add_drawing(png("Pic").with_anchor(two_cell(8, 8, 9, 9)));
-    sheet.add_drawing(raw_link(0, 11, "rId1", "https://one.example/"));
-    sheet.add_drawing(raw_link(2, 12, "rId1", "https://two.example/"));
-    sheet.add_drawing(raw_link(4, 13, "rId1", "https://one.example/"));
+    sheet.add_drawing(png("Pic").with_anchor(two_cell(8, 8, 9, 9))).unwrap();
+    sheet.add_drawing(raw_link(0, 11, "rId1", "https://one.example/")).unwrap();
+    sheet.add_drawing(raw_link(2, 12, "rId1", "https://two.example/")).unwrap();
+    sheet.add_drawing(raw_link(4, 13, "rId1", "https://one.example/")).unwrap();
 
     let read = round_trip(&workbook);
     assert_eq!(kind_tags(&read), vec!["image", "raw", "raw", "raw"]);
@@ -377,7 +377,7 @@ fn xlsx_twin_text_on_captionless_control_is_ignored() {
             cell_link: None,
         }))
         .with_anchor(two_cell(1, 1, 2, 4)),
-    );
+    ).unwrap();
     let mut output = Cursor::new(Vec::new());
     XlsxWriter::write(&workbook, &mut output).expect("write");
     let bytes = output.into_inner();
@@ -419,11 +419,11 @@ fn xlsx_twin_text_on_captionless_control_is_ignored() {
 
     let read = XlsxReader::read(Cursor::new(patched_bytes)).expect("read patched");
     let sheet = read.worksheet(0).unwrap();
-    let controls = sheet.placed_form_controls();
+    let controls = sheet.form_controls().collect::<Vec<_>>();
     assert_eq!(controls.len(), 1);
     assert!(
         matches!(
-            controls[0].control.kind,
+            controls[0].payload.kind,
             FormControlKind::Scrollbar { value: 5, .. }
         ),
         "scrollbar survives with its state"
@@ -438,8 +438,8 @@ fn xlsx_raw_anchor_keeps_order_and_parsed_anchor() {
     // image / connector / image, then verify order and anchor.
     let mut workbook = Workbook::new();
     let sheet = workbook.worksheet_mut(0).unwrap();
-    sheet.add_drawing(png("Below").with_anchor(two_cell(0, 0, 2, 2)));
-    sheet.add_drawing(png("Above").with_anchor(two_cell(4, 4, 6, 6)));
+    sheet.add_drawing(png("Below").with_anchor(two_cell(0, 0, 2, 2))).unwrap();
+    sheet.add_drawing(png("Above").with_anchor(two_cell(4, 4, 6, 6))).unwrap();
     let mut output = Cursor::new(Vec::new());
     XlsxWriter::write(&workbook, &mut output).expect("write");
     let bytes = output.into_inner();
@@ -591,7 +591,7 @@ fn xlsx_smartart_rel_ids_attributes_are_captured_and_round_trip() {
     workbook
         .worksheet_mut(0)
         .unwrap()
-        .add_drawing(png("Pic").with_anchor(two_cell(0, 0, 2, 2)));
+        .add_drawing(png("Pic").with_anchor(two_cell(0, 0, 2, 2))).unwrap();
     let mut output = Cursor::new(Vec::new());
     XlsxWriter::write(&workbook, &mut output).expect("write");
     let patched = splice_drawing_anchor(output.into_inner(), anchor, &RT_DIAGRAM, &PARTS);
@@ -666,7 +666,7 @@ fn xlsx_group_nested_control_emits_controls_block_and_vml() {
             }],
         })
         .with_anchor(two_cell(0, 0, 3, 3)),
-    );
+    ).unwrap();
 
     let mut output = Cursor::new(Vec::new());
     XlsxWriter::write(&workbook, &mut output).expect("write");
@@ -710,7 +710,7 @@ fn xlsx_group_nested_control_emits_controls_block_and_vml() {
     // And the control survives the round trip inside the group.
     let read = XlsxReader::read(Cursor::new(bytes)).expect("read");
     let sheet = read.worksheet(0).unwrap();
-    let controls: Vec<_> = sheet.placed_form_controls();
+    let controls: Vec<_> = sheet.form_controls().collect::<Vec<_>>();
     assert_eq!(controls.len(), 1, "group-nested control survives");
     let group = sheet
         .drawings()
@@ -885,7 +885,7 @@ fn xlsx_malformed_drawing_part_is_skipped() {
     let mut workbook = Workbook::new();
     let sheet = workbook.worksheet_mut(0).unwrap();
     sheet.set_cell_value_at(0, 0, "kept").unwrap();
-    sheet.add_drawing(png("Pic").with_anchor(two_cell(1, 1, 3, 3)));
+    sheet.add_drawing(png("Pic").with_anchor(two_cell(1, 1, 3, 3))).unwrap();
     let mut output = Cursor::new(Vec::new());
     XlsxWriter::write(&workbook, &mut output).expect("write");
 
@@ -944,7 +944,7 @@ fn xlsx_chart_one_cell_and_edit_as_anchors_round_trip() {
         width_emu: 5_000_000,
         height_emu: 3_000_000,
     };
-    sheet.add_chart(one_cell_chart, one_cell.clone());
+    sheet.add_chart(one_cell_chart, one_cell.clone()).unwrap();
 
     let mut pinned_chart = Chart::new(ChartType::ColumnClustered);
     pinned_chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$3")));
@@ -963,17 +963,17 @@ fn xlsx_chart_one_cell_and_edit_as_anchors_round_trip() {
         },
         edit_as: Some(EditAs::Absolute),
     };
-    sheet.add_chart(pinned_chart, pinned.clone());
+    sheet.add_chart(pinned_chart, pinned.clone()).unwrap();
 
     let read = round_trip(&workbook);
     let charts: Vec<_> = read.worksheet(0).unwrap().charts().collect();
     assert_eq!(charts.len(), 2);
     assert_eq!(
-        charts[0].object.anchor, one_cell,
+        charts[0].object.unwrap().anchor, one_cell,
         "OneCell chart anchor survives with its extent"
     );
     assert_eq!(
-        charts[1].object.anchor, pinned,
+        charts[1].object.unwrap().anchor, pinned,
         "TwoCell chart anchor keeps editAs"
     );
 }

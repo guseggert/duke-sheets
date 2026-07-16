@@ -315,7 +315,12 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
             &addin_table,
         );
         if let Some(sheet_drawing) = drawing_state.sheets.get(&sheet_idx) {
-            write_sheet_drawing_records(&mut stream, sheet_drawing, sheet)?;
+            write_sheet_drawing_records(
+                &mut stream,
+                sheet_drawing,
+                sheet,
+                &workbook.theme_palette(),
+            )?;
         }
         write_eof(&mut stream);
         sheet_bof_offsets.push(bof_pos);
@@ -472,11 +477,24 @@ impl StyleTables {
         }
 
         for sheet in workbook.worksheets() {
-            for placed in sheet.placed_form_controls() {
-                let Some(caption) = placed.control.caption() else {
+            for placed in sheet.form_controls() {
+                let Some(caption) = placed.payload.caption() else {
                     continue;
                 };
                 for run in &caption.runs {
+                    if let Some(rf) = &run.font {
+                        let font = run_font_to_font_style(rf);
+                        if !font_xf_index.contains_key(&font) {
+                            let on_disk = fonts_in_order.len() as u16;
+                            let xf_idx = if on_disk < 4 { on_disk } else { on_disk + 1 };
+                            fonts_in_order.push(font.clone());
+                            font_xf_index.insert(font, xf_idx);
+                        }
+                    }
+                }
+            }
+            for (_, comment) in sheet.comments() {
+                for run in &comment.text.runs {
                     if let Some(rf) = &run.font {
                         let font = run_font_to_font_style(rf);
                         if !font_xf_index.contains_key(&font) {
@@ -2097,8 +2115,8 @@ fn user_names_in_xls_emit_order(
 fn macro_names_in_xls_emit_order(workbook: &Workbook) -> Vec<String> {
     let mut names = workbook
         .worksheets()
-        .flat_map(|sheet| sheet.placed_form_controls())
-        .filter_map(|placed| placed.control.macro_name.clone())
+        .flat_map(|sheet| sheet.form_controls())
+        .filter_map(|placed| placed.payload.macro_name.clone())
         .collect::<Vec<_>>();
     names.sort_by_key(|name| name.to_ascii_lowercase());
     names.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
@@ -4756,7 +4774,9 @@ struct CommentShape {
     /// Author string from `CellComment.author`.
     author: String,
     /// Comment body text from `CellComment.text`.
-    text: String,
+    text: duke_sheets_core::DrawingText,
+    /// TXO formatting runs (utf16 offset, font index) for the text.
+    txo_runs: Vec<(u16, u16)>,
     /// Whether the comment box is visible by default (sets `NOTE.flags`
     /// bit 1).
     visible: bool,
@@ -5205,6 +5225,18 @@ impl ShapeBuilder<'_> {
         let spid = self.alloc_spid()?;
         let obj_id = self.alloc_obj_id()?;
         let text_id = self.alloc_text_id();
+        let mut txo_runs = Vec::new();
+        let mut offset = 0usize;
+        for run in &comment.text.runs {
+            let font_index = run
+                .font
+                .as_ref()
+                .map(run_font_to_font_style)
+                .and_then(|font| self.styles.font_xf_index.get(&font).copied())
+                .unwrap_or(0);
+            txo_runs.push((offset.min(u16::MAX as usize) as u16, font_index));
+            offset = offset.saturating_add(run.text.encode_utf16().count());
+        }
         Ok(SheetShape::Comment(CommentShape {
             spid,
             obj_id,
@@ -5213,6 +5245,7 @@ impl ShapeBuilder<'_> {
             col,
             author: comment.author.clone(),
             text: comment.text.clone(),
+            txo_runs,
             visible,
             anchor: anchor.clone(),
         }))
@@ -5310,11 +5343,11 @@ fn chain_option_buttons(shapes: &mut [SheetShape], sheet: &Worksheet) {
     }
     let mut controls: Vec<&mut ControlShape> = Vec::new();
     collect(shapes, &mut controls);
-    let placed = sheet.placed_form_controls();
+    let placed = sheet.form_controls().collect::<Vec<_>>();
     debug_assert_eq!(
         placed.len(),
         controls.len(),
-        "placed_form_controls() must walk the same control set as the built shapes"
+        "form_controls().collect::<Vec<_>>() must walk the same control set as the built shapes"
     );
     if placed.len() != controls.len() {
         // Positional pairing is broken; in release, degrade to
@@ -5461,6 +5494,7 @@ fn write_sheet_drawing_records(
     stream: &mut Vec<u8>,
     drawing: &SheetDrawing,
     metrics: &dyn duke_sheets_chart::DrawingMetrics,
+    palette: &duke_sheets_core::style::ThemePalette,
 ) -> XlsResult<()> {
     use crate::biff::escher::{
         rec_type as er, write_patriarch_sp_container, OfficeArtFdg, OfficeArtRecordHeader,
@@ -5469,7 +5503,7 @@ fn write_sheet_drawing_records(
 
     let mut flats: Vec<FlatShape> = Vec::new();
     for shape in &drawing.shapes {
-        flatten_shape(shape, &mut flats, metrics)?;
+        flatten_shape(shape, &mut flats, metrics, palette)?;
     }
 
     // The patriarch SP_CONTAINER (FSPGR + FSP) is always emitted
@@ -5595,6 +5629,7 @@ fn flatten_shape(
     shape: &SheetShape,
     out: &mut Vec<FlatShape>,
     metrics: &dyn duke_sheets_chart::DrawingMetrics,
+    palette: &duke_sheets_core::style::ThemePalette,
 ) -> XlsResult<()> {
     use crate::biff::escher::{
         comment_fopt, complex_string_entry, fsp_flags, rec_type as er, shape_type,
@@ -5653,7 +5688,7 @@ fn flatten_shape(
                 grf_persistence: grf,
             }
             .write_to(shape.shape_type, &mut pre);
-            basic_shape_fopt(shape).write_to(&mut pre);
+            basic_shape_fopt(shape, palette).write_to(&mut pre);
             shape.anchor.write_to(&mut pre, metrics)?;
             write_client_data(&mut pre);
 
@@ -5757,7 +5792,7 @@ fn flatten_shape(
         SheetShape::Group(group) => {
             let mut kids: Vec<FlatShape> = Vec::new();
             for child in &group.children {
-                flatten_shape(child, &mut kids, metrics)?;
+                flatten_shape(child, &mut kids, metrics, palette)?;
             }
 
             // The group's own SP container: FSPGR (child coordinate
@@ -5839,7 +5874,10 @@ fn flatten_shape(
 /// Build the OfficeArt properties for a basic shape. Shape type lives
 /// in `FSP.recInstance` ([MS-ODRAW] 2.2.40/2.4.24); visual properties
 /// live in FOPT ([MS-ODRAW] 2.3.7, 2.3.8, and 2.3.18.5).
-fn basic_shape_fopt(shape: &BasicShape) -> crate::biff::escher::FoptTable {
+fn basic_shape_fopt(
+    shape: &BasicShape,
+    palette: &duke_sheets_core::style::ThemePalette,
+) -> crate::biff::escher::FoptTable {
     use crate::biff::escher::{
         complex_string_entry, fopt_id, FoptEntry, FoptTable, GROUP_SHAPE_HIDDEN,
         GROUP_SHAPE_VISIBLE,
@@ -5865,7 +5903,7 @@ fn basic_shape_fopt(shape: &BasicShape) -> crate::biff::escher::FoptTable {
         ShapeFill::Solid(color) => {
             table.push(FoptEntry::simple(
                 fopt_id::FILL_COLOR,
-                color_to_officeart(color),
+                color_to_officeart(color, palette),
             ));
             table.push(FoptEntry::simple(fopt_id::FILL_BOOLEAN_PROPS, 0x0010_0010));
         }
@@ -5873,7 +5911,7 @@ fn basic_shape_fopt(shape: &BasicShape) -> crate::biff::escher::FoptTable {
     if let Some(color) = shape.shape.line.color {
         table.push(FoptEntry::simple(
             fopt_id::LINE_COLOR,
-            color_to_officeart(color),
+            color_to_officeart(color, palette),
         ));
     }
     if let Some(width) = shape.shape.line.width_emu {
@@ -5928,8 +5966,13 @@ fn rotation_to_officeart_fixed(rotation: i32) -> u32 {
     (fixed.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32) as u32
 }
 
-fn color_to_officeart(color: duke_sheets_core::Color) -> u32 {
-    let (r, g, b) = color.to_rgb();
+/// OfficeArt wire colors are concrete RGB, so theme colors are baked
+/// here against the workbook palette; Auto falls back to black.
+fn color_to_officeart(
+    color: duke_sheets_core::Color,
+    palette: &duke_sheets_core::style::ThemePalette,
+) -> u32 {
+    let (r, g, b) = palette.resolve(&color).unwrap_or((0, 0, 0));
     u32::from(r) | (u32::from(g) << 8) | (u32::from(b) << 16)
 }
 
@@ -6232,7 +6275,12 @@ fn deterministic_guid(seed: u32) -> [u8; 16] {
 /// Emit a comment's `TXO` record + the two `CONTINUE` records that
 /// carry its text payload and formatting runs.
 fn write_comment_txo_to_vec(out: &mut Vec<u8>, comment: &CommentShape) -> XlsResult<()> {
-    write_txo_records(out, &comment.text, 0x0212, &[])
+    write_txo_records(
+        out,
+        &comment.text.plain_text(),
+        0x0212,
+        &comment.txo_runs,
+    )
 }
 
 /// Emit a `TXO` record with the given flags, plus (for non-empty
@@ -6504,12 +6552,10 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
 
     let kind = &control.control.kind;
     if let FormControlKind::Unknown {
-        legacy_object_type,
-        raw_obj,
-        ..
+        legacy_object_type, ..
     } = kind
     {
-        let Some(raw_obj) = raw_obj else {
+        let Some(raw_obj) = &control.control.raw_obj else {
             return Err(XlsError::InvalidFormat(
                 "XLS unknown controls require a raw OBJ body captured from an XLS file".into(),
             ));
@@ -7141,7 +7187,7 @@ mod tests {
                 flip_h: false,
                 flip_v: false,
             };
-            let table = basic_shape_fopt(&basic);
+            let table = basic_shape_fopt(&basic, &duke_sheets_core::style::ThemePalette::default());
             let props = table
                 .entries()
                 .find(|entry| entry.id == fopt_id::LINE_BOOLEAN_PROPS)
@@ -7231,7 +7277,7 @@ mod tests {
         };
         let metrics = duke_sheets_core::Worksheet::new("m");
         let mut flats = Vec::new();
-        flatten_shape(&SheetShape::Group(group), &mut flats, &metrics).expect("flatten");
+        flatten_shape(&SheetShape::Group(group), &mut flats, &metrics, &duke_sheets_core::style::ThemePalette::default()).expect("flatten");
         assert_eq!(
             fopt_rotation_in(&flats[0].pre),
             Some(5_898_240),
@@ -7257,7 +7303,7 @@ mod tests {
         };
         let metrics = duke_sheets_core::Worksheet::new("m");
         let mut flats = Vec::new();
-        flatten_shape(&SheetShape::Picture(picture), &mut flats, &metrics).expect("flatten");
+        flatten_shape(&SheetShape::Picture(picture), &mut flats, &metrics, &duke_sheets_core::style::ThemePalette::default()).expect("flatten");
         assert_eq!(
             fopt_rotation_in(&flats[0].pre),
             Some(5_898_240),

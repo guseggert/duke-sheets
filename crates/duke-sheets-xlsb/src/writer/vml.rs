@@ -17,13 +17,14 @@ pub(crate) fn write_legacy_vml<W: Write + Seek>(
     options: &SimpleFileOptions,
     sheet_index: usize,
     ws: &Worksheet,
+    palette: &duke_sheets_core::style::ThemePalette,
 ) -> XlsbResult<bool> {
     for control in &sheet_controls(ws) {
         control.payload.validate()?;
     }
     duke_sheets_vml::validate_sheet_raw_client_data(ws)
         .map_err(crate::error::XlsbError::InvalidFormat)?;
-    let Some(xml) = duke_sheets_vml::build_legacy_vml(ws, sheet_index) else {
+    let Some(xml) = duke_sheets_vml::build_legacy_vml(ws, sheet_index, palette) else {
         return Ok(false);
     };
     let path = format!("xl/drawings/vmlDrawing{}.vml", sheet_index + 1);

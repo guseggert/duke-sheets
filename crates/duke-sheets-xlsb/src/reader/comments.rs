@@ -192,7 +192,7 @@ mod tests {
         let (row, col, comment) = &comments[0];
         assert_eq!((*row, *col), (5, 3));
         assert_eq!(comment.author, "probe");
-        assert_eq!(comment.text, "a note");
+        assert_eq!(comment.plain_text(), "a note");
     }
 }
 

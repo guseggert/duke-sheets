@@ -60,7 +60,7 @@ pub(crate) fn write_comments<W: Write + Seek>(
 
         let mut text_payload = Vec::new();
         text_payload.push(0x00);
-        text_payload.extend_from_slice(&encode_wide_str(&comment.text));
+        text_payload.extend_from_slice(&encode_wide_str(&comment.plain_text()));
         rw.write_record(records::BRT_COMMENT_TEXT, &text_payload)?;
 
         rw.write_record(records::BRT_END_COMMENT, &[])?;

@@ -123,7 +123,7 @@ pub(crate) fn write_worksheet<W: Write + Seek>(
     // VML presence must match write_legacy_vml's gate, which walks
     // placed controls (including group children), not just top-level
     // ones; a mismatch pairs BrtDrawing with the wrong relationship.
-    let has_vml = has_comments || !ws.placed_form_controls().is_empty();
+    let has_vml = has_comments || !ws.form_controls().collect::<Vec<_>>().is_empty();
     // `write_sheet_rels` writes hyperlinks/tables first, then
     // comments, VML, and Drawing. `rid_counter` only includes the
     // hyperlink rels here; table rels occupy the next `table_count`
@@ -226,11 +226,7 @@ fn encode_brt_color_ws(color: &duke_sheets_core::style::Color) -> [u8; 8] {
         Color::Theme { index, tint } => {
             buf[0] = 3;
             buf[1] = *index;
-            let tint_i16 = if *tint == 0 {
-                0i16
-            } else {
-                ((*tint as f64 / 100.0) * 32767.0).round() as i16
-            };
+            let tint_i16 = (tint.clamp(-1.0, 1.0) * 32767.0).round() as i16;
             buf[2..4].copy_from_slice(&tint_i16.to_le_bytes());
         }
     }
@@ -1751,11 +1747,7 @@ fn encode_cf_color(color: &Color) -> [u8; 8] {
         Color::Theme { index, tint } => {
             buf[0] = 3 << 1;
             buf[1] = *index;
-            let tint_i16 = if *tint == 0 {
-                0i16
-            } else {
-                ((*tint as f64 / 100.0) * 32767.0).round() as i16
-            };
+            let tint_i16 = (tint.clamp(-1.0, 1.0) * 32767.0).round() as i16;
             buf[2..4].copy_from_slice(&tint_i16.to_le_bytes());
         }
         Color::Indexed(idx) => {

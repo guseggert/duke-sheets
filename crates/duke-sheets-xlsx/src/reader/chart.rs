@@ -202,7 +202,7 @@ mod tests {
         assert_eq!(chart.title.as_deref(), Some("Revenue by Quarter"));
         assert_eq!(chart.series.len(), 2);
 
-        if let DrawingAnchor::TwoCell { from, to, .. } = &drawn.object.anchor {
+        if let DrawingAnchor::TwoCell { from, to, .. } = &drawn.object.unwrap().anchor {
             assert_eq!(from.col, 2);
             assert_eq!(from.row, 3);
             assert_eq!(to.col, 12);

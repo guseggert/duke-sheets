@@ -81,7 +81,7 @@ fn basic_shape() -> Shape {
 fn basic_workbook() -> Workbook {
     let mut workbook = Workbook::new();
     let sheet = workbook.worksheet_mut(0).unwrap();
-    let index = sheet.add_shape(basic_shape(), anchor(1, 2, 5, 8));
+    let index = sheet.add_shape(basic_shape(), anchor(1, 2, 5, 8)).unwrap();
     let object = &mut sheet.drawings_mut()[index];
     object.meta.name = Some("Status panel".to_string());
     object.meta.alt_text = Some("red status rectangle".to_string());
@@ -92,17 +92,17 @@ fn basic_workbook() -> Workbook {
 fn assert_basic_shape(sheet: &Worksheet, format: &str, has_title: bool) {
     assert_eq!(sheet.shape_count(), 1, "{format}: shape count");
     let drawn = sheet.shapes().next().expect("shape");
-    assert_eq!(drawn.index, 0);
-    assert_eq!(drawn.object.meta.name.as_deref(), Some("Status panel"));
+    assert_eq!(drawn.path, vec![0]);
+    assert_eq!(drawn.object.unwrap().meta.name.as_deref(), Some("Status panel"));
     assert_eq!(
-        drawn.object.meta.alt_text.as_deref(),
+        drawn.object.unwrap().meta.alt_text.as_deref(),
         Some("red status rectangle")
     );
     assert_eq!(
-        drawn.object.meta.title.as_deref(),
+        drawn.object.unwrap().meta.title.as_deref(),
         has_title.then_some("Status")
     );
-    assert_eq!(drawn.object.anchor, anchor(1, 2, 5, 8));
+    assert_eq!(drawn.object.unwrap().anchor, anchor(1, 2, 5, 8));
 
     let shape = drawn.payload;
     assert_eq!(shape.geometry, ShapeGeometry::Preset("rect".to_string()));
@@ -204,7 +204,7 @@ fn xlsx_grouped_shape_child_round_trips() {
         DrawingObject::group(group)
             .with_anchor(anchor(0, 0, 4, 8))
             .with_name("Shape group"),
-    );
+    ).unwrap();
 
     let (parsed, _) = round_trip_xlsx(&workbook);
     let group = parsed.worksheet(0).unwrap().drawings()[0]
@@ -240,8 +240,8 @@ fn image() -> EmbeddedImage {
 fn z_order_workbook() -> Workbook {
     let mut workbook = Workbook::new();
     let sheet = workbook.worksheet_mut(0).unwrap();
-    sheet.add_image(image(), anchor(0, 0, 2, 2));
-    sheet.add_shape(Shape::preset("ellipse"), anchor(1, 1, 3, 3));
+    sheet.add_image(image(), anchor(0, 0, 2, 2)).unwrap();
+    sheet.add_shape(Shape::preset("ellipse"), anchor(1, 1, 3, 3)).unwrap();
     sheet.add_form_control(
         FormControl::new(FormControlKind::Checkbox {
             caption: "top".into(),
@@ -250,7 +250,7 @@ fn z_order_workbook() -> Workbook {
             no_3d: false,
         }),
         anchor(2, 2, 4, 4),
-    );
+    ).unwrap();
     workbook
 }
 
@@ -286,7 +286,7 @@ fn xlsx_shape_preserves_unmodeled_shape_property_fragments() {
     workbook
         .worksheet_mut(0)
         .unwrap()
-        .add_shape(shape, anchor(0, 0, 3, 5));
+        .add_shape(shape, anchor(0, 0, 3, 5)).unwrap();
 
     let (first_read, _) = round_trip_xlsx(&workbook);
     let parsed_shape = first_read
@@ -322,7 +322,7 @@ fn malformed_preserved_shape_xml_fails_the_write() {
     workbook
         .worksheet_mut(0)
         .unwrap()
-        .add_shape(shape, anchor(0, 0, 2, 2));
+        .add_shape(shape, anchor(0, 0, 2, 2)).unwrap();
     let error = XlsxWriter::write(&workbook, &mut Cursor::new(Vec::new())).unwrap_err();
     assert!(
         error.to_string().contains("unterminated"),
@@ -335,7 +335,7 @@ fn malformed_preserved_shape_xml_fails_the_write() {
     workbook
         .worksheet_mut(0)
         .unwrap()
-        .add_shape(shape, anchor(0, 0, 2, 2));
+        .add_shape(shape, anchor(0, 0, 2, 2)).unwrap();
     assert!(XlsxWriter::write(&workbook, &mut Cursor::new(Vec::new())).is_err());
 }
 

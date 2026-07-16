@@ -305,7 +305,8 @@ impl XlsbWriter {
                 comments::write_comments(&mut zip, &options, i, ws)?;
                 comment_sheet_indices.push(i);
             }
-            let has_vml = vml::write_legacy_vml(&mut zip, &options, i, ws)?;
+            let has_vml =
+                vml::write_legacy_vml(&mut zip, &options, i, ws, &workbook.theme_palette())?;
 
             if !result.sheet_rels.is_empty() || result.has_comments || has_drawing_rel || has_vml {
                 let drawing_path = drawing_result

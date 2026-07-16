@@ -53,6 +53,7 @@ pub use duke_sheets_core::{
     radio_groups,
     rich_text_to_plain,
     validate_anchor,
+    validate_group_child,
     Alignment,
     AutoFilter,
     BorderEdge,
@@ -96,7 +97,7 @@ pub use duke_sheets_core::{
     DrawingObject,
     DrawingPath,
     DrawingText,
-    Drawn,
+    Placed,
     // Error types
     Error,
     FillStyle,
@@ -146,6 +147,7 @@ pub use duke_sheets_core::{
     Table,
     TableColumn,
     TableStyleInfo,
+    ThemePalette,
     TimePeriod,
     Top10Filter,
     TotalsRowFunction,
@@ -185,10 +187,10 @@ pub use duke_sheets_chart::{
 // Re-export I/O types
 pub use duke_sheets_csv::{CsvError, CsvReadOptions, CsvReader, CsvWriteOptions, CsvWriter};
 #[cfg(feature = "xls")]
-pub use duke_sheets_xls::{XlsError, XlsReader, XlsWriter};
+pub use duke_sheets_xls::{XlsError, XlsReadOptions, XlsReader, XlsWriter};
 #[cfg(feature = "xlsb")]
 pub use duke_sheets_xlsb::{XlsbError, XlsbReader, XlsbWriter};
-pub use duke_sheets_xlsx::{XlsxError, XlsxReader, XlsxWriter};
+pub use duke_sheets_xlsx::{XlsxError, XlsxReadOptions, XlsxReader, XlsxWriter};
 
 use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::path::Path;
@@ -462,12 +464,21 @@ impl WorkbookExt for Workbook {
         let path = path.as_ref();
         let pw = opts.password.as_deref();
         let vs = opts.try_velvet_sweatshop;
-        let skip_ic = opts.skip_integrity_check;
+        let xlsx_opts = XlsxReadOptions {
+            password: opts.password.clone(),
+            try_velvet_sweatshop: vs,
+            skip_integrity_check: opts.skip_integrity_check,
+        };
+        #[cfg(feature = "xls")]
+        let xls_opts = XlsReadOptions {
+            password: opts.password.clone(),
+            try_velvet_sweatshop: vs,
+        };
 
         let format = detect_format_from_path(path)?;
 
         if (pw.is_some() || vs) && format == FileFormat::Xls {
-            match XlsxReader::read_file_with_options(path, pw, vs, skip_ic) {
+            match XlsxReader::read_file_with(path, &xlsx_opts) {
                 Ok(wb) => return Ok(wb),
                 Err(XlsxError::InvalidFormat(msg)) if is_ooxml_envelope_probe_miss(&msg) => {}
                 Err(e) => return Err(Error::other(e.to_string())),
@@ -475,10 +486,10 @@ impl WorkbookExt for Workbook {
         }
 
         match format {
-            FileFormat::Xlsx => XlsxReader::read_file_with_options(path, pw, vs, skip_ic)
+            FileFormat::Xlsx => XlsxReader::read_file_with(path, &xlsx_opts)
                 .map_err(|e| Error::other(e.to_string())),
             #[cfg(feature = "xls")]
-            FileFormat::Xls => XlsReader::read_file_with_password(path, pw, vs)
+            FileFormat::Xls => XlsReader::read_file_with(path, &xls_opts)
                 .map_err(|e| Error::other(e.to_string())),
             #[cfg(not(feature = "xls"))]
             FileFormat::Xls => Err(Error::other(
@@ -493,12 +504,12 @@ impl WorkbookExt for Workbook {
                 "XLSB format detected but the 'xlsb' feature is not enabled",
             )),
             FileFormat::Unknown if path_has_xlsx_family_extension(path) => {
-                XlsxReader::read_file_with_options(path, pw, vs, skip_ic)
+                XlsxReader::read_file_with(path, &xlsx_opts)
                     .map_err(|e| Error::other(e.to_string()))
             }
             #[cfg(feature = "xls")]
             FileFormat::Unknown if path_has_extension(path, "xls") => {
-                XlsReader::read_file_with_password(path, pw, vs)
+                XlsReader::read_file_with(path, &xls_opts)
                     .map_err(|e| Error::other(e.to_string()))
             }
             #[cfg(not(feature = "xls"))]
@@ -521,7 +532,16 @@ impl WorkbookExt for Workbook {
     fn from_bytes_with(bytes: &[u8], opts: &WorkbookOpenOptions) -> Result<Workbook> {
         let pw = opts.password.as_deref();
         let vs = opts.try_velvet_sweatshop;
-        let skip_ic = opts.skip_integrity_check;
+        let xlsx_opts = XlsxReadOptions {
+            password: opts.password.clone(),
+            try_velvet_sweatshop: vs,
+            skip_integrity_check: opts.skip_integrity_check,
+        };
+        #[cfg(feature = "xls")]
+        let xls_opts = XlsReadOptions {
+            password: opts.password.clone(),
+            try_velvet_sweatshop: vs,
+        };
 
         // Encrypted XLSX files masquerade as XLS to detect_format because
         // both share the CFB magic header. When a password is supplied
@@ -534,19 +554,19 @@ impl WorkbookExt for Workbook {
         // UnsupportedEncryption, crypto-layer InvalidFormat) propagate
         // back to the caller instead of being silently retried as XLS.
         if (pw.is_some() || vs) && is_cfb_magic(bytes) {
-            match XlsxReader::read_bytes_with_options(bytes, pw, vs, skip_ic) {
+            match XlsxReader::read_bytes_with(bytes, &xlsx_opts) {
                 Ok(wb) => return Ok(wb),
                 Err(XlsxError::InvalidFormat(msg)) if is_ooxml_envelope_probe_miss(&msg) => {}
                 Err(e) => return Err(Error::other(e.to_string())),
             }
         }
         match detect_format(bytes) {
-            FileFormat::Xlsx => XlsxReader::read_bytes_with_password(bytes, pw, vs)
+            FileFormat::Xlsx => XlsxReader::read_bytes_with(bytes, &xlsx_opts)
                 .map_err(|e| Error::other(e.to_string())),
             #[cfg(feature = "xls")]
             FileFormat::Xls => {
                 let cursor = Cursor::new(bytes);
-                XlsReader::read_with_password(cursor, pw, vs)
+                XlsReader::read_with(cursor, &xls_opts)
                     .map_err(|e| Error::other(e.to_string()))
             }
             _ => Self::from_bytes(bytes),

@@ -8,7 +8,7 @@ use std::io::Cursor;
 
 use duke_sheets_chart::{CellMarker, DrawingAnchor};
 use duke_sheets_core::{
-    CheckState, ControlText, DrawingObject, Drawn, FormControl, FormControlKind, ListSelection,
+    CheckState, ControlText, DrawingObject, FormControl, FormControlKind, ListSelection, Placed,
     RichTextRun, RunFont, Workbook, Worksheet,
 };
 use duke_sheets_xls::{XlsReader, XlsWriter};
@@ -40,7 +40,7 @@ fn control_at(kind: FormControlKind, anchor: DrawingAnchor) -> DrawingObject {
     DrawingObject::form_control(FormControl::new(kind)).with_anchor(anchor)
 }
 
-fn controls_of(ws: &Worksheet) -> Vec<Drawn<'_, FormControl>> {
+fn controls_of(ws: &Worksheet) -> Vec<Placed<'_, FormControl>> {
     ws.form_controls().collect()
 }
 
@@ -48,7 +48,7 @@ fn single_control_round_trip(kind: FormControlKind) -> FormControlKind {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "anchor").expect("A1");
-    ws.add_drawing(control_at(kind, anchor(1, 1, 3, 3)));
+    ws.add_drawing(control_at(kind, anchor(1, 1, 3, 3))).unwrap();
 
     let parsed = write_then_read(&wb);
     let controls = controls_of(parsed.worksheet(0).unwrap());
@@ -128,7 +128,7 @@ fn option_buttons_round_trip_as_group() {
                 no_3d: false,
             },
             anchor(1, 1 + i as u32, 3, 2 + i as u32),
-        ));
+        )).unwrap();
     }
 
     let parsed = write_then_read(&wb);
@@ -312,7 +312,7 @@ fn cross_sheet_cell_link_round_trips() {
             no_3d: false,
         },
         anchor(0, 0, 2, 2),
-    ));
+    )).unwrap();
 
     let parsed = write_then_read(&wb);
     let controls = controls_of(parsed.worksheet(0).unwrap());
@@ -345,11 +345,11 @@ fn control_anchor_round_trips() {
             caption: "here".into(),
         },
         anchor(2, 3, 5, 8),
-    ));
+    )).unwrap();
 
     let parsed = write_then_read(&wb);
     let controls = controls_of(parsed.worksheet(0).unwrap());
-    match &controls[0].object.anchor {
+    match &controls[0].object.unwrap().anchor {
         DrawingAnchor::TwoCell { from, to, .. } => {
             assert_eq!(from.col, 2);
             assert_eq!(from.row, 3);
@@ -375,12 +375,12 @@ fn locked_and_printable_flags_round_trip() {
     );
     object.meta.locked = false;
     object.meta.printable = false;
-    ws.add_drawing(object);
+    ws.add_drawing(object).unwrap();
 
     let parsed = write_then_read(&wb);
     let controls = controls_of(parsed.worksheet(0).unwrap());
-    assert!(!controls[0].object.meta.locked);
-    assert!(!controls[0].object.meta.printable);
+    assert!(!controls[0].object.unwrap().meta.locked);
+    assert!(!controls[0].object.unwrap().meta.printable);
 }
 
 #[test]
@@ -413,7 +413,7 @@ fn controls_coexist_with_comments_and_pictures() {
         })
         .with_anchor(anchor(6, 1, 8, 4))
         .with_name("Pic"),
-    );
+    ).unwrap();
     ws.set_comment_at(0, 0, duke_sheets_core::CellComment::new("Author", "note"))
         .expect("set comment");
     ws.add_drawing(control_at(
@@ -424,13 +424,13 @@ fn controls_coexist_with_comments_and_pictures() {
             no_3d: false,
         },
         anchor(1, 1, 3, 3),
-    ));
+    )).unwrap();
     ws.add_drawing(control_at(
         FormControlKind::Button {
             caption: "go".into(),
         },
         anchor(1, 5, 3, 7),
-    ));
+    )).unwrap();
 
     let parsed = write_then_read(&wb);
     let ws2 = parsed.worksheet(0).unwrap();
@@ -458,7 +458,7 @@ fn controls_on_multiple_sheets_round_trip() {
                 no_3d: false,
             },
             anchor(0, 0, 2, 2),
-        ));
+        )).unwrap();
     wb.worksheet_mut(1).unwrap().add_drawing(control_at(
             FormControlKind::Spinner {
                 value: 5,
@@ -468,7 +468,7 @@ fn controls_on_multiple_sheets_round_trip() {
                 cell_link: None,
             },
             anchor(0, 0, 1, 3),
-        ));
+        )).unwrap();
 
     let parsed = write_then_read(&wb);
     assert_eq!(parsed.worksheet(0).unwrap().form_control_count(), 1);
@@ -511,28 +511,28 @@ fn radio_groups_workbook() -> Workbook {
     };
     // Box A spans cols 0-2, Box B cols 4-6; radios sit inside them,
     // the loose radio at col 8 is outside both.
-    ws.add_drawing(control_at(group_box("Box A"), anchor(0, 0, 2, 6)));
-    ws.add_drawing(control_at(group_box("Box B"), anchor(4, 0, 6, 6)));
+    ws.add_drawing(control_at(group_box("Box A"), anchor(0, 0, 2, 6))).unwrap();
+    ws.add_drawing(control_at(group_box("Box B"), anchor(4, 0, 6, 6))).unwrap();
     ws.add_drawing(control_at(
         radio("A1", CheckState::Checked),
         anchor(1, 1, 2, 2),
-    ));
+    )).unwrap();
     ws.add_drawing(control_at(
         radio("B1", CheckState::Unchecked),
         anchor(5, 1, 6, 2),
-    ));
+    )).unwrap();
     ws.add_drawing(control_at(
         radio("A2", CheckState::Unchecked),
         anchor(1, 3, 2, 4),
-    ));
+    )).unwrap();
     ws.add_drawing(control_at(
         radio("B2", CheckState::Checked),
         anchor(5, 3, 6, 4),
-    ));
+    )).unwrap();
     ws.add_drawing(control_at(
         radio("Loose", CheckState::Unchecked),
         anchor(8, 1, 9, 2),
-    ));
+    )).unwrap();
     wb
 }
 
@@ -689,7 +689,7 @@ fn oversized_macro_name_returns_a_clean_error() {
             .with_macro_name("A".repeat(300)),
         )
         .with_anchor(anchor(1, 1, 3, 3)),
-    );
+    ).unwrap();
     ws.add_drawing(
         DrawingObject::form_control(
             FormControl::new(FormControlKind::Button {
@@ -698,7 +698,7 @@ fn oversized_macro_name_returns_a_clean_error() {
             .with_macro_name("RunSecond"),
         )
         .with_anchor(anchor(1, 5, 3, 7)),
-    );
+    ).unwrap();
     let err = XlsWriter::write_to_bytes(&wb).expect_err("oversized macro name must fail");
     assert!(
         err.to_string().contains("procedure name"),
@@ -722,7 +722,7 @@ fn multiple_macro_names_round_trip_pointing_at_their_own_lbls() {
             .with_macro_name("Zulu"),
         )
         .with_anchor(anchor(1, 1, 3, 3)),
-    );
+    ).unwrap();
     ws.add_drawing(
         DrawingObject::form_control(
             FormControl::new(FormControlKind::Button {
@@ -731,7 +731,7 @@ fn multiple_macro_names_round_trip_pointing_at_their_own_lbls() {
             .with_macro_name("Alpha"),
         )
         .with_anchor(anchor(1, 5, 3, 7)),
-    );
+    ).unwrap();
 
     let parsed = write_then_read(&wb);
     let controls = controls_of(parsed.worksheet(0).unwrap());
@@ -749,7 +749,7 @@ fn caption_over_u16_character_limit_returns_a_clean_error() {
             caption: "😀".repeat(32_768).into(),
             },
             anchor(0, 0, 2, 2),
-        ));
+        )).unwrap();
     let err = XlsWriter::write_to_bytes(&wb).expect_err("caption exceeds cchText");
     assert!(err.to_string().contains("maximum is 65535"));
 }
@@ -791,7 +791,7 @@ fn cross_sheet_input_range_round_trips() {
             no_3d: false,
         },
         anchor(0, 0, 2, 1),
-    ));
+    )).unwrap();
 
     let parsed = write_then_read(&wb);
     let controls = controls_of(parsed.worksheet(0).unwrap());
@@ -823,7 +823,7 @@ fn uncompilable_cell_link_returns_a_clean_error() {
                 no_3d: false,
             },
             anchor(0, 0, 2, 2),
-        ));
+        )).unwrap();
     let err = XlsWriter::write_to_bytes(&wb).expect_err("non-reference link is invalid");
     assert!(err.to_string().contains("must be one BIFF8"));
 }
@@ -863,7 +863,7 @@ fn large_multi_select_list_uses_continue_records() {
             no_3d: false,
         },
         anchor(0, 0, 2, 10),
-    ));
+    )).unwrap();
 
     let parsed = write_then_read(&wb);
     match &controls_of(parsed.worksheet(0).unwrap())[0].payload.kind {
@@ -886,7 +886,7 @@ fn full_column_list_range_returns_a_clean_error() {
                 no_3d: false,
             },
             anchor(0, 0, 2, 10),
-        ));
+        )).unwrap();
 
     let err = XlsWriter::write_to_bytes(&wb).expect_err("cLines exceeds the BIFF8 limit");
     assert!(err.to_string().contains("32767"));
@@ -905,7 +905,7 @@ fn list_selection_outside_input_range_returns_a_clean_error() {
                 no_3d: false,
             },
             anchor(0, 0, 2, 4),
-        ));
+        )).unwrap();
 
     let err = XlsWriter::write_to_bytes(&wb).expect_err("selection exceeds cLines");
     assert!(err.to_string().contains("selection index 4"));
@@ -919,7 +919,7 @@ fn control_anchor_outside_biff8_grid_returns_a_clean_error() {
             caption: "outside".into(),
             },
             anchor(256, 0, 257, 1),
-        ));
+        )).unwrap();
     let err = XlsWriter::write_to_bytes(&wb).expect_err("column 256 is outside XLS");
     assert!(err.to_string().contains("BIFF8 sheet grid"));
 }
@@ -927,7 +927,9 @@ fn control_anchor_outside_biff8_grid_returns_a_clean_error() {
 #[test]
 fn reversed_control_anchor_returns_a_clean_error() {
     let mut wb = Workbook::new();
-    wb.worksheet_mut(0).unwrap().add_drawing(control_at(
+    // Unchecked: the anchor fails validation on purpose; the writer
+    // must still reject it for files read permissively.
+    wb.worksheet_mut(0).unwrap().drawings_mut().push(control_at(
             FormControlKind::Button {
             caption: "reversed".into(),
             },
@@ -948,7 +950,7 @@ fn out_of_grid_control_formula_returns_a_clean_error() {
                 no_3d: false,
             },
             anchor(0, 0, 2, 2),
-        ));
+        )).unwrap();
     let err = XlsWriter::write_to_bytes(&wb).expect_err("column IW is outside XLS");
     assert!(err.to_string().contains("must be one BIFF8"));
 }
@@ -956,7 +958,9 @@ fn out_of_grid_control_formula_returns_a_clean_error() {
 #[test]
 fn invalid_scrollbar_tuple_returns_a_clean_error() {
     let mut wb = Workbook::new();
-    wb.worksheet_mut(0).unwrap().add_drawing(control_at(
+    // Unchecked: the tuple fails validation on purpose; the writer
+    // must still reject it for files read permissively.
+    wb.worksheet_mut(0).unwrap().drawings_mut().push(control_at(
             FormControlKind::Scrollbar {
                 value: 50,
                 min: 100,
@@ -975,7 +979,9 @@ fn invalid_scrollbar_tuple_returns_a_clean_error() {
 #[test]
 fn mixed_option_button_returns_a_clean_error() {
     let mut wb = Workbook::new();
-    wb.worksheet_mut(0).unwrap().add_drawing(control_at(
+    // Unchecked: the state fails validation on purpose; the writer
+    // must still reject it for files read permissively.
+    wb.worksheet_mut(0).unwrap().drawings_mut().push(control_at(
             FormControlKind::OptionButton {
             caption: "mixed".into(),
                 state: CheckState::Mixed,
@@ -1067,7 +1073,7 @@ fn lo_can_open_xls_with_form_controls_we_emit() {
     ];
     for (i, kind) in kinds.into_iter().enumerate() {
         let row = 1 + 2 * i as u32;
-        ws.add_drawing(control_at(kind, anchor(1, row, 3, row + 1)));
+        ws.add_drawing(control_at(kind, anchor(1, row, 3, row + 1))).unwrap();
     }
     assert_eq!(wb.sync_form_control_links(), 1);
 

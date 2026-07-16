@@ -31,6 +31,17 @@ use crate::biff::{self, BiffRecord};
 use crate::error::{XlsError, XlsResult};
 use crate::styles::{self, StyleContext};
 
+/// Options for opening an XLS workbook.
+#[derive(Debug, Clone, Default)]
+pub struct XlsReadOptions {
+    /// Password for encrypted workbooks.
+    pub password: Option<String>,
+    /// Retry encrypted workbooks with Excel's well-known
+    /// `VelvetSweatshop` sentinel when no password is supplied,
+    /// before reporting them as encrypted.
+    pub try_velvet_sweatshop: bool,
+}
+
 /// XLS file reader.
 pub struct XlsReader;
 
@@ -258,36 +269,26 @@ impl XlsReader {
         Self::read(file)
     }
 
-    /// Read an XLS file from a filesystem path, supplying a password for
-    /// encrypted workbooks. When `password` is `None` and
-    /// `try_velvet_sweatshop` is true, encrypted workbooks are
-    /// transparently retried with the `VelvetSweatshop` sentinel before
-    /// reporting them as encrypted.
-    pub fn read_file_with_password<P: AsRef<Path>>(
+    /// Read an XLS file from a filesystem path with explicit open
+    /// options (password, encrypted-workbook handling).
+    pub fn read_file_with<P: AsRef<Path>>(
         path: P,
-        password: Option<&str>,
-        try_velvet_sweatshop: bool,
+        options: &XlsReadOptions,
     ) -> XlsResult<Workbook> {
         let file = std::fs::File::open(path.as_ref())?;
-        Self::read_with_password(file, password, try_velvet_sweatshop)
+        Self::read_with(file, options)
     }
 
     /// Read an XLS file from any `Read + Seek` source.
     pub fn read<R: Read + Seek>(reader: R) -> XlsResult<Workbook> {
-        Self::read_with_password(reader, None, false)
+        Self::read_with(reader, &XlsReadOptions::default())
     }
 
-    /// Read an XLS file from any `Read + Seek` source, supplying a
-    /// password for encrypted workbooks.
-    ///
-    /// `try_velvet_sweatshop` enables the Excel-compatible auto-retry
-    /// with the well-known sentinel password when no explicit password
-    /// is supplied. Wrong passwords return [`XlsError::BadPassword`].
-    pub fn read_with_password<R: Read + Seek>(
-        reader: R,
-        password: Option<&str>,
-        try_velvet_sweatshop: bool,
-    ) -> XlsResult<Workbook> {
+    /// Read an XLS file from any `Read + Seek` source with explicit
+    /// open options. Wrong passwords return [`XlsError::BadPassword`].
+    pub fn read_with<R: Read + Seek>(reader: R, options: &XlsReadOptions) -> XlsResult<Workbook> {
+        let password = options.password.as_deref();
+        let try_velvet_sweatshop = options.try_velvet_sweatshop;
         let cfb = crate::cfb::CompoundFile::open(reader).map_err(std::io::Error::from)?;
         let stream_path = resolve_workbook_stream(|p| cfb.exists(p))?;
         let mut stream_data = cfb.read_stream(stream_path).map_err(std::io::Error::from)?;
@@ -2916,10 +2917,10 @@ impl XlsReader {
                     &mut hoisted,
                     ws,
                 ) {
-                    ws.add_drawing(object);
+                    ws.drawings_mut().push(object);
                 }
                 for object in hoisted {
-                    ws.add_drawing(object);
+                    ws.drawings_mut().push(object);
                 }
             }
         } else {
@@ -2941,7 +2942,7 @@ impl XlsReader {
             for node in flat {
                 if let Some(payload) = Self::image_payload_from_node(node, blip_store) {
                     let object = Self::top_level_image(node, payload, None, ws);
-                    ws.add_drawing(object);
+                    ws.drawings_mut().push(object);
                 }
             }
             // Comments straight from their NOTE records.
@@ -2959,7 +2960,7 @@ impl XlsReader {
                     let mut object = duke_sheets_core::DrawingObject::form_control(control);
                     object.meta.locked = parsed.grbit & obj::cmo_flags::LOCKED != 0;
                     object.meta.printable = parsed.grbit & obj::cmo_flags::PRINT != 0;
-                    ws.add_drawing(object);
+                    ws.drawings_mut().push(object);
                 }
             }
         }
@@ -2979,17 +2980,17 @@ impl XlsReader {
         obj_texts: &std::collections::HashMap<u16, duke_sheets_core::ControlText>,
         ws: &mut duke_sheets_core::Worksheet,
     ) {
-        let text = obj_texts
-            .get(&note.obj_id)
-            .map(duke_sheets_core::ControlText::plain_text)
-            .unwrap_or_default();
+        let text = obj_texts.get(&note.obj_id).cloned().unwrap_or_default();
         // Permissive read: a NOTE pointing outside the model grid is
         // dropped rather than failing the sheet load.
         if ws
             .set_comment_at(
                 note.row,
                 note.col,
-                CellComment::new(note.author.clone(), text),
+                CellComment {
+                    author: note.author.clone(),
+                    text,
+                },
             )
             .is_ok()
         {
@@ -3055,14 +3056,14 @@ impl XlsReader {
                 .enumerate()
                 .find(|(i, note)| !note_used[*i] && note.obj_id == parsed.id)?;
             note_used[index] = true;
-            let text = obj_texts
-                .get(&note.obj_id)
-                .map(duke_sheets_core::ControlText::plain_text)
-                .unwrap_or_default();
+            let text = obj_texts.get(&note.obj_id).cloned().unwrap_or_default();
             let mut object = duke_sheets_core::DrawingObject::comment(
                 note.row,
                 note.col,
-                CellComment::new(note.author.clone(), text),
+                CellComment {
+                    author: note.author.clone(),
+                    text,
+                },
             );
             if let Some(anchor) = &node.client_anchor {
                 object.anchor = Self::client_anchor_to_drawing_anchor(anchor, metrics);
@@ -3212,14 +3213,14 @@ impl XlsReader {
                     .find(|(i, note)| !note_used[*i] && note.obj_id == parsed.id)
                 {
                     note_used[index] = true;
-                    let text = obj_texts
-                        .get(&note.obj_id)
-                        .map(duke_sheets_core::ControlText::plain_text)
-                        .unwrap_or_default();
+                    let text = obj_texts.get(&note.obj_id).cloned().unwrap_or_default();
                     let mut object = duke_sheets_core::DrawingObject::comment(
                         note.row,
                         note.col,
-                        CellComment::new(note.author.clone(), text),
+                        CellComment {
+                            author: note.author.clone(),
+                            text,
+                        },
                     );
                     object.meta.hidden = !note.visible;
                     hoisted.push(object);
@@ -3635,13 +3636,14 @@ impl XlsReader {
                 },
                 legacy_object_type: Some(parsed.ot),
                 caption: caption(),
-                raw_properties: Vec::new(),
-                raw_obj: Some(parsed.raw_body.clone()),
             },
             _ => unreachable!(),
         };
 
         let mut control = FormControl::new(kind);
+        if matches!(control.kind, FormControlKind::Unknown { .. }) {
+            control.raw_obj = Some(parsed.raw_body.clone());
+        }
         control.macro_name = parsed.macro_rgce.as_ref().and_then(|rgce| {
             let name = crate::biff::formula::decompile(rgce, formula_ctx);
             let name = name.strip_prefix('=').unwrap_or(&name).trim();
@@ -5076,7 +5078,7 @@ mod tests {
 
         let comment = ws.comment_at(2, 3).expect("comment should exist");
         assert_eq!(comment.author, "John");
-        assert_eq!(comment.text, "Review this");
+        assert_eq!(comment.plain_text(), "Review this");
         assert_eq!(ws.comment_visible(2, 3), Some(true));
     }
 
@@ -5093,7 +5095,7 @@ mod tests {
 
         let ws = parse(vec![rec(records::NOTE, note_data)]);
         let comment = ws.comment_at(0, 0).expect("comment should exist");
-        assert_eq!(comment.text, "");
+        assert_eq!(comment.plain_text(), "");
         assert_eq!(comment.author, "");
     }
 
@@ -5161,7 +5163,7 @@ mod tests {
         assert_eq!(ws.form_control_count(), 1);
         let control = ws.form_controls().next().unwrap();
         assert_eq!(
-            control.object.anchor,
+            control.object.unwrap().anchor,
             duke_sheets_chart::DrawingAnchor::default(),
             "mismatched pairing falls back to the default anchor"
         );

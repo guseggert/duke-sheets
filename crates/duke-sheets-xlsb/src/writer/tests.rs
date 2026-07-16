@@ -24,7 +24,7 @@ mod tests {
         ws.add_drawing(DrawingObject::raw(RawDrawing {
             bytes,
             rels: vec![],
-        }));
+        })).unwrap();
     }
 
     fn raw_drawing_bytes(ws: &duke_sheets_core::Worksheet) -> Vec<&Vec<u8>> {
@@ -625,10 +625,10 @@ mod tests {
         let ws2 = wb2.worksheet(0).unwrap();
         let c1 = ws2.comment_at(0, 0).expect("comment at A1");
         assert_eq!(c1.author, "Author1");
-        assert_eq!(c1.text, "First comment");
+        assert_eq!(c1.plain_text(), "First comment");
         let c2 = ws2.comment_at(1, 1).expect("comment at B2");
         assert_eq!(c2.author, "Author2");
-        assert_eq!(c2.text, "Second comment");
+        assert_eq!(c2.plain_text(), "Second comment");
     }
 
     #[test]
@@ -1421,7 +1421,7 @@ mod tests {
         let mut chart = Chart::new(ChartType::ColumnClustered);
         chart.title = Some("Chart Title".to_string());
         chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$3")));
-        ws.add_chart(chart, DrawingAnchor::default());
+        ws.add_chart(chart, DrawingAnchor::default()).unwrap();
 
         let mut buf = Vec::new();
         XlsbWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3022,7 +3022,7 @@ mod tests {
         let count = kinds.len();
         for (i, kind) in kinds.iter().enumerate() {
             let row = 1 + 2 * i as u32;
-            ws.add_form_control(FormControl::new(kind.clone()), anchor(1, row, 3, row + 1));
+            ws.add_form_control(FormControl::new(kind.clone()), anchor(1, row, 3, row + 1)).unwrap();
         }
 
         let wb2 = round_trip(&wb);
@@ -3037,7 +3037,7 @@ mod tests {
             }
             assert_eq!(drawn.payload.kind, expected, "control {i} kind mismatch");
         }
-        match &controls[0].object.anchor {
+        match &controls[0].object.unwrap().anchor {
             DrawingAnchor::TwoCell { from, to, .. } => {
                 assert_eq!((from.col, from.row), (1, 1));
                 assert_eq!((to.col, to.row), (3, 2));
@@ -3077,7 +3077,7 @@ mod tests {
                 },
                 edit_as: None,
             },
-        );
+        ).unwrap();
 
         let wb2 = round_trip(&wb);
         let ws2 = wb2.worksheet(0).unwrap();
@@ -3146,7 +3146,7 @@ mod tests {
                 },
                 edit_as: None,
             },
-        );
+        ).unwrap();
 
         let mut bytes = Vec::new();
         XlsbWriter::write(&wb, Cursor::new(&mut bytes)).unwrap();
@@ -3214,7 +3214,7 @@ mod tests {
         let mut wb = Workbook::new();
         wb.worksheet_mut(0)
             .unwrap()
-            .add_chart_ex(chart_ex, duke_sheets_chart::DrawingAnchor::default());
+            .add_chart_ex(chart_ex, duke_sheets_chart::DrawingAnchor::default()).unwrap();
 
         let mut bytes = Vec::new();
         XlsbWriter::write(&wb, Cursor::new(&mut bytes)).unwrap();

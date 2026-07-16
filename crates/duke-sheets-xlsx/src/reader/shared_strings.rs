@@ -177,7 +177,7 @@ pub(crate) fn parse_rpr_element(name: &[u8], e: &BytesStart, font: &mut Option<R
         b"charset" => f.charset = parse_val_u8(e),
         b"scheme" => f.scheme = parse_val_string(e),
         b"color" => {
-            let color = parse_color_element(e, None);
+            let color = parse_color_element(e);
             if color != Color::Auto {
                 f.color = Some(color);
             }

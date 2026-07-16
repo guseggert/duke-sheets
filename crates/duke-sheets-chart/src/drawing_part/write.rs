@@ -1622,23 +1622,22 @@ fn write_drawing_color(w: &mut XmlWriter, color: TwinColor) -> WriteResult<()> {
             };
             let mut color = BytesStart::new("a:schemeClr");
             color.push_attribute(("val", scheme));
-            if tint == 0 {
+            if tint == 0.0 {
                 w.write_event(Event::Empty(color))?;
             } else {
                 w.write_event(Event::Start(color))?;
-                let tint = i32::from(tint).clamp(-100, 100);
-                let lum_mod = if tint > 0 {
-                    100_000 - tint * 1_000
-                } else {
-                    100_000 + tint * 1_000
-                };
+                // lumMod/lumOff carry thousandths of a percent; the
+                // tint fraction maps to lumMod = 100000 - |tint| and,
+                // when lightening, lumOff = tint.
+                let steps = (tint.clamp(-1.0, 1.0) * 100_000.0).round() as i32;
+                let lum_mod = 100_000 - steps.abs();
                 let mut lum_mod_tag = BytesStart::new("a:lumMod");
                 let lum_mod = lum_mod.to_string();
                 lum_mod_tag.push_attribute(("val", lum_mod.as_str()));
                 w.write_event(Event::Empty(lum_mod_tag))?;
-                if tint > 0 {
+                if steps > 0 {
                     let mut lum_off_tag = BytesStart::new("a:lumOff");
-                    let lum_off = (tint * 1_000).to_string();
+                    let lum_off = steps.to_string();
                     lum_off_tag.push_attribute(("val", lum_off.as_str()));
                     w.write_event(Event::Empty(lum_off_tag))?;
                 }

@@ -77,7 +77,7 @@ fn linked_controls_workbook() -> Workbook {
         },
     ];
     for kind in kinds {
-        sheet.add_form_control(FormControl::new(kind), DrawingAnchor::default());
+        sheet.add_form_control(FormControl::new(kind), DrawingAnchor::default()).unwrap();
     }
     workbook
 }
@@ -122,7 +122,7 @@ fn calculation_keeps_linked_cells_and_controls_live() {
             no_3d: false,
         }),
         DrawingAnchor::default(),
-    );
+    ).unwrap();
     // Cell -> control: a formula in a linked cell drives the control.
     sheet.set_cell_value("B1", 5.0).unwrap();
     sheet.set_cell_formula("D3", "=B1>0").unwrap();
@@ -134,7 +134,7 @@ fn calculation_keeps_linked_cells_and_controls_live() {
             no_3d: false,
         }),
         DrawingAnchor::default(),
-    );
+    ).unwrap();
 
     workbook.calculate().unwrap();
     let sheet = workbook.worksheet(0).unwrap();

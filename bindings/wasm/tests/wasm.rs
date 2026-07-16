@@ -461,7 +461,7 @@ fn form_control_drawing(
     anchor: JsValue,
     control_kind: JsValue,
 ) -> JsValue {
-    form_control_drawing_with_raws(name, anchor, control_kind, None)
+    form_control_drawing_with_raws(name, anchor, control_kind, None, &[])
 }
 
 fn form_control_drawing_with_raws(
@@ -469,11 +469,14 @@ fn form_control_drawing_with_raws(
     anchor: JsValue,
     control_kind: JsValue,
     raw_client_data: Option<JsValue>,
+    payload_raws: &[(&str, JsValue)],
 ) -> JsValue {
-    let form_control = match raw_client_data {
-        Some(raws) => make_options(&[("kind", control_kind), ("rawClientData", raws)]),
-        None => make_options(&[("kind", control_kind)]),
-    };
+    let mut payload_fields: Vec<(&str, JsValue)> = vec![("kind", control_kind)];
+    if let Some(raws) = raw_client_data {
+        payload_fields.push(("rawClientData", raws));
+    }
+    payload_fields.extend(payload_raws.iter().cloned());
+    let form_control = make_options(&payload_fields);
     make_options(&[
         ("name", JsValue::from_str(name)),
         ("anchor", anchor),
@@ -565,6 +568,139 @@ fn test_drawing_paths_order_and_nested_groups() {
     let controls = Array::from(&sheet.form_controls().unwrap());
     assert_eq!(controls.length(), 1);
     assert_drawing_path(&controls.get(0), &[1.0, 0.0]);
+}
+
+#[wasm_bindgen_test]
+fn test_absolute_rect_emu_resolves_group_children() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+
+    // Top-level control anchored at the sheet origin.
+    sheet
+        .add_drawing(form_control_drawing(
+            "top",
+            drawing_anchor(0, 0, 1, 1),
+            make_options(&[
+                ("kind", JsValue::from_str("label")),
+                ("caption", drawing_text("top")),
+            ]),
+        ))
+        .unwrap();
+
+    // Group with a 1000x1000 child space; the child occupies the
+    // quarter starting at (250, 500), so its absolute rectangle is a
+    // frame-relative slice of the group's anchor rectangle.
+    let child = make_options(&[
+        ("transform", make_options(&[
+            ("xEmu", JsValue::from_f64(250.0)),
+            ("yEmu", JsValue::from_f64(500.0)),
+            ("cxEmu", JsValue::from_f64(500.0)),
+            ("cyEmu", JsValue::from_f64(250.0)),
+        ])),
+        ("kind", JsValue::from_str("formControl")),
+        (
+            "formControl",
+            make_options(&[(
+                "kind",
+                make_options(&[
+                    ("kind", JsValue::from_str("label")),
+                    ("caption", drawing_text("nested")),
+                ]),
+            )]),
+        ),
+    ]);
+    let group = make_options(&[
+        ("anchor", drawing_anchor(0, 0, 4, 4)),
+        ("kind", JsValue::from_str("group")),
+        (
+            "group",
+            make_options(&[
+                ("groupTransform", make_options(&[
+                    ("childXEmu", JsValue::from_f64(0.0)),
+                    ("childYEmu", JsValue::from_f64(0.0)),
+                    ("childCxEmu", JsValue::from_f64(1000.0)),
+                    ("childCyEmu", JsValue::from_f64(1000.0)),
+                ])),
+                ("children", make_array(&[child])),
+            ]),
+        ),
+    ]);
+    sheet.add_drawing(group).unwrap();
+
+    let rect_of = |value: &JsValue| -> (f64, f64, f64, f64) {
+        let rect = Reflect::get(value, &"absoluteRectEmu".into()).unwrap();
+        let field = |name: &str| {
+            Reflect::get(&rect, &name.into())
+                .unwrap()
+                .as_f64()
+                .unwrap()
+        };
+        (
+            field("xEmu"),
+            field("yEmu"),
+            field("widthEmu"),
+            field("heightEmu"),
+        )
+    };
+
+    let drawings = Array::from(&sheet.drawings().unwrap());
+    let (x, y, w, h) = rect_of(&drawings.get(0));
+    assert_eq!((x, y), (0.0, 0.0));
+    assert!(w > 0.0 && h > 0.0, "anchor rect must have extent");
+
+    let (gx, gy, gw, gh) = rect_of(&drawings.get(1));
+    let controls = Array::from(&sheet.form_controls().unwrap());
+    assert_eq!(controls.length(), 2);
+    let (cx, cy, cw, ch) = rect_of(&controls.get(1));
+    assert_eq!(cx, gx + gw * 0.25, "child x scales into the group frame");
+    assert_eq!(cy, gy + gh * 0.5, "child y scales into the group frame");
+    assert_eq!(cw, gw * 0.5, "child width scales into the group frame");
+    assert_eq!(ch, gh * 0.25, "child height scales into the group frame");
+
+    // The tree and flat views agree.
+    let group_node = Reflect::get(&drawings.get(1), &"group".into()).unwrap();
+    let children = Array::from(&Reflect::get(&group_node, &"children".into()).unwrap());
+    assert_eq!(rect_of(&children.get(0)), (cx, cy, cw, ch));
+}
+
+#[wasm_bindgen_test]
+fn test_theme_palette_and_resolve_color() {
+    let wb = Workbook::new();
+    let palette = wb.theme_palette();
+    assert_eq!(palette.len(), 12);
+    assert_eq!(palette[4], "4F81BD", "default accent 1");
+
+    let resolve = |color: JsValue| -> Option<String> { wb.resolve_color(color).unwrap() };
+    assert_eq!(
+        resolve(make_options(&[
+            ("colorType", JsValue::from_str("theme")),
+            ("index", JsValue::from_f64(4.0)),
+            ("tint", JsValue::from_f64(0.0)),
+        ])),
+        Some("4F81BD".to_string())
+    );
+    // Positive tint lightens; matches Color::theme(4, 0.5).
+    assert_eq!(
+        resolve(make_options(&[
+            ("colorType", JsValue::from_str("theme")),
+            ("index", JsValue::from_f64(4.0)),
+            ("tint", JsValue::from_f64(0.5)),
+        ])),
+        Some("A7C0DE".to_string())
+    );
+    assert_eq!(
+        resolve(make_options(&[
+            ("colorType", JsValue::from_str("rgb")),
+            ("r", JsValue::from_f64(1.0)),
+            ("g", JsValue::from_f64(2.0)),
+            ("b", JsValue::from_f64(3.0)),
+        ])),
+        Some("010203".to_string())
+    );
+    assert_eq!(
+        resolve(make_options(&[("colorType", JsValue::from_str("auto"))])),
+        None
+    );
 }
 
 #[wasm_bindgen_test]
@@ -717,9 +853,9 @@ fn test_unknown_control_passthrough_survives_set_drawing_and_save() {
                 ("kind", JsValue::from_str("unknown")),
                 ("objectType", JsValue::from_str("EditBox")),
                 ("caption", drawing_text("Unsupported editor")),
-                ("rawProperties", raw_properties),
             ]),
             Some(raw_client_data),
+            &[("rawProperties", raw_properties)],
         ))
         .unwrap();
     let bytes = wb.save_xlsx_bytes().unwrap();
@@ -730,13 +866,13 @@ fn test_unknown_control_passthrough_survives_set_drawing_and_save() {
     let kind = form_control_kind(&control);
     assert_eq!(get_string_field(&kind, "kind"), "unknown");
     assert_eq!(get_string_field(&kind, "objectType"), "EditBox");
-    let properties = Array::from(&Reflect::get(&kind, &"rawProperties".into()).unwrap());
+    let payload = Reflect::get(&control, &"formControl".into()).unwrap();
+    let properties = Array::from(&Reflect::get(&payload, &"rawProperties".into()).unwrap());
     let property_count = properties.length();
     assert!(
         property_count >= 3,
         "expected raw properties to survive the read, got {property_count}"
     );
-    let payload = Reflect::get(&control, &"formControl".into()).unwrap();
     let client_data = Array::from(&Reflect::get(&payload, &"rawClientData".into()).unwrap());
     assert!(client_data.length() >= 1);
 
@@ -749,7 +885,8 @@ fn test_unknown_control_passthrough_survives_set_drawing_and_save() {
     let control = Array::from(&sheet.form_controls().unwrap()).get(0);
     let kind = form_control_kind(&control);
     assert_eq!(get_string_field(&kind, "objectType"), "EditBox");
-    let properties = Array::from(&Reflect::get(&kind, &"rawProperties".into()).unwrap());
+    let payload = Reflect::get(&control, &"formControl".into()).unwrap();
+    let properties = Array::from(&Reflect::get(&payload, &"rawProperties".into()).unwrap());
     assert_eq!(properties.length(), property_count);
     let has_custom_flag = properties.iter().any(|pair| {
         let pair = Array::from(&pair);
@@ -757,7 +894,6 @@ fn test_unknown_control_passthrough_survives_set_drawing_and_save() {
             && pair.get(1).as_string().as_deref() == Some("kept")
     });
     assert!(has_custom_flag, "customFlag raw property must survive rewrite");
-    let payload = Reflect::get(&control, &"formControl".into()).unwrap();
     let client_data = Array::from(&Reflect::get(&payload, &"rawClientData".into()).unwrap());
     let has_val_fragment = client_data.iter().any(|fragment| {
         String::from_utf8_lossy(&byte_array_to_vec(&fragment)).contains("<x:Val>17</x:Val>")
@@ -780,6 +916,7 @@ fn test_modeled_control_raw_client_data_survives_save() {
                 ("state", JsValue::from_str("checked")),
             ]),
             Some(make_array(&[js_sys::Uint8Array::from(&fragment[..]).into()])),
+            &[],
         ))
         .unwrap();
     let bytes = wb.save_xlsx_bytes().unwrap();
@@ -840,9 +977,9 @@ fn test_uint8array_payloads_survive_add_and_set_drawing() {
                 ("kind", JsValue::from_str("unknown")),
                 ("objectType", JsValue::from_str("EditBox")),
                 ("caption", drawing_text("editor")),
-                ("rawObj", js_sys::Uint8Array::from(&obj_body[..]).into()),
             ]),
             Some(make_array(&[js_sys::Uint8Array::from(&fragment[..]).into()])),
+            &[("rawObj", js_sys::Uint8Array::from(&obj_body[..]).into())],
         )
     };
     sheet.add_drawing(unknown_control("added")).unwrap();
@@ -852,11 +989,10 @@ fn test_uint8array_payloads_survive_add_and_set_drawing() {
 
     let control = Array::from(&sheet.form_controls().unwrap()).get(0);
     assert_eq!(get_string_field(&control, "name"), "replaced");
-    let kind = form_control_kind(&control);
     let payload = Reflect::get(&control, &"formControl".into()).unwrap();
     let client_data = Array::from(&Reflect::get(&payload, &"rawClientData".into()).unwrap());
     assert_eq!(byte_array_to_vec(&client_data.get(0)), fragment.to_vec());
-    let raw_obj = Reflect::get(&kind, &"rawObj".into()).unwrap();
+    let raw_obj = Reflect::get(&payload, &"rawObj".into()).unwrap();
     assert_eq!(byte_array_to_vec(&raw_obj), obj_body.to_vec());
 }
 

@@ -217,7 +217,7 @@ fn border_color_indexed_non_black_round_trips() {
         .left
         .clone()
         .expect("left edge present");
-    let (r, g, b) = edge.color.to_rgb();
+    let (r, g, b) = edge.color.to_rgb().unwrap();
     assert_eq!(
         (r, g, b),
         (255, 0, 0),
@@ -299,7 +299,7 @@ fn fill_color_palette_exact_rgb_round_trips() {
         other => panic!("expected a solid-equivalent fill, got {other:?}"),
     };
     assert_eq!(
-        color.to_rgb(),
+        color.to_rgb().unwrap(),
         (128, 0, 128),
         "palette-exact fill RGB survives; got {color:?}"
     );
@@ -329,7 +329,7 @@ fn border_color_palette_exact_rgb_round_trips() {
         .clone()
         .expect("left edge present");
     assert_eq!(
-        edge.color.to_rgb(),
+        edge.color.to_rgb().unwrap(),
         (255, 153, 0),
         "palette-exact border RGB survives; got {:?}",
         edge.color

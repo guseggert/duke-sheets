@@ -1828,7 +1828,7 @@ fn excel_can_read_xlsb_form_controls_we_emit() {
     let expected = kinds.clone();
     for (i, kind) in kinds.into_iter().enumerate() {
         let row = 1 + 2 * i as u32;
-        ws.add_form_control(FormControl::new(kind), anchor(1, row, 3, row + 1));
+        ws.add_form_control(FormControl::new(kind), anchor(1, row, 3, row + 1)).unwrap();
     }
     assert_eq!(wb.sync_form_control_links(), 3);
 
@@ -1873,11 +1873,11 @@ fn excel_preserves_xlsb_custom_metric_control_anchor_we_emit() {
             width_emu: 609_600,
             height_emu: 190_500,
         },
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel_xlsb(&workbook);
     let drawn = result.worksheet(0).unwrap().form_controls().next().unwrap();
-    match &drawn.object.anchor {
+    match &drawn.object.unwrap().anchor {
         DrawingAnchor::TwoCell { from, to, .. } => {
             assert_eq!((from.col, from.col_offset_emu), (0, 0));
             assert_eq!((from.row, from.row_offset_emu), (0, 0));
@@ -1948,17 +1948,17 @@ fn excel_preserves_xlsb_control_visual_metadata_we_emit() {
     object.meta.alt_text = Some("Visual probe alternative".into());
     object.meta.title = Some("Visual probe title".into());
     let mut workbook = Workbook::new();
-    workbook.worksheet_mut(0).unwrap().add_drawing(object);
+    workbook.worksheet_mut(0).unwrap().add_drawing(object).unwrap();
 
     let result = roundtrip_through_excel_xlsb(&workbook);
     let drawn = result.worksheet(0).unwrap().form_controls().next().unwrap();
-    assert_eq!(drawn.object.meta.name.as_deref(), Some("Visual Probe"));
+    assert_eq!(drawn.object.unwrap().meta.name.as_deref(), Some("Visual Probe"));
     assert_eq!(
-        drawn.object.meta.alt_text.as_deref(),
+        drawn.object.unwrap().meta.alt_text.as_deref(),
         Some("Visual probe alternative")
     );
     assert_eq!(
-        drawn.object.meta.title.as_deref(),
+        drawn.object.unwrap().meta.title.as_deref(),
         Some("Visual probe title")
     );
     assert_eq!(drawn.payload.caption_text().as_deref(), Some("Red Blue"));
@@ -2008,9 +2008,9 @@ fn excel_can_read_xlsb_comment_we_emit() {
     let sheet = result.worksheet(0).unwrap();
     let comment = sheet.comment_at(1, 1).expect("comment survives at B2");
     assert!(
-        comment.text.contains("Check this figure"),
+        comment.plain_text().contains("Check this figure"),
         "comment text lost: {:?}",
-        comment.text
+        comment.plain_text()
     );
     assert!(
         comment.author.contains("Reviewer"),
@@ -2058,7 +2058,7 @@ fn excel_can_read_xlsb_png_image_we_emit() {
             },
             edit_as: None,
         },
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel_xlsb(&wb);
     let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
@@ -2105,7 +2105,7 @@ fn excel_preserves_xlsb_one_cell_and_absolute_images_we_emit() {
             width_emu: 1_200_000,
             height_emu: 700_000,
         }),
-    );
+    ).unwrap();
     ws.add_drawing(
         image("Absolute").with_anchor(DrawingAnchor::Absolute {
             x_emu: 2_000_000,
@@ -2113,13 +2113,13 @@ fn excel_preserves_xlsb_one_cell_and_absolute_images_we_emit() {
             width_emu: 900_000,
             height_emu: 500_000,
         }),
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel_xlsb(&wb);
     let images: Vec<_> = result.worksheet(0).unwrap().images().collect();
     assert_eq!(images.len(), 2);
     assert_eq!(
-        images[0].object.anchor,
+        images[0].object.unwrap().anchor,
         DrawingAnchor::OneCell {
             from: CellMarker {
                 col: 1,
@@ -2132,7 +2132,7 @@ fn excel_preserves_xlsb_one_cell_and_absolute_images_we_emit() {
         }
     );
     assert_eq!(
-        images[1].object.anchor,
+        images[1].object.unwrap().anchor,
         DrawingAnchor::Absolute {
             x_emu: 2_000_000,
             y_emu: 1_000_000,
@@ -2177,7 +2177,7 @@ fn excel_can_read_xlsb_chart_we_emit() {
             },
             edit_as: None,
         },
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel_xlsb(&wb);
     let sheet = result.worksheet(0).unwrap();
@@ -2232,7 +2232,7 @@ fn excel_preserves_xlsb_drawing_z_order_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "anchor").unwrap();
-    ws.add_drawing(png("Below").with_anchor(two_cell(0, 0, 2, 2)));
+    ws.add_drawing(png("Below").with_anchor(two_cell(0, 0, 2, 2))).unwrap();
     ws.add_drawing(
         DrawingObject::form_control(FormControl::new(FormControlKind::Checkbox {
             caption: "Middle".into(),
@@ -2241,8 +2241,8 @@ fn excel_preserves_xlsb_drawing_z_order_we_emit() {
             no_3d: true,
         }))
         .with_anchor(two_cell(1, 1, 3, 3)),
-    );
-    ws.add_drawing(png("Above").with_anchor(two_cell(2, 2, 4, 4)));
+    ).unwrap();
+    ws.add_drawing(png("Above").with_anchor(two_cell(2, 2, 4, 4))).unwrap();
 
     let result = roundtrip_through_excel_xlsb(&wb);
     let sheet = result.worksheet(0).unwrap();
@@ -2261,8 +2261,8 @@ fn excel_preserves_xlsb_drawing_z_order_we_emit() {
         "z-order must survive Excel XLSB re-save"
     );
     let images: Vec<_> = sheet.images().collect();
-    assert_eq!(images[0].object.meta.name.as_deref(), Some("Below"));
-    assert_eq!(images[1].object.meta.name.as_deref(), Some("Above"));
+    assert_eq!(images[0].object.unwrap().meta.name.as_deref(), Some("Below"));
+    assert_eq!(images[1].object.unwrap().meta.name.as_deref(), Some("Above"));
     assert_eq!(
         sheet
             .form_controls()
@@ -2327,18 +2327,18 @@ fn excel_preserves_hidden_drawing_flags_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "anchor").unwrap();
-    ws.add_drawing(png("Shown").with_anchor(two_cell(0, 0, 2, 2)));
+    ws.add_drawing(png("Shown").with_anchor(two_cell(0, 0, 2, 2))).unwrap();
     ws.add_drawing(
         png("Ghost")
             .with_anchor(two_cell(2, 2, 4, 4))
             .with_hidden(true),
-    );
-    ws.add_drawing(checkbox("Visible box").with_anchor(two_cell(4, 4, 6, 6)));
+    ).unwrap();
+    ws.add_drawing(checkbox("Visible box").with_anchor(two_cell(4, 4, 6, 6))).unwrap();
     ws.add_drawing(
         checkbox("Cloaked box")
             .with_anchor(two_cell(6, 6, 8, 8))
             .with_hidden(true),
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel_xlsb(&wb);
     let sheet = result.worksheet(0).unwrap();
@@ -2348,9 +2348,8 @@ fn excel_preserves_hidden_drawing_flags_we_emit() {
     let image_hidden = |name: &str| {
         images
             .iter()
-            .find(|i| i.object.meta.name.as_deref() == Some(name))
+            .find(|i| i.object.unwrap().meta.name.as_deref() == Some(name))
             .unwrap_or_else(|| panic!("image {name:?} lost in Excel re-save"))
-            .object
             .meta
             .hidden
     };
@@ -2367,7 +2366,6 @@ fn excel_preserves_hidden_drawing_flags_we_emit() {
             .iter()
             .find(|c| c.payload.caption_text().as_deref() == Some(caption))
             .unwrap_or_else(|| panic!("control {caption:?} lost in Excel re-save"))
-            .object
             .meta
             .hidden
     };
@@ -2443,16 +2441,16 @@ fn excel_preserves_xlsb_basic_shape_we_emit() {
     object.meta.alt_text = Some("red status rectangle".into());
     object.meta.title = Some("Status".into());
     let mut workbook = Workbook::new();
-    workbook.worksheet_mut(0).unwrap().add_drawing(object);
+    workbook.worksheet_mut(0).unwrap().add_drawing(object).unwrap();
 
     let result = roundtrip_through_excel_xlsb(&workbook);
     let drawn = result.worksheet(0).unwrap().shapes().next().expect("shape");
-    assert_eq!(drawn.object.meta.name.as_deref(), Some("Status panel"));
+    assert_eq!(drawn.object.unwrap().meta.name.as_deref(), Some("Status panel"));
     assert_eq!(
-        drawn.object.meta.alt_text.as_deref(),
+        drawn.object.unwrap().meta.alt_text.as_deref(),
         Some("red status rectangle")
     );
-    assert_eq!(drawn.object.meta.title.as_deref(), Some("Status"));
+    assert_eq!(drawn.object.unwrap().meta.title.as_deref(), Some("Status"));
     assert_eq!(drawn.payload.geometry, ShapeGeometry::Preset("rect".into()));
     assert_eq!(drawn.payload.fill, ShapeFill::Solid(Color::rgb(255, 0, 0)));
     assert_eq!(drawn.payload.line.color, Some(Color::rgb(0, 0, 255)));
@@ -2518,7 +2516,7 @@ fn excel_preserves_unmodeled_client_data_we_emit_xlsb() {
             },
             edit_as: None,
         },
-    );
+    ).unwrap();
 
     let result = roundtrip_through_excel_xlsb(&wb);
     let control = result

@@ -87,6 +87,19 @@ export declare class Workbook {
   get workbookProtection(): JsWorkbookProtection | null
   /** Get all named ranges defined in the workbook. */
   get namedRanges(): Array<JsNamedRange>
+  /**
+   * The workbook theme's 12 clrScheme colors as `RRGGBB` hex, in
+   * theme-index order (background 1, text 1, background 2, text 2,
+   * accent 1-6, hyperlink, followed hyperlink). The Office default
+   * palette when the file carries no theme.
+   */
+  get themePalette(): Array<string>
+  /**
+   * Resolve a drawing color to display RGB (`RRGGBB` hex) against
+   * this workbook's theme palette. `auto` has no fixed RGB and
+   * resolves to `null`.
+   */
+  resolveColor(color: object): string | null
   /** Get all chart sheets. */
   get chartsheets(): Array<JsChartSheet>
   /** Get the number of chart sheets. */
@@ -992,19 +1005,24 @@ export type JsCheckState =  'unchecked'|
 /**
  * Color representation. The `colorType` field indicates the variant:
  * `"auto"`, `"rgb"`, `"argb"`, `"theme"`, or `"indexed"`.
- * The `hex` field always contains the resolved 6- or 8-char hex string.
+ * `hex` carries the context-free hex string; it is absent for
+ * `"auto"` and `"theme"` colors, which have no fixed RGB without the
+ * workbook - resolve those through `Workbook.resolveColor`.
  */
 export interface JsColor {
   colorType: string
-  /** Resolved hex string (6 or 8 chars, no `#` prefix). */
-  hex: string
+  /**
+   * Context-free hex string (6 or 8 chars, no `#` prefix); absent
+   * for auto and theme colors.
+   */
+  hex?: string
   r?: number
   g?: number
   b?: number
   a?: number
-  /** Theme color index (0-9), present when `colorType === "theme"`. */
+  /** Theme color index (0-11), present when `colorType === "theme"`. */
   themeIndex?: number
-  /** Tint percentage (-100 to 100), present when `colorType === "theme"`. */
+  /** OOXML tint fraction (-1.0 to 1.0), present when `colorType === "theme"`. */
   tint?: number
   /** Palette index, present when `colorType === "indexed"`. */
   paletteIndex?: number

@@ -16,7 +16,9 @@ pub(super) fn write_vml_drawing<W: Write + Seek>(
         .ok_or_else(|| XlsxError::InvalidFormat("Sheet not found".into()))?;
 
     duke_sheets_vml::validate_sheet_raw_client_data(sheet).map_err(XlsxError::InvalidFormat)?;
-    let Some(xml) = duke_sheets_vml::build_legacy_vml(sheet, sheet_index) else {
+    let Some(xml) =
+        duke_sheets_vml::build_legacy_vml(sheet, sheet_index, &workbook.theme_palette())
+    else {
         return Ok(());
     };
     let path = format!("xl/drawings/vmlDrawing{}.vml", sheet_index + 1);
@@ -82,10 +84,7 @@ pub(super) fn write_comments<W: Write + Seek>(
             w.write_event(Event::Start(c_tag))?;
 
             w.write_event(Event::Start(BytesStart::new("text")))?;
-            w.write_event(Event::Start(BytesStart::new("r")))?;
-            w.create_element("t")
-                .write_text_content(BytesText::new(&comment.text))?;
-            w.write_event(Event::End(BytesEnd::new("r")))?;
+            super::XlsxWriter::write_rich_text_runs(w, &comment.text.runs)?;
             w.write_event(Event::End(BytesEnd::new("text")))?;
 
             w.write_event(Event::End(BytesEnd::new("comment")))?;

@@ -118,7 +118,7 @@ fn test_xls_font_color() {
     let workbook = XlsReader::read_file(&path).unwrap();
     let sheet = workbook.worksheet(0).unwrap();
     let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
-    let (r, g, b) = style.font.color.to_rgb();
+    let (r, g, b) = style.font.color.to_rgb().unwrap();
     assert!(
         r > 200 && g < 50 && b < 50,
         "A1 font color should be red-ish, got ({r}, {g}, {b})"
@@ -245,7 +245,7 @@ fn test_xls_fill_solid_color() {
     let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
     match &style.fill {
         FillStyle::Solid { color } => {
-            let (r, g, b) = color.to_rgb();
+            let (r, g, b) = color.to_rgb().unwrap();
             assert!(
                 r > 200 && g > 200 && b < 50,
                 "A1 fill should be yellow-ish, got ({r}, {g}, {b})"
@@ -281,7 +281,7 @@ fn test_xls_fill_blue_background() {
     let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
     match &style.fill {
         FillStyle::Solid { color } => {
-            let (r, g, b) = color.to_rgb();
+            let (r, g, b) = color.to_rgb().unwrap();
             assert!(
                 r < 50 && g < 50 && b > 200,
                 "A1 fill should be blue-ish, got ({r}, {g}, {b})"
@@ -769,7 +769,7 @@ fn test_xls_combined_styles() {
         style.font.size
     );
     // Font color should be blue-ish
-    let (r, g, b) = style.font.color.to_rgb();
+    let (r, g, b) = style.font.color.to_rgb().unwrap();
     assert!(
         r < 50 && g < 50 && b > 200,
         "A1 font color should be blue-ish, got ({r}, {g}, {b})"
@@ -777,7 +777,7 @@ fn test_xls_combined_styles() {
     // Fill should be yellow-ish
     match &style.fill {
         FillStyle::Solid { color } => {
-            let (r, g, b) = color.to_rgb();
+            let (r, g, b) = color.to_rgb().unwrap();
             assert!(
                 r > 200 && g > 200 && b < 50,
                 "A1 fill should be yellow-ish, got ({r}, {g}, {b})"

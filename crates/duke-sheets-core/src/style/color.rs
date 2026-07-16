@@ -5,7 +5,7 @@ use std::fmt;
 /// Color representation
 ///
 /// Supports RGB, ARGB, theme colors, and indexed colors.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum Color {
     /// Automatic/default color
     #[default]
@@ -25,15 +25,68 @@ pub enum Color {
     /// 2 = Background 2
     /// 3 = Text 2
     /// 4-9 = Accent 1-6
+    /// 10 = Hyperlink
+    /// 11 = Followed hyperlink
     Theme {
-        /// Theme color index (0-9)
+        /// Theme slot index (0-11)
         index: u8,
-        /// Tint value (-1.0 to 1.0, stored as i8 percentage)
-        tint: i8,
+        /// OOXML tint fraction (-1.0 to 1.0): negative darkens toward
+        /// black, positive lightens toward white, 0.0 keeps the base
+        /// theme color.
+        tint: f64,
     },
 
     /// Indexed color (legacy Excel palette)
     Indexed(u8),
+}
+
+/// Equality compares `Theme::tint` bitwise so [`Color`] keeps total
+/// equality and stays usable as a style-dedup key.
+impl PartialEq for Color {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Color::Auto, Color::Auto) => true,
+            (Color::Rgb { r, g, b }, Color::Rgb { r: r2, g: g2, b: b2 }) => {
+                (r, g, b) == (r2, g2, b2)
+            }
+            (
+                Color::Argb { a, r, g, b },
+                Color::Argb {
+                    a: a2,
+                    r: r2,
+                    g: g2,
+                    b: b2,
+                },
+            ) => (a, r, g, b) == (a2, r2, g2, b2),
+            (
+                Color::Theme { index, tint },
+                Color::Theme {
+                    index: index2,
+                    tint: tint2,
+                },
+            ) => index == index2 && tint.to_bits() == tint2.to_bits(),
+            (Color::Indexed(i), Color::Indexed(j)) => i == j,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Color {}
+
+impl std::hash::Hash for Color {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            Color::Auto => {}
+            Color::Rgb { r, g, b } => (r, g, b).hash(state),
+            Color::Argb { a, r, g, b } => (a, r, g, b).hash(state),
+            Color::Theme { index, tint } => {
+                index.hash(state);
+                tint.to_bits().hash(state);
+            }
+            Color::Indexed(i) => i.hash(state),
+        }
+    }
 }
 
 impl Color {
@@ -47,8 +100,8 @@ impl Color {
         Color::Argb { a, r, g, b }
     }
 
-    /// Create a theme color
-    pub const fn theme(index: u8, tint: i8) -> Self {
+    /// Create a theme color with an OOXML tint fraction (-1.0..=1.0).
+    pub const fn theme(index: u8, tint: f64) -> Self {
         Color::Theme { index, tint }
     }
 
@@ -74,55 +127,41 @@ impl Color {
         }
     }
 
-    /// Convert to hex string (without # prefix)
-    pub fn to_hex(&self) -> String {
+    /// Context-free hex string (without # prefix). `None` for
+    /// [`Color::Auto`] and [`Color::Theme`], which have no fixed RGB
+    /// without a workbook: resolve those through
+    /// [`ThemePalette::resolve`] (or `Workbook::resolve_color`).
+    pub fn to_hex(&self) -> Option<String> {
         match self {
-            Color::Auto => "000000".to_string(),
-            Color::Rgb { r, g, b } => format!("{:02X}{:02X}{:02X}", r, g, b),
-            Color::Argb { a, r, g, b } => format!("{:02X}{:02X}{:02X}{:02X}", a, r, g, b),
-            Color::Theme { .. } => {
-                let (r, g, b) = self.to_rgb();
-                format!("{:02X}{:02X}{:02X}", r, g, b)
-            }
-            Color::Indexed(i) => {
-                // Return indexed color from standard palette
-                let (r, g, b) = Self::indexed_to_rgb(*i);
-                format!("{:02X}{:02X}{:02X}", r, g, b)
-            }
+            Color::Argb { a, r, g, b } => Some(format!("{:02X}{:02X}{:02X}{:02X}", a, r, g, b)),
+            _ => self
+                .to_rgb()
+                .map(|(r, g, b)| format!("{:02X}{:02X}{:02X}", r, g, b)),
         }
     }
 
-    /// Convert to ARGB hex string (8 characters, used by XLSX)
-    ///
-    /// Always returns an 8-character string with alpha, e.g., "FFFF0000" for opaque red.
-    pub fn to_argb_hex(&self) -> String {
+    /// Context-free ARGB hex string (8 characters, as used by XLSX),
+    /// e.g. "FFFF0000" for opaque red. `None` for [`Color::Auto`] and
+    /// [`Color::Theme`]; see [`Self::to_hex`].
+    pub fn to_argb_hex(&self) -> Option<String> {
         match self {
-            Color::Auto => "FF000000".to_string(),
-            Color::Rgb { r, g, b } => format!("FF{:02X}{:02X}{:02X}", r, g, b),
-            Color::Argb { a, r, g, b } => format!("{:02X}{:02X}{:02X}{:02X}", a, r, g, b),
-            Color::Theme { .. } => {
-                let (r, g, b) = self.to_rgb();
-                format!("FF{:02X}{:02X}{:02X}", r, g, b)
-            }
-            Color::Indexed(i) => {
-                let (r, g, b) = Self::indexed_to_rgb(*i);
-                format!("FF{:02X}{:02X}{:02X}", r, g, b)
-            }
+            Color::Argb { a, r, g, b } => Some(format!("{:02X}{:02X}{:02X}{:02X}", a, r, g, b)),
+            _ => self
+                .to_rgb()
+                .map(|(r, g, b)| format!("FF{:02X}{:02X}{:02X}", r, g, b)),
         }
     }
 
-    /// Convert to RGB tuple
-    pub fn to_rgb(&self) -> (u8, u8, u8) {
+    /// Context-free RGB. `None` for [`Color::Auto`] (no fixed RGB)
+    /// and [`Color::Theme`] (depends on the workbook palette); see
+    /// [`Self::to_hex`]. Indexed colors use the standard legacy
+    /// palette.
+    pub fn to_rgb(&self) -> Option<(u8, u8, u8)> {
         match self {
-            Color::Auto => (0, 0, 0),
-            Color::Rgb { r, g, b } => (*r, *g, *b),
-            Color::Argb { r, g, b, .. } => (*r, *g, *b),
-            Color::Theme { index, tint } => {
-                // Get base theme color and apply tint
-                let base = Self::theme_to_rgb(*index);
-                Self::apply_tint(base, *tint)
-            }
-            Color::Indexed(i) => Self::indexed_to_rgb(*i),
+            Color::Auto | Color::Theme { .. } => None,
+            Color::Rgb { r, g, b } => Some((*r, *g, *b)),
+            Color::Argb { r, g, b, .. } => Some((*r, *g, *b)),
+            Color::Indexed(i) => Some(Self::indexed_to_rgb(*i)),
         }
     }
 
@@ -200,40 +239,6 @@ impl Color {
         }
     }
 
-    /// Get RGB for theme color (using default Office theme)
-    fn theme_to_rgb(index: u8) -> (u8, u8, u8) {
-        match index {
-            0 => (255, 255, 255), // Background 1 (white)
-            1 => (0, 0, 0),       // Text 1 (black)
-            2 => (238, 236, 225), // Background 2
-            3 => (31, 73, 125),   // Text 2
-            4 => (79, 129, 189),  // Accent 1
-            5 => (192, 80, 77),   // Accent 2
-            6 => (155, 187, 89),  // Accent 3
-            7 => (128, 100, 162), // Accent 4
-            8 => (75, 172, 198),  // Accent 5
-            9 => (247, 150, 70),  // Accent 6
-            _ => (0, 0, 0),
-        }
-    }
-
-    /// Apply tint to a color
-    fn apply_tint(color: (u8, u8, u8), tint: i8) -> (u8, u8, u8) {
-        let tint_float = tint as f64 / 100.0;
-
-        let apply = |c: u8| -> u8 {
-            let c = c as f64;
-            let result = if tint_float < 0.0 {
-                c * (1.0 + tint_float)
-            } else {
-                c + (255.0 - c) * tint_float
-            };
-            result.clamp(0.0, 255.0) as u8
-        };
-
-        (apply(color.0), apply(color.1), apply(color.2))
-    }
-
     // Common colors
     pub const BLACK: Color = Color::Rgb { r: 0, g: 0, b: 0 };
     pub const WHITE: Color = Color::Rgb {
@@ -282,9 +287,85 @@ impl fmt::Display for Color {
             Color::Auto => write!(f, "auto"),
             Color::Rgb { r, g, b } => write!(f, "#{:02X}{:02X}{:02X}", r, g, b),
             Color::Argb { a, r, g, b } => write!(f, "#{:02X}{:02X}{:02X}{:02X}", a, r, g, b),
-            Color::Theme { index, tint } => write!(f, "theme({}, {}%)", index, tint),
+            Color::Theme { index, tint } => write!(f, "theme({}, {})", index, tint),
             Color::Indexed(i) => write!(f, "indexed({})", i),
         }
+    }
+}
+
+/// The workbook theme's color scheme (`clrScheme`), in [`Color::Theme`]
+/// index order: 0 background 1, 1 text 1, 2 background 2, 3 text 2,
+/// 4-9 accent 1-6, 10 hyperlink, 11 followed hyperlink.
+///
+/// Readers populate it from the theme part; [`Default`] is the Office
+/// theme, used when a file carries no theme.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ThemePalette {
+    /// RGB triples in theme-index order.
+    pub colors: [(u8, u8, u8); 12],
+}
+
+impl Default for ThemePalette {
+    fn default() -> Self {
+        Self {
+            colors: [
+                (255, 255, 255), // Background 1
+                (0, 0, 0),       // Text 1
+                (238, 236, 225), // Background 2
+                (31, 73, 125),   // Text 2
+                (79, 129, 189),  // Accent 1
+                (192, 80, 77),   // Accent 2
+                (155, 187, 89),  // Accent 3
+                (128, 100, 162), // Accent 4
+                (75, 172, 198),  // Accent 5
+                (247, 150, 70),  // Accent 6
+                (0, 0, 255),     // Hyperlink
+                (128, 0, 128),   // Followed hyperlink
+            ],
+        }
+    }
+}
+
+impl ThemePalette {
+    /// The base RGB of a theme slot (no tint). Out-of-range indices
+    /// resolve to black.
+    pub fn theme_rgb(&self, index: u8) -> (u8, u8, u8) {
+        self.colors
+            .get(index as usize)
+            .copied()
+            .unwrap_or((0, 0, 0))
+    }
+
+    /// Resolve a theme slot with an OOXML tint fraction (-1.0..=1.0;
+    /// negative darkens, positive lightens).
+    pub fn resolve_theme(&self, index: u8, tint: f64) -> (u8, u8, u8) {
+        Self::apply_tint(self.theme_rgb(index), tint)
+    }
+
+    /// Resolve any [`Color`] to display RGB against this palette.
+    /// [`Color::Auto`] has no fixed RGB and resolves to `None`.
+    pub fn resolve(&self, color: &Color) -> Option<(u8, u8, u8)> {
+        match color {
+            Color::Auto => None,
+            Color::Rgb { r, g, b } | Color::Argb { r, g, b, .. } => Some((*r, *g, *b)),
+            Color::Theme { index, tint } => Some(self.resolve_theme(*index, *tint)),
+            Color::Indexed(i) => Some(Color::indexed_to_rgb(*i)),
+        }
+    }
+
+    pub(crate) fn apply_tint(color: (u8, u8, u8), tint: f64) -> (u8, u8, u8) {
+        let apply = |c: u8| -> u8 {
+            let c = c as f64;
+            let result = if tint < 0.0 {
+                c * (1.0 + tint)
+            } else {
+                c + (255.0 - c) * tint
+            };
+            result.clamp(0.0, 255.0) as u8
+        };
+
+        (apply(color.0), apply(color.1), apply(color.2))
     }
 }
 
@@ -314,8 +395,27 @@ mod tests {
     }
 
     #[test]
+    fn context_free_resolution_is_honest_about_theme_and_auto() {
+        // Auto has no fixed RGB; Theme depends on the workbook
+        // palette. Neither resolves without context.
+        assert_eq!(Color::Auto.to_rgb(), None);
+        assert_eq!(Color::theme(4, 0.0).to_rgb(), None);
+        assert_eq!(Color::Auto.to_hex(), None);
+        assert_eq!(Color::theme(4, 0.5).to_hex(), None);
+        assert_eq!(Color::Auto.to_argb_hex(), None);
+        assert_eq!(Color::theme(4, 0.5).to_argb_hex(), None);
+
+        assert_eq!(Color::rgb(1, 2, 3).to_rgb(), Some((1, 2, 3)));
+        assert_eq!(Color::argb(9, 4, 5, 6).to_rgb(), Some((4, 5, 6)));
+        assert_eq!(Color::Indexed(2).to_rgb(), Some((255, 0, 0)));
+    }
+
+    #[test]
     fn test_to_hex() {
-        assert_eq!(Color::Rgb { r: 255, g: 0, b: 0 }.to_hex(), "FF0000");
+        assert_eq!(
+            Color::Rgb { r: 255, g: 0, b: 0 }.to_hex(),
+            Some("FF0000".to_string())
+        );
         assert_eq!(
             Color::Argb {
                 a: 128,
@@ -324,22 +424,65 @@ mod tests {
                 b: 255
             }
             .to_hex(),
-            "80FFFFFF"
+            Some("80FFFFFF".to_string())
         );
-        assert_eq!(Color::theme(4, 0).to_hex(), "4F81BD");
-        assert_eq!(Color::theme(4, 50).to_hex(), "A7C0DE");
     }
 
     #[test]
     fn test_to_argb_hex() {
-        assert_eq!(Color::Rgb { r: 255, g: 0, b: 0 }.to_argb_hex(), "FFFF0000");
-        assert_eq!(Color::theme(4, 0).to_argb_hex(), "FF4F81BD");
-        assert_eq!(Color::theme(4, 50).to_argb_hex(), "FFA7C0DE");
+        assert_eq!(
+            Color::Rgb { r: 255, g: 0, b: 0 }.to_argb_hex(),
+            Some("FFFF0000".to_string())
+        );
+        assert_eq!(
+            Color::Indexed(2).to_argb_hex(),
+            Some("FFFF0000".to_string())
+        );
     }
 
     #[test]
     fn test_to_rgb() {
-        assert_eq!(Color::RED.to_rgb(), (255, 0, 0));
-        assert_eq!(Color::Indexed(2).to_rgb(), (255, 0, 0));
+        assert_eq!(Color::RED.to_rgb(), Some((255, 0, 0)));
+        assert_eq!(Color::Indexed(2).to_rgb(), Some((255, 0, 0)));
+    }
+
+    #[test]
+    fn theme_palette_resolves_every_color_kind() {
+        let mut palette = ThemePalette::default();
+        palette.colors[4] = (0x11, 0x22, 0x33);
+
+        assert_eq!(palette.resolve(&Color::Auto), None);
+        assert_eq!(palette.resolve(&Color::rgb(1, 2, 3)), Some((1, 2, 3)));
+        assert_eq!(palette.resolve(&Color::argb(9, 4, 5, 6)), Some((4, 5, 6)));
+        assert_eq!(palette.resolve(&Color::Indexed(2)), Some((255, 0, 0)));
+        assert_eq!(palette.resolve(&Color::theme(4, 0.0)), Some((0x11, 0x22, 0x33)));
+        // Positive tint lightens toward white: c + (255 - c) * 0.5.
+        assert_eq!(
+            palette.resolve(&Color::theme(4, 0.5)),
+            Some((0x88, 0x90, 0x99))
+        );
+        // Negative tint darkens toward black: c * 0.5.
+        assert_eq!(
+            palette.resolve(&Color::theme(4, -0.5)),
+            Some((0x08, 0x11, 0x19))
+        );
+        // Out-of-range slots resolve to black.
+        assert_eq!(palette.resolve(&Color::theme(12, 0.0)), Some((0, 0, 0)));
+    }
+
+    #[test]
+    fn default_theme_palette_resolves_all_slots() {
+        let palette = ThemePalette::default();
+        assert_eq!(palette.resolve_theme(4, 0.0), (79, 129, 189));
+        assert_eq!(palette.resolve_theme(4, 0.5), (167, 192, 222));
+        for index in 0..12u8 {
+            // Every slot resolves; tints stay in u8 range.
+            let (r, g, b) = palette.resolve_theme(index, 0.25);
+            assert_eq!(
+                palette.resolve(&Color::theme(index, 0.25)),
+                Some((r, g, b)),
+                "slot {index} must resolve through the palette"
+            );
+        }
     }
 }

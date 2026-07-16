@@ -24,5 +24,5 @@ pub mod styles;
 pub mod writer;
 
 pub use error::{XlsError, XlsResult};
-pub use reader::XlsReader;
+pub use reader::{XlsReadOptions, XlsReader};
 pub use writer::XlsWriter;

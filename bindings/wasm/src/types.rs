@@ -86,13 +86,16 @@ impl From<core::ImageInfo> for WasmImageInfo {
 #[serde(rename_all = "camelCase")]
 pub struct WasmColor {
     pub color_type: String,
-    pub hex: String,
+    /// Context-free hex string; omitted for auto and theme colors,
+    /// which resolve through `Workbook.resolveColor`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hex: Option<String>,
     pub r: Option<u32>,
     pub g: Option<u32>,
     pub b: Option<u32>,
     pub a: Option<u32>,
     pub theme_index: Option<u32>,
-    pub tint: Option<i32>,
+    pub tint: Option<f64>,
     pub palette_index: Option<u32>,
 }
 
@@ -141,7 +144,7 @@ impl From<&CoreColor> for WasmColor {
                 b: None,
                 a: None,
                 theme_index: Some(*index as u32),
-                tint: Some(*tint as i32),
+                tint: Some(*tint),
                 palette_index: None,
             },
             CoreColor::Indexed(i) => Self {
@@ -518,7 +521,7 @@ pub struct WasmColorInput {
     pub b: Option<u32>,
     pub a: Option<u32>,
     pub theme_index: Option<u32>,
-    pub tint: Option<i32>,
+    pub tint: Option<f64>,
     pub palette_index: Option<u32>,
 }
 
@@ -618,8 +621,12 @@ fn u32_to_u8(value: u32, field: &str) -> Result<u8, String> {
     u8::try_from(value).map_err(|_| format!("{field} must be between 0 and 255"))
 }
 
-fn i32_to_i8(value: i32, field: &str) -> Result<i8, String> {
-    i8::try_from(value).map_err(|_| format!("{field} must be between -128 and 127"))
+fn tint_fraction(value: Option<f64>) -> Result<f64, String> {
+    let tint = value.unwrap_or(0.0);
+    if !tint.is_finite() || !(-1.0..=1.0).contains(&tint) {
+        return Err("tint must be between -1.0 and 1.0".to_string());
+    }
+    Ok(tint)
 }
 
 fn parse_color_hex(hex: &str) -> Result<CoreColor, String> {
@@ -695,7 +702,7 @@ impl WasmColorInput {
                         .ok_or_else(|| "theme color requires themeIndex".to_string())?,
                     "themeIndex",
                 )?,
-                tint: i32_to_i8(self.tint.unwrap_or(0), "tint")?,
+                tint: tint_fraction(self.tint)?,
             }),
             Some("indexed") => Ok(CoreColor::Indexed(u32_to_u8(
                 self.palette_index
@@ -724,7 +731,7 @@ impl WasmColorInput {
                 } else if let Some(theme_index) = self.theme_index {
                     Ok(CoreColor::Theme {
                         index: u32_to_u8(theme_index, "themeIndex")?,
-                        tint: i32_to_i8(self.tint.unwrap_or(0), "tint")?,
+                        tint: tint_fraction(self.tint)?,
                     })
                 } else if let Some(palette_index) = self.palette_index {
                     Ok(CoreColor::Indexed(u32_to_u8(
@@ -1168,7 +1175,7 @@ impl WasmComment {
     pub fn from_comment(comment: &core::CellComment, visible: bool) -> Self {
         Self {
             author: comment.author.clone(),
-            text: comment.text.clone(),
+            text: comment.plain_text(),
             visible,
         }
     }

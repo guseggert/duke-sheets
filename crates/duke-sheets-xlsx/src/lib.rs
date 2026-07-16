@@ -9,5 +9,5 @@ pub mod writer;
 mod styles;
 
 pub use error::{XlsxError, XlsxResult};
-pub use reader::XlsxReader;
+pub use reader::{XlsxReadOptions, XlsxReader};
 pub use writer::{EncryptionProfile, XlsxWriter};

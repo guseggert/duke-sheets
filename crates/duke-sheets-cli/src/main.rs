@@ -345,6 +345,7 @@ fn to_html(
         full_document: !fragment,
         title,
         formatted: !raw,
+        theme_palette: workbook.theme_palette(),
     };
 
     let html = duke_sheets_html::worksheet_to_html(sheet, &options);

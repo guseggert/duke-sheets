@@ -114,7 +114,7 @@ fn save_with_wrong_password_on_open_yields_bad_password() {
     // the duke-sheets error layer flattens it.
     let bytes = std::fs::read(&path).unwrap();
     let err =
-        duke_sheets::XlsxReader::read_bytes_with_password(&bytes, Some("nope"), false).unwrap_err();
+        duke_sheets::XlsxReader::read_bytes_with(&bytes, &duke_sheets::XlsxReadOptions { password: Some("nope".to_string()), ..Default::default() }).unwrap_err();
     assert!(matches!(err, XlsxError::BadPassword));
 }
 
@@ -146,7 +146,7 @@ fn open_with_tampered_envelope_default_rejects_via_integrity_check() {
     tamper_encrypted_package_byte(&path);
 
     let bytes = std::fs::read(&path).unwrap();
-    let xlsx_err = duke_sheets::XlsxReader::read_bytes_with_password(&bytes, Some(PASSWORD), false)
+    let xlsx_err = duke_sheets::XlsxReader::read_bytes_with(&bytes, &duke_sheets::XlsxReadOptions { password: Some(PASSWORD.to_string()), ..Default::default() })
         .expect_err("tampered envelope must fail integrity check");
     assert!(
         matches!(xlsx_err, XlsxError::IntegrityCheckFailed),

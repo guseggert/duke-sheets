@@ -6,7 +6,7 @@
 //! either backend.
 
 use duke_sheets_core::{CellValue, Workbook};
-use duke_sheets_xlsx::{EncryptionProfile, XlsxError, XlsxReader, XlsxWriter};
+use duke_sheets_xlsx::{EncryptionProfile, XlsxError, XlsxReadOptions, XlsxReader, XlsxWriter};
 
 const PASSWORD: &str = "round-trip-pw";
 
@@ -41,7 +41,7 @@ fn write_then_read_agile_round_trips_workbook_contents() {
         "encrypted output must be a CFB envelope"
     );
 
-    let opened = XlsxReader::read_bytes_with_password(&bytes, Some(PASSWORD), false)
+    let opened = XlsxReader::read_bytes_with(&bytes, &XlsxReadOptions { password: Some(PASSWORD.to_string()), ..Default::default() })
         .expect("decrypt with correct password must succeed");
     assert_workbook_contents(&opened);
 }
@@ -52,7 +52,7 @@ fn write_then_read_agile_with_wrong_password_yields_bad_password() {
     let bytes =
         XlsxWriter::write_to_bytes_encrypted(&wb, PASSWORD, &EncryptionProfile::agile_default())
             .unwrap();
-    let err = XlsxReader::read_bytes_with_password(&bytes, Some("not-the-pw"), false)
+    let err = XlsxReader::read_bytes_with(&bytes, &XlsxReadOptions { password: Some("not-the-pw".to_string()), ..Default::default() })
         .expect_err("must reject wrong password");
     assert!(
         matches!(err, XlsxError::BadPassword),
@@ -69,7 +69,7 @@ fn write_then_read_agile_aes128_round_trip() {
     };
     let bytes = XlsxWriter::write_to_bytes_encrypted(&wb, PASSWORD, &profile).unwrap();
     let opened =
-        XlsxReader::read_bytes_with_password(&bytes, Some(PASSWORD), false).expect("decrypt ok");
+        XlsxReader::read_bytes_with(&bytes, &XlsxReadOptions { password: Some(PASSWORD.to_string()), ..Default::default() }).expect("decrypt ok");
     assert_workbook_contents(&opened);
 }
 
@@ -88,7 +88,7 @@ fn write_to_file_encrypted_writes_cfb_envelope() {
         "file at path must be a CFB envelope"
     );
     let opened =
-        XlsxReader::read_file_with_password(&path, Some(PASSWORD), false).expect("decrypt file");
+        XlsxReader::read_file_with(&path, &XlsxReadOptions { password: Some(PASSWORD.to_string()), ..Default::default() }).expect("decrypt file");
     assert_workbook_contents(&opened);
 }
 
@@ -104,6 +104,6 @@ fn write_with_low_spincount_speeds_up_kdf() {
     };
     let bytes = XlsxWriter::write_to_bytes_encrypted(&wb, PASSWORD, &profile).unwrap();
     let opened =
-        XlsxReader::read_bytes_with_password(&bytes, Some(PASSWORD), false).expect("decrypt ok");
+        XlsxReader::read_bytes_with(&bytes, &XlsxReadOptions { password: Some(PASSWORD.to_string()), ..Default::default() }).expect("decrypt ok");
     assert_workbook_contents(&opened);
 }

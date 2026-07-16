@@ -214,6 +214,12 @@ pub(super) fn parse_ctrl_prop(bytes: &[u8]) -> Option<CtrlProp> {
                         _ => {}
                     }
                 }
+                // Names the kind's writer can emit are modeled, not
+                // raw: capturing them would shadow later model edits.
+                let modeled =
+                    crate::writer::form_controls::modeled_ctrl_prop_attrs(&pr.object_type);
+                pr.raw_properties
+                    .retain(|(name, _)| !modeled.contains(&name.as_str()));
                 return Some(pr);
             }
             Ok(Event::Eof) | Err(_) => return None,
@@ -332,12 +338,11 @@ pub(super) fn assemble(
             object_type: object_type.to_string(),
             legacy_object_type: None,
             caption,
-            raw_properties: pr.raw_properties.clone(),
-            raw_obj: None,
         },
     };
 
     let mut control = FormControl::new(kind);
+    control.raw_properties = pr.raw_properties.clone();
     control.macro_name = pr.macro_name.clone().or_else(|| pending.macro_name.clone());
     let mut object = DrawingObject::form_control(control)
         .with_anchor(pending.anchor.clone().unwrap_or_default());

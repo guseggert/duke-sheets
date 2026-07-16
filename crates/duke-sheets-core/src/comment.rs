@@ -25,21 +25,23 @@
 //! assert!(comment.is_some());
 //! ```
 
+use crate::drawing::DrawingText;
+
 /// A cell comment/note
 ///
 /// Comments are annotations attached to cells that can contain
-/// author information and text content.
-#[derive(Debug, Clone, PartialEq)]
-#[derive(Default)]
+/// author information and text content. The text carries rich runs;
+/// use [`Self::plain_text`] for the concatenated string.
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct CellComment {
     /// Author of the comment
     pub author: String,
-    /// Comment text content
-    pub text: String,
+    /// Comment text content (rich runs).
+    pub text: DrawingText,
 }
 
 impl CellComment {
-    /// Create a new comment with the given author and text
+    /// Create a new comment with the given author and plain text
     ///
     /// # Example
     ///
@@ -48,21 +50,26 @@ impl CellComment {
     ///
     /// let comment = CellComment::new("John Doe", "Review this value");
     /// assert_eq!(comment.author, "John Doe");
-    /// assert_eq!(comment.text, "Review this value");
+    /// assert_eq!(comment.plain_text(), "Review this value");
     /// ```
     pub fn new(author: impl Into<String>, text: impl Into<String>) -> Self {
         Self {
             author: author.into(),
-            text: text.into(),
+            text: DrawingText::plain(text.into()),
         }
     }
 
-    /// Create a comment with just text (empty author)
+    /// Create a comment with just plain text (empty author)
     pub fn text_only(text: impl Into<String>) -> Self {
         Self {
             author: String::new(),
-            text: text.into(),
+            text: DrawingText::plain(text.into()),
         }
+    }
+
+    /// The comment text as a plain string (runs concatenated).
+    pub fn plain_text(&self) -> String {
+        self.text.plain_text()
     }
 
     /// Check if this comment has an author
@@ -75,9 +82,9 @@ impl CellComment {
 impl std::fmt::Display for CellComment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.has_author() {
-            write!(f, "[{}]: {}", self.author, self.text)
+            write!(f, "[{}]: {}", self.author, self.plain_text())
         } else {
-            write!(f, "{}", self.text)
+            write!(f, "{}", self.plain_text())
         }
     }
 }
@@ -90,14 +97,14 @@ mod tests {
     fn test_new_comment() {
         let comment = CellComment::new("Author", "Text");
         assert_eq!(comment.author, "Author");
-        assert_eq!(comment.text, "Text");
+        assert_eq!(comment.plain_text(), "Text");
     }
 
     #[test]
     fn test_text_only() {
         let comment = CellComment::text_only("Just text");
         assert_eq!(comment.author, "");
-        assert_eq!(comment.text, "Just text");
+        assert_eq!(comment.plain_text(), "Just text");
         assert!(!comment.has_author());
     }
 

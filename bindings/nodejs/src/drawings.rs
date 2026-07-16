@@ -290,7 +290,7 @@ enum DrawingColor {
     Auto,
     Rgb { r: u8, g: u8, b: u8 },
     Argb { a: u8, r: u8, g: u8, b: u8 },
-    Theme { index: u8, tint: i8 },
+    Theme { index: u8, tint: f64 },
     Indexed { index: u8 },
 }
 
@@ -656,14 +656,6 @@ enum DrawingFormControlKind {
         legacy_object_type: Option<u16>,
         #[serde(default)]
         caption: DrawingText,
-        /// Internal passthrough of unmodeled XLSX `formControlPr`
-        /// attributes; echoed back unchanged on write.
-        #[serde(default)]
-        raw_properties: Vec<(String, String)>,
-        /// Internal passthrough of the original BIFF OBJ body (Buffer
-        /// in JS), required for XLS rewrite.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        raw_obj: Option<ByteBuf>,
     },
 }
 
@@ -764,14 +756,10 @@ impl From<&core::FormControlKind> for DrawingFormControlKind {
                 object_type,
                 legacy_object_type,
                 caption,
-                raw_properties,
-                raw_obj,
             } => Self::Unknown {
                 object_type: object_type.clone(),
                 legacy_object_type: *legacy_object_type,
                 caption: DrawingText::from(caption),
-                raw_properties: raw_properties.clone(),
-                raw_obj: raw_obj.clone().map(ByteBuf::from),
             },
         }
     }
@@ -876,14 +864,10 @@ impl TryFrom<DrawingFormControlKind> for core::FormControlKind {
                 object_type,
                 legacy_object_type,
                 caption,
-                raw_properties,
-                raw_obj,
             } => Self::Unknown {
                 object_type,
                 legacy_object_type,
                 caption: caption.try_into()?,
-                raw_properties,
-                raw_obj: raw_obj.map(ByteBuf::into_vec),
             },
         })
     }
@@ -899,6 +883,14 @@ struct DrawingFormControl {
     /// on any control kind; echoed back unchanged on write.
     #[serde(default)]
     raw_client_data: Vec<ByteBuf>,
+    /// Unmodeled XLSX `formControlPr` attributes preserved on any
+    /// control kind; echoed back unchanged on write.
+    #[serde(default)]
+    raw_properties: Vec<(String, String)>,
+    /// Original BIFF OBJ body (Buffer in JS) for XLS passthrough of
+    /// Unknown controls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    raw_obj: Option<ByteBuf>,
 }
 
 impl From<&core::FormControl> for DrawingFormControl {
@@ -912,6 +904,8 @@ impl From<&core::FormControl> for DrawingFormControl {
                 .cloned()
                 .map(ByteBuf::from)
                 .collect(),
+            raw_properties: control.raw_properties.clone(),
+            raw_obj: control.raw_obj.clone().map(ByteBuf::from),
         }
     }
 }
@@ -928,6 +922,8 @@ impl TryFrom<DrawingFormControl> for core::FormControl {
                 .into_iter()
                 .map(ByteBuf::into_vec)
                 .collect(),
+            raw_properties: control.raw_properties,
+            raw_obj: control.raw_obj.map(ByteBuf::into_vec),
         };
         result.validate().map_err(|error| error.to_string())?;
         Ok(result)
@@ -1133,7 +1129,12 @@ struct DrawingComment {
     row: u32,
     col: u16,
     author: String,
+    /// Plain text (runs concatenated).
     text: String,
+    /// Rich runs; present on output when any run is formatted, and
+    /// wins over `text` on input when supplied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rich_text: Option<DrawingText>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1429,14 +1430,23 @@ fn drawing_kind_from_input(
             core::DrawingKind::FormControl(form_control.try_into()?),
             false,
         ),
-        DrawingInputKind::Comment { comment } => (
-            core::DrawingKind::Comment {
-                row: comment.row,
-                col: comment.col,
-                comment: core::CellComment::new(comment.author, comment.text),
-            },
-            true,
-        ),
+        DrawingInputKind::Comment { comment } => {
+            let text = match comment.rich_text {
+                Some(rich) => rich.try_into()?,
+                None => core::DrawingText::plain(comment.text),
+            };
+            (
+                core::DrawingKind::Comment {
+                    row: comment.row,
+                    col: comment.col,
+                    comment: core::CellComment {
+                        author: comment.author,
+                        text,
+                    },
+                },
+                true,
+            )
+        }
         DrawingInputKind::Shape { shape } => {
             (core::DrawingKind::Shape(Box::new(shape.try_into()?)), false)
         }
@@ -1510,6 +1520,7 @@ fn objects_to_array<'env>(
 
 fn drawing_node_to_js<'env>(
     env: &'env Env,
+    sheet: &core::Worksheet,
     meta: &core::DrawingMeta,
     placement: DrawingPlacement<'_>,
     kind: &core::DrawingKind,
@@ -1517,6 +1528,10 @@ fn drawing_node_to_js<'env>(
 ) -> Result<JsObject<'env>> {
     let mut drawing = Object::new(env)?;
     drawing.set("drawingPath", drawing_path_to_js(path)?)?;
+    drawing.set(
+        "absoluteRectEmu",
+        rect_emu_to_js(env, sheet.drawing_rect_emu(path).unwrap_or_default())?,
+    )?;
     if let Some(name) = &meta.name {
         drawing.set("name", name.clone())?;
     }
@@ -1580,7 +1595,13 @@ fn drawing_node_to_js<'env>(
                     row: *row,
                     col: *col,
                     author: comment.author.clone(),
-                    text: comment.text.clone(),
+                    text: comment.plain_text(),
+                    rich_text: comment
+                        .text
+                        .runs
+                        .iter()
+                        .any(|run| run.font.is_some())
+                        .then(|| DrawingText::from(&comment.text)),
                 },
             )?;
         }
@@ -1608,6 +1629,7 @@ fn drawing_node_to_js<'env>(
                 child_path.push(index);
                 children.push(drawing_node_to_js(
                     env,
+                    sheet,
                     &child.meta,
                     DrawingPlacement::Child(&child.transform),
                     &child.kind,
@@ -1643,6 +1665,20 @@ fn drawing_node_to_js<'env>(
     Ok(drawing)
 }
 
+/// Resolved on-sheet placement in EMU. Core saturates the values at
+/// the JS safe-integer range, so the `as f64` casts are exact.
+fn rect_emu_to_js<'env>(
+    env: &'env Env,
+    rect: core::drawing::RectEmu,
+) -> Result<JsObject<'env>> {
+    let mut object = Object::new(env)?;
+    object.set("xEmu", rect.x_emu as f64)?;
+    object.set("yEmu", rect.y_emu as f64)?;
+    object.set("widthEmu", rect.width_emu as f64)?;
+    object.set("heightEmu", rect.height_emu as f64)?;
+    Ok(object)
+}
+
 fn drawing_tree<'env>(
     env: &'env Env,
     sheet: &core::Worksheet,
@@ -1654,6 +1690,7 @@ fn drawing_tree<'env>(
         .map(|(index, object)| {
             drawing_node_to_js(
                 env,
+                sheet,
                 &object.meta,
                 DrawingPlacement::TopLevel(&object.anchor),
                 &object.kind,
@@ -1685,6 +1722,7 @@ impl DrawingFilter {
 
 fn collect_children<'env>(
     env: &'env Env,
+    sheet: &core::Worksheet,
     kind: &core::DrawingKind,
     path: &[usize],
     filter: DrawingFilter,
@@ -1699,13 +1737,14 @@ fn collect_children<'env>(
         if filter.matches(&child.kind) {
             output.push(drawing_node_to_js(
                 env,
+                sheet,
                 &child.meta,
                 DrawingPlacement::Child(&child.transform),
                 &child.kind,
                 &child_path,
             )?);
         }
-        collect_children(env, &child.kind, &child_path, filter, output)?;
+        collect_children(env, sheet, &child.kind, &child_path, filter, output)?;
     }
     Ok(())
 }
@@ -1721,13 +1760,14 @@ fn filtered_drawings<'env>(
         if filter.matches(&object.kind) {
             output.push(drawing_node_to_js(
                 env,
+                sheet,
                 &object.meta,
                 DrawingPlacement::TopLevel(&object.anchor),
                 &object.kind,
                 &path,
             )?);
         }
-        collect_children(env, &object.kind, &path, filter, &mut output)?;
+        collect_children(env, sheet, &object.kind, &path, filter, &mut output)?;
     }
     Ok(output)
 }
@@ -1735,6 +1775,14 @@ fn filtered_drawings<'env>(
 fn deserialize_drawing(env: &Env, input: Unknown<'_>) -> Result<DrawingInput> {
     env.from_js_value(input)
         .map_err(|error| napi::Error::from_reason(format!("invalid drawing: {error}")))
+}
+
+/// Deserialize a `DrawingColor` DTO into a core color.
+pub(crate) fn drawing_color_from_js(env: &Env, input: Unknown<'_>) -> Result<core::Color> {
+    let color: DrawingColor = env
+        .from_js_value(input)
+        .map_err(|error| napi::Error::from_reason(format!("invalid color: {error}")))?;
+    Ok(color.into())
 }
 
 fn drawing_path(path: Vec<u32>) -> Result<Vec<usize>> {
@@ -1751,48 +1799,6 @@ fn count_drawings(sheet: &core::Worksheet, filter: DrawingFilter) -> Result<u32>
         .filter(|(_, node)| filter.matches(node.kind))
         .count();
     u32::try_from(count).map_err(|_| napi::Error::from_reason("drawing count exceeds u32"))
-}
-
-fn path_starts_with(path: &[usize], prefix: &[usize]) -> bool {
-    path.len() >= prefix.len() && path[..prefix.len()] == *prefix
-}
-
-/// The cell keyed by `replacement` when it is a comment. Validation
-/// already rejected comments nested in groups, so only a top-level
-/// comment kind can claim a cell.
-// core candidate: comment-cell uniqueness belongs in core's worksheet
-// drawing mutation APIs; this check is triplicated across bindings.
-fn replacement_comment_cell(kind: &core::DrawingKind) -> Option<(u32, u16)> {
-    match kind {
-        core::DrawingKind::Comment { row, col, .. } => Some((*row, *col)),
-        _ => None,
-    }
-}
-
-/// Enforce one comment per cell: reject a comment `replacement` whose
-/// cell already has a comment elsewhere on the sheet, ignoring
-/// drawings at or under `replaced_path`.
-fn ensure_comment_cells_available(
-    sheet: &core::Worksheet,
-    replacement: &core::DrawingKind,
-    replaced_path: Option<&[usize]>,
-) -> Result<()> {
-    let Some(new_cell) = replacement_comment_cell(replacement) else {
-        return Ok(());
-    };
-    for (path, node) in sheet.drawings_flat() {
-        if replaced_path.is_some_and(|prefix| path_starts_with(&path, prefix)) {
-            continue;
-        }
-        if let core::DrawingKind::Comment { row, col, .. } = node.kind {
-            if (*row, *col) == new_cell {
-                return Err(napi::Error::from_reason(format!(
-                    "cell ({row}, {col}) already has a comment"
-                )));
-            }
-        }
-    }
-    Ok(())
 }
 
 #[napi(object)]
@@ -1930,8 +1936,7 @@ impl Worksheet {
             let sheet = workbook
                 .worksheet_mut(self.sheet_index)
                 .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
-            ensure_comment_cells_available(sheet, &object.kind, None)?;
-            let index = sheet.try_add_drawing(object).map_err(to_napi_err)?;
+            let index = sheet.add_drawing(object).map_err(to_napi_err)?;
             u32::try_from(index)
                 .map_err(|_| napi::Error::from_reason("drawing index exceeds u32"))
         })
@@ -1950,7 +1955,6 @@ impl Worksheet {
             let sheet = workbook
                 .worksheet_mut(self.sheet_index)
                 .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
-            ensure_comment_cells_available(sheet, &object.kind, None)?;
             sheet
                 .insert_drawing(index as usize, object)
                 .map_err(to_napi_err)
@@ -1977,38 +1981,11 @@ impl Worksheet {
 
             if path.len() == 1 {
                 let object = input.into_object().map_err(napi::Error::from_reason)?;
-                let count = sheet.drawings().len();
-                if path[0] >= count {
-                    return Err(napi::Error::from_reason(format!(
-                        "drawing path {path:?} out of bounds (count: {count})"
-                    )));
-                }
-                ensure_comment_cells_available(sheet, &object.kind, Some(&path))?;
-                sheet.drawings_mut()[path[0]] = object;
-                return Ok(());
+                return sheet.set_drawing(path[0], object).map_err(to_napi_err);
             }
 
             let child = input.into_child().map_err(napi::Error::from_reason)?;
-            ensure_comment_cells_available(sheet, &child.kind, Some(&path))?;
-            let (&child_index, parent_path) = path
-                .split_last()
-                .ok_or_else(|| napi::Error::from_reason("drawing path cannot be empty"))?;
-            let parent = sheet.drawing_at_path_mut(parent_path).ok_or_else(|| {
-                napi::Error::from_reason(format!("drawing path {parent_path:?} not found"))
-            })?;
-            let core::DrawingKind::Group(group) = parent.kind else {
-                return Err(napi::Error::from_reason(
-                    "nested drawing parent is not a group",
-                ));
-            };
-            let count = group.children.len();
-            let slot = group.children.get_mut(child_index).ok_or_else(|| {
-                napi::Error::from_reason(format!(
-                    "drawing path {path:?} out of bounds (child count: {count})"
-                ))
-            })?;
-            *slot = child;
-            Ok(())
+            sheet.set_group_child(&path, child).map_err(to_napi_err)
         })
     }
 
@@ -2030,24 +2007,10 @@ impl Worksheet {
                     .map_err(to_napi_err);
             }
 
-            let (&child_index, parent_path) = path
-                .split_last()
-                .ok_or_else(|| napi::Error::from_reason("drawing path cannot be empty"))?;
-            let parent = sheet.drawing_at_path_mut(parent_path).ok_or_else(|| {
-                napi::Error::from_reason(format!("drawing path {parent_path:?} not found"))
-            })?;
-            let core::DrawingKind::Group(group) = parent.kind else {
-                return Err(napi::Error::from_reason(
-                    "nested drawing parent is not a group",
-                ));
-            };
-            if child_index >= group.children.len() {
-                return Err(napi::Error::from_reason(format!(
-                    "drawing path {path:?} out of bounds (child count: {})",
-                    group.children.len()
-                )));
-            }
-            group.children.remove(child_index);
+            sheet
+                .remove_group_child(&path)
+                .map(|_| ())
+                .map_err(to_napi_err)?;
             Ok(())
         })
     }

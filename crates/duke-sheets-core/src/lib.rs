@@ -63,9 +63,11 @@ pub use conditional_format::{
     IconSetStyle, TimePeriod,
 };
 pub use drawing::{
-    default_comment_anchor, validate_anchor, ChildTransform, CommentRef, DrawingKind, DrawingMeta,
-    DrawingNodeMut, DrawingNodeRef, DrawingObject, DrawingPath, DrawingText, Drawn, Group,
-    GroupChild, GroupTransform, RawDrawing, RawRel, RectEmu, Shape, ShapeFill, ShapeGeometry,
+    default_comment_anchor, validate_anchor, validate_group_child, ChildTransform, CommentRef,
+    DrawingKind, DrawingMeta,
+    DrawingNodeMut, DrawingNodeRef, DrawingObject, DrawingPath, DrawingText, Group,
+    GroupChild, GroupTransform, Placed, RawDrawing, RawRel, RectEmu, Shape, ShapeFill,
+    ShapeGeometry,
     ShapeLine,
 };
 pub use error::{Error, Result};
@@ -88,7 +90,7 @@ pub use worksheet::{
 // Re-export all style types for convenience
 pub use style::{
     Alignment, BorderEdge, BorderLineStyle, BorderStyle, Color, FillStyle, FontStyle,
-    HorizontalAlignment, NumberFormat, Style, StylePool, VerticalAlignment,
+    HorizontalAlignment, NumberFormat, Style, StylePool, ThemePalette, VerticalAlignment,
 };
 
 /// Maximum number of rows in a worksheet (Excel limit)

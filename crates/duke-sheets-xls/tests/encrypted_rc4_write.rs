@@ -4,7 +4,7 @@
 //! LibreOffice-produced `xls_rc4_cryptoapi.plain.xls` fixture, encrypts
 //! it with `xls::encrypt_workbook_stream` for one of the three FilePass
 //! variants, wraps the result in a fresh CFB envelope, and reads the
-//! result back through `XlsReader::read_with_password` to confirm the
+//! result back through `XlsReader::read_with` to confirm the
 //! original cell values are recovered.
 
 use std::io::Cursor;
@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use duke_sheets_crypto::xls::{encrypt_workbook_stream, XlsEncryptionVariant};
 use duke_sheets_xls::cfb::{CompoundFile, CompoundFileBuilder};
-use duke_sheets_xls::{XlsError, XlsReader};
+use duke_sheets_xls::{XlsError, XlsReadOptions, XlsReader};
 
 const FIXTURE_PASSWORD: &str = "duke-test-pw";
 const FIXTURE_NAME: &str = "xls_rc4_cryptoapi.plain.xls";
@@ -60,8 +60,8 @@ fn run_round_trip(variant: XlsEncryptionVariant) {
     let cfb_bytes = wrap_in_cfb(encrypted_workbook);
 
     let workbook =
-        XlsReader::read_with_password(Cursor::new(&cfb_bytes), Some(FIXTURE_PASSWORD), false)
-            .expect("XlsReader::read_with_password recovers our encrypted output");
+        XlsReader::read_with(Cursor::new(&cfb_bytes), &XlsReadOptions { password: Some(FIXTURE_PASSWORD.to_string()), ..Default::default() })
+            .expect("XlsReader::read_with recovers our encrypted output");
 
     let sheet = workbook.worksheet(0).expect("sheet 0 exists");
     let a1 = sheet.get_value("A1").expect("A1 must exist");
@@ -104,7 +104,7 @@ fn round_trip_wrong_password_yields_bad_password() {
     .expect("encrypt succeeds");
     let cfb_bytes = wrap_in_cfb(encrypted_workbook);
 
-    let err = XlsReader::read_with_password(Cursor::new(&cfb_bytes), Some("wrong"), false)
+    let err = XlsReader::read_with(Cursor::new(&cfb_bytes), &XlsReadOptions { password: Some("wrong".to_string()), ..Default::default() })
         .expect_err("wrong password must fail");
     assert!(matches!(err, XlsError::BadPassword), "got {err:?}");
 }

@@ -4,12 +4,8 @@ use duke_sheets_core::conditional_format::{
 use duke_sheets_core::style::Color;
 use duke_sheets_core::CellRange;
 
-use super::ThemePalette;
 
-pub(crate) fn parse_color_element(
-    e: &quick_xml::events::BytesStart,
-    theme_palette: Option<&ThemePalette>,
-) -> Color {
+pub(crate) fn parse_color_element(e: &quick_xml::events::BytesStart) -> Color {
     let mut rgb: Option<String> = None;
     let mut theme: Option<u8> = None;
     let mut tint: Option<f64> = None;
@@ -70,14 +66,9 @@ pub(crate) fn parse_color_element(
     }
 
     if let Some(index) = theme {
-        let tint_i8 = tint.map(|t| (t * 100.0).round() as i8).unwrap_or(0);
-        if let Some(theme) = theme_palette {
-            let (r, g, b) = theme.resolve_theme_color(index, tint_i8);
-            return Color::Rgb { r, g, b };
-        }
         return Color::Theme {
             index,
-            tint: tint_i8,
+            tint: tint.unwrap_or(0.0),
         };
     }
 
@@ -251,8 +242,8 @@ mod tests {
         e.push_attribute(("tint", "0.5"));
 
         assert_eq!(
-            parse_color_element(&e, None),
-            Color::Theme { index: 4, tint: 50 }
+            parse_color_element(&e),
+            Color::Theme { index: 4, tint: 0.5 }
         );
     }
 
@@ -260,10 +251,10 @@ mod tests {
     fn test_parse_color_element_indexed_and_auto() {
         let mut indexed = BytesStart::new("color");
         indexed.push_attribute(("indexed", "12"));
-        assert_eq!(parse_color_element(&indexed, None), Color::Indexed(12));
+        assert_eq!(parse_color_element(&indexed), Color::Indexed(12));
 
         let mut auto = BytesStart::new("color");
         auto.push_attribute(("auto", "1"));
-        assert_eq!(parse_color_element(&auto, None), Color::Auto);
+        assert_eq!(parse_color_element(&auto), Color::Auto);
     }
 }

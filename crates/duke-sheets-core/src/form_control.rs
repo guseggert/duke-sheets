@@ -43,7 +43,7 @@
 //! let mut workbook = Workbook::new();
 //! let sheet = workbook.worksheet_mut(0).unwrap();
 //!
-//! sheet.try_add_drawing(DrawingObject::form_control(FormControl::new(
+//! sheet.add_drawing(DrawingObject::form_control(FormControl::new(
 //!     FormControlKind::Checkbox {
 //!         caption: "Enable feature".into(),
 //!         state: CheckState::Checked,
@@ -55,7 +55,7 @@
 //! assert_eq!(sheet.form_control_count(), 1);
 //! ```
 
-use crate::drawing::{DrawingPath, RectEmu};
+use crate::drawing::{Placed, RectEmu};
 use crate::{Error, Result};
 
 /// Caption text, rich formatting, and alignment for a form control.
@@ -209,12 +209,6 @@ pub enum FormControlKind {
         legacy_object_type: Option<u16>,
         /// Text displayed by the legacy shape.
         caption: ControlText,
-        /// Unmodeled XLSX `formControlPr` attributes.
-        #[doc(hidden)]
-        raw_properties: Vec<(String, String)>,
-        /// Original BIFF OBJ body, required for XLS passthrough.
-        #[doc(hidden)]
-        raw_obj: Option<Vec<u8>>,
     },
 }
 
@@ -424,6 +418,19 @@ pub struct FormControl {
     /// modeled fields, so mutating the control does not stale them.
     #[doc(hidden)]
     pub raw_client_data: Vec<Vec<u8>>,
+    /// Unmodeled XLSX `formControlPr` attributes, preserved for
+    /// passthrough on every kind. Attribute-granular and disjoint
+    /// from the modeled fields (names a kind's writer can emit are
+    /// never captured here), so mutating the control does not stale
+    /// them; entries colliding with a modeled emission are dropped at
+    /// write.
+    #[doc(hidden)]
+    pub raw_properties: Vec<(String, String)>,
+    /// Original BIFF OBJ body, required for XLS passthrough of
+    /// Unknown controls. Modeled kinds re-emit their OBJ from the
+    /// model and leave this `None`.
+    #[doc(hidden)]
+    pub raw_obj: Option<Vec<u8>>,
 }
 
 impl FormControl {
@@ -433,6 +440,8 @@ impl FormControl {
             kind,
             macro_name: None,
             raw_client_data: Vec::new(),
+            raw_properties: Vec::new(),
+            raw_obj: None,
         }
     }
 
@@ -475,21 +484,11 @@ impl FormControl {
     }
 }
 
-/// A form control located in the worksheet's drawing tree: its path,
-/// its resolved on-sheet rectangle, and the control payload.
-///
-/// Produced by [`crate::Worksheet::placed_form_controls`] in
-/// depth-first order (top-level objects in z-order, group children
-/// within their group).
-#[derive(Debug)]
-pub struct PlacedControl<'a> {
-    /// Path to the control in the drawing tree.
-    pub path: DrawingPath,
-    /// Absolute EMU rectangle using the worksheet's row and column metrics.
-    pub rect_emu: RectEmu,
-    /// The control payload.
-    pub control: &'a FormControl,
-}
+/// A form control located in the worksheet's drawing tree, as
+/// produced by [`crate::Worksheet::form_controls`] in depth-first
+/// order (top-level objects in z-order, group children within their
+/// group).
+pub type PlacedControl<'a> = Placed<'a, FormControl>;
 
 /// Result of applying an interactive form-control state change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -507,7 +506,7 @@ pub struct FormControlInteractionResult {
 /// radios outside every box form the sheet-level group.
 ///
 /// Takes the sheet's controls as produced by
-/// [`crate::Worksheet::placed_form_controls`] and returns groups of
+/// [`crate::Worksheet::form_controls`] and returns groups of
 /// indices into that slice, in traversal order (both across groups
 /// and within each group). Non-radio controls never appear in the
 /// result.
@@ -516,28 +515,27 @@ pub struct FormControlInteractionResult {
 pub fn radio_groups(controls: &[PlacedControl<'_>]) -> Vec<Vec<usize>> {
     let box_rects: Vec<RectEmu> = controls
         .iter()
-        .filter(|placed| matches!(placed.control.kind, FormControlKind::GroupBox { .. }))
+        .filter(|placed| matches!(placed.payload.kind, FormControlKind::GroupBox { .. }))
         .map(|placed| placed.rect_emu)
         .collect();
 
     let containing_box = |rect: RectEmu| -> Option<usize> {
-        let (x1, y1, x2, y2) = rect;
-        let (cx, cy) = (x1.saturating_add(x2) / 2, y1.saturating_add(y2) / 2);
+        let cx = rect.x_emu.saturating_add(rect.width_emu / 2);
+        let cy = rect.y_emu.saturating_add(rect.height_emu / 2);
         box_rects
             .iter()
             .enumerate()
-            .filter(|(_, (bx1, by1, bx2, by2))| {
-                (*bx1..=*bx2).contains(&cx) && (*by1..=*by2).contains(&cy)
+            .filter(|(_, b)| {
+                (b.x_emu..=b.x_emu.saturating_add(b.width_emu)).contains(&cx)
+                    && (b.y_emu..=b.y_emu.saturating_add(b.height_emu)).contains(&cy)
             })
-            .min_by_key(|(_, (bx1, by1, bx2, by2))| {
-                (bx2 - bx1).max(0).saturating_mul((by2 - by1).max(0))
-            })
+            .min_by_key(|(_, b)| b.width_emu.max(0).saturating_mul(b.height_emu.max(0)))
             .map(|(i, _)| i)
     };
 
     let mut groups: Vec<(Option<usize>, Vec<usize>)> = Vec::new();
     for (idx, placed) in controls.iter().enumerate() {
-        if !matches!(placed.control.kind, FormControlKind::OptionButton { .. }) {
+        if !matches!(placed.payload.kind, FormControlKind::OptionButton { .. }) {
             continue;
         }
         let key = containing_box(placed.rect_emu);
@@ -595,7 +593,9 @@ mod tests {
     fn placed(objects: &[DrawingObject]) -> Vec<PlacedControl<'_>> {
         let mut sheet = crate::Worksheet::new("t");
         for object in objects {
-            sheet.add_drawing(object.clone());
+            // Unchecked: extreme-anchor tests exercise traversal with
+            // content that validation would reject.
+            sheet.drawings_mut().push(object.clone());
         }
         // Re-borrow from the slice we were given: rebuild placements
         // through a worksheet to exercise the real traversal.
@@ -606,7 +606,9 @@ mod tests {
                 object.kind.as_form_control().map(|control| PlacedControl {
                     path: vec![i],
                     rect_emu: crate::drawing::anchor_rect_emu(&object.anchor),
-                    control,
+                    meta: &object.meta,
+                    object: Some(object),
+                    payload: control,
                 })
             })
             .collect()
@@ -854,14 +856,14 @@ mod tests {
     fn worksheet_drawing_mutations_validate_and_shift_indices() {
         let mut worksheet = crate::Worksheet::new("Sheet1");
         let first = worksheet
-            .try_add_drawing(DrawingObject::form_control(FormControl::new(
+            .add_drawing(DrawingObject::form_control(FormControl::new(
                 FormControlKind::Button {
                     caption: "one".into(),
                 },
             )))
             .unwrap();
         let second = worksheet
-            .try_add_drawing(DrawingObject::form_control(FormControl::new(
+            .add_drawing(DrawingObject::form_control(FormControl::new(
                 FormControlKind::Label {
                     caption: "two".into(),
                 },

@@ -9,6 +9,7 @@ pub use crate::{
     default_comment_anchor,
     radio_groups,
     validate_anchor,
+    validate_group_child,
     // Style types
     Alignment,
     BorderEdge,
@@ -54,7 +55,7 @@ pub use crate::{
     DrawingObject,
     DrawingPath,
     DrawingText,
-    Drawn,
+    Placed,
     EmbeddedImage,
     // Error types
     Error,
