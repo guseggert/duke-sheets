@@ -1,6 +1,6 @@
 {
   "name": "@dukelib/sheets-linux-x64-gnu",
-  "version": "0.1.28",
+  "version": "0.1.29",
   "cpu": [
     "x64"
   ],
