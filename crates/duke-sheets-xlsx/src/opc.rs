@@ -83,7 +83,10 @@ fn decode_percent_encoded_unreserved(value: &str) -> String {
         decoded.push(bytes[index]);
         index += 1;
     }
-    String::from_utf8(decoded).expect("percent decoding preserves UTF-8")
+    match String::from_utf8(decoded) {
+        Ok(decoded) => decoded,
+        Err(_) => value.to_string(),
+    }
 }
 
 /// Resolve an internal OPC relationship target to its ZIP entry name.
