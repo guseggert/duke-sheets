@@ -694,7 +694,31 @@ fn assert_smartart_relationships_round_trip(rt_diagram: &[(&str, &str, &str); 4]
     let read = XlsxReader::read(Cursor::new(patched)).expect("read patched");
     assert_diagram_rels(&read, "first read");
 
-    let again = round_trip(&read);
+    let mut output = Cursor::new(Vec::new());
+    XlsxWriter::write(&read, &mut output).expect("rewrite SmartArt");
+    let rewritten = output.into_inner();
+    let mut archive = zip::ZipArchive::new(Cursor::new(&rewritten)).expect("open rewritten zip");
+    let mut content_types = String::new();
+    std::io::Read::read_to_string(
+        &mut archive
+            .by_name("[Content_Types].xml")
+            .expect("content types"),
+        &mut content_types,
+    )
+    .expect("read content types");
+    for content_type in [
+        "application/vnd.openxmlformats-officedocument.drawingml.diagramData+xml",
+        "application/vnd.openxmlformats-officedocument.drawingml.diagramLayout+xml",
+        "application/vnd.openxmlformats-officedocument.drawingml.diagramStyle+xml",
+        "application/vnd.openxmlformats-officedocument.drawingml.diagramColors+xml",
+    ] {
+        assert!(
+            content_types.contains(content_type),
+            "SmartArt content type {content_type} preserved"
+        );
+    }
+    drop(archive);
+    let again = XlsxReader::read(Cursor::new(rewritten)).expect("reread SmartArt");
     assert_diagram_rels(&again, "round trip");
 }
 
