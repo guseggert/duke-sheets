@@ -2,6 +2,12 @@
 
 `✔` supported · `●` partial (see Notes) · `✖` unverified/not yet · `-` N/A.
 
+## Package handling
+
+| Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
+|---------|------|------|-----|-----|------|------|
+| Package validation diagnostics | R✔ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | `opc_package::compatible_mode_recovers_workbook_from_content_types_without_root_rels`, `opc_package::strict_mode_rejects_package_without_root_rels` | ECMA-376 Part 2 §§6.2, 6.5, 7.2.3.2 | Compatible mode reports deterministic recovery; strict mode validates traversed OPC parts, not unreachable extension parts. |
+
 ## Cell values
 
 | Feature | XLSX | XLSB | XLS | ODS | Test | Spec |

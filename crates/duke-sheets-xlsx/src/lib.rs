@@ -10,5 +10,6 @@ mod opc;
 mod styles;
 
 pub use error::{XlsxError, XlsxResult};
-pub use reader::{XlsxReadOptions, XlsxReader};
+pub use opc::{XlsxDiagnostic, XlsxDiagnosticCode, XlsxDiagnosticSeverity, XlsxPackagePolicy};
+pub use reader::{XlsxReadOptions, XlsxReadReport, XlsxReader};
 pub use writer::{EncryptionProfile, XlsxWriter};

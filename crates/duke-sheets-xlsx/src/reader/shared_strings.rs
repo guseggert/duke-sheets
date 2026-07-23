@@ -24,12 +24,23 @@ pub(crate) enum SharedStringEntry {
 /// Each `<si>` element is either plain text (`<t>`) or rich text (`<r>` runs).
 /// Rich text runs preserve per-character formatting (bold, italic, color, etc.)
 /// via `<rPr>` elements within each `<r>`.
+#[cfg(test)]
 pub(crate) fn read_shared_strings<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
 ) -> XlsxResult<Vec<SharedStringEntry>> {
-    let mut entries = Vec::new();
+    read_shared_strings_at(archive, Some("xl/sharedStrings.xml"))
+}
 
-    let file = match archive_by_name(archive, "xl/sharedStrings.xml") {
+pub(crate) fn read_shared_strings_at<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    path: Option<&str>,
+) -> XlsxResult<Vec<SharedStringEntry>> {
+    let mut entries = Vec::new();
+    let Some(path) = path else {
+        return Ok(entries);
+    };
+
+    let file = match archive_by_name(archive, path) {
         Ok(f) => f,
         Err(_) => return Ok(entries), // No shared strings is valid
     };
