@@ -97,7 +97,6 @@ pub use duke_sheets_core::{
     DrawingObject,
     DrawingPath,
     DrawingText,
-    Placed,
     // Error types
     Error,
     FillStyle,
@@ -124,6 +123,7 @@ pub use duke_sheets_core::{
     PageBreak,
     PageOrientation,
     PageSetup,
+    Placed,
     PlacedControl,
     ProtectedRange,
     RawDrawing,
@@ -190,7 +190,10 @@ pub use duke_sheets_csv::{CsvError, CsvReadOptions, CsvReader, CsvWriteOptions, 
 pub use duke_sheets_xls::{XlsError, XlsReadOptions, XlsReader, XlsWriter};
 #[cfg(feature = "xlsb")]
 pub use duke_sheets_xlsb::{XlsbError, XlsbReader, XlsbWriter};
-pub use duke_sheets_xlsx::{XlsxError, XlsxReadOptions, XlsxReader, XlsxWriter};
+pub use duke_sheets_xlsx::{
+    XlsxDiagnostic, XlsxDiagnosticCode, XlsxDiagnosticSeverity, XlsxError, XlsxPackagePolicy,
+    XlsxReadOptions, XlsxReadReport, XlsxReader, XlsxWriter,
+};
 
 use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::path::Path;
@@ -489,8 +492,9 @@ impl WorkbookExt for Workbook {
             FileFormat::Xlsx => XlsxReader::read_file_with(path, &xlsx_opts)
                 .map_err(|e| Error::other(e.to_string())),
             #[cfg(feature = "xls")]
-            FileFormat::Xls => XlsReader::read_file_with(path, &xls_opts)
-                .map_err(|e| Error::other(e.to_string())),
+            FileFormat::Xls => {
+                XlsReader::read_file_with(path, &xls_opts).map_err(|e| Error::other(e.to_string()))
+            }
             #[cfg(not(feature = "xls"))]
             FileFormat::Xls => Err(Error::other(
                 "XLS format detected but the 'xls' feature is not enabled",
@@ -509,8 +513,7 @@ impl WorkbookExt for Workbook {
             }
             #[cfg(feature = "xls")]
             FileFormat::Unknown if path_has_extension(path, "xls") => {
-                XlsReader::read_file_with(path, &xls_opts)
-                    .map_err(|e| Error::other(e.to_string()))
+                XlsReader::read_file_with(path, &xls_opts).map_err(|e| Error::other(e.to_string()))
             }
             #[cfg(not(feature = "xls"))]
             FileFormat::Unknown if path_has_extension(path, "xls") => Err(Error::other(
@@ -566,8 +569,7 @@ impl WorkbookExt for Workbook {
             #[cfg(feature = "xls")]
             FileFormat::Xls => {
                 let cursor = Cursor::new(bytes);
-                XlsReader::read_with(cursor, &xls_opts)
-                    .map_err(|e| Error::other(e.to_string()))
+                XlsReader::read_with(cursor, &xls_opts).map_err(|e| Error::other(e.to_string()))
             }
             _ => Self::from_bytes(bytes),
         }

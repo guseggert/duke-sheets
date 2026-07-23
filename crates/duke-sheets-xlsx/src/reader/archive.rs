@@ -33,6 +33,13 @@ pub(crate) fn archive_by_name<'a, R: Read + Seek>(
             return archive.by_name(&backslashed);
         }
     }
+    let equivalent = archive
+        .file_names()
+        .find(|name| name.replace('\\', "/").eq_ignore_ascii_case(path))
+        .map(str::to_string);
+    if let Some(equivalent) = equivalent {
+        return archive.by_name(&equivalent);
+    }
     // Fall through: let the exact-name lookup produce the idiomatic error.
     archive.by_name(path)
 }
@@ -100,6 +107,18 @@ mod tests {
             .read_to_string(&mut buf)
             .unwrap();
         assert_eq!(buf, "forward");
+    }
+
+    #[test]
+    fn archive_by_name_uses_opc_case_insensitive_equivalence() {
+        let bytes = zip_with_entries(&[("XL/Workbook.xml", b"wb")]);
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let mut buf = String::new();
+        archive_by_name(&mut archive, "xl/workbook.xml")
+            .unwrap()
+            .read_to_string(&mut buf)
+            .unwrap();
+        assert_eq!(buf, "wb");
     }
 
     #[test]

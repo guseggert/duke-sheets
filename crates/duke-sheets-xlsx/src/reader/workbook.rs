@@ -4,11 +4,13 @@ use std::collections::HashMap;
 use std::io::{BufReader, Read, Seek};
 
 use quick_xml::events::Event;
-use quick_xml::reader::Reader;
+use quick_xml::name::ResolveResult;
+use quick_xml::reader::NsReader;
 
 use super::archive_by_name;
 use crate::error::{XlsxError, XlsxResult};
-use crate::opc::{read_relationships, Relationship};
+use crate::opc::{OpcPackage, PartName, Relationship, RelationshipSource};
+use crate::XlsxPackagePolicy;
 use duke_sheets_core::{SheetVisibility, WorkbookProtection};
 
 /// Parsed workbook properties from workbook.xml
@@ -23,6 +25,8 @@ pub(super) struct WorkbookRels {
     pub(super) sheet_paths: HashMap<String, String>,
     pub(super) chartsheet_paths: HashMap<String, String>,
     pub(super) theme_path: Option<String>,
+    pub(super) styles_path: Option<String>,
+    pub(super) shared_strings_path: Option<String>,
 }
 
 pub(super) type PartRelationship = Relationship;
@@ -37,17 +41,49 @@ pub(super) struct SheetEntry {
 /// and defined names.
 pub(super) fn read_workbook_xml<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
+    workbook_path: &str,
+    policy: XlsxPackagePolicy,
 ) -> XlsxResult<WorkbookProps> {
     use duke_sheets_core::named_range::{NameScope, NamedRange};
 
-    let file = archive_by_name(archive, "xl/workbook.xml")
-        .map_err(|_| XlsxError::MissingPart("xl/workbook.xml".into()))?;
+    let file = archive_by_name(archive, workbook_path)
+        .map_err(|_| XlsxError::MissingPart(workbook_path.into()))?;
 
     let reader = BufReader::new(file);
-    let mut xml_reader = Reader::from_reader(reader);
+    let mut xml_reader = NsReader::from_reader(reader);
     xml_reader.config_mut().trim_text(true);
 
     let mut buf = Vec::new();
+    loop {
+        match xml_reader.read_resolved_event_into(&mut buf) {
+            Ok((ResolveResult::Bound(namespace), Event::Start(element)))
+                if element.name().local_name().as_ref() == b"workbook"
+                    && matches!(
+                        namespace.as_ref(),
+                        b"http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+                            | b"http://purl.oclc.org/ooxml/spreadsheetml/main"
+                    ) =>
+            {
+                break;
+            }
+            Ok((_, Event::Decl(_) | Event::Comment(_) | Event::PI(_))) => {}
+            Ok((_, Event::Text(text)))
+                if text.unescape().is_ok_and(|value| value.trim().is_empty()) => {}
+            Ok((_, Event::Eof)) => {
+                return Err(XlsxError::InvalidFormat(
+                    "Workbook part has no workbook root element".into(),
+                ));
+            }
+            Ok(_) => {
+                return Err(XlsxError::InvalidFormat(
+                    "Workbook part has an invalid root element or namespace".into(),
+                ));
+            }
+            Err(error) => return Err(XlsxError::Xml(error)),
+        }
+        buf.clear();
+    }
+    buf.clear();
     let mut sheets = Vec::new();
     let mut date_1904 = false;
     let mut workbook_protection = None;
@@ -56,7 +92,13 @@ pub(super) fn read_workbook_xml<R: Read + Seek>(
     loop {
         match xml_reader.read_event_into(&mut buf) {
             Ok(Event::Empty(ref e)) => match e.name().local_name().as_ref() {
-                b"sheet" => parse_sheet_element(e, &mut sheets),
+                b"sheet" => {
+                    if !parse_sheet_element(e, &mut sheets) && policy == XlsxPackagePolicy::Strict {
+                        return Err(XlsxError::InvalidFormat(
+                            "Workbook sheet is missing name or relationship id".into(),
+                        ));
+                    }
+                }
                 b"workbookPr" => parse_workbook_pr(e, &mut date_1904),
                 b"workbookProtection" => {
                     workbook_protection = parse_workbook_protection(e);
@@ -64,7 +106,13 @@ pub(super) fn read_workbook_xml<R: Read + Seek>(
                 _ => {}
             },
             Ok(Event::Start(ref e)) => match e.name().local_name().as_ref() {
-                b"sheet" => parse_sheet_element(e, &mut sheets),
+                b"sheet" => {
+                    if !parse_sheet_element(e, &mut sheets) && policy == XlsxPackagePolicy::Strict {
+                        return Err(XlsxError::InvalidFormat(
+                            "Workbook sheet is missing name or relationship id".into(),
+                        ));
+                    }
+                }
                 b"workbookPr" => parse_workbook_pr(e, &mut date_1904),
                 b"workbookProtection" => {
                     workbook_protection = parse_workbook_protection(e);
@@ -131,7 +179,10 @@ pub(super) fn read_workbook_xml<R: Read + Seek>(
     })
 }
 
-fn parse_sheet_element(e: &quick_xml::events::BytesStart<'_>, sheets: &mut Vec<SheetEntry>) {
+fn parse_sheet_element(
+    e: &quick_xml::events::BytesStart<'_>,
+    sheets: &mut Vec<SheetEntry>,
+) -> bool {
     let mut name = None;
     let mut r_id = None;
     let mut visibility = SheetVisibility::Visible;
@@ -159,6 +210,9 @@ fn parse_sheet_element(e: &quick_xml::events::BytesStart<'_>, sheets: &mut Vec<S
             r_id,
             visibility,
         });
+        true
+    } else {
+        false
     }
 }
 
@@ -209,22 +263,62 @@ fn parse_workbook_protection(e: &quick_xml::events::BytesStart<'_>) -> Option<Wo
 
 /// Read workbook.xml.rels to get sheet file paths and theme path.
 pub(super) fn read_workbook_rels<R: Read + Seek>(
-    archive: &mut zip::ZipArchive<R>,
+    package: &mut OpcPackage<R>,
+    workbook_path: &PartName,
 ) -> XlsxResult<WorkbookRels> {
-    let relationships = read_relationships(archive, "xl/workbook.xml", true)?;
+    let source = RelationshipSource::Part(workbook_path.clone());
+    let relationships = package.relationships(&source, true)?;
     let mut rels = HashMap::new();
     let mut chartsheet_rels = HashMap::new();
     let mut theme_path: Option<String> = None;
-    for (id, relationship) in relationships {
+    let mut styles_path: Option<String> = None;
+    let mut shared_strings_path: Option<String> = None;
+    for relationship in relationships.iter() {
+        let worksheet = relationship_type_is(&relationship.rel_type, "worksheet");
+        let chartsheet = relationship_type_is(&relationship.rel_type, "chartsheet");
+        let dialogsheet = relationship_type_is(&relationship.rel_type, "dialogsheet");
+        let theme = relationship_type_is(&relationship.rel_type, "theme");
+        let styles = relationship_type_is(&relationship.rel_type, "styles");
+        let shared_strings = relationship_type_is(&relationship.rel_type, "sharedStrings");
+        if dialogsheet {
+            package.diagnostics_mut().violation(
+                crate::opc::XlsxDiagnosticCode::UnsupportedSheetType,
+                "Dialogsheet parts are not supported by the workbook model",
+                Some(workbook_path.as_str()),
+                Some(&relationship.id),
+                Some(&relationship.raw_target),
+            )?;
+            continue;
+        }
+        if !(worksheet || chartsheet || theme || styles || shared_strings) {
+            continue;
+        }
         let Some(path) = relationship.internal_path() else {
+            package.diagnostics_mut().violation(
+                crate::opc::XlsxDiagnosticCode::MalformedRelationship,
+                format!(
+                    "Workbook relationship {} must have an internal target",
+                    relationship.id
+                ),
+                Some(workbook_path.as_str()),
+                Some(&relationship.id),
+                Some(&relationship.raw_target),
+            )?;
             continue;
         };
-        if relationship.rel_type.ends_with("/worksheet") {
-            rels.insert(id, path.to_string());
-        } else if relationship.rel_type.ends_with("/chartsheet") {
-            chartsheet_rels.insert(id, path.to_string());
-        } else if relationship.rel_type.ends_with("/theme") {
+        if package.open_related_part(&source, relationship)?.is_none() {
+            continue;
+        }
+        if worksheet {
+            rels.insert(relationship.id.clone(), path.to_string());
+        } else if chartsheet {
+            chartsheet_rels.insert(relationship.id.clone(), path.to_string());
+        } else if theme {
             theme_path = Some(path.to_string());
+        } else if styles {
+            styles_path = Some(path.to_string());
+        } else if shared_strings {
+            shared_strings_path = Some(path.to_string());
         }
     }
 
@@ -232,13 +326,70 @@ pub(super) fn read_workbook_rels<R: Read + Seek>(
         sheet_paths: rels,
         chartsheet_paths: chartsheet_rels,
         theme_path,
+        styles_path,
+        shared_strings_path,
     })
+}
+
+fn relationship_type_is(rel_type: &str, name: &str) -> bool {
+    rel_type
+        == format!("http://schemas.openxmlformats.org/officeDocument/2006/relationships/{name}")
+        || rel_type == format!("http://purl.oclc.org/ooxml/officeDocument/relationships/{name}")
 }
 
 /// Read relationships owned by any package part.
 pub(super) fn read_part_rels<R: Read + Seek>(
-    archive: &mut zip::ZipArchive<R>,
+    package: &mut OpcPackage<R>,
     part_path: &str,
 ) -> XlsxResult<HashMap<String, PartRelationship>> {
-    read_relationships(archive, part_path, false)
+    let source = RelationshipSource::Part(PartName::from_zip_name(part_path)?);
+    let relationships = package.relationships(&source, false)?;
+    for relationship in relationships.iter() {
+        if relationship_must_be_internal(&relationship.rel_type)
+            && relationship.internal_part().is_none()
+        {
+            package.diagnostics_mut().violation(
+                crate::opc::XlsxDiagnosticCode::MalformedRelationship,
+                format!(
+                    "relationship {} from {} must have an internal target",
+                    relationship.id, part_path
+                ),
+                Some(source.display_name()),
+                Some(&relationship.id),
+                Some(&relationship.raw_target),
+            )?;
+        }
+    }
+    Ok(relationships
+        .iter()
+        .cloned()
+        .map(|relationship| (relationship.id.clone(), relationship))
+        .collect())
+}
+
+fn relationship_must_be_internal(rel_type: &str) -> bool {
+    [
+        "/worksheet",
+        "/chartsheet",
+        "/styles",
+        "/sharedStrings",
+        "/theme",
+        "/drawing",
+        "/chart",
+        "/chartEx",
+        "/chartStyle",
+        "/chartColorStyle",
+        "/comments",
+        "/vmlDrawing",
+        "/table",
+        "/ctrlProp",
+    ]
+    .iter()
+    .any(|suffix| relationship_type_is(rel_type, suffix.trim_start_matches('/')))
+        || matches!(
+            rel_type,
+            "http://schemas.microsoft.com/office/2014/relationships/chartEx"
+                | "http://schemas.microsoft.com/office/2011/relationships/chartStyle"
+                | "http://schemas.microsoft.com/office/2011/relationships/chartColorStyle"
+        )
 }

@@ -24,27 +24,17 @@ pub(super) fn read_theme_palette<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     theme_path: Option<&str>,
 ) -> XlsxResult<(Option<ThemePalette>, Option<Vec<u8>>)> {
-    let mut try_paths: Vec<String> = Vec::new();
-    if let Some(path) = theme_path {
-        try_paths.push(path.to_string());
-    }
-    if !try_paths.iter().any(|p| p == "xl/theme/theme1.xml") {
-        try_paths.push("xl/theme/theme1.xml".to_string());
-    }
-
-    for path in try_paths {
-        let mut file = match archive_by_name(archive, &path) {
-            Ok(f) => f,
-            Err(_) => continue,
-        };
-        // Read raw bytes for roundtrip preservation, then parse palette from them.
-        let mut raw_bytes = Vec::new();
-        file.read_to_end(&mut raw_bytes)?;
-        let palette = parse_theme_palette(std::io::Cursor::new(&raw_bytes))?;
-        return Ok((Some(palette), Some(raw_bytes)));
-    }
-
-    Ok((None, None))
+    let Some(path) = theme_path else {
+        return Ok((None, None));
+    };
+    let mut file = match archive_by_name(archive, path) {
+        Ok(file) => file,
+        Err(_) => return Ok((None, None)),
+    };
+    let mut raw_bytes = Vec::new();
+    file.read_to_end(&mut raw_bytes)?;
+    let palette = parse_theme_palette(std::io::Cursor::new(&raw_bytes))?;
+    Ok((Some(palette), Some(raw_bytes)))
 }
 
 pub(super) fn parse_theme_palette<R: Read>(reader: R) -> XlsxResult<ThemePalette> {
