@@ -709,15 +709,17 @@ impl XlsxReader {
                 // Read tables for this worksheet (if present).
                 // Each relationship with type ending in "/table" points to
                 // an xl/tables/tableN.xml part.
-                let mut table_rels: Vec<(&String, &PartRelationship)> = sheet_rels
+                let mut table_rels: Vec<(&String, &PartRelationship, &str)> = sheet_rels
                     .iter()
-                    .filter(|(_, rel)| {
-                        rel.rel_type.ends_with("/table") && rel.internal_path().is_some()
+                    .filter_map(|(id, rel)| {
+                        rel.rel_type
+                            .ends_with("/table")
+                            .then(|| rel.internal_path().map(|path| (id, rel, path)))
+                            .flatten()
                     })
                     .collect();
-                table_rels.sort_by_key(|(_, rel)| rel.internal_path());
-                for (id, rel) in table_rels {
-                    let table_path = rel.internal_path().unwrap();
+                table_rels.sort_by_key(|(_, _, path)| *path);
+                for (id, rel, table_path) in table_rels {
                     if open_relationship_part(&mut archive, path, id, rel).is_none() {
                         continue;
                     }
@@ -958,14 +960,16 @@ impl XlsxReader {
 
         // Drawing part entries in document order.
         let mut natives: Vec<(DrawingObject, Option<u32>)> = Vec::new();
-        let mut drawing_targets: Vec<(String, &PartRelationship)> = sheet_rels
+        let mut drawing_targets: Vec<(String, &PartRelationship, &str)> = sheet_rels
             .iter()
             .filter(|(_, r)| r.rel_type.ends_with("/drawing"))
-            .filter(|(_, r)| r.internal_path().is_some())
-            .map(|(id, r)| (id.clone(), r))
+            .filter_map(|(id, rel)| {
+                rel.internal_path()
+                    .map(|path| (id.clone(), rel, path))
+            })
             .collect();
         // Numeric-aware sort so rId2 precedes rId10.
-        drawing_targets.sort_by_key(|(id, _)| {
+        drawing_targets.sort_by_key(|(id, _, _)| {
             (
                 id.strip_prefix("rId")
                     .and_then(|n| n.parse::<u64>().ok())
@@ -973,8 +977,7 @@ impl XlsxReader {
                 id.clone(),
             )
         });
-        for (drawing_id, drawing_rel) in &drawing_targets {
-            let drawing_path = drawing_rel.internal_path().unwrap();
+        for (drawing_id, drawing_rel, drawing_path) in &drawing_targets {
             if open_relationship_part(archive, sheet_path, drawing_id, drawing_rel).is_none() {
                 continue;
             }
