@@ -4,12 +4,12 @@ mod package;
 mod part_name;
 mod relationships;
 
-use std::io::{Read, Seek};
-
 #[cfg(test)]
 use std::collections::HashMap;
 #[cfg(test)]
 use std::io::BufReader;
+#[cfg(test)]
+use std::io::{Read, Seek};
 
 #[cfg(test)]
 use crate::error::XlsxError;
@@ -84,16 +84,6 @@ pub(crate) fn read_relationships<R: Read + Seek>(
         .cloned()
         .map(|relationship| (relationship.id.clone(), relationship))
         .collect())
-}
-
-pub(crate) fn open_relationship_part<'a, R: Read + Seek>(
-    package: &'a mut OpcPackage<R>,
-    source_part: &str,
-    _relationship_id: &str,
-    relationship: &Relationship,
-) -> XlsxResult<Option<zip::read::ZipFile<'a>>> {
-    let source = RelationshipSource::Part(PartName::from_zip_name(source_part)?);
-    package.open_related_part(&source, relationship)
 }
 
 #[cfg(test)]

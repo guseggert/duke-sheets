@@ -27,6 +27,9 @@ pub(super) struct WorkbookRels {
     pub(super) theme_path: Option<String>,
     pub(super) styles_path: Option<String>,
     pub(super) shared_strings_path: Option<String>,
+    /// Relationship ids of valid but unmodeled sheet kinds
+    /// (dialog/macro sheets); their sheet entries are skipped.
+    pub(super) unmodeled_sheet_rels: std::collections::HashSet<String>,
 }
 
 pub(super) type PartRelationship = Relationship;
@@ -54,34 +57,37 @@ pub(super) fn read_workbook_xml<R: Read + Seek>(
     xml_reader.config_mut().trim_text(true);
 
     let mut buf = Vec::new();
-    loop {
-        match xml_reader.read_resolved_event_into(&mut buf) {
-            Ok((ResolveResult::Bound(namespace), Event::Start(element)))
-                if element.name().local_name().as_ref() == b"workbook"
-                    && matches!(
-                        namespace.as_ref(),
-                        b"http://schemas.openxmlformats.org/spreadsheetml/2006/main"
-                            | b"http://purl.oclc.org/ooxml/spreadsheetml/main"
-                    ) =>
-            {
-                break;
+    // Compatible mode keeps the historical namespace-agnostic parse.
+    if policy == XlsxPackagePolicy::Strict {
+        loop {
+            match xml_reader.read_resolved_event_into(&mut buf) {
+                Ok((ResolveResult::Bound(namespace), Event::Start(element)))
+                    if element.name().local_name().as_ref() == b"workbook"
+                        && matches!(
+                            namespace.as_ref(),
+                            b"http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+                                | b"http://purl.oclc.org/ooxml/spreadsheetml/main"
+                        ) =>
+                {
+                    break;
+                }
+                Ok((_, Event::Decl(_) | Event::Comment(_) | Event::PI(_))) => {}
+                Ok((_, Event::Text(text)))
+                    if text.unescape().is_ok_and(|value| value.trim().is_empty()) => {}
+                Ok((_, Event::Eof)) => {
+                    return Err(XlsxError::InvalidFormat(
+                        "Workbook part has no workbook root element".into(),
+                    ));
+                }
+                Ok(_) => {
+                    return Err(XlsxError::InvalidFormat(
+                        "Workbook part has an invalid root element or namespace".into(),
+                    ));
+                }
+                Err(error) => return Err(XlsxError::Xml(error)),
             }
-            Ok((_, Event::Decl(_) | Event::Comment(_) | Event::PI(_))) => {}
-            Ok((_, Event::Text(text)))
-                if text.unescape().is_ok_and(|value| value.trim().is_empty()) => {}
-            Ok((_, Event::Eof)) => {
-                return Err(XlsxError::InvalidFormat(
-                    "Workbook part has no workbook root element".into(),
-                ));
-            }
-            Ok(_) => {
-                return Err(XlsxError::InvalidFormat(
-                    "Workbook part has an invalid root element or namespace".into(),
-                ));
-            }
-            Err(error) => return Err(XlsxError::Xml(error)),
+            buf.clear();
         }
-        buf.clear();
     }
     buf.clear();
     let mut sheets = Vec::new();
@@ -273,21 +279,40 @@ pub(super) fn read_workbook_rels<R: Read + Seek>(
     let mut theme_path: Option<String> = None;
     let mut styles_path: Option<String> = None;
     let mut shared_strings_path: Option<String> = None;
+    let mut unmodeled_sheet_rels = std::collections::HashSet::new();
     for relationship in relationships.iter() {
         let worksheet = relationship_type_is(&relationship.rel_type, "worksheet");
         let chartsheet = relationship_type_is(&relationship.rel_type, "chartsheet");
-        let dialogsheet = relationship_type_is(&relationship.rel_type, "dialogsheet");
         let theme = relationship_type_is(&relationship.rel_type, "theme");
         let styles = relationship_type_is(&relationship.rel_type, "styles");
         let shared_strings = relationship_type_is(&relationship.rel_type, "sharedStrings");
-        if dialogsheet {
-            package.diagnostics_mut().violation(
+        // Valid OOXML sheet kinds this library does not model yet; a
+        // capability limitation, never a conformance violation.
+        if let Some(kind) = unmodeled_sheet_kind(&relationship.rel_type) {
+            if relationship.internal_part().is_none() {
+                package.diagnostics_mut().violation(
+                    crate::opc::XlsxDiagnosticCode::MalformedRelationship,
+                    format!(
+                        "Workbook relationship {} must have an internal target",
+                        relationship.id
+                    ),
+                    Some(workbook_path.as_str()),
+                    Some(&relationship.id),
+                    Some(&relationship.raw_target),
+                )?;
+                continue;
+            }
+            if package.open_related_part(relationship)?.is_none() {
+                continue;
+            }
+            package.diagnostics_mut().warning(
                 crate::opc::XlsxDiagnosticCode::UnsupportedSheetType,
-                "Dialogsheet parts are not supported by the workbook model",
+                format!("{kind} sheets are not supported by the workbook model"),
                 Some(workbook_path.as_str()),
                 Some(&relationship.id),
                 Some(&relationship.raw_target),
-            )?;
+            );
+            unmodeled_sheet_rels.insert(relationship.id.clone());
             continue;
         }
         if !(worksheet || chartsheet || theme || styles || shared_strings) {
@@ -306,7 +331,7 @@ pub(super) fn read_workbook_rels<R: Read + Seek>(
             )?;
             continue;
         };
-        if package.open_related_part(&source, relationship)?.is_none() {
+        if package.open_related_part(relationship)?.is_none() {
             continue;
         }
         if worksheet {
@@ -328,7 +353,21 @@ pub(super) fn read_workbook_rels<R: Read + Seek>(
         theme_path,
         styles_path,
         shared_strings_path,
+        unmodeled_sheet_rels,
     })
+}
+
+fn unmodeled_sheet_kind(rel_type: &str) -> Option<&'static str> {
+    if relationship_type_is(rel_type, "dialogsheet") {
+        Some("Dialog")
+    } else if rel_type == "http://schemas.microsoft.com/office/2006/relationships/xlMacrosheet" {
+        Some("Macro")
+    } else if rel_type == "http://schemas.microsoft.com/office/2006/relationships/xlIntlMacrosheet"
+    {
+        Some("International macro")
+    } else {
+        None
+    }
 }
 
 fn relationship_type_is(rel_type: &str, name: &str) -> bool {

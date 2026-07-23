@@ -10,8 +10,7 @@ use quick_xml::reader::Reader;
 
 use crate::error::{XlsxError, XlsxResult};
 use crate::opc::{
-    open_relationship_part, resolve_internal_target, OpcPackage, PartName, XlsxDiagnosticCode,
-    XlsxPackagePolicy,
+    resolve_internal_target, OpcPackage, PartName, XlsxDiagnosticCode, XlsxPackagePolicy,
 };
 use crate::styles::{
     read_styles_xml, register_roundtrip_style_data, register_roundtrip_theme_data, ParsedStyles,
@@ -124,15 +123,15 @@ fn read_chart_style_color<R: Read + Seek>(
     chart: &mut duke_sheets_chart::Chart,
 ) -> XlsxResult<()> {
     let chart_rels = read_part_rels(package, chart_path)?;
-    for (id, rel) in &chart_rels {
+    for rel in chart_rels.values() {
         if rel.rel_type.ends_with("/chartStyle") {
-            if let Some(mut f) = open_relationship_part(package, chart_path, id, rel)? {
+            if let Some(mut f) = package.open_related_part(rel)? {
                 let mut bytes = Vec::new();
                 f.read_to_end(&mut bytes)?;
                 chart.raw_chart_style = Some(bytes);
             }
         } else if rel.rel_type.ends_with("/chartColorStyle") {
-            if let Some(mut f) = open_relationship_part(package, chart_path, id, rel)? {
+            if let Some(mut f) = package.open_related_part(rel)? {
                 let mut bytes = Vec::new();
                 f.read_to_end(&mut bytes)?;
                 chart.raw_chart_color_style = Some(bytes);
@@ -148,15 +147,15 @@ fn read_chart_style_color_for_chart_ex<R: Read + Seek>(
     chart: &mut duke_sheets_chart::ChartEx,
 ) -> XlsxResult<()> {
     let chart_rels = read_part_rels(package, chart_path)?;
-    for (id, rel) in &chart_rels {
+    for rel in chart_rels.values() {
         if rel.rel_type.ends_with("/chartStyle") {
-            if let Some(mut f) = open_relationship_part(package, chart_path, id, rel)? {
+            if let Some(mut f) = package.open_related_part(rel)? {
                 let mut bytes = Vec::new();
                 f.read_to_end(&mut bytes)?;
                 chart.raw_chart_style = Some(bytes);
             }
         } else if rel.rel_type.ends_with("/chartColorStyle") {
-            if let Some(mut f) = open_relationship_part(package, chart_path, id, rel)? {
+            if let Some(mut f) = package.open_related_part(rel)? {
                 let mut bytes = Vec::new();
                 f.read_to_end(&mut bytes)?;
                 chart.raw_chart_color_style = Some(bytes);
@@ -199,7 +198,6 @@ fn take_control(
 /// child transform carries rotation/flips, so the payload keeps none.
 fn resolve_pic_image<R: Read + Seek>(
     package: &mut OpcPackage<R>,
-    drawing_path: &str,
     drawing_rels: &HashMap<String, PartRelationship>,
     pic: drawing::PicShape,
     in_group: bool,
@@ -226,7 +224,7 @@ fn resolve_pic_image<R: Read + Seek>(
             image.format = fmt;
         }
         image.media_path = path.to_string();
-        if let Some(mut f) = open_relationship_part(package, drawing_path, &image_rel_id, rel)? {
+        if let Some(mut f) = package.open_related_part(rel)? {
             let mut buf = Vec::new();
             if std::io::Read::read_to_end(&mut f, &mut buf).is_ok() {
                 image.data = buf;
@@ -239,7 +237,7 @@ fn resolve_pic_image<R: Read + Seek>(
                 return Ok(image);
             };
             image.svg_media_path = Some(path.to_string());
-            if let Some(mut f) = open_relationship_part(package, drawing_path, &svg_rel_id, rel)? {
+            if let Some(mut f) = package.open_related_part(rel)? {
                 let mut buf = Vec::new();
                 if std::io::Read::read_to_end(&mut f, &mut buf).is_ok() {
                     image.svg_data = Some(buf);
@@ -287,7 +285,6 @@ fn shape_from_parsed(parsed: &drawing::ParsedShape) -> duke_sheets_core::Shape {
 /// group with the twin's child transform).
 fn build_group<R: Read + Seek>(
     package: &mut OpcPackage<R>,
-    drawing_path: &str,
     drawing_rels: &HashMap<String, PartRelationship>,
     group: drawing::ParsedGroup,
     controls: &mut [AssembledControl],
@@ -313,7 +310,7 @@ fn build_group<R: Read + Seek>(
                     hidden: pic.hidden,
                     ..DrawingMeta::default()
                 };
-                let image = resolve_pic_image(package, drawing_path, drawing_rels, pic, true)?;
+                let image = resolve_pic_image(package, drawing_rels, pic, true)?;
                 children.push(GroupChild {
                     meta,
                     transform,
@@ -351,7 +348,7 @@ fn build_group<R: Read + Seek>(
                     hidden: inner.hidden,
                     ..DrawingMeta::default()
                 };
-                let built = build_group(package, drawing_path, drawing_rels, inner, controls)?;
+                let built = build_group(package, drawing_rels, inner, controls)?;
                 children.push(GroupChild {
                     meta,
                     transform,
@@ -442,7 +439,7 @@ fn capture_raw_rels<R: Read + Seek>(
         let part = if source_name.as_ref() == rel.internal_part() {
             None
         } else {
-            match open_relationship_part(package, source_part, &id, rel)? {
+            match package.open_related_part(rel)? {
                 Some(mut file) => {
                     let mut bytes = Vec::new();
                     file.read_to_end(&mut bytes)?;
@@ -478,6 +475,7 @@ pub struct XlsxReadOptions {
 
 /// Workbook and package diagnostics returned by report-oriented read APIs.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct XlsxReadReport {
     /// Parsed workbook.
     pub workbook: Workbook,
@@ -708,6 +706,7 @@ impl XlsxReader {
 
         let sheet_paths = workbook_rels.sheet_paths;
         let chartsheet_paths = workbook_rels.chartsheet_paths;
+        let unmodeled_sheet_rels = workbook_rels.unmodeled_sheet_rels;
 
         // Create workbook
         let mut workbook = Workbook::empty();
@@ -780,7 +779,7 @@ impl XlsxReader {
                 // by their controls), unmatched controls, and comments
                 // spliced by the legacy VML shape order.
                 let vml_file = match vml_rel {
-                    Some((id, rel)) => open_relationship_part(&mut package, path, id, rel)?,
+                    Some((_, rel)) => package.open_related_part(rel)?,
                     None => vml_path
                         .as_deref()
                         .and_then(|path| archive_by_name(package.archive_mut(), path).ok()),
@@ -792,9 +791,7 @@ impl XlsxReader {
                         .map(|_| buf)
                 });
                 let comments_available = match comments_rel {
-                    Some((id, rel)) => {
-                        open_relationship_part(&mut package, path, id, rel)?.is_some()
-                    }
+                    Some((_, rel)) => package.open_related_part(rel)?.is_some(),
                     None => true,
                 };
                 let comments = if !comments_available {
@@ -807,7 +804,6 @@ impl XlsxReader {
                 };
                 let objects = Self::merge_sheet_drawings(
                     &mut package,
-                    path,
                     &sheet_rels,
                     &pending_controls,
                     vml_bytes.as_deref(),
@@ -832,8 +828,8 @@ impl XlsxReader {
                     })
                     .collect();
                 table_rels.sort_by_key(|(_, _, path)| *path);
-                for (id, rel, table_path) in table_rels {
-                    if open_relationship_part(&mut package, path, id, rel)?.is_none() {
+                for (_, rel, table_path) in table_rels {
+                    if package.open_related_part(rel)?.is_none() {
                         continue;
                     }
                     if let Some(t) = table::read_table(package.archive_mut(), table_path)? {
@@ -848,9 +844,7 @@ impl XlsxReader {
                     let cs_rels = read_part_rels(&mut package, cs_path)?;
                     if let Some(drawing_rel) = cs_rels.get(&rid) {
                         if let Some(drawing_path) = drawing_rel.internal_path() {
-                            if open_relationship_part(&mut package, cs_path, &rid, drawing_rel)?
-                                .is_some()
-                            {
+                            if package.open_related_part(drawing_rel)?.is_some() {
                                 let entries = drawing::read_drawing_entries(
                                     package.archive_mut(),
                                     drawing_path,
@@ -900,14 +894,7 @@ impl XlsxReader {
                                         let Some(chart_path) = dr.internal_path() else {
                                             continue;
                                         };
-                                        if open_relationship_part(
-                                            &mut package,
-                                            drawing_path,
-                                            &chart_ref.rel_id,
-                                            dr,
-                                        )?
-                                        .is_none()
-                                        {
+                                        if package.open_related_part(dr)?.is_none() {
                                             continue;
                                         }
                                         if let Some(mut c) =
@@ -953,7 +940,9 @@ impl XlsxReader {
                         .sheet_order_mut()
                         .push(SheetSlot::ChartSheet(cs_idx));
                 }
-            } else if package.policy() == XlsxPackagePolicy::Strict {
+            } else if !unmodeled_sheet_rels.contains(&sheet_entry.r_id)
+                && package.policy() == XlsxPackagePolicy::Strict
+            {
                 return Err(XlsxError::InvalidFormat(format!(
                     "sheet {} has no resolvable worksheet or chartsheet relationship",
                     sheet_entry.name
@@ -964,14 +953,19 @@ impl XlsxReader {
         // Apply print area and print titles from named ranges to worksheets.
         Self::apply_print_settings(&mut workbook);
 
-        // Ensure at least one sheet exists
+        // Compatible preserves the historical at-least-one-sheet
+        // recovery. Strict does not invent a worksheet when all source
+        // sheets were valid but unmodeled dialog or macro sheets.
         if workbook.sheet_count() == 0 && workbook.chartsheet_count() == 0 {
             if package.policy() == XlsxPackagePolicy::Strict {
-                return Err(XlsxError::InvalidFormat(
-                    "Workbook contains no readable sheets".into(),
-                ));
+                if unmodeled_sheet_rels.is_empty() {
+                    return Err(XlsxError::InvalidFormat(
+                        "Workbook contains no readable sheets".into(),
+                    ));
+                }
+            } else {
+                workbook.add_worksheet()?;
             }
-            workbook.add_worksheet()?;
         }
 
         register_roundtrip_style_data(&workbook, roundtrip_style_data);
@@ -1014,7 +1008,6 @@ impl XlsxReader {
     /// order, and comments spliced by the legacy VML shape sequence.
     fn merge_sheet_drawings<R: Read + Seek>(
         package: &mut OpcPackage<R>,
-        sheet_path: &str,
         sheet_rels: &HashMap<String, PartRelationship>,
         pending_controls: &[form_controls::PendingControl],
         vml_bytes: Option<&[u8]>,
@@ -1044,8 +1037,7 @@ impl XlsxReader {
             if !rel.rel_type.ends_with("/ctrlProp") {
                 continue;
             }
-            let Some(mut f) = open_relationship_part(package, sheet_path, &pending.rid, rel)?
-            else {
+            let Some(mut f) = package.open_related_part(rel)? else {
                 continue;
             };
             let mut bytes = Vec::new();
@@ -1106,8 +1098,8 @@ impl XlsxReader {
                 id.clone(),
             )
         });
-        for (drawing_id, drawing_rel, drawing_path) in &drawing_targets {
-            if open_relationship_part(package, sheet_path, drawing_id, drawing_rel)?.is_none() {
+        for (_, drawing_rel, drawing_path) in &drawing_targets {
+            if package.open_related_part(drawing_rel)?.is_none() {
                 continue;
             }
             let entries = drawing::read_drawing_entries(package.archive_mut(), drawing_path)?;
@@ -1126,8 +1118,7 @@ impl XlsxReader {
                         let descr = pic.descr.clone();
                         let title = pic.title.clone();
                         let hidden = pic.hidden;
-                        let image =
-                            resolve_pic_image(package, drawing_path, &drawing_rels, pic, false)?;
+                        let image = resolve_pic_image(package, &drawing_rels, pic, false)?;
                         let mut object = DrawingObject::image(image).with_anchor(entry.anchor);
                         object.meta.name = Some(name);
                         object.meta.alt_text = descr;
@@ -1155,9 +1146,7 @@ impl XlsxReader {
                         let Some(chart_path) = dr.internal_path() else {
                             continue;
                         };
-                        if open_relationship_part(package, drawing_path, &chart_ref.rel_id, dr)?
-                            .is_none()
-                        {
+                        if package.open_related_part(dr)?.is_none() {
                             continue;
                         }
                         if chart_ref.is_chart_ex {
@@ -1195,13 +1184,7 @@ impl XlsxReader {
                         let descr = group.descr.clone();
                         let title = group.title.clone();
                         let hidden = group.hidden;
-                        let built = build_group(
-                            package,
-                            drawing_path,
-                            &drawing_rels,
-                            group,
-                            &mut controls,
-                        )?;
+                        let built = build_group(package, &drawing_rels, group, &mut controls)?;
                         let mut object = DrawingObject::group(built).with_anchor(entry.anchor);
                         object.meta.name = Some(name);
                         object.meta.alt_text = descr;

@@ -2,18 +2,23 @@ use crate::error::{XlsxError, XlsxResult};
 
 /// Controls how strictly traversed OPC package structures are validated.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum XlsxPackagePolicy {
     /// Recover from common package defects when the intended part is unambiguous.
     #[default]
     Compatible,
     /// Reject OPC violations encountered while traversing the workbook graph.
+    /// Valid but unmodeled features (for example dialog sheets) are reported
+    /// as warnings, not errors.
     Strict,
 }
 
 /// Severity of a package diagnostic emitted while reading an XLSX file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum XlsxDiagnosticSeverity {
-    /// The package is malformed, but the affected optional data was skipped.
+    /// A package defect or unsupported construct was observed; reading
+    /// continued, possibly without the affected data.
     Warning,
     /// A compatibility fallback was used to continue reading the workbook.
     Recovery,
@@ -21,6 +26,7 @@ pub enum XlsxDiagnosticSeverity {
 
 /// Stable category for a package diagnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum XlsxDiagnosticCode {
     InvalidPartName,
     EquivalentPartName,
@@ -45,6 +51,7 @@ pub enum XlsxDiagnosticCode {
 
 /// A recoverable OPC package problem observed while reading an XLSX file.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct XlsxDiagnostic {
     pub code: XlsxDiagnosticCode,
     pub severity: XlsxDiagnosticSeverity,

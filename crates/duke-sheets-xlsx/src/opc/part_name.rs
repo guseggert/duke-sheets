@@ -36,7 +36,11 @@ impl PartName {
     }
 
     pub(crate) fn extension(&self) -> Option<&str> {
-        self.0.rsplit_once('.').map(|(_, extension)| extension)
+        self.0
+            .rsplit('/')
+            .next()
+            .and_then(|file| file.rsplit_once('.'))
+            .map(|(_, extension)| extension)
     }
 
     pub(crate) fn parent(&self) -> Option<&str> {
@@ -54,15 +58,6 @@ impl PartName {
             format!("{parent}/_rels/{file}.rels")
         };
         Self::new(path)
-    }
-
-    pub(crate) fn is_derivable_from(&self, other: &Self) -> bool {
-        let prefix = format!("{}/", other.as_str());
-        self.as_str().len() > prefix.len()
-            && self
-                .as_str()
-                .get(..prefix.len())
-                .is_some_and(|value| value.eq_ignore_ascii_case(&prefix))
     }
 }
 
@@ -306,6 +301,18 @@ mod tests {
         ] {
             assert!(PartName::new(value).is_err(), "{value}");
         }
+    }
+
+    #[test]
+    fn extension_comes_only_from_the_final_segment() {
+        assert_eq!(
+            PartName::new("/xl/media/image.png").unwrap().extension(),
+            Some("png")
+        );
+        assert_eq!(
+            PartName::new("/xl/media.v2/blob").unwrap().extension(),
+            None
+        );
     }
 
     #[test]

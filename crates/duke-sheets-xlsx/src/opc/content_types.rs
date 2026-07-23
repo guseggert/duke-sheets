@@ -9,21 +9,8 @@ use super::diagnostics::{DiagnosticSink, XlsxDiagnosticCode, XlsxPackagePolicy};
 use super::part_name::PartName;
 use crate::error::{XlsxError, XlsxResult};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ContentTypeRecord {
-    Default {
-        extension: String,
-        content_type: String,
-    },
-    Override {
-        part_name: PartName,
-        content_type: String,
-    },
-}
-
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ContentTypes {
-    records: Vec<ContentTypeRecord>,
     defaults: HashMap<String, String>,
     overrides: HashMap<PartName, String>,
 }
@@ -35,6 +22,7 @@ impl ContentTypes {
     ) -> XlsxResult<Self> {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes)?;
+        validate_well_formed_xml(&bytes)?;
         if diagnostics.policy() == XlsxPackagePolicy::Strict {
             validate_content_types_structure(&bytes)?;
         }
@@ -142,14 +130,8 @@ impl ContentTypes {
                                     None,
                                 )?;
                             } else {
-                                content_types
-                                    .defaults
-                                    .insert(extension.clone(), content_type.clone());
+                                content_types.defaults.insert(extension, content_type);
                             }
-                            content_types.records.push(ContentTypeRecord::Default {
-                                extension,
-                                content_type,
-                            });
                         }
                         b"Override" => {
                             let mut part_name = None;
@@ -220,14 +202,8 @@ impl ContentTypes {
                                     Some(part_name.as_str()),
                                 )?;
                             } else {
-                                content_types
-                                    .overrides
-                                    .insert(part_name.clone(), content_type.clone());
+                                content_types.overrides.insert(part_name, content_type);
                             }
-                            content_types.records.push(ContentTypeRecord::Override {
-                                part_name,
-                                content_type,
-                            });
                         }
                         _ => {}
                     }
@@ -265,6 +241,37 @@ impl ContentTypes {
 
 fn namespace_is(resolution: &ResolveResult<'_>, namespace: &str) -> bool {
     matches!(resolution, ResolveResult::Bound(actual) if actual.as_ref() == namespace.as_bytes())
+}
+
+fn validate_well_formed_xml(bytes: &[u8]) -> XlsxResult<()> {
+    let mut reader = quick_xml::Reader::from_reader(Cursor::new(bytes));
+    let mut buf = Vec::new();
+    let mut open_elements: Vec<Vec<u8>> = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(element)) => open_elements.push(element.name().as_ref().to_vec()),
+            Ok(Event::End(element)) => {
+                let expected = open_elements.pop().ok_or_else(|| {
+                    XlsxError::InvalidFormat("unexpected closing XML element".into())
+                })?;
+                if expected != element.name().as_ref() {
+                    return Err(XlsxError::InvalidFormat(
+                        "mismatched closing XML element".into(),
+                    ));
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(error) => return Err(XlsxError::Xml(error)),
+            _ => {}
+        }
+        buf.clear();
+    }
+    if !open_elements.is_empty() {
+        return Err(XlsxError::InvalidFormat(
+            "unclosed XML element at end of stream".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_content_types_structure(bytes: &[u8]) -> XlsxResult<()> {
