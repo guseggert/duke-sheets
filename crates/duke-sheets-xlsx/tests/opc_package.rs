@@ -212,7 +212,7 @@ fn compatible_mode_recovers_when_root_rels_omit_office_document() {
 }
 
 #[test]
-fn rejects_workbook_part_with_wrong_root_element() {
+fn compatible_accepts_nonstandard_workbook_root_but_strict_rejects_it() {
     let bytes = rewrite_text_part(
         relocated_package("pkg/main/book.xml"),
         "pkg/main/book.xml",
@@ -222,7 +222,121 @@ fn rejects_workbook_part_with_wrong_root_element() {
                 .replace("</workbook>", "</notWorkbook>")
         },
     );
-    assert!(XlsxReader::read(Cursor::new(bytes)).is_err());
+    assert!(XlsxReader::read(Cursor::new(&bytes)).is_ok());
+    assert!(XlsxReader::read_with_report(Cursor::new(bytes), XlsxPackagePolicy::Strict,).is_err());
+}
+
+#[test]
+fn compatible_falls_back_from_missing_office_document_target() {
+    let bytes = rewrite_text_part(
+        relocated_package("pkg/main/book.xml"),
+        "_rels/.rels",
+        |relationships| {
+            relationships.replace(r#"Target="pkg/main/book.xml""#, r#"Target="missing.xml""#)
+        },
+    );
+    let report = XlsxReader::read_with_report(Cursor::new(&bytes), XlsxPackagePolicy::Compatible)
+        .expect("compatible fallback");
+    assert_eq!(
+        report.workbook.worksheet(0).expect("worksheet").name(),
+        "Moved"
+    );
+    assert!(report
+        .diagnostics
+        .iter()
+        .any(|diagnostic| { diagnostic.code == XlsxDiagnosticCode::MissingRelationshipTarget }));
+    assert!(XlsxReader::read_with_report(Cursor::new(bytes), XlsxPackagePolicy::Strict,).is_err());
+}
+
+#[test]
+fn compatible_falls_back_from_malformed_package_relationships() {
+    let bytes = rewrite_text_part(
+        relocated_package("pkg/main/book.xml"),
+        "_rels/.rels",
+        |relationships| relationships.replace("</Relationships>", "<broken>"),
+    );
+    let report = XlsxReader::read_with_report(Cursor::new(&bytes), XlsxPackagePolicy::Compatible)
+        .expect("compatible fallback");
+    assert_eq!(
+        report.workbook.worksheet(0).expect("worksheet").name(),
+        "Moved"
+    );
+    assert!(report
+        .diagnostics
+        .iter()
+        .any(|diagnostic| { diagnostic.code == XlsxDiagnosticCode::MalformedRelationship }));
+    assert!(XlsxReader::read_with_report(Cursor::new(bytes), XlsxPackagePolicy::Strict).is_err());
+}
+
+#[test]
+fn compatible_prefers_workbook_content_type_among_ambiguous_roots() {
+    let bytes = rewrite_text_part(
+        relocated_package("pkg/main/book.xml"),
+        "_rels/.rels",
+        |relationships| {
+            relationships.replace(
+                "<Relationship Id=\"rId1\"",
+                "<Relationship Id=\"rId0\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"pkg/resources/styles.xml\"/><Relationship Id=\"rId1\"",
+            )
+        },
+    );
+    let report = XlsxReader::read_with_report(Cursor::new(&bytes), XlsxPackagePolicy::Compatible)
+        .expect("compatible selection");
+    assert_eq!(
+        report.workbook.worksheet(0).expect("worksheet").name(),
+        "Moved"
+    );
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == XlsxDiagnosticCode::AmbiguousOfficeDocumentRelationship
+    }));
+    assert!(XlsxReader::read_with_report(Cursor::new(bytes), XlsxPackagePolicy::Strict).is_err());
+}
+
+#[test]
+fn compatible_ignores_malformed_content_types_but_strict_rejects_them() {
+    let bytes = rewrite_text_part(
+        relocated_package("pkg/main/book.xml"),
+        "[Content_Types].xml",
+        |content_types| content_types.replace("</Types>", "<broken>"),
+    );
+    let report = XlsxReader::read_with_report(Cursor::new(&bytes), XlsxPackagePolicy::Compatible)
+        .expect("compatible read");
+    assert_eq!(
+        report.workbook.worksheet(0).expect("worksheet").name(),
+        "Moved"
+    );
+    assert!(report
+        .diagnostics
+        .iter()
+        .any(|diagnostic| { diagnostic.code == XlsxDiagnosticCode::MalformedContentType }));
+    assert!(XlsxReader::read_with_report(Cursor::new(bytes), XlsxPackagePolicy::Strict,).is_err());
+}
+
+#[test]
+fn strict_skips_valid_unmodeled_dialog_sheet_without_inventing_a_worksheet() {
+    let bytes = rewrite_text_part(
+        relocated_package("pkg/main/book.xml"),
+        "pkg/main/_rels/book.xml.rels",
+        |relationships| {
+            relationships.replace(
+                r#"/relationships/worksheet""#,
+                r#"/relationships/dialogsheet""#,
+            )
+        },
+    );
+    let bytes = rewrite_text_part(bytes, "[Content_Types].xml", |content_types| {
+        content_types.replace(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.dialogsheet+xml",
+        )
+    });
+    let report = XlsxReader::read_with_report(Cursor::new(bytes), XlsxPackagePolicy::Strict)
+        .expect("strict read");
+    assert_eq!(report.workbook.sheet_count(), 0);
+    assert!(report
+        .diagnostics
+        .iter()
+        .any(|diagnostic| { diagnostic.code == XlsxDiagnosticCode::UnsupportedSheetType }));
 }
 
 #[test]

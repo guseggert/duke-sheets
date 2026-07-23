@@ -89,6 +89,7 @@ impl RelationshipSet {
     ) -> XlsxResult<Self> {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes)?;
+        validate_well_formed_xml(&bytes)?;
         if diagnostics.policy() == super::diagnostics::XlsxPackagePolicy::Strict {
             validate_relationships_structure(&bytes)?;
         }
@@ -206,28 +207,32 @@ impl RelationshipSet {
                         continue;
                     }
 
-                    let parsed_target = match target_mode.as_deref() {
-                        None | Some("Internal") => {
-                            match resolve_internal_target_with_policy(
-                                source.part_name(),
-                                &raw_target,
-                                diagnostics.policy()
-                                    == super::diagnostics::XlsxPackagePolicy::Compatible,
-                            ) {
-                                Ok(part_name) => RelationshipTarget::Internal(part_name),
-                                Err(error) => {
-                                    diagnostics.violation(
-                                        XlsxDiagnosticCode::UnresolvedRelationshipTarget,
-                                        error.to_string(),
-                                        source.part_name().map(PartName::as_str),
-                                        Some(&id),
-                                        Some(&raw_target),
-                                    )?;
-                                    RelationshipTarget::UnresolvedInternal
-                                }
-                            }
+                    // TargetMode values are matched case-insensitively for
+                    // compatibility; non-canonical casing is a violation.
+                    let mode = target_mode.as_deref();
+                    if mode.is_some_and(|mode| {
+                        (mode.eq_ignore_ascii_case("Internal") && mode != "Internal")
+                            || (mode.eq_ignore_ascii_case("External") && mode != "External")
+                    }) {
+                        diagnostics.violation(
+                            XlsxDiagnosticCode::UnknownTargetMode,
+                            format!(
+                                "non-canonical relationship TargetMode {}",
+                                mode.unwrap_or_default()
+                            ),
+                            source.part_name().map(PartName::as_str),
+                            Some(&id),
+                            Some(&raw_target),
+                        )?;
+                    }
+                    let parsed_target = match mode {
+                        None => Self::resolve_internal(source, &id, &raw_target, diagnostics)?,
+                        Some(mode) if mode.eq_ignore_ascii_case("Internal") => {
+                            Self::resolve_internal(source, &id, &raw_target, diagnostics)?
                         }
-                        Some("External") => RelationshipTarget::External(raw_target.clone()),
+                        Some(mode) if mode.eq_ignore_ascii_case("External") => {
+                            RelationshipTarget::External(raw_target.clone())
+                        }
                         Some(mode) => {
                             diagnostics.violation(
                                 XlsxDiagnosticCode::UnknownTargetMode,
@@ -270,6 +275,31 @@ impl RelationshipSet {
         Ok(relationships)
     }
 
+    fn resolve_internal(
+        source: &RelationshipSource,
+        id: &str,
+        raw_target: &str,
+        diagnostics: &mut DiagnosticSink,
+    ) -> XlsxResult<RelationshipTarget> {
+        match resolve_internal_target_with_policy(
+            source.part_name(),
+            raw_target,
+            diagnostics.policy() == super::diagnostics::XlsxPackagePolicy::Compatible,
+        ) {
+            Ok(part_name) => Ok(RelationshipTarget::Internal(part_name)),
+            Err(error) => {
+                diagnostics.violation(
+                    XlsxDiagnosticCode::UnresolvedRelationshipTarget,
+                    error.to_string(),
+                    source.part_name().map(PartName::as_str),
+                    Some(id),
+                    Some(raw_target),
+                )?;
+                Ok(RelationshipTarget::UnresolvedInternal)
+            }
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn get(&self, id: &str) -> Option<&Relationship> {
         self.by_id
@@ -300,6 +330,37 @@ impl RelationshipSet {
 
 fn namespace_is(resolution: &ResolveResult<'_>, namespace: &str) -> bool {
     matches!(resolution, ResolveResult::Bound(actual) if actual.as_ref() == namespace.as_bytes())
+}
+
+fn validate_well_formed_xml(bytes: &[u8]) -> XlsxResult<()> {
+    let mut reader = quick_xml::Reader::from_reader(Cursor::new(bytes));
+    let mut buf = Vec::new();
+    let mut open_elements: Vec<Vec<u8>> = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(element)) => open_elements.push(element.name().as_ref().to_vec()),
+            Ok(Event::End(element)) => {
+                let expected = open_elements.pop().ok_or_else(|| {
+                    XlsxError::InvalidFormat("unexpected closing XML element".into())
+                })?;
+                if expected != element.name().as_ref() {
+                    return Err(XlsxError::InvalidFormat(
+                        "mismatched closing XML element".into(),
+                    ));
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(error) => return Err(XlsxError::Xml(error)),
+            _ => {}
+        }
+        buf.clear();
+    }
+    if !open_elements.is_empty() {
+        return Err(XlsxError::InvalidFormat(
+            "unclosed XML element at end of stream".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_relationships_structure(bytes: &[u8]) -> XlsxResult<()> {
@@ -460,6 +521,32 @@ mod tests {
             Cursor::new(xml),
             &RelationshipSource::Package,
             &mut diagnostics
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn compatible_mode_accepts_noncanonical_external_target_mode() {
+        let xml = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="urn:link" Target="https://example.com" TargetMode="external"/></Relationships>"#;
+        let mut diagnostics = DiagnosticSink::new(XlsxPackagePolicy::Compatible);
+        let relationships = RelationshipSet::parse(
+            Cursor::new(xml),
+            &RelationshipSource::Package,
+            &mut diagnostics,
+        )
+        .unwrap();
+        assert!(relationships.get("rId1").unwrap().is_external());
+        assert_eq!(diagnostics.into_diagnostics().len(), 1);
+    }
+
+    #[test]
+    fn strict_mode_rejects_noncanonical_target_mode() {
+        let xml = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="urn:link" Target="https://example.com" TargetMode="external"/></Relationships>"#;
+        let mut diagnostics = DiagnosticSink::new(XlsxPackagePolicy::Strict);
+        assert!(RelationshipSet::parse(
+            Cursor::new(xml),
+            &RelationshipSource::Package,
+            &mut diagnostics,
         )
         .is_err());
     }

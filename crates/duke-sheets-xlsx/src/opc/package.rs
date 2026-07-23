@@ -30,6 +30,9 @@ pub(crate) struct OpcPackage<R: Read + Seek> {
     archive: zip::ZipArchive<R>,
     entries: HashMap<PartName, usize>,
     content_types: ContentTypes,
+    /// False when `[Content_Types].xml` was unreadable and Compatible
+    /// mode degraded to an empty map; content-type checks are skipped.
+    content_types_usable: bool,
     relationships: HashMap<RelationshipSource, RelationshipSet>,
     validated_content_types: HashSet<PartName>,
     diagnostics: DiagnosticSink,
@@ -94,19 +97,30 @@ impl<R: Read + Seek> OpcPackage<R> {
                 )?;
                 continue;
             }
-            for existing in &ordered_names {
-                if part_name.is_derivable_from(existing) || existing.is_derivable_from(&part_name) {
+            ordered_names.push(part_name.clone());
+            entries.insert(part_name, index);
+        }
+
+        let lowercased: HashSet<String> = ordered_names
+            .iter()
+            .map(|name| name.as_str().to_ascii_lowercase())
+            .collect();
+        for part_name in &ordered_names {
+            let lower = part_name.as_str().to_ascii_lowercase();
+            for (offset, _) in lower.match_indices('/').skip(1) {
+                if lowercased.contains(&lower[..offset]) {
                     diagnostics.violation(
                         XlsxDiagnosticCode::DerivablePartName,
-                        format!("derivable OPC part names: {existing} and {part_name}"),
+                        format!(
+                            "derivable OPC part names: {} and {part_name}",
+                            &lower[..offset]
+                        ),
                         None,
                         None,
                         Some(part_name.as_str()),
                     )?;
                 }
             }
-            ordered_names.push(part_name.clone());
-            entries.insert(part_name, index);
         }
 
         let content_types_index = content_types_index
@@ -115,12 +129,27 @@ impl<R: Read + Seek> OpcPackage<R> {
         archive
             .by_index(content_types_index)?
             .read_to_end(&mut content_types_xml)?;
-        let content_types = ContentTypes::parse(Cursor::new(content_types_xml), &mut diagnostics)?;
+        let (content_types, content_types_usable) =
+            match ContentTypes::parse(Cursor::new(content_types_xml), &mut diagnostics) {
+                Ok(content_types) => (content_types, true),
+                Err(error) if policy == XlsxPackagePolicy::Strict => return Err(error),
+                Err(error) => {
+                    diagnostics.warning(
+                        XlsxDiagnosticCode::MalformedContentType,
+                        format!("ignoring unreadable [Content_Types].xml: {error}"),
+                        Some("/[Content_Types].xml"),
+                        None,
+                        None,
+                    );
+                    (ContentTypes::default(), false)
+                }
+            };
 
         Ok(Self {
             archive,
             entries,
             content_types,
+            content_types_usable,
             relationships: HashMap::new(),
             validated_content_types: HashSet::new(),
             diagnostics,
@@ -166,27 +195,47 @@ impl<R: Read + Seek> OpcPackage<R> {
                 )?;
             }
 
-            let mut targets = Vec::new();
+            let mut targets: Vec<PartName> = Vec::new();
             for relationship in office_relationships {
                 let Some(part_name) = relationship.internal_part().cloned() else {
-                    return Err(XlsxError::InvalidFormat(format!(
-                        "officeDocument relationship {} is not a resolvable internal target",
-                        relationship.id
-                    )));
+                    // External mode is diagnosed here; unresolved internal
+                    // targets were already diagnosed while parsing.
+                    if relationship.is_external() {
+                        self.diagnostics.violation(
+                            XlsxDiagnosticCode::MalformedRelationship,
+                            format!(
+                                "officeDocument relationship {} must target an internal part",
+                                relationship.id
+                            ),
+                            None,
+                            Some(&relationship.id),
+                            Some(&relationship.raw_target),
+                        )?;
+                    }
+                    continue;
                 };
-                if !self.part_exists(&part_name) {
-                    return Err(XlsxError::MissingPart(part_name.zip_name().to_string()));
-                }
-                if !targets.iter().any(|target| target == &part_name) {
+                // Missing targets were diagnosed while parsing the set.
+                if self.part_exists(&part_name) && !targets.contains(&part_name) {
                     targets.push(part_name);
                 }
             }
-            if targets.len() != 1 {
-                return Err(XlsxError::InvalidFormat(
-                    "package has multiple distinct officeDocument targets".into(),
-                ));
+            if targets.is_empty() {
+                return self.discover_workbook_fallback();
             }
-            let workbook = targets.remove(0);
+            let canonical = PartName::new("/xl/workbook.xml")?;
+            let preferred = targets
+                .iter()
+                .position(|target| {
+                    target == &canonical && self.has_workbook_content_type(target)
+                })
+                .or_else(|| {
+                    targets
+                        .iter()
+                        .position(|target| self.has_workbook_content_type(target))
+                })
+                .or_else(|| targets.iter().position(|target| target == &canonical))
+                .unwrap_or(0);
+            let workbook = targets.remove(preferred);
             self.validate_workbook_content_type(&workbook)?;
             return Ok(workbook);
         }
@@ -203,7 +252,7 @@ impl<R: Read + Seek> OpcPackage<R> {
     }
 
     fn discover_workbook_fallback(&mut self) -> XlsxResult<PartName> {
-        let candidates: Vec<_> = self
+        let mut candidates: Vec<_> = self
             .entries
             .keys()
             .filter(|part_name| {
@@ -217,23 +266,35 @@ impl<R: Read + Seek> OpcPackage<R> {
             })
             .cloned()
             .collect();
-        if candidates.len() == 1 {
+        candidates.sort_by(|left, right| {
+            left.as_str()
+                .to_ascii_lowercase()
+                .cmp(&right.as_str().to_ascii_lowercase())
+        });
+        if candidates.len() > 1 {
+            self.diagnostics.violation(
+                XlsxDiagnosticCode::AmbiguousOfficeDocumentRelationship,
+                "content types identify multiple possible Workbook parts",
+                None,
+                None,
+                None,
+            )?;
+        }
+        if !candidates.is_empty() {
+            let canonical = PartName::new("/xl/workbook.xml")?;
+            let chosen = if candidates.contains(&canonical) {
+                canonical
+            } else {
+                candidates.remove(0)
+            };
             self.diagnostics.recovery(
                 XlsxDiagnosticCode::CanonicalPartFallback,
-                format!(
-                    "located Workbook part {} through its content type",
-                    candidates[0]
-                ),
+                format!("located Workbook part {chosen} through its content type"),
                 None,
                 None,
-                Some(candidates[0].as_str()),
+                Some(chosen.as_str()),
             );
-            return Ok(candidates[0].clone());
-        }
-        if candidates.len() > 1 {
-            return Err(XlsxError::InvalidFormat(
-                "content types identify multiple possible Workbook parts".into(),
-            ));
+            return Ok(chosen);
         }
 
         let canonical = PartName::new("/xl/workbook.xml")?;
@@ -241,7 +302,7 @@ impl<R: Read + Seek> OpcPackage<R> {
             self.validate_workbook_content_type(&canonical)?;
             self.diagnostics.recovery(
                 XlsxDiagnosticCode::CanonicalPartFallback,
-                "using conventional /xl/workbook.xml because package relationships are absent",
+                "using conventional /xl/workbook.xml because it was not discoverable through package relationships",
                 None,
                 None,
                 Some(canonical.as_str()),
@@ -298,35 +359,41 @@ impl<R: Read + Seek> OpcPackage<R> {
         self.open_part(&relationships_part)?
             .read_to_end(&mut bytes)?;
         let relationships =
-            RelationshipSet::parse(Cursor::new(bytes), source, &mut self.diagnostics)?;
+            match RelationshipSet::parse(Cursor::new(bytes), source, &mut self.diagnostics) {
+                Ok(relationships) => relationships,
+                Err(error) if self.policy() == XlsxPackagePolicy::Compatible => {
+                    self.diagnostics.warning(
+                        XlsxDiagnosticCode::MalformedRelationship,
+                        format!(
+                            "ignoring unreadable relationships for {}: {error}",
+                            source.display_name()
+                        ),
+                        source.part_name().map(PartName::as_str),
+                        None,
+                        None,
+                    );
+                    RelationshipSet::default()
+                }
+                Err(error) => return Err(error),
+            };
         self.validate_relationship_set(source, &relationships)?;
         self.relationships
             .insert(source.clone(), relationships.clone());
         Ok(relationships)
     }
 
+    /// Open a relationship's internal target. Missing or mistyped targets
+    /// were already diagnosed when the relationship set was parsed.
     pub(crate) fn open_related_part(
         &mut self,
-        source: &RelationshipSource,
         relationship: &super::relationships::Relationship,
     ) -> XlsxResult<Option<zip::read::ZipFile<'_>>> {
         let Some(part_name) = relationship.internal_part().cloned() else {
             return Ok(None);
         };
         if !self.part_exists(&part_name) {
-            self.diagnostics.violation(
-                XlsxDiagnosticCode::MissingRelationshipTarget,
-                format!(
-                    "missing relationship target {part_name} from {}",
-                    source.display_name()
-                ),
-                source.part_name().map(PartName::as_str),
-                Some(&relationship.id),
-                Some(&relationship.raw_target),
-            )?;
             return Ok(None);
         }
-        self.validate_relationship_content_type(&part_name, &relationship.rel_type)?;
         self.open_part(&part_name).map(Some)
     }
 
@@ -339,6 +406,9 @@ impl<R: Read + Seek> OpcPackage<R> {
         part_name: &PartName,
         expected: &str,
     ) -> XlsxResult<()> {
+        if !self.content_types_usable {
+            return Ok(());
+        }
         self.validate_content_type_presence(part_name)?;
         let actual = self.content_types.content_type_for(part_name);
         if actual.is_some_and(|actual| actual.eq_ignore_ascii_case(expected)) {
@@ -365,6 +435,9 @@ impl<R: Read + Seek> OpcPackage<R> {
     }
 
     fn validate_workbook_content_type(&mut self, workbook: &PartName) -> XlsxResult<()> {
+        if !self.content_types_usable {
+            return Ok(());
+        }
         let workbook_parts: Vec<_> = self
             .entries
             .keys()
@@ -408,8 +481,23 @@ impl<R: Read + Seek> OpcPackage<R> {
         )
     }
 
+    fn has_workbook_content_type(&self, part_name: &PartName) -> bool {
+        self.content_types_usable
+            && self
+                .content_types
+                .content_type_for(part_name)
+                .is_some_and(|content_type| {
+                    WORKBOOK_CONTENT_TYPES
+                        .iter()
+                        .any(|accepted| content_type.eq_ignore_ascii_case(accepted))
+                })
+    }
+
     fn validate_content_type_presence(&mut self, part_name: &PartName) -> XlsxResult<()> {
-        if is_relationship_part(part_name) || self.validated_content_types.contains(part_name) {
+        if !self.content_types_usable
+            || is_relationship_part(part_name)
+            || self.validated_content_types.contains(part_name)
+        {
             return Ok(());
         }
         if self.content_types.content_type_for(part_name).is_none() {
@@ -430,6 +518,9 @@ impl<R: Read + Seek> OpcPackage<R> {
         part_name: &PartName,
         rel_type: &str,
     ) -> XlsxResult<()> {
+        if !self.content_types_usable {
+            return Ok(());
+        }
         let Some(expected) = expected_content_type(rel_type) else {
             return Ok(());
         };
@@ -511,6 +602,13 @@ fn expected_content_type(rel_type: &str) -> Option<ContentTypeExpectation> {
         exact("application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml")
     } else if office_relationship_type_is(rel_type, "chartsheet") {
         exact("application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml")
+    } else if office_relationship_type_is(rel_type, "dialogsheet") {
+        exact("application/vnd.openxmlformats-officedocument.spreadsheetml.dialogsheet+xml")
+    } else if rel_type == "http://schemas.microsoft.com/office/2006/relationships/xlMacrosheet" {
+        exact("application/vnd.ms-excel.macrosheet+xml")
+    } else if rel_type == "http://schemas.microsoft.com/office/2006/relationships/xlIntlMacrosheet"
+    {
+        exact("application/vnd.ms-excel.intlmacrosheet+xml")
     } else if office_relationship_type_is(rel_type, "styles") {
         exact("application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml")
     } else if office_relationship_type_is(rel_type, "sharedStrings") {
