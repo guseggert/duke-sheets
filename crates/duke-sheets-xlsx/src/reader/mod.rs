@@ -438,7 +438,8 @@ fn capture_raw_rels<R: Read + Seek>(
         let Some(rel) = relationships.get(&id) else {
             continue;
         };
-        let part = if rel.internal_path() == Some(source_part) {
+        let source_name = PartName::from_zip_name(source_part).ok();
+        let part = if source_name.as_ref() == rel.internal_part() {
             None
         } else {
             match open_relationship_part(package, source_part, &id, rel)? {

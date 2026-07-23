@@ -11,9 +11,9 @@ use quick_xml::Writer;
 use crate::error::{XlsxError, XlsxResult};
 use crate::opc::resolve_internal_target;
 use crate::styles::{roundtrip_theme_data_for, XlsxStyleTable};
-use form_controls::radio_head_flags;
 use duke_sheets_core::style::Color;
 use duke_sheets_core::{CellAddress, CellRange, SheetSlot, Workbook};
+use form_controls::radio_head_flags;
 
 mod chart;
 mod chart_ex;
@@ -22,11 +22,13 @@ mod conditional_format;
 mod data_validation;
 mod drawing;
 pub(crate) mod form_controls;
+mod manifest;
 mod tables;
 
 const NS_SPREADSHEET: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 const NS_RELATIONSHIPS: &str = "http://schemas.openxmlformats.org/package/2006/relationships";
 const NS_DOC_RELS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+#[cfg(test)]
 const NS_CONTENT_TYPES: &str = "http://schemas.openxmlformats.org/package/2006/content-types";
 
 // Relationship types
@@ -68,6 +70,7 @@ const CT_COMMENTS: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml";
 const CT_CTRLPROP: &str = "application/vnd.ms-excel.controlproperties+xml";
 const CT_THEME: &str = "application/vnd.openxmlformats-officedocument.theme+xml";
+#[cfg(test)]
 const CT_RELS: &str = "application/vnd.openxmlformats-package.relationships+xml";
 const CT_TABLE: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml";
 const CT_METADATA: &str =
@@ -381,6 +384,69 @@ pub(super) struct WorksheetRelationship {
     rel_type: &'static str,
     target: String,
     target_mode: Option<&'static str>,
+}
+
+struct RawPartPlan {
+    path: String,
+    content_type: &'static str,
+}
+
+fn raw_part_content_type(rel_type: &str, path: &str) -> &'static str {
+    let relationship_name = [
+        (
+            "diagramData",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramData",
+            "http://purl.oclc.org/ooxml/officeDocument/relationships/diagramData",
+        ),
+        (
+            "diagramLayout",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramLayout",
+            "http://purl.oclc.org/ooxml/officeDocument/relationships/diagramLayout",
+        ),
+        (
+            "diagramQuickStyle",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramQuickStyle",
+            "http://purl.oclc.org/ooxml/officeDocument/relationships/diagramQuickStyle",
+        ),
+        (
+            "diagramColors",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramColors",
+            "http://purl.oclc.org/ooxml/officeDocument/relationships/diagramColors",
+        ),
+    ]
+    .iter()
+    .find_map(|(name, transitional, strict)| {
+        (rel_type == *transitional || rel_type == *strict).then_some(*name)
+    });
+    match relationship_name {
+        Some("diagramData") => {
+            "application/vnd.openxmlformats-officedocument.drawingml.diagramData+xml"
+        }
+        Some("diagramLayout") => {
+            "application/vnd.openxmlformats-officedocument.drawingml.diagramLayout+xml"
+        }
+        Some("diagramQuickStyle") => {
+            "application/vnd.openxmlformats-officedocument.drawingml.diagramStyle+xml"
+        }
+        Some("diagramColors") => {
+            "application/vnd.openxmlformats-officedocument.drawingml.diagramColors+xml"
+        }
+        _ => path
+            .rsplit('/')
+            .next()
+            .and_then(|file| file.rsplit_once('.'))
+            .map(|(_, extension)| extension.to_ascii_lowercase())
+            .and_then(|extension| {
+                duke_sheets_chart::ImageFormat::from_extension(&extension)
+                    .map(drawing::image_format_mime)
+                    .or_else(|| match extension.as_str() {
+                        "xml" => Some("application/xml"),
+                        "vml" => Some("application/vnd.openxmlformats-officedocument.vmlDrawing"),
+                        _ => None,
+                    })
+            })
+            .unwrap_or("application/octet-stream"),
+    }
 }
 
 pub(super) fn write_color_element(w: &mut XmlWriter, tag: &str, color: &Color) -> XlsxResult<()> {
@@ -733,26 +799,37 @@ impl XlsxWriter {
         // (xl/media/imageN.ext). Reserve their numbers so generated
         // media filenames never collide, and collect their content
         // types and part bytes.
-        let mut raw_media_parts: Vec<(String, usize)> = Vec::new(); // (path, sheet_idx)
+        let mut raw_media_parts: Vec<RawPartPlan> = Vec::new();
         let mut max_claimed_image_num = 0usize;
-        for (i, sheet) in workbook.worksheets().enumerate() {
+        for sheet in workbook.worksheets() {
             for rel in sheet_raw_rels(sheet) {
                 if rel.external || rel.part.is_none() {
                     continue;
                 }
                 let path = resolve_internal_target("xl/drawings/drawing1.xml", &rel.target)?;
-                if path == "xl/drawings/drawing1.xml" {
+                if path.eq_ignore_ascii_case("xl/drawings/drawing1.xml") {
                     continue;
                 }
-                if let Some(rest) = path.strip_prefix("xl/media/image") {
+                let identity = path.to_ascii_lowercase();
+                if let Some(rest) = identity.strip_prefix("xl/media/image") {
                     if let Some((num, _ext)) = rest.split_once('.') {
                         if let Ok(num) = num.parse::<usize>() {
                             max_claimed_image_num = max_claimed_image_num.max(num);
                         }
                     }
                 }
-                if !raw_media_parts.iter().any(|(p, _)| p == &path) {
-                    raw_media_parts.push((path, i));
+                let content_type = raw_part_content_type(&rel.rel_type, &path);
+                if let Some(existing) = raw_media_parts
+                    .iter()
+                    .find(|part| part.path.eq_ignore_ascii_case(&path))
+                {
+                    if existing.content_type != content_type {
+                        return Err(XlsxError::InvalidFormat(format!(
+                            "conflicting content types for raw part {path}"
+                        )));
+                    }
+                } else {
+                    raw_media_parts.push(RawPartPlan { path, content_type });
                 }
             }
         }
@@ -764,18 +841,29 @@ impl XlsxWriter {
                     continue;
                 }
                 let path = resolve_internal_target("xl/drawings/drawing1.xml", &rel.target)?;
-                if path == "xl/drawings/drawing1.xml" {
+                if path.eq_ignore_ascii_case("xl/drawings/drawing1.xml") {
                     continue;
                 }
-                if let Some(rest) = path.strip_prefix("xl/media/image") {
+                let identity = path.to_ascii_lowercase();
+                if let Some(rest) = identity.strip_prefix("xl/media/image") {
                     if let Some((num, _ext)) = rest.split_once('.') {
                         if let Ok(num) = num.parse::<usize>() {
                             max_claimed_image_num = max_claimed_image_num.max(num);
                         }
                     }
                 }
-                if !raw_media_parts.iter().any(|(p, _)| p == &path) {
-                    raw_media_parts.push((path, 0));
+                let content_type = raw_part_content_type(&rel.rel_type, &path);
+                if let Some(existing) = raw_media_parts
+                    .iter()
+                    .find(|part| part.path.eq_ignore_ascii_case(&path))
+                {
+                    if existing.content_type != content_type {
+                        return Err(XlsxError::InvalidFormat(format!(
+                            "conflicting content types for raw part {path}"
+                        )));
+                    }
+                } else {
+                    raw_media_parts.push(RawPartPlan { path, content_type });
                 }
             }
         }
@@ -840,8 +928,7 @@ impl XlsxWriter {
             }
         }
 
-        Self::write_content_types(
-            &mut zip,
+        let mut manifest = Self::build_opc_manifest(
             workbook,
             &sheets_with_comments,
             &sheets_with_vml,
@@ -851,12 +938,14 @@ impl XlsxWriter {
             &drawing_numbering,
             &chart_numbering,
             &chart_ex_numbering,
+            &image_numbering,
             &raw_media_parts,
             global_chart_num - 1, // total standard charts (for style/color numbering)
             &cs_drawing_numbering,
             &cs_chart_numbering,
             needs_metadata,
         )?;
+        manifest.write(&mut zip)?;
 
         // Write _rels/.rels
         Self::write_root_rels(&mut zip)?;
@@ -882,9 +971,13 @@ impl XlsxWriter {
             Self::write_metadata_xml(&mut zip)?;
         }
 
-        // Media part paths already written (generated + raw
-        // preserved), to avoid duplicate archive entries.
-        let mut written_media: HashSet<String> = HashSet::new();
+        // Reserve generated VML paths before raw parts can claim them.
+        let mut written_parts: HashSet<String> = sheets_with_vml
+            .iter()
+            .map(|sheet_index| {
+                format!("xl/drawings/vmlDrawing{}.vml", sheet_index + 1).to_ascii_lowercase()
+            })
+            .collect();
 
         // Write worksheets and their relationships
         for (i, sheet) in workbook.worksheets().enumerate() {
@@ -916,6 +1009,16 @@ impl XlsxWriter {
                 drawing_num,
                 ctrl_prop_start,
             )?;
+
+            let worksheet_source = format!("xl/worksheets/sheet{}.xml", i + 1);
+            for relationship in &rels {
+                manifest.register_relationship(
+                    Some(&worksheet_source),
+                    &relationship.id,
+                    &relationship.target,
+                    relationship.target_mode == Some("External"),
+                )?;
+            }
 
             if !rels.is_empty() {
                 Self::write_worksheet_rels(&mut zip, i, &rels)?;
@@ -983,13 +1086,22 @@ impl XlsxWriter {
                     &chartex_global_nums,
                     &image_parts,
                 );
+                let drawing_source = format!("xl/drawings/drawing{dn}.xml");
+                for relationship in &plan.rels {
+                    manifest.register_relationship(
+                        Some(&drawing_source),
+                        &relationship.id,
+                        &relationship.target,
+                        relationship.external,
+                    )?;
+                }
                 drawing::write_drawing(&mut zip, sheet, i, &plan, dn)?;
                 drawing::write_drawing_rels(&mut zip, dn, &plan.rels)?;
 
                 // Write image binary parts (xl/media/imageN.<ext>).
                 for (img, &(gn, ext)) in image_payloads.iter().zip(&image_parts) {
                     drawing::write_media_part(&mut zip, gn, ext, &img.data)?;
-                    written_media.insert(format!("xl/media/image{gn}.{ext}"));
+                    written_parts.insert(format!("xl/media/image{gn}.{ext}").to_ascii_lowercase());
                 }
                 // Write raw-preserved parts at their original paths.
                 for rel in sheet_raw_rels(sheet) {
@@ -1001,10 +1113,10 @@ impl XlsxWriter {
                     }
                     let source_path = format!("xl/drawings/drawing{dn}.xml");
                     let path = resolve_internal_target(&source_path, &rel.target)?;
-                    if path == source_path {
+                    if path.eq_ignore_ascii_case(&source_path) {
                         continue;
                     }
-                    if !written_media.insert(path.clone()) {
+                    if !written_parts.insert(path.to_ascii_lowercase()) {
                         continue;
                     }
                     zip.start_file(&path, zip::write::SimpleFileOptions::default())?;
@@ -1043,6 +1155,30 @@ impl XlsxWriter {
             let Some(dn) = cs_dn else { continue };
             let plan =
                 drawing::plan_chartsheet_drawing(&cs.raw_drawing_objects, &cs.raw_drawing_rels);
+            let chartsheet_source = format!("xl/chartsheets/sheet{}.xml", i + 1);
+            manifest.register_relationship(
+                Some(&chartsheet_source),
+                "rId1",
+                &format!("../drawings/drawing{dn}.xml"),
+                false,
+            )?;
+            let drawing_source = format!("xl/drawings/drawing{dn}.xml");
+            if let Some(chart_num) = cs_cn {
+                manifest.register_relationship(
+                    Some(&drawing_source),
+                    &plan.chart_rid,
+                    &format!("../charts/chart{chart_num}.xml"),
+                    false,
+                )?;
+            }
+            for relationship in &plan.raw_rels {
+                manifest.register_relationship(
+                    Some(&drawing_source),
+                    &relationship.id,
+                    &relationship.target,
+                    relationship.external,
+                )?;
+            }
             Self::write_chartsheet_rels(&mut zip, i, dn)?;
             drawing::write_chartsheet_drawing(&mut zip, &plan, cs_cn.is_some(), dn)?;
             drawing::write_chartsheet_drawing_rels(
@@ -1062,10 +1198,10 @@ impl XlsxWriter {
                 }
                 let source_path = format!("xl/drawings/drawing{dn}.xml");
                 let path = resolve_internal_target(&source_path, &rel.target)?;
-                if path == source_path {
+                if path.eq_ignore_ascii_case(&source_path) {
                     continue;
                 }
-                if !written_media.insert(path.clone()) {
+                if !written_parts.insert(path.to_ascii_lowercase()) {
                     continue;
                 }
                 zip.start_file(&path, zip::write::SimpleFileOptions::default())?;
@@ -1081,6 +1217,258 @@ impl XlsxWriter {
     }
 
     #[allow(clippy::too_many_arguments)]
+    fn build_opc_manifest(
+        workbook: &Workbook,
+        sheets_with_comments: &[usize],
+        sheets_with_vml: &[usize],
+        total_ctrl_props: usize,
+        sst: &SharedStringTable,
+        table_numbering: &[(usize, usize, usize)],
+        drawing_numbering: &[(usize, usize)],
+        chart_numbering: &[(usize, usize, usize)],
+        chart_ex_numbering: &[(usize, usize, usize)],
+        image_numbering: &[(usize, usize, usize)],
+        raw_media_parts: &[RawPartPlan],
+        total_standard_charts: usize,
+        cs_drawing_numbering: &[(usize, usize)],
+        cs_chart_numbering: &[(usize, usize)],
+        has_metadata: bool,
+    ) -> XlsxResult<manifest::OpcManifest> {
+        let mut manifest = manifest::OpcManifest::new()?;
+        manifest.register_part("xl/workbook.xml", CT_WORKBOOK)?;
+        manifest.register_part("xl/styles.xml", CT_STYLES)?;
+        manifest.register_part("xl/theme/theme1.xml", CT_THEME)?;
+        if !sst.is_empty() {
+            manifest.register_part("xl/sharedStrings.xml", CT_SST)?;
+        }
+        for index in 0..workbook.sheet_count() {
+            manifest.register_part(
+                &format!("xl/worksheets/sheet{}.xml", index + 1),
+                CT_WORKSHEET,
+            )?;
+        }
+        for index in 0..workbook.chartsheet_count() {
+            manifest.register_part(
+                &format!("xl/chartsheets/sheet{}.xml", index + 1),
+                CT_CHARTSHEET,
+            )?;
+        }
+        for &sheet_index in sheets_with_comments {
+            manifest.register_part(&format!("xl/comments{}.xml", sheet_index + 1), CT_COMMENTS)?;
+        }
+        if !sheets_with_vml.is_empty() {
+            manifest.register_default(
+                "vml",
+                "application/vnd.openxmlformats-officedocument.vmlDrawing",
+            )?;
+            for &sheet_index in sheets_with_vml {
+                manifest.register_part(
+                    &format!("xl/drawings/vmlDrawing{}.vml", sheet_index + 1),
+                    "application/vnd.openxmlformats-officedocument.vmlDrawing",
+                )?;
+            }
+        }
+        for number in 1..=total_ctrl_props {
+            manifest.register_part(&format!("xl/ctrlProps/ctrlProp{number}.xml"), CT_CTRLPROP)?;
+        }
+        for &(_, _, global_num) in table_numbering {
+            manifest.register_part(&format!("xl/tables/table{global_num}.xml"), CT_TABLE)?;
+        }
+        for &(_, drawing_num) in drawing_numbering.iter().chain(cs_drawing_numbering.iter()) {
+            manifest.register_part(&format!("xl/drawings/drawing{drawing_num}.xml"), CT_DRAWING)?;
+        }
+        for &(sheet_index, chart_index, global_num) in chart_numbering {
+            manifest.register_part(&format!("xl/charts/chart{global_num}.xml"), CT_CHART)?;
+            if let Some(chart) = workbook
+                .worksheet(sheet_index)
+                .and_then(|sheet| sheet.charts().nth(chart_index))
+                .map(|placed| placed.payload)
+            {
+                let chart_source = format!("xl/charts/chart{global_num}.xml");
+                let mut relationship_id = 1usize;
+                if chart.raw_chart_style.is_some() {
+                    manifest.register_part(
+                        &format!("xl/charts/style{global_num}.xml"),
+                        CT_CHART_STYLE,
+                    )?;
+                    manifest.register_relationship(
+                        Some(&chart_source),
+                        &format!("rId{relationship_id}"),
+                        &format!("style{global_num}.xml"),
+                        false,
+                    )?;
+                    relationship_id += 1;
+                }
+                if chart.raw_chart_color_style.is_some() {
+                    manifest.register_part(
+                        &format!("xl/charts/colors{global_num}.xml"),
+                        CT_CHART_COLOR_STYLE,
+                    )?;
+                    manifest.register_relationship(
+                        Some(&chart_source),
+                        &format!("rId{relationship_id}"),
+                        &format!("colors{global_num}.xml"),
+                        false,
+                    )?;
+                }
+            }
+        }
+        for &(chartsheet_index, global_num) in cs_chart_numbering {
+            manifest.register_part(&format!("xl/charts/chart{global_num}.xml"), CT_CHART)?;
+            if let Some(chart) = workbook
+                .chartsheets()
+                .get(chartsheet_index)
+                .map(|chartsheet| &chartsheet.chart)
+            {
+                let chart_source = format!("xl/charts/chart{global_num}.xml");
+                let mut relationship_id = 1usize;
+                if chart.raw_chart_style.is_some() {
+                    manifest.register_part(
+                        &format!("xl/charts/style{global_num}.xml"),
+                        CT_CHART_STYLE,
+                    )?;
+                    manifest.register_relationship(
+                        Some(&chart_source),
+                        &format!("rId{relationship_id}"),
+                        &format!("style{global_num}.xml"),
+                        false,
+                    )?;
+                    relationship_id += 1;
+                }
+                if chart.raw_chart_color_style.is_some() {
+                    manifest.register_part(
+                        &format!("xl/charts/colors{global_num}.xml"),
+                        CT_CHART_COLOR_STYLE,
+                    )?;
+                    manifest.register_relationship(
+                        Some(&chart_source),
+                        &format!("rId{relationship_id}"),
+                        &format!("colors{global_num}.xml"),
+                        false,
+                    )?;
+                }
+            }
+        }
+        for &(sheet_index, chart_index, global_num) in chart_ex_numbering {
+            manifest.register_part(&format!("xl/charts/chartEx{global_num}.xml"), CT_CHART_EX)?;
+            if let Some(chart) = workbook
+                .worksheet(sheet_index)
+                .and_then(|sheet| sheet.charts_ex().nth(chart_index))
+                .map(|placed| placed.payload)
+            {
+                let style_num = total_standard_charts + global_num;
+                let chart_source = format!("xl/charts/chartEx{global_num}.xml");
+                let mut relationship_id = 1usize;
+                if chart.raw_chart_style.is_some() {
+                    manifest.register_part(
+                        &format!("xl/charts/style{style_num}.xml"),
+                        CT_CHART_STYLE,
+                    )?;
+                    manifest.register_relationship(
+                        Some(&chart_source),
+                        &format!("rId{relationship_id}"),
+                        &format!("style{style_num}.xml"),
+                        false,
+                    )?;
+                    relationship_id += 1;
+                }
+                if chart.raw_chart_color_style.is_some() {
+                    manifest.register_part(
+                        &format!("xl/charts/colors{style_num}.xml"),
+                        CT_CHART_COLOR_STYLE,
+                    )?;
+                    manifest.register_relationship(
+                        Some(&chart_source),
+                        &format!("rId{relationship_id}"),
+                        &format!("colors{style_num}.xml"),
+                        false,
+                    )?;
+                }
+            }
+        }
+        for &(sheet_index, image_index, global_num) in image_numbering {
+            let Some(image) = workbook
+                .worksheet(sheet_index)
+                .and_then(|sheet| sheet_image_payloads(sheet).get(image_index).copied())
+            else {
+                continue;
+            };
+            let extension = drawing::image_format_extension(image.format);
+            let content_type = drawing::image_format_mime(image.format);
+            manifest.register_default(extension, content_type)?;
+            manifest.register_part(
+                &format!("xl/media/image{global_num}.{extension}"),
+                content_type,
+            )?;
+        }
+        for raw_part in raw_media_parts {
+            let content_type = raw_part.content_type;
+            manifest.register_part(&raw_part.path, content_type)?;
+        }
+        if has_metadata {
+            manifest.register_part("xl/metadata.xml", CT_METADATA)?;
+        }
+        manifest.register_relationship(None, "rId1", "xl/workbook.xml", false)?;
+
+        let order = Self::effective_sheet_order(workbook);
+        let mut worksheet_number = 0usize;
+        let mut chartsheet_number = 0usize;
+        for (tab_index, slot) in order.iter().enumerate() {
+            let target = match slot {
+                SheetSlot::Worksheet(_) => {
+                    worksheet_number += 1;
+                    format!("worksheets/sheet{worksheet_number}.xml")
+                }
+                SheetSlot::ChartSheet(_) => {
+                    chartsheet_number += 1;
+                    format!("chartsheets/sheet{chartsheet_number}.xml")
+                }
+            };
+            manifest.register_relationship(
+                Some("xl/workbook.xml"),
+                &format!("rId{}", tab_index + 1),
+                &target,
+                false,
+            )?;
+        }
+        let mut next_id = order.len() + 1;
+        manifest.register_relationship(
+            Some("xl/workbook.xml"),
+            &format!("rId{next_id}"),
+            "styles.xml",
+            false,
+        )?;
+        next_id += 1;
+        if !sst.is_empty() {
+            manifest.register_relationship(
+                Some("xl/workbook.xml"),
+                &format!("rId{next_id}"),
+                "sharedStrings.xml",
+                false,
+            )?;
+            next_id += 1;
+        }
+        manifest.register_relationship(
+            Some("xl/workbook.xml"),
+            &format!("rId{next_id}"),
+            "theme/theme1.xml",
+            false,
+        )?;
+        next_id += 1;
+        if has_metadata {
+            manifest.register_relationship(
+                Some("xl/workbook.xml"),
+                &format!("rId{next_id}"),
+                "metadata.xml",
+                false,
+            )?;
+        }
+        Ok(manifest)
+    }
+
+    #[cfg(test)]
+    // Keep the pre-manifest serializer available as a package-test oracle.
+    #[allow(clippy::too_many_arguments, dead_code)]
     fn write_content_types<W: Write + Seek>(
         zip: &mut zip::ZipWriter<W>,
         workbook: &Workbook,
@@ -1092,7 +1480,7 @@ impl XlsxWriter {
         drawing_numbering: &[(usize, usize)],
         chart_numbering: &[(usize, usize, usize)],
         chart_ex_numbering: &[(usize, usize, usize)],
-        raw_media_parts: &[(String, usize)],
+        raw_media_parts: &[RawPartPlan],
         total_standard_charts: usize,
         cs_drawing_numbering: &[(usize, usize)],
         cs_chart_numbering: &[(usize, usize)],
@@ -1134,7 +1522,8 @@ impl XlsxWriter {
                     );
                 }
             }
-            for (path, _) in raw_media_parts {
+            for raw_part in raw_media_parts {
+                let path = &raw_part.path;
                 let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
                 if ext.is_empty() || matches!(ext.as_str(), "rels" | "xml" | "vml") {
                     continue;
@@ -4251,8 +4640,11 @@ mod tests {
         XlsxWriter::write(&wb, &mut out).unwrap();
         let bytes = out.into_inner();
 
-        let wb2 = XlsxReader::read(Cursor::new(bytes)).unwrap();
-        let s = wb2.worksheet(0).unwrap();
+        let report =
+            XlsxReader::read_with_report(Cursor::new(bytes), crate::XlsxPackagePolicy::Strict)
+                .unwrap();
+        assert!(report.diagnostics.is_empty());
+        let s = report.workbook.worksheet(0).unwrap();
         assert_eq!(s.chart_count(), 1);
         assert_eq!(s.comment_count(), 1);
         assert_eq!(s.table_count(), 1);
@@ -4302,6 +4694,46 @@ mod tests {
         assert!(
             sheet_xml.contains("<drawing r:id="),
             "missing drawing element in worksheet"
+        );
+    }
+
+    #[test]
+    fn smartart_relationships_keep_specialized_content_types() {
+        assert_eq!(
+            raw_part_content_type(
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramData",
+                "xl/diagrams/data1.xml",
+            ),
+            "application/vnd.openxmlformats-officedocument.drawingml.diagramData+xml"
+        );
+        assert_eq!(
+            raw_part_content_type(
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramQuickStyle",
+                "xl/diagrams/quickStyle1.xml",
+            ),
+            "application/vnd.openxmlformats-officedocument.drawingml.diagramStyle+xml"
+        );
+        assert_eq!(
+            raw_part_content_type(
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramLayout",
+                "xl/diagrams/layout1.xml",
+            ),
+            "application/vnd.openxmlformats-officedocument.drawingml.diagramLayout+xml"
+        );
+        assert_eq!(
+            raw_part_content_type(
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramColors",
+                "xl/diagrams/colors1.xml",
+            ),
+            "application/vnd.openxmlformats-officedocument.drawingml.diagramColors+xml"
+        );
+        assert_eq!(
+            raw_part_content_type("urn:vendor", "xl/vendor/payload.bin"),
+            "application/octet-stream"
+        );
+        assert_eq!(
+            raw_part_content_type("urn:vendor/diagramData", "xl/vendor/data.xml"),
+            "application/xml"
         );
     }
 }
