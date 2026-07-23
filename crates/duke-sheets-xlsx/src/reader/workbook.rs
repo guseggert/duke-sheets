@@ -8,6 +8,7 @@ use quick_xml::reader::Reader;
 
 use super::archive_by_name;
 use crate::error::{XlsxError, XlsxResult};
+use crate::opc::{read_relationships, Relationship};
 use duke_sheets_core::{SheetVisibility, WorkbookProtection};
 
 /// Parsed workbook properties from workbook.xml
@@ -24,11 +25,7 @@ pub(super) struct WorkbookRels {
     pub(super) theme_path: Option<String>,
 }
 
-#[derive(Debug, Clone)]
-pub(super) struct SheetRelationship {
-    pub(super) rel_type: String,
-    pub(super) target: String,
-}
+pub(super) type PartRelationship = Relationship;
 
 pub(super) struct SheetEntry {
     pub(super) name: String,
@@ -214,71 +211,21 @@ fn parse_workbook_protection(e: &quick_xml::events::BytesStart<'_>) -> Option<Wo
 pub(super) fn read_workbook_rels<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
 ) -> XlsxResult<WorkbookRels> {
-    let file = archive_by_name(archive, "xl/_rels/workbook.xml.rels")
-        .map_err(|_| XlsxError::MissingPart("xl/_rels/workbook.xml.rels".into()))?;
-
-    let reader = BufReader::new(file);
-    let mut xml_reader = Reader::from_reader(reader);
-    xml_reader.config_mut().trim_text(true);
-
-    let mut buf = Vec::new();
+    let relationships = read_relationships(archive, "xl/workbook.xml", true)?;
     let mut rels = HashMap::new();
     let mut chartsheet_rels = HashMap::new();
     let mut theme_path: Option<String> = None;
-    loop {
-        match xml_reader.read_event_into(&mut buf) {
-            Ok(Event::Empty(e)) | Ok(Event::Start(e))
-                if e.name().local_name().as_ref() == b"Relationship" =>
-            {
-                let mut id = None;
-                let mut target = None;
-                let mut rel_type = None;
-
-                for attr in e.attributes().flatten() {
-                    match attr.key.local_name().as_ref() {
-                        b"Id" => id = attr.unescape_value().ok().map(|s| s.to_string()),
-                        b"Target" => {
-                            target = attr.unescape_value().ok().map(|s| s.to_string());
-                        }
-                        b"Type" => {
-                            rel_type = attr.unescape_value().ok().map(|s| s.to_string());
-                        }
-                        _ => {}
-                    }
-                }
-
-                // Include worksheet relationships and theme relationship
-                if let (Some(id), Some(target), Some(rel_type)) = (id, target, rel_type) {
-                    if rel_type.ends_with("/worksheet") {
-                        // Target is relative to xl/ folder
-                        let full_path = if let Some(stripped) = target.strip_prefix('/') {
-                            stripped.to_string()
-                        } else {
-                            format!("xl/{}", target)
-                        };
-                        rels.insert(id, full_path);
-                    } else if rel_type.ends_with("/chartsheet") {
-                        let full_path = if let Some(stripped) = target.strip_prefix('/') {
-                            stripped.to_string()
-                        } else {
-                            format!("xl/{}", target)
-                        };
-                        chartsheet_rels.insert(id, full_path);
-                    } else if rel_type.ends_with("/theme") {
-                        let full_path = if let Some(stripped) = target.strip_prefix('/') {
-                            stripped.to_string()
-                        } else {
-                            format!("xl/{}", target)
-                        };
-                        theme_path = Some(full_path);
-                    }
-                }
-            }
-            Ok(Event::Eof) => break,
-            Err(e) => return Err(XlsxError::Xml(e)),
-            _ => {}
+    for (id, relationship) in relationships {
+        let Some(path) = relationship.internal_path() else {
+            continue;
+        };
+        if relationship.rel_type.ends_with("/worksheet") {
+            rels.insert(id, path.to_string());
+        } else if relationship.rel_type.ends_with("/chartsheet") {
+            chartsheet_rels.insert(id, path.to_string());
+        } else if relationship.rel_type.ends_with("/theme") {
+            theme_path = Some(path.to_string());
         }
-        buf.clear();
     }
 
     Ok(WorkbookRels {
@@ -288,177 +235,10 @@ pub(super) fn read_workbook_rels<R: Read + Seek>(
     })
 }
 
-/// A relationship with its original (unresolved) target, as written
-/// in the .rels part. Used to preserve raw drawing relationships
-/// byte-faithfully.
-#[derive(Debug, Clone)]
-pub(super) struct VerbatimRel {
-    pub(super) rel_type: String,
-    /// Target exactly as in the rels XML (relative or absolute).
-    pub(super) target: String,
-    /// TargetMode="External".
-    pub(super) external: bool,
-}
-
-/// Read a part's .rels keeping original targets and TargetMode.
-pub(super) fn read_rels_verbatim<R: Read + Seek>(
+/// Read relationships owned by any package part.
+pub(super) fn read_part_rels<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     part_path: &str,
-) -> XlsxResult<HashMap<String, VerbatimRel>> {
-    let (base_dir, file_name) = match part_path.rsplit_once('/') {
-        Some((dir, file)) => (dir, file),
-        None => return Ok(HashMap::new()),
-    };
-    let rels_path = format!("{}/_rels/{}.rels", base_dir, file_name);
-
-    let file = match archive_by_name(archive, &rels_path) {
-        Ok(f) => f,
-        Err(_) => return Ok(HashMap::new()),
-    };
-
-    let reader = BufReader::new(file);
-    let mut xml_reader = Reader::from_reader(reader);
-    xml_reader.config_mut().trim_text(true);
-
-    let mut buf = Vec::new();
-    let mut rels = HashMap::new();
-
-    loop {
-        match xml_reader.read_event_into(&mut buf) {
-            Ok(Event::Empty(e)) | Ok(Event::Start(e))
-                if e.name().local_name().as_ref() == b"Relationship" =>
-            {
-                let mut id = None;
-                let mut target = None;
-                let mut rel_type = None;
-                let mut target_mode = None;
-
-                for attr in e.attributes().flatten() {
-                    match attr.key.local_name().as_ref() {
-                        b"Id" => id = attr.unescape_value().ok().map(|s| s.to_string()),
-                        b"Target" => target = attr.unescape_value().ok().map(|s| s.to_string()),
-                        b"Type" => rel_type = attr.unescape_value().ok().map(|s| s.to_string()),
-                        b"TargetMode" => {
-                            target_mode = attr.unescape_value().ok().map(|s| s.to_string())
-                        }
-                        _ => {}
-                    }
-                }
-
-                if let (Some(id), Some(target), Some(rel_type)) = (id, target, rel_type) {
-                    rels.insert(
-                        id,
-                        VerbatimRel {
-                            rel_type,
-                            target,
-                            external: target_mode.as_deref() == Some("External"),
-                        },
-                    );
-                }
-            }
-            Ok(Event::Eof) => break,
-            Err(e) => return Err(XlsxError::Xml(e)),
-            _ => {}
-        }
-        buf.clear();
-    }
-
-    Ok(rels)
-}
-
-/// Resolve a relationship target against a base directory (e.g.
-/// "xl/drawings"): `../media/image5.png` -> `xl/media/image5.png`.
-pub(super) fn resolve_rel_target(base_dir: &str, target: &str) -> String {
-    if let Some(stripped) = target.strip_prefix('/') {
-        return stripped.to_string();
-    }
-    let mut parts: Vec<&str> = base_dir.split('/').collect();
-    for part in target.split('/') {
-        if part == ".." {
-            parts.pop();
-        } else if part != "." && !part.is_empty() {
-            parts.push(part);
-        }
-    }
-    parts.join("/")
-}
-
-/// Read per-sheet .rels to get hyperlinks, comments, tables, etc.
-pub(super) fn read_sheet_rels<R: Read + Seek>(
-    archive: &mut zip::ZipArchive<R>,
-    sheet_path: &str,
-) -> XlsxResult<HashMap<String, SheetRelationship>> {
-    let (base_dir, file_name) = match sheet_path.rsplit_once('/') {
-        Some((dir, file)) => (dir, file),
-        None => return Ok(HashMap::new()),
-    };
-    let rels_path = format!("{}/_rels/{}.rels", base_dir, file_name);
-
-    let file = match archive_by_name(archive, &rels_path) {
-        Ok(f) => f,
-        Err(_) => return Ok(HashMap::new()),
-    };
-
-    let reader = BufReader::new(file);
-    let mut xml_reader = Reader::from_reader(reader);
-    xml_reader.config_mut().trim_text(true);
-
-    let mut buf = Vec::new();
-    let mut rels = HashMap::new();
-
-    loop {
-        match xml_reader.read_event_into(&mut buf) {
-            Ok(Event::Empty(e)) | Ok(Event::Start(e))
-                if e.name().local_name().as_ref() == b"Relationship" =>
-            {
-                let mut id = None;
-                let mut target = None;
-                let mut rel_type = None;
-                let mut target_mode = None;
-
-                for attr in e.attributes().flatten() {
-                    match attr.key.local_name().as_ref() {
-                        b"Id" => id = attr.unescape_value().ok().map(|s| s.to_string()),
-                        b"Target" => target = attr.unescape_value().ok().map(|s| s.to_string()),
-                        b"Type" => rel_type = attr.unescape_value().ok().map(|s| s.to_string()),
-                        b"TargetMode" => {
-                            target_mode = attr.unescape_value().ok().map(|s| s.to_string())
-                        }
-                        _ => {}
-                    }
-                }
-
-                if let (Some(id), Some(target), Some(rel_type)) = (id, target, rel_type) {
-                    let resolved_target =
-                        if target.starts_with('/') || target_mode.as_deref() == Some("External") {
-                            target
-                        } else {
-                            let mut parts: Vec<&str> = base_dir.split('/').collect();
-                            for part in target.split('/') {
-                                if part == ".." {
-                                    parts.pop();
-                                } else if part != "." && !part.is_empty() {
-                                    parts.push(part);
-                                }
-                            }
-                            parts.join("/")
-                        };
-
-                    rels.insert(
-                        id,
-                        SheetRelationship {
-                            rel_type,
-                            target: resolved_target,
-                        },
-                    );
-                }
-            }
-            Ok(Event::Eof) => break,
-            Err(e) => return Err(XlsxError::Xml(e)),
-            _ => {}
-        }
-        buf.clear();
-    }
-
-    Ok(rels)
+) -> XlsxResult<HashMap<String, PartRelationship>> {
+    read_relationships(archive, part_path, false)
 }

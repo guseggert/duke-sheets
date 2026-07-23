@@ -113,8 +113,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_full_xlsx_with_chart_roundtrip() {
+    fn build_xlsx_with_chart_relationships(drawing_target: &str, chart_target: &str) -> Vec<u8> {
         let mut bytes = Vec::new();
         {
             let cursor = Cursor::new(&mut bytes);
@@ -139,7 +138,7 @@ mod tests {
 
             zip.start_file("xl/worksheets/_rels/sheet1.xml.rels", options)
                 .unwrap();
-            zip.write_all(br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>"#).unwrap();
+            zip.write_all(format!(r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="{drawing_target}"/></Relationships>"#).as_bytes()).unwrap();
 
             zip.start_file("xl/drawings/drawing1.xml", options).unwrap();
             zip.write_all(br#"<?xml version="1.0"?>
@@ -161,7 +160,7 @@ mod tests {
 
             zip.start_file("xl/drawings/_rels/drawing1.xml.rels", options)
                 .unwrap();
-            zip.write_all(br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/></Relationships>"#).unwrap();
+            zip.write_all(format!(r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="{chart_target}"/></Relationships>"#).as_bytes()).unwrap();
 
             zip.start_file("xl/charts/chart1.xml", options).unwrap();
             zip.write_all(br#"<?xml version="1.0"?>
@@ -191,6 +190,12 @@ mod tests {
             zip.finish().unwrap();
         }
 
+        bytes
+    }
+
+    fn assert_xlsx_chart_relationships(drawing_target: &str, chart_target: &str) {
+        let bytes = build_xlsx_with_chart_relationships(drawing_target, chart_target);
+
         let workbook = XlsxReader::read(Cursor::new(bytes)).unwrap();
         let sheet = workbook.worksheet(0).unwrap();
 
@@ -219,6 +224,16 @@ mod tests {
             chart.legend.as_ref().unwrap().position,
             LegendPosition::Right
         );
+    }
+
+    #[test]
+    fn test_full_xlsx_with_chart_roundtrip() {
+        assert_xlsx_chart_relationships("../drawings/drawing1.xml", "../charts/chart1.xml");
+    }
+
+    #[test]
+    fn absolute_drawing_and_chart_relationships_are_resolved() {
+        assert_xlsx_chart_relationships("/xl/drawings/drawing1.xml", "/xl/charts/chart1.xml");
     }
 
     #[test]

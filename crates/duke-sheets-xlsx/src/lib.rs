@@ -6,6 +6,7 @@ pub mod error;
 pub mod reader;
 pub mod writer;
 
+mod opc;
 mod styles;
 
 pub use error::{XlsxError, XlsxResult};

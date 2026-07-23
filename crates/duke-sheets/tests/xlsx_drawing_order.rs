@@ -359,6 +359,45 @@ fn xlsx_conflicting_raw_rel_ids_are_remapped() {
     );
 }
 
+#[test]
+fn xlsx_same_document_raw_relationship_does_not_duplicate_drawing_part() {
+    let mut object = raw_link(0, 11, "rId1", "#shape");
+    let DrawingKind::Raw(raw) = &mut object.kind else {
+        panic!("raw drawing");
+    };
+    raw.rels[0].external = false;
+    raw.rels[0].part = Some(b"must not become a duplicate drawing part".to_vec());
+
+    let mut workbook = Workbook::new();
+    workbook.worksheet_mut(0).unwrap().add_drawing(object).unwrap();
+    let mut output = Cursor::new(Vec::new());
+    XlsxWriter::write(&workbook, &mut output).expect("write");
+    let bytes = output.into_inner();
+
+    let archive = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+    assert_eq!(
+        archive
+            .file_names()
+            .filter(|name| *name == "xl/drawings/drawing1.xml")
+            .count(),
+        1
+    );
+
+    let read = XlsxReader::read(Cursor::new(bytes)).expect("read");
+    let raw = read
+        .worksheet(0)
+        .unwrap()
+        .drawings()
+        .iter()
+        .find_map(|object| match &object.kind {
+            DrawingKind::Raw(raw) => Some(raw),
+            _ => None,
+        })
+        .expect("raw drawing");
+    assert_eq!(raw.rels[0].target, "#shape");
+    assert_eq!(raw.rels[0].part, None);
+}
+
 /// A foreign file whose control twin carries a txBody for a
 /// caption-less control kind (scrollbars, spinners, list boxes) must
 /// not crash the reader; the stray text is ignored.
@@ -555,30 +594,53 @@ fn splice_drawing_anchor(
 /// r:id/r:embed/r:link. Every attribute whose value matches a rel id
 /// in the drawing's .rels must be captured, with target parts, and
 /// survive a round trip resolvable.
-#[test]
-fn xlsx_smartart_rel_ids_attributes_are_captured_and_round_trip() {
-    const RT_DIAGRAM: [(&str, &str, &str); 4] = [
-        (
-            "rId2",
-            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramData",
-            "../diagrams/data1.xml",
-        ),
-        (
-            "rId3",
-            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramLayout",
-            "../diagrams/layout1.xml",
-        ),
-        (
-            "rId4",
-            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramQuickStyle",
-            "../diagrams/quickStyle1.xml",
-        ),
-        (
-            "rId5",
-            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramColors",
-            "../diagrams/colors1.xml",
-        ),
-    ];
+const RT_DIAGRAM_RELATIVE: [(&str, &str, &str); 4] = [
+    (
+        "rId2",
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramData",
+        "../diagrams/data1.xml",
+    ),
+    (
+        "rId3",
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramLayout",
+        "../diagrams/layout1.xml",
+    ),
+    (
+        "rId4",
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramQuickStyle",
+        "../diagrams/quickStyle1.xml",
+    ),
+    (
+        "rId5",
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramColors",
+        "../diagrams/colors1.xml",
+    ),
+];
+
+const RT_DIAGRAM_ABSOLUTE: [(&str, &str, &str); 4] = [
+    (
+        "rId2",
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramData",
+        "/xl/diagrams/data1.xml",
+    ),
+    (
+        "rId3",
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramLayout",
+        "/xl/diagrams/layout1.xml",
+    ),
+    (
+        "rId4",
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramQuickStyle",
+        "/xl/diagrams/quickStyle1.xml",
+    ),
+    (
+        "rId5",
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramColors",
+        "/xl/diagrams/colors1.xml",
+    ),
+];
+
+fn assert_smartart_relationships_round_trip(rt_diagram: &[(&str, &str, &str); 4]) {
     const PARTS: [(&str, &str); 4] = [
         ("xl/diagrams/data1.xml", "<dataModelRoot/>"),
         ("xl/diagrams/layout1.xml", "<layoutDefRoot/>"),
@@ -594,7 +656,7 @@ fn xlsx_smartart_rel_ids_attributes_are_captured_and_round_trip() {
         .add_drawing(png("Pic").with_anchor(two_cell(0, 0, 2, 2))).unwrap();
     let mut output = Cursor::new(Vec::new());
     XlsxWriter::write(&workbook, &mut output).expect("write");
-    let patched = splice_drawing_anchor(output.into_inner(), anchor, &RT_DIAGRAM, &PARTS);
+    let patched = splice_drawing_anchor(output.into_inner(), anchor, rt_diagram, &PARTS);
 
     let assert_diagram_rels = |workbook: &Workbook, phase: &str| {
         let sheet_drawings = workbook.worksheet(0).unwrap();
@@ -608,13 +670,14 @@ fn xlsx_smartart_rel_ids_attributes_are_captured_and_round_trip() {
             .unwrap_or_else(|| panic!("{phase}: raw diagram anchor"));
         assert_eq!(raw.rels.len(), 4, "{phase}: all four diagram rels captured");
         let bytes = std::str::from_utf8(&raw.bytes).unwrap();
-        for ((_, rel_type, _), (_, part_body)) in RT_DIAGRAM.iter().zip(PARTS.iter()) {
+        for ((_, rel_type, raw_target), (_, part_body)) in rt_diagram.iter().zip(PARTS.iter()) {
             let rel = raw
                 .rels
                 .iter()
                 .find(|rel| rel.rel_type == *rel_type)
                 .unwrap_or_else(|| panic!("{phase}: rel {rel_type} captured"));
             assert!(!rel.external, "{phase}: diagram rels are internal");
+            assert_eq!(rel.target, *raw_target, "{phase}: raw target preserved");
             assert!(
                 bytes.contains(&format!("\"{}\"", rel.id)),
                 "{phase}: anchor bytes reference {} ({bytes})",
@@ -633,6 +696,16 @@ fn xlsx_smartart_rel_ids_attributes_are_captured_and_round_trip() {
 
     let again = round_trip(&read);
     assert_diagram_rels(&again, "round trip");
+}
+
+#[test]
+fn xlsx_smartart_rel_ids_attributes_are_captured_and_round_trip() {
+    assert_smartart_relationships_round_trip(&RT_DIAGRAM_RELATIVE);
+}
+
+#[test]
+fn xlsx_absolute_smartart_relationships_are_captured_and_round_trip() {
+    assert_smartart_relationships_round_trip(&RT_DIAGRAM_ABSOLUTE);
 }
 
 /// A sheet whose only form control lives inside a group must still
@@ -724,6 +797,46 @@ fn xlsx_group_nested_control_emits_controls_block_and_vml() {
             .any(|child| matches!(child.kind, DrawingKind::FormControl(_))),
         "control stays inside the group"
     );
+}
+
+#[test]
+fn xlsx_chartsheet_with_missing_drawing_part_is_retained() {
+    use duke_sheets::{Chart, ChartType};
+    use duke_sheets_core::{ChartSheet, SheetVisibility};
+    use std::io::Read;
+
+    let mut workbook = Workbook::new();
+    workbook
+        .add_chartsheet(ChartSheet {
+            name: "Chart1".to_string(),
+            chart: Chart::new(ChartType::ColumnClustered),
+            visibility: SheetVisibility::Visible,
+            raw_drawing_objects: Vec::new(),
+            raw_drawing_rels: Vec::new(),
+        })
+        .unwrap();
+    let mut output = Cursor::new(Vec::new());
+    XlsxWriter::write(&workbook, &mut output).expect("write");
+
+    let mut archive = zip::ZipArchive::new(Cursor::new(output.into_inner())).unwrap();
+    let mut rebuilt = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for index in 0..archive.len() {
+        let mut file = archive.by_index(index).unwrap();
+        if file.name() == "xl/drawings/drawing1.xml" {
+            continue;
+        }
+        let name = file.name().to_string();
+        let mut content = Vec::new();
+        file.read_to_end(&mut content).unwrap();
+        rebuilt
+            .start_file(name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        rebuilt.write_all(&content).unwrap();
+    }
+
+    let read = XlsxReader::read(Cursor::new(rebuilt.finish().unwrap().into_inner())).unwrap();
+    assert_eq!(read.chartsheet_count(), 1);
+    assert_eq!(read.chartsheet(0).unwrap().name, "Chart1");
 }
 
 /// A chartsheet drawing can carry raw anchors (e.g. a connector with
