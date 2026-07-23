@@ -9,6 +9,7 @@ use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
 
 use crate::error::{XlsxError, XlsxResult};
+use crate::opc::resolve_internal_target;
 use crate::styles::{roundtrip_theme_data_for, XlsxStyleTable};
 use form_controls::radio_head_flags;
 use duke_sheets_core::style::Color;
@@ -468,23 +469,6 @@ pub(super) fn sheet_raw_rels(
     out
 }
 
-/// Resolve a relationship target against a base directory (e.g.
-/// "xl/drawings"): `../media/image5.png` -> `xl/media/image5.png`.
-pub(super) fn resolve_rel_target(base_dir: &str, target: &str) -> String {
-    if let Some(stripped) = target.strip_prefix('/') {
-        return stripped.to_string();
-    }
-    let mut parts: Vec<&str> = base_dir.split('/').collect();
-    for part in target.split('/') {
-        if part == ".." {
-            parts.pop();
-        } else if part != "." && !part.is_empty() {
-            parts.push(part);
-        }
-    }
-    parts.join("/")
-}
-
 pub(super) fn write_xml_part<W: Write + Seek>(
     zip: &mut zip::ZipWriter<W>,
     path: &str,
@@ -756,7 +740,10 @@ impl XlsxWriter {
                 if rel.external || rel.part.is_none() {
                     continue;
                 }
-                let path = resolve_rel_target("xl/drawings", &rel.target);
+                let path = resolve_internal_target("xl/drawings/drawing1.xml", &rel.target)?;
+                if path == "xl/drawings/drawing1.xml" {
+                    continue;
+                }
                 if let Some(rest) = path.strip_prefix("xl/media/image") {
                     if let Some((num, _ext)) = rest.split_once('.') {
                         if let Ok(num) = num.parse::<usize>() {
@@ -776,7 +763,10 @@ impl XlsxWriter {
                 if rel.external || rel.part.is_none() {
                     continue;
                 }
-                let path = resolve_rel_target("xl/drawings", &rel.target);
+                let path = resolve_internal_target("xl/drawings/drawing1.xml", &rel.target)?;
+                if path == "xl/drawings/drawing1.xml" {
+                    continue;
+                }
                 if let Some(rest) = path.strip_prefix("xl/media/image") {
                     if let Some((num, _ext)) = rest.split_once('.') {
                         if let Ok(num) = num.parse::<usize>() {
@@ -1009,7 +999,11 @@ impl XlsxWriter {
                     if rel.external {
                         continue;
                     }
-                    let path = resolve_rel_target("xl/drawings", &rel.target);
+                    let source_path = format!("xl/drawings/drawing{dn}.xml");
+                    let path = resolve_internal_target(&source_path, &rel.target)?;
+                    if path == source_path {
+                        continue;
+                    }
                     if !written_media.insert(path.clone()) {
                         continue;
                     }
@@ -1066,7 +1060,11 @@ impl XlsxWriter {
                 if rel.external {
                     continue;
                 }
-                let path = resolve_rel_target("xl/drawings", &rel.target);
+                let source_path = format!("xl/drawings/drawing{dn}.xml");
+                let path = resolve_internal_target(&source_path, &rel.target)?;
+                if path == source_path {
+                    continue;
+                }
                 if !written_media.insert(path.clone()) {
                     continue;
                 }
