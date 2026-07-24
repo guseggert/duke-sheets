@@ -1988,7 +1988,9 @@ fn roundtrip_dynamic_array_content_types_and_rels() {
             "Content_Types should reference metadata.xml"
         );
         assert!(
-            ct_xml.contains("metadata+xml"),
+            ct_xml.contains(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml"
+            ),
             "Content_Types should have metadata content type"
         );
     }

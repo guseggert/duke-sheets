@@ -31,7 +31,7 @@ pub(crate) const CT_TABLE: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml";
 pub(crate) const CT_CONTROL_PROPERTIES: &str = "application/vnd.ms-excel.controlproperties+xml";
 pub(crate) const CT_SHEET_METADATA: &str =
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.metadata+xml";
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml";
 pub(crate) const CT_DRAWING: &str = "application/vnd.openxmlformats-officedocument.drawing+xml";
 pub(crate) const CT_CHART: &str =
     "application/vnd.openxmlformats-officedocument.drawingml.chart+xml";
