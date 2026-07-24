@@ -10,7 +10,8 @@ use quick_xml::reader::Reader;
 
 use crate::error::{XlsxError, XlsxResult};
 use crate::opc::{
-    resolve_internal_target, OpcPackage, PartName, XlsxDiagnosticCode, XlsxPackagePolicy,
+    resolve_internal_target, OpcPackage, PartName, Relationship, RelationshipKind, RelationshipSet,
+    XlsxDiagnosticCode, XlsxPackagePolicy,
 };
 use crate::styles::{
     read_styles_xml, register_roundtrip_style_data, register_roundtrip_theme_data, ParsedStyles,
@@ -53,7 +54,7 @@ pub(crate) use archive::archive_by_name;
 pub(crate) use formulas::CellFormulaState;
 use shared_strings::SharedStringEntry;
 
-use workbook::{read_part_rels, read_workbook_rels, read_workbook_xml, PartRelationship};
+use workbook::{read_part_rels, read_workbook_rels, read_workbook_xml};
 
 /// Resolve a relative path from a drawing's .rels against the drawing's own path.
 
@@ -123,14 +124,14 @@ fn read_chart_style_color<R: Read + Seek>(
     chart: &mut duke_sheets_chart::Chart,
 ) -> XlsxResult<()> {
     let chart_rels = read_part_rels(package, chart_path)?;
-    for rel in chart_rels.values() {
-        if rel.rel_type.ends_with("/chartStyle") {
+    for rel in chart_rels.iter() {
+        if rel.kind() == Some(RelationshipKind::ChartStyle) {
             if let Some(mut f) = package.open_related_part(rel)? {
                 let mut bytes = Vec::new();
                 f.read_to_end(&mut bytes)?;
                 chart.raw_chart_style = Some(bytes);
             }
-        } else if rel.rel_type.ends_with("/chartColorStyle") {
+        } else if rel.kind() == Some(RelationshipKind::ChartColorStyle) {
             if let Some(mut f) = package.open_related_part(rel)? {
                 let mut bytes = Vec::new();
                 f.read_to_end(&mut bytes)?;
@@ -147,14 +148,14 @@ fn read_chart_style_color_for_chart_ex<R: Read + Seek>(
     chart: &mut duke_sheets_chart::ChartEx,
 ) -> XlsxResult<()> {
     let chart_rels = read_part_rels(package, chart_path)?;
-    for rel in chart_rels.values() {
-        if rel.rel_type.ends_with("/chartStyle") {
+    for rel in chart_rels.iter() {
+        if rel.kind() == Some(RelationshipKind::ChartStyle) {
             if let Some(mut f) = package.open_related_part(rel)? {
                 let mut bytes = Vec::new();
                 f.read_to_end(&mut bytes)?;
                 chart.raw_chart_style = Some(bytes);
             }
-        } else if rel.rel_type.ends_with("/chartColorStyle") {
+        } else if rel.kind() == Some(RelationshipKind::ChartColorStyle) {
             if let Some(mut f) = package.open_related_part(rel)? {
                 let mut bytes = Vec::new();
                 f.read_to_end(&mut bytes)?;
@@ -198,7 +199,7 @@ fn take_control(
 /// child transform carries rotation/flips, so the payload keeps none.
 fn resolve_pic_image<R: Read + Seek>(
     package: &mut OpcPackage<R>,
-    drawing_rels: &HashMap<String, PartRelationship>,
+    drawing_rels: &RelationshipSet,
     pic: drawing::PicShape,
     in_group: bool,
 ) -> XlsxResult<duke_sheets_chart::EmbeddedImage> {
@@ -285,7 +286,7 @@ fn shape_from_parsed(parsed: &drawing::ParsedShape) -> duke_sheets_core::Shape {
 /// group with the twin's child transform).
 fn build_group<R: Read + Seek>(
     package: &mut OpcPackage<R>,
-    drawing_rels: &HashMap<String, PartRelationship>,
+    drawing_rels: &RelationshipSet,
     group: drawing::ParsedGroup,
     controls: &mut [AssembledControl],
 ) -> XlsxResult<duke_sheets_core::Group> {
@@ -406,7 +407,7 @@ fn capture_raw_rels<R: Read + Seek>(
     package: &mut OpcPackage<R>,
     source_part: &str,
     bytes: &[u8],
-    relationships: &HashMap<String, PartRelationship>,
+    relationships: &RelationshipSet,
 ) -> XlsxResult<Vec<duke_sheets_core::RawRel>> {
     let mut ids: Vec<String> = Vec::new();
     let mut reader = quick_xml::Reader::from_reader(bytes);
@@ -416,7 +417,7 @@ fn capture_raw_rels<R: Read + Seek>(
             Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
                 for attr in e.attributes().flatten() {
                     if let Ok(value) = attr.unescape_value() {
-                        if relationships.contains_key(value.as_ref())
+                        if relationships.get(value.as_ref()).is_some()
                             && !ids.iter().any(|id| id == value.as_ref())
                         {
                             ids.push(value.to_string());
@@ -757,18 +758,18 @@ impl XlsxReader {
                 // index-based filenames for files that lack .rels entries.
                 let comments_rel = sheet_rels
                     .iter()
-                    .find(|(_, rel)| rel.rel_type.ends_with("/comments"));
+                    .find(|rel| rel.kind() == Some(RelationshipKind::Comments));
                 let comments_path = comments_rel
-                    .and_then(|(_, rel)| rel.internal_path().map(str::to_string))
+                    .and_then(|rel| rel.internal_path().map(str::to_string))
                     .or_else(|| {
                         (package.policy() == XlsxPackagePolicy::Compatible)
                             .then(|| format!("xl/comments{}.xml", ws_count))
                     });
                 let vml_rel = sheet_rels
                     .iter()
-                    .find(|(_, rel)| rel.rel_type.ends_with("/vmlDrawing"));
+                    .find(|rel| rel.kind() == Some(RelationshipKind::VmlDrawing));
                 let vml_path = vml_rel
-                    .and_then(|(_, rel)| rel.internal_path().map(str::to_string))
+                    .and_then(|rel| rel.internal_path().map(str::to_string))
                     .or_else(|| {
                         (package.policy() == XlsxPackagePolicy::Compatible)
                             .then(|| format!("xl/drawings/vmlDrawing{}.vml", ws_count))
@@ -779,7 +780,7 @@ impl XlsxReader {
                 // by their controls), unmatched controls, and comments
                 // spliced by the legacy VML shape order.
                 let vml_file = match vml_rel {
-                    Some((_, rel)) => package.open_related_part(rel)?,
+                    Some(rel) => package.open_related_part(rel)?,
                     None => vml_path
                         .as_deref()
                         .and_then(|path| archive_by_name(package.archive_mut(), path).ok()),
@@ -791,7 +792,7 @@ impl XlsxReader {
                         .map(|_| buf)
                 });
                 let comments_available = match comments_rel {
-                    Some((_, rel)) => package.open_related_part(rel)?.is_some(),
+                    Some(rel) => package.open_related_part(rel)?.is_some(),
                     None => true,
                 };
                 let comments = if !comments_available {
@@ -818,17 +819,16 @@ impl XlsxReader {
                 // Read tables for this worksheet (if present).
                 // Each relationship with type ending in "/table" points to
                 // an xl/tables/tableN.xml part.
-                let mut table_rels: Vec<(&String, &PartRelationship, &str)> = sheet_rels
+                let mut table_rels: Vec<(&Relationship, &str)> = sheet_rels
                     .iter()
-                    .filter_map(|(id, rel)| {
-                        rel.rel_type
-                            .ends_with("/table")
-                            .then(|| rel.internal_path().map(|path| (id, rel, path)))
+                    .filter_map(|rel| {
+                        (rel.kind() == Some(RelationshipKind::Table))
+                            .then(|| rel.internal_path().map(|path| (rel, path)))
                             .flatten()
                     })
                     .collect();
-                table_rels.sort_by_key(|(_, _, path)| *path);
-                for (_, rel, table_path) in table_rels {
+                table_rels.sort_by_key(|(_, path)| *path);
+                for (rel, table_path) in table_rels {
                     if package.open_related_part(rel)?.is_none() {
                         continue;
                     }
@@ -1008,7 +1008,7 @@ impl XlsxReader {
     /// order, and comments spliced by the legacy VML shape sequence.
     fn merge_sheet_drawings<R: Read + Seek>(
         package: &mut OpcPackage<R>,
-        sheet_rels: &HashMap<String, PartRelationship>,
+        sheet_rels: &RelationshipSet,
         pending_controls: &[form_controls::PendingControl],
         vml_bytes: Option<&[u8]>,
         comments: Vec<(u32, u16, duke_sheets_core::comment::CellComment)>,
@@ -1034,7 +1034,7 @@ impl XlsxReader {
             let Some(rel) = sheet_rels.get(&pending.rid) else {
                 continue;
             };
-            if !rel.rel_type.ends_with("/ctrlProp") {
+            if rel.kind() != Some(RelationshipKind::ControlProperties) {
                 continue;
             }
             let Some(mut f) = package.open_related_part(rel)? else {
@@ -1084,21 +1084,22 @@ impl XlsxReader {
 
         // Drawing part entries in document order.
         let mut natives: Vec<(DrawingObject, Option<u32>)> = Vec::new();
-        let mut drawing_targets: Vec<(String, &PartRelationship, &str)> = sheet_rels
+        let mut drawing_targets: Vec<(&Relationship, &str)> = sheet_rels
             .iter()
-            .filter(|(_, r)| r.rel_type.ends_with("/drawing"))
-            .filter_map(|(id, rel)| rel.internal_path().map(|path| (id.clone(), rel, path)))
+            .filter(|rel| rel.kind() == Some(RelationshipKind::Drawing))
+            .filter_map(|rel| rel.internal_path().map(|path| (rel, path)))
             .collect();
         // Numeric-aware sort so rId2 precedes rId10.
-        drawing_targets.sort_by_key(|(id, _, _)| {
+        drawing_targets.sort_by_key(|(rel, _)| {
             (
-                id.strip_prefix("rId")
+                rel.id
+                    .strip_prefix("rId")
                     .and_then(|n| n.parse::<u64>().ok())
                     .unwrap_or(u64::MAX),
-                id.clone(),
+                rel.id.clone(),
             )
         });
-        for (_, drawing_rel, drawing_path) in &drawing_targets {
+        for (drawing_rel, drawing_path) in &drawing_targets {
             if package.open_related_part(drawing_rel)?.is_none() {
                 continue;
             }
@@ -1306,7 +1307,7 @@ impl XlsxReader {
         shared_strings: &[SharedStringEntry],
         cell_styles: &[Style],
         dxf_styles: &[Style],
-        sheet_rels: &HashMap<String, PartRelationship>,
+        sheet_rels: &RelationshipSet,
     ) -> XlsxResult<Vec<form_controls::PendingControl>> {
         let file =
             archive_by_name(archive, path).map_err(|_| XlsxError::MissingPart(path.to_string()))?;
@@ -3642,7 +3643,7 @@ impl XlsxReader {
     fn parse_hyperlink_element(
         worksheet: &mut duke_sheets_core::Worksheet,
         e: &quick_xml::events::BytesStart<'_>,
-        sheet_rels: &HashMap<String, PartRelationship>,
+        sheet_rels: &RelationshipSet,
     ) {
         let mut cell_ref = None;
         let mut rel_id = None;
@@ -3682,7 +3683,7 @@ impl XlsxReader {
         let mut target = String::new();
         if let Some(rel_id) = rel_id {
             if let Some(rel) = sheet_rels.get(&rel_id) {
-                if rel.rel_type.ends_with("/hyperlink") {
+                if rel.kind() == Some(RelationshipKind::Hyperlink) {
                     target = rel.target().to_string();
                 }
             }

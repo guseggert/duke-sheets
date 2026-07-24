@@ -6,6 +6,7 @@ use quick_xml::reader::NsReader;
 
 use super::diagnostics::{DiagnosticSink, XlsxDiagnosticCode};
 use super::part_name::{resolve_internal_target_with_policy, PartName};
+use super::relationship_kind::RelationshipKind;
 use super::xml::{namespace_is, validate_well_formed};
 use crate::error::{XlsxError, XlsxResult};
 
@@ -51,6 +52,10 @@ pub(crate) struct Relationship {
 }
 
 impl Relationship {
+    pub(crate) fn kind(&self) -> Option<RelationshipKind> {
+        RelationshipKind::from_uri(&self.rel_type)
+    }
+
     pub(crate) fn internal_part(&self) -> Option<&PartName> {
         match &self.target {
             RelationshipTarget::Internal(part_name) => Some(part_name),
@@ -300,7 +305,6 @@ impl RelationshipSet {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn get(&self, id: &str) -> Option<&Relationship> {
         self.by_id
             .get(id)
@@ -309,17 +313,6 @@ impl RelationshipSet {
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = &Relationship> {
         self.relationships.iter()
-    }
-
-    pub(crate) fn by_type<'a>(
-        &'a self,
-        rel_types: &'a [&'a str],
-    ) -> impl Iterator<Item = &'a Relationship> + 'a {
-        self.relationships.iter().filter(move |relationship| {
-            rel_types
-                .iter()
-                .any(|rel_type| relationship.rel_type == *rel_type)
-        })
     }
 
     #[cfg(test)]

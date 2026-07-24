@@ -2,6 +2,7 @@ mod content_types;
 mod diagnostics;
 mod package;
 mod part_name;
+mod relationship_kind;
 mod relationships;
 mod xml;
 
@@ -12,7 +13,8 @@ pub use diagnostics::{
 };
 pub(crate) use package::OpcPackage;
 pub(crate) use part_name::PartName;
-pub(crate) use relationships::{Relationship, RelationshipSource};
+pub(crate) use relationship_kind::{ContentTypeExpectation, RelationshipKind};
+pub(crate) use relationships::{Relationship, RelationshipSet, RelationshipSource};
 
 /// Resolve an internal OPC relationship target to its ZIP entry name.
 pub(crate) fn resolve_internal_target(source_part: &str, target: &str) -> XlsxResult<String> {

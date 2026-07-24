@@ -9,7 +9,7 @@ use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
 
 use crate::error::{XlsxError, XlsxResult};
-use crate::opc::resolve_internal_target;
+use crate::opc::{resolve_internal_target, ContentTypeExpectation, RelationshipKind};
 use crate::styles::{roundtrip_theme_data_for, XlsxStyleTable};
 use duke_sheets_core::style::Color;
 use duke_sheets_core::{CellAddress, CellRange, SheetSlot, Workbook};
@@ -28,33 +28,6 @@ mod tables;
 const NS_SPREADSHEET: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 const NS_RELATIONSHIPS: &str = "http://schemas.openxmlformats.org/package/2006/relationships";
 const NS_DOC_RELS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
-
-// Relationship types
-const RT_OFFICE_DOC: &str =
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument";
-const RT_WORKSHEET: &str =
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet";
-const RT_STYLES: &str =
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles";
-const RT_SHARED_STRINGS: &str =
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings";
-const RT_THEME: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme";
-const RT_COMMENTS: &str =
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments";
-const RT_VML_DRAWING: &str =
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing";
-const RT_HYPERLINK: &str =
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink";
-const RT_TABLE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/table";
-const RT_CTRLPROP: &str =
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/ctrlProp";
-const RT_SHEET_METADATA: &str =
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sheetMetadata";
-const RT_DRAWING: &str =
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing";
-const RT_CHART: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart";
-const RT_CHARTSHEET: &str =
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet";
 
 // Content types
 const CT_WORKBOOK: &str =
@@ -75,9 +48,6 @@ const CT_DRAWING: &str = "application/vnd.openxmlformats-officedocument.drawing+
 const CT_CHART: &str = "application/vnd.openxmlformats-officedocument.drawingml.chart+xml";
 const CT_CHARTSHEET: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml";
-const RT_CHART_STYLE: &str = "http://schemas.microsoft.com/office/2011/relationships/chartStyle";
-const RT_CHART_COLOR_STYLE: &str =
-    "http://schemas.microsoft.com/office/2011/relationships/chartColorStyle";
 const CT_CHART_STYLE: &str = "application/vnd.ms-office.chartstyle+xml";
 const CT_CHART_COLOR_STYLE: &str = "application/vnd.ms-office.chartcolorstyle+xml";
 const CT_CHART_EX: &str = "application/vnd.ms-office.chartex+xml";
@@ -388,45 +358,8 @@ struct RawPartPlan {
 }
 
 fn raw_part_content_type(rel_type: &str, path: &str) -> &'static str {
-    let relationship_name = [
-        (
-            "diagramData",
-            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramData",
-            "http://purl.oclc.org/ooxml/officeDocument/relationships/diagramData",
-        ),
-        (
-            "diagramLayout",
-            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramLayout",
-            "http://purl.oclc.org/ooxml/officeDocument/relationships/diagramLayout",
-        ),
-        (
-            "diagramQuickStyle",
-            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramQuickStyle",
-            "http://purl.oclc.org/ooxml/officeDocument/relationships/diagramQuickStyle",
-        ),
-        (
-            "diagramColors",
-            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramColors",
-            "http://purl.oclc.org/ooxml/officeDocument/relationships/diagramColors",
-        ),
-    ]
-    .iter()
-    .find_map(|(name, transitional, strict)| {
-        (rel_type == *transitional || rel_type == *strict).then_some(*name)
-    });
-    match relationship_name {
-        Some("diagramData") => {
-            "application/vnd.openxmlformats-officedocument.drawingml.diagramData+xml"
-        }
-        Some("diagramLayout") => {
-            "application/vnd.openxmlformats-officedocument.drawingml.diagramLayout+xml"
-        }
-        Some("diagramQuickStyle") => {
-            "application/vnd.openxmlformats-officedocument.drawingml.diagramStyle+xml"
-        }
-        Some("diagramColors") => {
-            "application/vnd.openxmlformats-officedocument.drawingml.diagramColors+xml"
-        }
+    match RelationshipKind::from_uri(rel_type).and_then(RelationshipKind::content_type) {
+        Some(ContentTypeExpectation::Exact(content_type)) => content_type,
         _ => path
             .rsplit('/')
             .next()
@@ -1470,7 +1403,7 @@ impl XlsxWriter {
 
             w.create_element("Relationship")
                 .with_attribute(("Id", "rId1"))
-                .with_attribute(("Type", RT_OFFICE_DOC))
+                .with_attribute(("Type", RelationshipKind::OfficeDocument.uri()))
                 .with_attribute(("Target", "xl/workbook.xml"))
                 .write_empty()?;
 
@@ -1647,13 +1580,16 @@ impl XlsxWriter {
                     SheetSlot::Worksheet(ws_idx) => {
                         let _ = ws_idx;
                         ws_part_num += 1;
-                        (RT_WORKSHEET, format!("worksheets/sheet{}.xml", ws_part_num))
+                        (
+                            RelationshipKind::Worksheet.uri(),
+                            format!("worksheets/sheet{}.xml", ws_part_num),
+                        )
                     }
                     SheetSlot::ChartSheet(cs_idx) => {
                         let _ = cs_idx;
                         cs_part_num += 1;
                         (
-                            RT_CHARTSHEET,
+                            RelationshipKind::Chartsheet.uri(),
                             format!("chartsheets/sheet{}.xml", cs_part_num),
                         )
                     }
@@ -1670,7 +1606,7 @@ impl XlsxWriter {
             let rid = format!("rId{}", next_rid);
             w.create_element("Relationship")
                 .with_attribute(("Id", rid.as_str()))
-                .with_attribute(("Type", RT_STYLES))
+                .with_attribute(("Type", RelationshipKind::Styles.uri()))
                 .with_attribute(("Target", "styles.xml"))
                 .write_empty()?;
             next_rid += 1;
@@ -1680,7 +1616,7 @@ impl XlsxWriter {
                 let rid = format!("rId{}", next_rid);
                 w.create_element("Relationship")
                     .with_attribute(("Id", rid.as_str()))
-                    .with_attribute(("Type", RT_SHARED_STRINGS))
+                    .with_attribute(("Type", RelationshipKind::SharedStrings.uri()))
                     .with_attribute(("Target", "sharedStrings.xml"))
                     .write_empty()?;
                 next_rid += 1;
@@ -1690,7 +1626,7 @@ impl XlsxWriter {
             let rid = format!("rId{}", next_rid);
             w.create_element("Relationship")
                 .with_attribute(("Id", rid.as_str()))
-                .with_attribute(("Type", RT_THEME))
+                .with_attribute(("Type", RelationshipKind::Theme.uri()))
                 .with_attribute(("Target", "theme/theme1.xml"))
                 .write_empty()?;
             next_rid += 1;
@@ -1699,7 +1635,7 @@ impl XlsxWriter {
                 let rid = format!("rId{}", next_rid);
                 w.create_element("Relationship")
                     .with_attribute(("Id", rid.as_str()))
-                    .with_attribute(("Type", RT_SHEET_METADATA))
+                    .with_attribute(("Type", RelationshipKind::SheetMetadata.uri()))
                     .with_attribute(("Target", "metadata.xml"))
                     .write_empty()?;
             }
@@ -1770,7 +1706,7 @@ impl XlsxWriter {
             let target = format!("../drawings/drawing{}.xml", drawing_num);
             w.create_element("Relationship")
                 .with_attribute(("Id", "rId1"))
-                .with_attribute(("Type", RT_DRAWING))
+                .with_attribute(("Type", RelationshipKind::Drawing.uri()))
                 .with_attribute(("Target", target.as_str()))
                 .write_empty()?;
 
@@ -1800,7 +1736,9 @@ impl XlsxWriter {
             zip.write_all(bytes)?;
             rels_xml.push_str(&format!(
                 r#"<Relationship Id="rId{}" Type="{}" Target="style{}.xml"/>"#,
-                rel_id, RT_CHART_STYLE, chart_num
+                rel_id,
+                RelationshipKind::ChartStyle.uri(),
+                chart_num
             ));
             rel_id += 1;
         }
@@ -1810,7 +1748,9 @@ impl XlsxWriter {
             zip.write_all(bytes)?;
             rels_xml.push_str(&format!(
                 r#"<Relationship Id="rId{}" Type="{}" Target="colors{}.xml"/>"#,
-                rel_id, RT_CHART_COLOR_STYLE, chart_num
+                rel_id,
+                RelationshipKind::ChartColorStyle.uri(),
+                chart_num
             ));
         }
         rels_xml.push_str("</Relationships>");
@@ -2089,7 +2029,7 @@ impl XlsxWriter {
                 let vml_target = format!("../drawings/vmlDrawing{}.vml", index + 1);
                 rels.push(WorksheetRelationship {
                     id: "rId1".to_string(),
-                    rel_type: RT_VML_DRAWING,
+                    rel_type: RelationshipKind::VmlDrawing.uri(),
                     target: vml_target,
                     target_mode: None,
                 });
@@ -2098,7 +2038,7 @@ impl XlsxWriter {
                 let comments_target = format!("../comments{}.xml", index + 1);
                 rels.push(WorksheetRelationship {
                     id: format!("rId{}", rels.len() + 1),
-                    rel_type: RT_COMMENTS,
+                    rel_type: RelationshipKind::Comments.uri(),
                     target: comments_target,
                     target_mode: None,
                 });
@@ -2111,7 +2051,7 @@ impl XlsxWriter {
                 let rid = format!("rId{}", rels.len() + 1);
                 rels.push(WorksheetRelationship {
                     id: rid.clone(),
-                    rel_type: RT_CTRLPROP,
+                    rel_type: RelationshipKind::ControlProperties.uri(),
                     target: format!("../ctrlProps/ctrlProp{}.xml", ctrl_prop_start + j),
                     target_mode: None,
                 });
@@ -2123,7 +2063,7 @@ impl XlsxWriter {
                 let target = format!("../drawings/drawing{}.xml", dn);
                 rels.push(WorksheetRelationship {
                     id: rid.clone(),
-                    rel_type: RT_DRAWING,
+                    rel_type: RelationshipKind::Drawing.uri(),
                     target,
                     target_mode: None,
                 });
@@ -2236,7 +2176,7 @@ impl XlsxWriter {
                     let target = format!("../tables/table{}.xml", global_num);
                     rels.push(WorksheetRelationship {
                         id: rid.clone(),
-                        rel_type: RT_TABLE,
+                        rel_type: RelationshipKind::Table.uri(),
                         target,
                         target_mode: None,
                     });
@@ -3483,7 +3423,7 @@ impl XlsxWriter {
                 }
                 rels.push(WorksheetRelationship {
                     id: rid,
-                    rel_type: RT_HYPERLINK,
+                    rel_type: RelationshipKind::Hyperlink.uri(),
                     target: target.to_string(),
                     target_mode: Some("External"),
                 });
@@ -3613,7 +3553,7 @@ mod tests {
         assert!(content_types.contains(CT_THEME));
 
         let rels = read_zip_entry(bytes.clone(), "xl/_rels/workbook.xml.rels");
-        assert!(rels.contains(RT_THEME));
+        assert!(rels.contains(RelationshipKind::Theme.uri()));
         assert!(rels.contains("Target=\"theme/theme1.xml\""));
 
         let theme = read_zip_entry(bytes, "xl/theme/theme1.xml");
@@ -3901,7 +3841,7 @@ mod tests {
         let first_bytes = first_write.into_inner();
 
         let sheet_rels = read_zip_entry(first_bytes.clone(), "xl/worksheets/_rels/sheet1.xml.rels");
-        assert!(sheet_rels.contains(RT_HYPERLINK));
+        assert!(sheet_rels.contains(RelationshipKind::Hyperlink.uri()));
         assert!(sheet_rels.contains("Target=\"https://example.com\""));
 
         let wb2 = XlsxReader::read(Cursor::new(first_bytes)).unwrap();
@@ -4436,14 +4376,14 @@ mod tests {
         assert!(ct.contains(CT_CHART), "wrong chart content type");
 
         let sheet_rels = read_zip_entry(bytes.clone(), "xl/worksheets/_rels/sheet1.xml.rels");
-        assert!(sheet_rels.contains(RT_DRAWING), "missing drawing rel type");
+        assert!(sheet_rels.contains(RelationshipKind::Drawing.uri()), "missing drawing rel type");
         assert!(
             sheet_rels.contains("../drawings/drawing1.xml"),
             "missing drawing target"
         );
 
         let drawing_rels = read_zip_entry(bytes.clone(), "xl/drawings/_rels/drawing1.xml.rels");
-        assert!(drawing_rels.contains(RT_CHART), "missing chart rel type");
+        assert!(drawing_rels.contains(RelationshipKind::Chart.uri()), "missing chart rel type");
         assert!(
             drawing_rels.contains("../charts/chart1.xml"),
             "missing chart target"

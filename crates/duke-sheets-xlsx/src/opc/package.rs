@@ -1,9 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read, Seek};
+use std::sync::Arc;
 
 use super::content_types::ContentTypes;
 use super::diagnostics::{DiagnosticSink, XlsxDiagnostic, XlsxDiagnosticCode, XlsxPackagePolicy};
 use super::part_name::PartName;
+use super::relationship_kind::{ContentTypeExpectation, RelationshipKind};
 use super::relationships::{RelationshipSet, RelationshipSource};
 use crate::error::{XlsxError, XlsxResult};
 
@@ -21,11 +23,6 @@ pub(crate) const WORKBOOK_CONTENT_TYPES: &[&str] = &[
     CT_MACRO_TEMPLATE,
 ];
 
-const RT_OFFICE_DOCUMENT_TRANSITIONAL: &str =
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument";
-const RT_OFFICE_DOCUMENT_STRICT: &str =
-    "http://purl.oclc.org/ooxml/officeDocument/relationships/officeDocument";
-
 pub(crate) struct OpcPackage<R: Read + Seek> {
     archive: zip::ZipArchive<R>,
     entries: HashMap<PartName, usize>,
@@ -33,7 +30,7 @@ pub(crate) struct OpcPackage<R: Read + Seek> {
     /// False when `[Content_Types].xml` was unreadable and Compatible
     /// mode degraded to an empty map; content-type checks are skipped.
     content_types_usable: bool,
-    relationships: HashMap<RelationshipSource, RelationshipSet>,
+    relationships: HashMap<RelationshipSource, Arc<RelationshipSet>>,
     validated_content_types: HashSet<PartName>,
     diagnostics: DiagnosticSink,
 }
@@ -172,7 +169,10 @@ impl<R: Read + Seek> OpcPackage<R> {
         if has_package_relationships {
             let relationships = self.relationships(&source, true)?;
             let office_relationships: Vec<_> = relationships
-                .by_type(&[RT_OFFICE_DOCUMENT_TRANSITIONAL, RT_OFFICE_DOCUMENT_STRICT])
+                .iter()
+                .filter(|relationship| {
+                    relationship.kind() == Some(RelationshipKind::OfficeDocument)
+                })
                 .cloned()
                 .collect();
             if office_relationships.is_empty() {
@@ -225,9 +225,7 @@ impl<R: Read + Seek> OpcPackage<R> {
             let canonical = PartName::new("/xl/workbook.xml")?;
             let preferred = targets
                 .iter()
-                .position(|target| {
-                    target == &canonical && self.has_workbook_content_type(target)
-                })
+                .position(|target| target == &canonical && self.has_workbook_content_type(target))
                 .or_else(|| {
                     targets
                         .iter()
@@ -330,7 +328,7 @@ impl<R: Read + Seek> OpcPackage<R> {
         &mut self,
         source: &RelationshipSource,
         required: bool,
-    ) -> XlsxResult<RelationshipSet> {
+    ) -> XlsxResult<Arc<RelationshipSet>> {
         if let Some(relationships) = self.relationships.get(source) {
             return Ok(relationships.clone());
         }
@@ -349,7 +347,7 @@ impl<R: Read + Seek> OpcPackage<R> {
                     None,
                 )?;
             }
-            let relationships = RelationshipSet::default();
+            let relationships = Arc::new(RelationshipSet::default());
             self.relationships
                 .insert(source.clone(), relationships.clone());
             return Ok(relationships);
@@ -377,6 +375,7 @@ impl<R: Read + Seek> OpcPackage<R> {
                 Err(error) => return Err(error),
             };
         self.validate_relationship_set(source, &relationships)?;
+        let relationships = Arc::new(relationships);
         self.relationships
             .insert(source.clone(), relationships.clone());
         Ok(relationships)
@@ -521,7 +520,9 @@ impl<R: Read + Seek> OpcPackage<R> {
         if !self.content_types_usable {
             return Ok(());
         }
-        let Some(expected) = expected_content_type(rel_type) else {
+        let Some(expected) =
+            RelationshipKind::from_uri(rel_type).and_then(RelationshipKind::content_type)
+        else {
             return Ok(());
         };
         let actual = self.content_types.content_type_for(part_name);
@@ -589,61 +590,6 @@ impl<R: Read + Seek> OpcPackage<R> {
         }
         Ok(())
     }
-}
-
-enum ContentTypeExpectation {
-    Exact(&'static str),
-    Prefix(&'static str),
-}
-
-fn expected_content_type(rel_type: &str) -> Option<ContentTypeExpectation> {
-    let exact = |content_type| Some(ContentTypeExpectation::Exact(content_type));
-    if office_relationship_type_is(rel_type, "worksheet") {
-        exact("application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml")
-    } else if office_relationship_type_is(rel_type, "chartsheet") {
-        exact("application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml")
-    } else if office_relationship_type_is(rel_type, "dialogsheet") {
-        exact("application/vnd.openxmlformats-officedocument.spreadsheetml.dialogsheet+xml")
-    } else if rel_type == "http://schemas.microsoft.com/office/2006/relationships/xlMacrosheet" {
-        exact("application/vnd.ms-excel.macrosheet+xml")
-    } else if rel_type == "http://schemas.microsoft.com/office/2006/relationships/xlIntlMacrosheet"
-    {
-        exact("application/vnd.ms-excel.intlmacrosheet+xml")
-    } else if office_relationship_type_is(rel_type, "styles") {
-        exact("application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml")
-    } else if office_relationship_type_is(rel_type, "sharedStrings") {
-        exact("application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml")
-    } else if office_relationship_type_is(rel_type, "theme") {
-        exact("application/vnd.openxmlformats-officedocument.theme+xml")
-    } else if office_relationship_type_is(rel_type, "drawing") {
-        exact("application/vnd.openxmlformats-officedocument.drawing+xml")
-    } else if office_relationship_type_is(rel_type, "chart") {
-        exact("application/vnd.openxmlformats-officedocument.drawingml.chart+xml")
-    } else if rel_type == "http://schemas.microsoft.com/office/2014/relationships/chartEx" {
-        exact("application/vnd.ms-office.chartex+xml")
-    } else if rel_type == "http://schemas.microsoft.com/office/2011/relationships/chartStyle" {
-        exact("application/vnd.ms-office.chartstyle+xml")
-    } else if rel_type == "http://schemas.microsoft.com/office/2011/relationships/chartColorStyle" {
-        exact("application/vnd.ms-office.chartcolorstyle+xml")
-    } else if office_relationship_type_is(rel_type, "comments") {
-        exact("application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml")
-    } else if office_relationship_type_is(rel_type, "vmlDrawing") {
-        exact("application/vnd.openxmlformats-officedocument.vmlDrawing")
-    } else if office_relationship_type_is(rel_type, "table") {
-        exact("application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml")
-    } else if office_relationship_type_is(rel_type, "ctrlProp") {
-        exact("application/vnd.ms-excel.controlproperties+xml")
-    } else if office_relationship_type_is(rel_type, "image") {
-        Some(ContentTypeExpectation::Prefix("image/"))
-    } else {
-        None
-    }
-}
-
-fn office_relationship_type_is(rel_type: &str, name: &str) -> bool {
-    rel_type
-        == format!("http://schemas.openxmlformats.org/officeDocument/2006/relationships/{name}")
-        || rel_type == format!("http://purl.oclc.org/ooxml/officeDocument/relationships/{name}")
 }
 
 fn is_relationship_part(part_name: &PartName) -> bool {

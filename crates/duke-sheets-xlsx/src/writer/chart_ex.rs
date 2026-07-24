@@ -39,7 +39,7 @@ pub(super) fn write_chart_ex_style_color_parts<W: Write + Seek>(
         rels_xml.push_str(&format!(
             r#"<Relationship Id="rId{}" Type="{}" Target="style{}.xml"/>"#,
             rel_id,
-            super::RT_CHART_STYLE,
+            super::RelationshipKind::ChartStyle.uri(),
             style_color_num
         ));
         rel_id += 1;
@@ -51,7 +51,7 @@ pub(super) fn write_chart_ex_style_color_parts<W: Write + Seek>(
         rels_xml.push_str(&format!(
             r#"<Relationship Id="rId{}" Type="{}" Target="colors{}.xml"/>"#,
             rel_id,
-            super::RT_CHART_COLOR_STYLE,
+            super::RelationshipKind::ChartColorStyle.uri(),
             style_color_num
         ));
     }

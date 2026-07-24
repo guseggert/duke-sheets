@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::io::{BufReader, Read, Seek};
+use std::sync::Arc;
 
 use quick_xml::events::Event;
 use quick_xml::name::ResolveResult;
@@ -9,7 +10,7 @@ use quick_xml::reader::NsReader;
 
 use super::archive_by_name;
 use crate::error::{XlsxError, XlsxResult};
-use crate::opc::{OpcPackage, PartName, Relationship, RelationshipSource};
+use crate::opc::{OpcPackage, PartName, RelationshipKind, RelationshipSet, RelationshipSource};
 use crate::XlsxPackagePolicy;
 use duke_sheets_core::{SheetVisibility, WorkbookProtection};
 
@@ -31,8 +32,6 @@ pub(super) struct WorkbookRels {
     /// (dialog/macro sheets); their sheet entries are skipped.
     pub(super) unmodeled_sheet_rels: std::collections::HashSet<String>,
 }
-
-pub(super) type PartRelationship = Relationship;
 
 pub(super) struct SheetEntry {
     pub(super) name: String,
@@ -281,14 +280,12 @@ pub(super) fn read_workbook_rels<R: Read + Seek>(
     let mut shared_strings_path: Option<String> = None;
     let mut unmodeled_sheet_rels = std::collections::HashSet::new();
     for relationship in relationships.iter() {
-        let worksheet = relationship_type_is(&relationship.rel_type, "worksheet");
-        let chartsheet = relationship_type_is(&relationship.rel_type, "chartsheet");
-        let theme = relationship_type_is(&relationship.rel_type, "theme");
-        let styles = relationship_type_is(&relationship.rel_type, "styles");
-        let shared_strings = relationship_type_is(&relationship.rel_type, "sharedStrings");
+        let Some(kind) = relationship.kind() else {
+            continue;
+        };
         // Valid OOXML sheet kinds this library does not model yet; a
         // capability limitation, never a conformance violation.
-        if let Some(kind) = unmodeled_sheet_kind(&relationship.rel_type) {
+        if let Some(label) = kind.unmodeled_sheet_label() {
             if relationship.internal_part().is_none() {
                 package.diagnostics_mut().violation(
                     crate::opc::XlsxDiagnosticCode::MalformedRelationship,
@@ -307,7 +304,7 @@ pub(super) fn read_workbook_rels<R: Read + Seek>(
             }
             package.diagnostics_mut().warning(
                 crate::opc::XlsxDiagnosticCode::UnsupportedSheetType,
-                format!("{kind} sheets are not supported by the workbook model"),
+                format!("{label} sheets are not supported by the workbook model"),
                 Some(workbook_path.as_str()),
                 Some(&relationship.id),
                 Some(&relationship.raw_target),
@@ -315,7 +312,14 @@ pub(super) fn read_workbook_rels<R: Read + Seek>(
             unmodeled_sheet_rels.insert(relationship.id.clone());
             continue;
         }
-        if !(worksheet || chartsheet || theme || styles || shared_strings) {
+        if !matches!(
+            kind,
+            RelationshipKind::Worksheet
+                | RelationshipKind::Chartsheet
+                | RelationshipKind::Theme
+                | RelationshipKind::Styles
+                | RelationshipKind::SharedStrings
+        ) {
             continue;
         }
         let Some(path) = relationship.internal_path() else {
@@ -334,15 +338,15 @@ pub(super) fn read_workbook_rels<R: Read + Seek>(
         if package.open_related_part(relationship)?.is_none() {
             continue;
         }
-        if worksheet {
+        if kind == RelationshipKind::Worksheet {
             rels.insert(relationship.id.clone(), path.to_string());
-        } else if chartsheet {
+        } else if kind == RelationshipKind::Chartsheet {
             chartsheet_rels.insert(relationship.id.clone(), path.to_string());
-        } else if theme {
+        } else if kind == RelationshipKind::Theme {
             theme_path = Some(path.to_string());
-        } else if styles {
+        } else if kind == RelationshipKind::Styles {
             styles_path = Some(path.to_string());
-        } else if shared_strings {
+        } else if kind == RelationshipKind::SharedStrings {
             shared_strings_path = Some(path.to_string());
         }
     }
@@ -357,34 +361,17 @@ pub(super) fn read_workbook_rels<R: Read + Seek>(
     })
 }
 
-fn unmodeled_sheet_kind(rel_type: &str) -> Option<&'static str> {
-    if relationship_type_is(rel_type, "dialogsheet") {
-        Some("Dialog")
-    } else if rel_type == "http://schemas.microsoft.com/office/2006/relationships/xlMacrosheet" {
-        Some("Macro")
-    } else if rel_type == "http://schemas.microsoft.com/office/2006/relationships/xlIntlMacrosheet"
-    {
-        Some("International macro")
-    } else {
-        None
-    }
-}
-
-fn relationship_type_is(rel_type: &str, name: &str) -> bool {
-    rel_type
-        == format!("http://schemas.openxmlformats.org/officeDocument/2006/relationships/{name}")
-        || rel_type == format!("http://purl.oclc.org/ooxml/officeDocument/relationships/{name}")
-}
-
 /// Read relationships owned by any package part.
 pub(super) fn read_part_rels<R: Read + Seek>(
     package: &mut OpcPackage<R>,
     part_path: &str,
-) -> XlsxResult<HashMap<String, PartRelationship>> {
+) -> XlsxResult<Arc<RelationshipSet>> {
     let source = RelationshipSource::Part(PartName::from_zip_name(part_path)?);
     let relationships = package.relationships(&source, false)?;
     for relationship in relationships.iter() {
-        if relationship_must_be_internal(&relationship.rel_type)
+        if relationship
+            .kind()
+            .is_some_and(RelationshipKind::requires_internal_target)
             && relationship.internal_part().is_none()
         {
             package.diagnostics_mut().violation(
@@ -399,36 +386,5 @@ pub(super) fn read_part_rels<R: Read + Seek>(
             )?;
         }
     }
-    Ok(relationships
-        .iter()
-        .cloned()
-        .map(|relationship| (relationship.id.clone(), relationship))
-        .collect())
-}
-
-fn relationship_must_be_internal(rel_type: &str) -> bool {
-    [
-        "/worksheet",
-        "/chartsheet",
-        "/styles",
-        "/sharedStrings",
-        "/theme",
-        "/drawing",
-        "/chart",
-        "/chartEx",
-        "/chartStyle",
-        "/chartColorStyle",
-        "/comments",
-        "/vmlDrawing",
-        "/table",
-        "/ctrlProp",
-    ]
-    .iter()
-    .any(|suffix| relationship_type_is(rel_type, suffix.trim_start_matches('/')))
-        || matches!(
-            rel_type,
-            "http://schemas.microsoft.com/office/2014/relationships/chartEx"
-                | "http://schemas.microsoft.com/office/2011/relationships/chartStyle"
-                | "http://schemas.microsoft.com/office/2011/relationships/chartColorStyle"
-        )
+    Ok(relationships)
 }
