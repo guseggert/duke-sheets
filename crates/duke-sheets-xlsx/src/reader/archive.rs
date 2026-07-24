@@ -8,8 +8,7 @@
 
 use std::io::{Read, Seek};
 
-/// Look up a ZIP entry by name, falling back to a Windows-separator variant
-/// if the exact match fails.
+/// Look up a ZIP entry by its OPC-equivalent name.
 ///
 /// On success returns a `ZipFile` for the requested entry. On failure returns
 /// `ZipError::FileNotFound` (or the underlying error) as if the fallback had
@@ -26,22 +25,29 @@ pub(crate) fn archive_by_name<'a, R: Read + Seek>(
     if exact_exists {
         return archive.by_name(path);
     }
-    if path.contains('/') {
-        let backslashed = path.replace('/', "\\");
-        let backslashed_exists = archive.file_names().any(|n| n == backslashed);
-        if backslashed_exists {
-            return archive.by_name(&backslashed);
-        }
-    }
     let equivalent = archive
         .file_names()
-        .find(|name| name.replace('\\', "/").eq_ignore_ascii_case(path))
+        .find(|name| zip_name_eq(name, path))
         .map(str::to_string);
     if let Some(equivalent) = equivalent {
         return archive.by_name(&equivalent);
     }
     // Fall through: let the exact-name lookup produce the idiomatic error.
     archive.by_name(path)
+}
+
+fn zip_name_eq(left: &str, right: &str) -> bool {
+    left.bytes()
+        .map(normalize_zip_name_byte)
+        .eq(right.bytes().map(normalize_zip_name_byte))
+}
+
+fn normalize_zip_name_byte(byte: u8) -> u8 {
+    if byte == b'\\' {
+        b'/'
+    } else {
+        byte.to_ascii_lowercase()
+    }
 }
 
 #[cfg(test)]
