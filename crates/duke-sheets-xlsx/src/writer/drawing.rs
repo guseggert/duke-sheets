@@ -50,7 +50,7 @@ fn shape_part(shape: &Shape) -> PartShape<'_> {
     }
 }
 
-use super::{XlsxResult, RT_CHART};
+use super::{RelationshipKind, XlsxResult};
 
 pub(super) use duke_sheets_chart::drawing_part::write::{DrawingPlan, PlannedRel};
 pub(super) use duke_sheets_chart::drawing_part::{image_format_extension, image_format_mime};
@@ -288,7 +288,7 @@ pub(super) fn write_chartsheet_drawing_rels<W: Write + Seek>(
     if let Some((rid, cn)) = chart {
         rels.push(PlannedRel {
             id: rid.to_string(),
-            rel_type: RT_CHART.to_string(),
+            rel_type: RelationshipKind::Chart.uri().to_string(),
             target: format!("../charts/chart{}.xml", cn),
             external: false,
         });
