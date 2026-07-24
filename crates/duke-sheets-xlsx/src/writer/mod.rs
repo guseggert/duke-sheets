@@ -10,10 +10,10 @@ use quick_xml::Writer;
 
 use crate::error::{XlsxError, XlsxResult};
 use crate::opc::{
-    resolve_internal_target, ContentTypeExpectation, RelationshipKind, CT_CHART,
-    CT_CHARTSHEET, CT_CHART_COLOR_STYLE, CT_CHART_EX, CT_CHART_STYLE, CT_COMMENTS,
-    CT_CONTROL_PROPERTIES, CT_DRAWING, CT_SHARED_STRINGS, CT_SHEET_METADATA, CT_STYLES,
-    CT_TABLE, CT_THEME, CT_VML_DRAWING, CT_WORKBOOK, CT_WORKSHEET,
+    resolve_internal_target, ContentTypeExpectation, RelationshipKind, CT_CHART, CT_CHARTSHEET,
+    CT_CHART_COLOR_STYLE, CT_CHART_EX, CT_CHART_STYLE, CT_COMMENTS, CT_CONTROL_PROPERTIES,
+    CT_DRAWING, CT_SHARED_STRINGS, CT_SHEET_METADATA, CT_STYLES, CT_TABLE, CT_THEME,
+    CT_VML_DRAWING, CT_WORKBOOK, CT_WORKSHEET,
 };
 use crate::styles::{roundtrip_theme_data_for, XlsxStyleTable};
 use duke_sheets_core::style::Color;
@@ -1153,10 +1153,7 @@ impl XlsxWriter {
             manifest.register_part(&format!("xl/comments{}.xml", sheet_index + 1), CT_COMMENTS)?;
         }
         if !sheets_with_vml.is_empty() {
-            manifest.register_default(
-                "vml",
-                CT_VML_DRAWING,
-            )?;
+            manifest.register_default("vml", CT_VML_DRAWING)?;
             for &sheet_index in sheets_with_vml {
                 manifest.register_part(
                     &format!("xl/drawings/vmlDrawing{}.vml", sheet_index + 1),
@@ -1165,7 +1162,10 @@ impl XlsxWriter {
             }
         }
         for number in 1..=total_ctrl_props {
-            manifest.register_part(&format!("xl/ctrlProps/ctrlProp{number}.xml"), CT_CONTROL_PROPERTIES)?;
+            manifest.register_part(
+                &format!("xl/ctrlProps/ctrlProp{number}.xml"),
+                CT_CONTROL_PROPERTIES,
+            )?;
         }
         for &(_, _, global_num) in table_numbering {
             manifest.register_part(&format!("xl/tables/table{global_num}.xml"), CT_TABLE)?;
@@ -3299,7 +3299,6 @@ impl XlsxWriter {
     fn is_external_target(target: &str) -> bool {
         target.contains("://") || target.starts_with("mailto:") || target.starts_with("file:")
     }
-
 }
 
 #[cfg(test)]

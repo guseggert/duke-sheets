@@ -337,6 +337,7 @@ impl<R: Read + Seek> OpcPackage<R> {
             .entries
             .get(part_name)
             .ok_or_else(|| XlsxError::MissingPart(part_name.zip_name().to_string()))?;
+        let backslashed = part_name.zip_name().replace('/', "\\");
         let index = entry
             .variants
             .iter()
@@ -345,7 +346,7 @@ impl<R: Read + Seek> OpcPackage<R> {
                 entry
                     .variants
                     .iter()
-                    .find(|variant| !variant.name.contains('\\'))
+                    .find(|variant| variant.name == backslashed)
             })
             .or_else(|| entry.variants.first())
             .map(|variant| variant.index)
@@ -708,6 +709,27 @@ mod tests {
             .read_to_string(&mut contents)
             .unwrap();
         assert_eq!(contents, "exact");
+    }
+
+    #[test]
+    fn package_prefers_exact_backslash_before_case_only_equivalent() {
+        let content_types = br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>"#;
+        let mut package = package(
+            &[
+                ("[Content_Types].xml", content_types),
+                ("xl\\workbook.xml", b"backslash"),
+                ("XL/workbook.xml", b"case-only"),
+            ],
+            XlsxPackagePolicy::Compatible,
+        )
+        .unwrap();
+        let mut contents = String::new();
+        package
+            .open_zip_name("xl/workbook.xml")
+            .unwrap()
+            .read_to_string(&mut contents)
+            .unwrap();
+        assert_eq!(contents, "backslash");
     }
 
     #[test]
