@@ -345,6 +345,12 @@ export declare class Worksheet {
   /** Get the display-formatted value by row/col (0-based). */
   getFormattedValueAt(row: number, col: number): string
   /**
+   * Export this worksheet as a CSV string using the default CSV options.
+   *
+   * Form-control state is synchronized into linked cells in the output.
+   */
+  toCsvString(): string
+  /**
    * Get a batch of sparse rows starting from `start_row`.
    *
    * Returns up to `max_rows` rows that contain data or metadata.

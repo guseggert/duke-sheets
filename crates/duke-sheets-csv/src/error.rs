@@ -16,6 +16,10 @@ pub enum CsvError {
     #[error("CSV error: {0}")]
     Csv(#[from] csv::Error),
 
+    /// UTF-8 conversion error
+    #[error("UTF-8 conversion error: {0}")]
+    Utf8(#[from] std::string::FromUtf8Error),
+
     /// Parse error
     #[error("Parse error at row {row}, column {column}: {message}")]
     Parse {

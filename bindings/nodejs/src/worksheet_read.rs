@@ -154,6 +154,27 @@ impl Worksheet {
         })
     }
 
+    /// Export this worksheet as a CSV string using the default CSV options.
+    ///
+    /// Form-control state is synchronized into linked cells in the output.
+    #[napi(js_name = "toCsvString")]
+    pub fn to_csv_string(&self) -> Result<String> {
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let snapshot = wb.synchronized_for_save();
+            let wb = snapshot.as_ref().unwrap_or_else(|| &*wb);
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+
+            duke_sheets_csv::CsvWriter::write_string(
+                ws,
+                &duke_sheets_csv::CsvWriteOptions::default(),
+            )
+            .map_err(|e| napi::Error::from_reason(format!("Failed to write CSV: {e}")))
+        })
+    }
+
     /// Get a batch of sparse rows starting from `start_row`.
     ///
     /// Returns up to `max_rows` rows that contain data or metadata.

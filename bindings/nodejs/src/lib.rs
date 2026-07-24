@@ -896,16 +896,11 @@ impl Workbook {
                 .worksheet(0)
                 .ok_or_else(|| napi::Error::from_reason("No worksheets to save"))?;
 
-            let mut buf = Vec::new();
-            duke_sheets_csv::CsvWriter::write(
+            duke_sheets_csv::CsvWriter::write_string(
                 ws,
-                &mut buf,
                 &duke_sheets_csv::CsvWriteOptions::default(),
             )
-            .map_err(|e| napi::Error::from_reason(format!("Failed to write CSV: {}", e)))?;
-
-            String::from_utf8(buf)
-                .map_err(|e| napi::Error::from_reason(format!("Invalid UTF-8: {}", e)))
+            .map_err(|e| napi::Error::from_reason(format!("Failed to write CSV: {e}")))
         })
     }
 
