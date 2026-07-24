@@ -1,13 +1,12 @@
 //! Shared string table reader with rich text run support.
 
-use std::io::{BufReader, Read, Seek};
+use std::io::{BufReader, Read};
 
 use duke_sheets_core::rich_text::{RichTextRun, RunFont};
 use duke_sheets_core::style::{Color, FontVerticalAlign, Underline};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::reader::Reader;
 
-use super::archive_by_name;
 use super::conditional_format::parse_color_element;
 use super::decode_excel_escapes;
 use crate::error::{XlsxError, XlsxResult};
@@ -19,34 +18,12 @@ pub(crate) enum SharedStringEntry {
     Rich(Vec<RichTextRun>),
 }
 
-/// Read the shared string table from `xl/sharedStrings.xml`.
-///
 /// Each `<si>` element is either plain text (`<t>`) or rich text (`<r>` runs).
 /// Rich text runs preserve per-character formatting (bold, italic, color, etc.)
 /// via `<rPr>` elements within each `<r>`.
-#[cfg(test)]
-pub(crate) fn read_shared_strings<R: Read + Seek>(
-    archive: &mut zip::ZipArchive<R>,
-) -> XlsxResult<Vec<SharedStringEntry>> {
-    read_shared_strings_at(archive, Some("xl/sharedStrings.xml"))
-}
-
-pub(crate) fn read_shared_strings_at<R: Read + Seek>(
-    archive: &mut zip::ZipArchive<R>,
-    path: Option<&str>,
-) -> XlsxResult<Vec<SharedStringEntry>> {
+pub(crate) fn parse_shared_strings<R: Read>(reader: R) -> XlsxResult<Vec<SharedStringEntry>> {
     let mut entries = Vec::new();
-    let Some(path) = path else {
-        return Ok(entries);
-    };
-
-    let file = match archive_by_name(archive, path) {
-        Ok(f) => f,
-        Err(_) => return Ok(entries), // No shared strings is valid
-    };
-
-    let reader = BufReader::new(file);
-    let mut xml_reader = Reader::from_reader(reader);
+    let mut xml_reader = Reader::from_reader(BufReader::new(reader));
     xml_reader.config_mut().trim_text(false);
 
     let mut buf = Vec::new();
@@ -268,19 +245,6 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
-    /// Create an in-memory ZIP with sharedStrings.xml content for testing.
-    fn make_sst_zip(xml: &str) -> zip::ZipArchive<Cursor<Vec<u8>>> {
-        let buf = Vec::new();
-        let cursor = Cursor::new(buf);
-        let mut zip = zip::ZipWriter::new(cursor);
-        let options = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Stored);
-        zip.start_file("xl/sharedStrings.xml", options).unwrap();
-        std::io::Write::write_all(&mut zip, xml.as_bytes()).unwrap();
-        let cursor = zip.finish().unwrap();
-        zip::ZipArchive::new(cursor).unwrap()
-    }
-
     #[test]
     fn plain_text_entries() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -288,8 +252,7 @@ mod tests {
   <si><t>Hello</t></si>
   <si><t>World</t></si>
 </sst>"#;
-        let mut archive = make_sst_zip(xml);
-        let entries = read_shared_strings(&mut archive).unwrap();
+        let entries = parse_shared_strings(Cursor::new(xml)).unwrap();
         assert_eq!(entries.len(), 2);
         assert!(matches!(&entries[0], SharedStringEntry::Plain(s) if s == "Hello"));
         assert!(matches!(&entries[1], SharedStringEntry::Plain(s) if s == "World"));
@@ -313,8 +276,7 @@ mod tests {
     </r>
   </si>
 </sst>"#;
-        let mut archive = make_sst_zip(xml);
-        let entries = read_shared_strings(&mut archive).unwrap();
+        let entries = parse_shared_strings(Cursor::new(xml)).unwrap();
         assert_eq!(entries.len(), 1);
         match &entries[0] {
             SharedStringEntry::Rich(runs) => {
@@ -349,8 +311,7 @@ mod tests {
   </si>
   <si><t>Another plain</t></si>
 </sst>"#;
-        let mut archive = make_sst_zip(xml);
-        let entries = read_shared_strings(&mut archive).unwrap();
+        let entries = parse_shared_strings(Cursor::new(xml)).unwrap();
         assert_eq!(entries.len(), 3);
         assert!(matches!(&entries[0], SharedStringEntry::Plain(s) if s == "Plain text"));
         assert!(matches!(&entries[1], SharedStringEntry::Rich(runs) if runs.len() == 2));
@@ -375,8 +336,7 @@ mod tests {
     </r>
   </si>
 </sst>"#;
-        let mut archive = make_sst_zip(xml);
-        let entries = read_shared_strings(&mut archive).unwrap();
+        let entries = parse_shared_strings(Cursor::new(xml)).unwrap();
         if let SharedStringEntry::Rich(runs) = &entries[0] {
             let font = runs[0].font.as_ref().unwrap();
             assert_eq!(font.underline, Some(Underline::Double));
@@ -397,8 +357,7 @@ mod tests {
     </r>
   </si>
 </sst>"#;
-        let mut archive = make_sst_zip(xml);
-        let entries = read_shared_strings(&mut archive).unwrap();
+        let entries = parse_shared_strings(Cursor::new(xml)).unwrap();
         if let SharedStringEntry::Rich(runs) = &entries[0] {
             let font = runs[0].font.as_ref().unwrap();
             // parse_color_element with no theme palette returns Theme { index, tint }
@@ -422,8 +381,7 @@ mod tests {
     </r>
   </si>
 </sst>"#;
-        let mut archive = make_sst_zip(xml);
-        let entries = read_shared_strings(&mut archive).unwrap();
+        let entries = parse_shared_strings(Cursor::new(xml)).unwrap();
         if let SharedStringEntry::Rich(runs) = &entries[0] {
             let font = runs[0].font.as_ref().unwrap();
             assert_eq!(font.vertical_align, Some(FontVerticalAlign::Superscript));
@@ -438,8 +396,7 @@ mod tests {
         let xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="0" uniqueCount="0">
 </sst>"#;
-        let mut archive = make_sst_zip(xml);
-        let entries = read_shared_strings(&mut archive).unwrap();
+        let entries = parse_shared_strings(Cursor::new(xml)).unwrap();
         assert!(entries.is_empty());
     }
 
@@ -451,8 +408,7 @@ mod tests {
     <r><t>Hello_x000D_World</t></r>
   </si>
 </sst>"#;
-        let mut archive = make_sst_zip(xml);
-        let entries = read_shared_strings(&mut archive).unwrap();
+        let entries = parse_shared_strings(Cursor::new(xml)).unwrap();
         if let SharedStringEntry::Rich(runs) = &entries[0] {
             assert_eq!(runs[0].text, "Hello\rWorld");
         } else {
@@ -471,8 +427,7 @@ mod tests {
     </r>
   </si>
 </sst>"#;
-        let mut archive = make_sst_zip(xml);
-        let entries = read_shared_strings(&mut archive).unwrap();
+        let entries = parse_shared_strings(Cursor::new(xml)).unwrap();
         if let SharedStringEntry::Rich(runs) = &entries[0] {
             let font = runs[0].font.as_ref().unwrap();
             assert_eq!(font.bold, Some(false));

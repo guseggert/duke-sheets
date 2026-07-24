@@ -1,6 +1,7 @@
-use std::io::{Read, Seek};
+use std::io::Read;
+#[cfg(test)]
+use std::io::Seek;
 
-use super::archive_by_name;
 use crate::error::XlsxResult;
 
 pub(crate) use duke_sheets_chart::drawing_part::read::{
@@ -13,16 +14,12 @@ pub(crate) use duke_sheets_chart::drawing_part::read::{
 /// A missing part yields an empty list; a malformed part is skipped
 /// with a warning (matching the XLSB reader) so the workbook stays
 /// readable.
-pub(crate) fn read_drawing_entries<R: Read + Seek>(
-    archive: &mut zip::ZipArchive<R>,
+pub(crate) fn parse_drawing_entries<R: Read>(
+    mut reader: R,
     drawing_path: &str,
 ) -> XlsxResult<Vec<DrawingEntry>> {
-    let mut file = match archive_by_name(archive, drawing_path) {
-        Ok(f) => f,
-        Err(_) => return Ok(Vec::new()),
-    };
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)?;
+    reader.read_to_end(&mut bytes)?;
     match duke_sheets_chart::drawing_part::read::parse_drawing_part(&bytes) {
         Ok(entries) => Ok(entries),
         Err(e) => {
@@ -30,6 +27,18 @@ pub(crate) fn read_drawing_entries<R: Read + Seek>(
             Ok(Vec::new())
         }
     }
+}
+
+#[cfg(test)]
+pub(crate) fn read_drawing_entries<R: Read + std::io::Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    drawing_path: &str,
+) -> XlsxResult<Vec<DrawingEntry>> {
+    let file = match archive.by_name(drawing_path) {
+        Ok(file) => file,
+        Err(_) => return Ok(Vec::new()),
+    };
+    parse_drawing_entries(file, drawing_path)
 }
 
 /// Backward-compatible view returning only chart refs.
@@ -537,6 +546,9 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert!(matches!(entries[0].kind, DrawingEntryKind::Raw));
         let raw = std::str::from_utf8(&entries[0].bytes).unwrap();
-        assert!(raw.contains("Connector 1"), "raw bytes keep the group: {raw}");
+        assert!(
+            raw.contains("Connector 1"),
+            "raw bytes keep the group: {raw}"
+        );
     }
 }

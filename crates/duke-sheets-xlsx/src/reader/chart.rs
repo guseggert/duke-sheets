@@ -1,25 +1,27 @@
-use std::io::{Read, Seek};
+use std::io::Read;
 
-use super::archive_by_name;
 use crate::error::{XlsxError, XlsxResult};
 use duke_sheets_chart::Chart;
 
-pub(crate) fn read_chart<R: Read + Seek>(
-    archive: &mut zip::ZipArchive<R>,
-    chart_path: &str,
-) -> XlsxResult<Option<Chart>> {
-    let file = match archive_by_name(archive, chart_path) {
-        Ok(f) => f,
-        Err(_) => return Ok(None),
-    };
-
-    let chart = duke_sheets_chart::parse::parse_chart_xml(file).map_err(|e| {
+pub(crate) fn parse_chart<R: Read>(reader: R) -> XlsxResult<Chart> {
+    duke_sheets_chart::parse::parse_chart_xml(reader).map_err(|e| {
         XlsxError::Xml(quick_xml::Error::from(std::io::Error::new(
             std::io::ErrorKind::Other,
             e.to_string(),
         )))
-    })?;
-    Ok(Some(chart))
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn read_chart<R: Read + std::io::Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    chart_path: &str,
+) -> XlsxResult<Option<Chart>> {
+    let file = match archive.by_name(chart_path) {
+        Ok(file) => file,
+        Err(_) => return Ok(None),
+    };
+    parse_chart(file).map(Some)
 }
 
 #[cfg(test)]

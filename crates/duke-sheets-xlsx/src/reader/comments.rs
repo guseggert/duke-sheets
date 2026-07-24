@@ -1,12 +1,14 @@
 #[cfg(test)]
 use std::collections::HashMap;
-use std::io::{BufReader, Read, Seek};
+#[cfg(test)]
+use std::io::Seek;
+use std::io::{BufReader, Read};
 
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
+use super::decode_excel_escapes;
 use super::shared_strings::parse_rpr_element;
-use super::{archive_by_name, decode_excel_escapes};
 use crate::error::{XlsxError, XlsxResult};
 use duke_sheets_core::comment::CellComment;
 use duke_sheets_core::rich_text::{RichTextRun, RunFont};
@@ -15,18 +17,9 @@ use duke_sheets_core::{CellAddress, DrawingText};
 /// Parse a comments part into `(row, col, comment)` tuples in
 /// document order. Placement (anchor, visibility, z-position) is
 /// resolved by the caller against the legacy VML part.
-pub(crate) fn read_comments_list<R: Read + Seek>(
-    archive: &mut zip::ZipArchive<R>,
-    comments_path: &str,
-) -> XlsxResult<Vec<(u32, u16, CellComment)>> {
+pub(crate) fn read_comments_list<R: Read>(reader: R) -> XlsxResult<Vec<(u32, u16, CellComment)>> {
     let mut comments = Vec::new();
-    let file = match archive_by_name(archive, comments_path) {
-        Ok(f) => f,
-        Err(_) => return Ok(comments),
-    };
-
-    let reader = BufReader::new(file);
-    let mut xml_reader = Reader::from_reader(reader);
+    let mut xml_reader = Reader::from_reader(BufReader::new(reader));
     // Keep whitespace: rich runs carry significant leading/trailing
     // spaces.
     xml_reader.config_mut().trim_text(false);
@@ -131,9 +124,10 @@ pub(crate) fn read_comments_list<R: Read + Seek>(
                 }
                 b"text" => in_text = false,
                 b"r" if in_r => {
-                    let font = run_font
-                        .take()
-                        .and_then(|font| if font.is_empty() { None } else { Some(font) });
+                    let font =
+                        run_font
+                            .take()
+                            .and_then(|font| if font.is_empty() { None } else { Some(font) });
                     runs.push(RichTextRun {
                         text: std::mem::take(&mut run_text),
                         font,
@@ -188,7 +182,7 @@ pub(crate) fn read_comment_visibility_map<R: Read + Seek>(
         return Ok(HashMap::new());
     };
 
-    let file = match archive_by_name(archive, vml_path) {
+    let file = match archive.by_name(vml_path) {
         Ok(f) => f,
         Err(_) => return Ok(HashMap::new()),
     };
