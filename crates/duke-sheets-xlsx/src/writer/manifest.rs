@@ -10,7 +10,15 @@ use crate::opc::PartName;
 pub(super) struct OpcManifest {
     defaults: BTreeMap<String, String>,
     parts: HashMap<PartName, String>,
-    relationships: BTreeMap<String, BTreeMap<String, String>>,
+    relationships: BTreeMap<String, Vec<ManifestRelationship>>,
+}
+
+#[derive(Debug)]
+struct ManifestRelationship {
+    id: String,
+    rel_type: String,
+    target: String,
+    external: bool,
 }
 
 impl OpcManifest {
@@ -56,7 +64,10 @@ impl OpcManifest {
         Ok(())
     }
 
-    pub(super) fn write<W: Write + Seek>(&self, zip: &mut zip::ZipWriter<W>) -> XlsxResult<()> {
+    pub(super) fn write_content_types<W: Write + Seek>(
+        &self,
+        zip: &mut zip::ZipWriter<W>,
+    ) -> XlsxResult<()> {
         super::write_xml_part(zip, "[Content_Types].xml", |writer| {
             let mut root = BytesStart::new("Types");
             root.push_attribute((
@@ -108,40 +119,86 @@ impl OpcManifest {
         &mut self,
         source_zip_path: Option<&str>,
         id: &str,
+        rel_type: &str,
         target: &str,
         external: bool,
     ) -> XlsxResult<()> {
         let source = match source_zip_path {
-            Some(path) => PartName::from_zip_name(path)?,
-            None => PartName::new("/_rels/.rels")?,
-        };
-        if let Some(path) = source_zip_path {
-            let source_part = PartName::from_zip_name(path)?;
-            if !self.parts.contains_key(&source_part) {
-                return Err(XlsxError::InvalidFormat(format!(
-                    "relationship source {source_part} is not an emitted part"
-                )));
+            Some(path) => {
+                let source_part = PartName::from_zip_name(path)?;
+                if !self.parts.contains_key(&source_part) {
+                    return Err(XlsxError::InvalidFormat(format!(
+                        "relationship source {source_part} is not an emitted part"
+                    )));
+                }
+                source_part.as_str().to_string()
             }
-        }
-        let ids = self
+            None => "/".to_string(),
+        };
+        let relationships = self
             .relationships
-            .entry(source.as_str().to_ascii_lowercase())
+            .entry(source.to_ascii_lowercase())
             .or_default();
-        if ids.insert(id.to_string(), target.to_string()).is_some() {
+        if relationships
+            .iter()
+            .any(|relationship| relationship.id == id)
+        {
             return Err(XlsxError::InvalidFormat(format!(
                 "duplicate relationship id {id} for {source}"
             )));
         }
-        if external {
-            return Ok(());
+        if !external {
+            let source_path = source_zip_path.unwrap_or("");
+            let resolved = crate::opc::resolve_internal_target(source_path, target)?;
+            let target_part = PartName::from_zip_name(&resolved)?;
+            if !self.parts.contains_key(&target_part) {
+                return Err(XlsxError::InvalidFormat(format!(
+                    "relationship {id} from {source} targets unregistered part {target_part}"
+                )));
+            }
         }
-        let source_path = source_zip_path.unwrap_or("");
-        let resolved = crate::opc::resolve_internal_target(source_path, target)?;
-        let target_part = PartName::from_zip_name(&resolved)?;
-        if !self.parts.contains_key(&target_part) {
-            return Err(XlsxError::InvalidFormat(format!(
-                "relationship {id} from {source} targets unregistered part {target_part}"
-            )));
+        relationships.push(ManifestRelationship {
+            id: id.to_string(),
+            rel_type: rel_type.to_string(),
+            target: target.to_string(),
+            external,
+        });
+        Ok(())
+    }
+
+    pub(super) fn write_relationships<W: Write + Seek>(
+        &self,
+        zip: &mut zip::ZipWriter<W>,
+    ) -> XlsxResult<()> {
+        for (source, relationships) in &self.relationships {
+            let path = if source == "/" {
+                "_rels/.rels".to_string()
+            } else {
+                PartName::new(source.clone())?
+                    .relationships_part()?
+                    .zip_name()
+                    .to_string()
+            };
+            super::write_xml_part(zip, &path, |writer| {
+                let mut root = BytesStart::new("Relationships");
+                root.push_attribute((
+                    "xmlns",
+                    "http://schemas.openxmlformats.org/package/2006/relationships",
+                ));
+                writer.write_event(Event::Start(root))?;
+                for relationship in relationships {
+                    let mut element = BytesStart::new("Relationship");
+                    element.push_attribute(("Id", relationship.id.as_str()));
+                    element.push_attribute(("Type", relationship.rel_type.as_str()));
+                    element.push_attribute(("Target", relationship.target.as_str()));
+                    if relationship.external {
+                        element.push_attribute(("TargetMode", "External"));
+                    }
+                    writer.write_event(Event::Empty(element))?;
+                }
+                writer.write_event(Event::End(BytesEnd::new("Relationships")))?;
+                Ok(())
+            })?;
         }
         Ok(())
     }
@@ -150,6 +207,7 @@ impl OpcManifest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::opc::RelationshipKind;
     use std::io::{Cursor, Read};
 
     #[test]
@@ -163,7 +221,7 @@ mod tests {
             .register_part("xl/workbook.xml", "workbook/type")
             .unwrap();
         let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
-        manifest.write(&mut zip).unwrap();
+        manifest.write_content_types(&mut zip).unwrap();
         let mut archive = zip::ZipArchive::new(zip.finish().unwrap()).unwrap();
         let mut xml = String::new();
         archive
@@ -197,7 +255,7 @@ mod tests {
             .register_part("xl/vendor.v1/blob", "application/octet-stream")
             .unwrap();
         let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
-        manifest.write(&mut zip).unwrap();
+        manifest.write_content_types(&mut zip).unwrap();
         let mut archive = zip::ZipArchive::new(zip.finish().unwrap()).unwrap();
         let mut xml = String::new();
         archive
@@ -207,5 +265,52 @@ mod tests {
             .unwrap();
         assert!(xml.contains("PartName=\"/xl/vendor.v1/blob\""));
         assert!(!xml.contains("Extension=\"v1/blob\""));
+    }
+
+    #[test]
+    fn manifest_serializes_registered_relationships() {
+        let mut manifest = OpcManifest::new().unwrap();
+        manifest
+            .register_part("xl/workbook.xml", "workbook/type")
+            .unwrap();
+        manifest
+            .register_part("xl/worksheets/sheet1.xml", "worksheet/type")
+            .unwrap();
+        manifest
+            .register_relationship(
+                None,
+                "rId1",
+                RelationshipKind::OfficeDocument.uri(),
+                "xl/workbook.xml",
+                false,
+            )
+            .unwrap();
+        manifest
+            .register_relationship(
+                Some("xl/workbook.xml"),
+                "rId1",
+                RelationshipKind::Worksheet.uri(),
+                "worksheets/sheet1.xml",
+                false,
+            )
+            .unwrap();
+
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        manifest.write_relationships(&mut zip).unwrap();
+        let mut archive = zip::ZipArchive::new(zip.finish().unwrap()).unwrap();
+        let mut root = String::new();
+        archive
+            .by_name("_rels/.rels")
+            .unwrap()
+            .read_to_string(&mut root)
+            .unwrap();
+        assert!(root.contains(RelationshipKind::OfficeDocument.uri()));
+        let mut workbook = String::new();
+        archive
+            .by_name("xl/_rels/workbook.xml.rels")
+            .unwrap()
+            .read_to_string(&mut workbook)
+            .unwrap();
+        assert!(workbook.contains("Target=\"worksheets/sheet1.xml\""));
     }
 }

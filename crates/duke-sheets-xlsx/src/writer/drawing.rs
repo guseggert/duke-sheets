@@ -50,9 +50,9 @@ fn shape_part(shape: &Shape) -> PartShape<'_> {
     }
 }
 
-use super::{RelationshipKind, XlsxResult};
+use super::XlsxResult;
 
-pub(super) use duke_sheets_chart::drawing_part::write::{DrawingPlan, PlannedRel};
+pub(super) use duke_sheets_chart::drawing_part::write::DrawingPlan;
 pub(super) use duke_sheets_chart::drawing_part::{image_format_extension, image_format_mime};
 
 pub(super) fn is_unsupported(chart: &Chart) -> bool {
@@ -214,19 +214,6 @@ pub(super) fn write_drawing<W: Write + Seek>(
     Ok(())
 }
 
-/// Write a drawing part's .rels from its plan.
-pub(super) fn write_drawing_rels<W: Write + Seek>(
-    zip: &mut zip::ZipWriter<W>,
-    drawing_num: usize,
-    rels: &[PlannedRel],
-) -> XlsxResult<()> {
-    let path = format!("xl/drawings/_rels/drawing{}.xml.rels", drawing_num);
-    let bytes = part_write::write_rels_part(rels)?;
-    zip.start_file(&path, zip::write::SimpleFileOptions::default())?;
-    zip.write_all(&bytes)?;
-    Ok(())
-}
-
 /// A chartsheet's drawing emission plan: anchor fragments in order,
 /// the relationships captured for them, and a chart rel id allocated
 /// around every id the anchors keep.
@@ -274,34 +261,6 @@ pub(super) fn write_chartsheet_drawing<W: Write + Seek>(
     zip.start_file(&path, zip::write::SimpleFileOptions::default())?;
     zip.write_all(&bytes)?;
     Ok(())
-}
-
-/// Chartsheet drawing rels: the chart (when present) plus every
-/// relationship preserved for raw anchors.
-pub(super) fn write_chartsheet_drawing_rels<W: Write + Seek>(
-    zip: &mut zip::ZipWriter<W>,
-    drawing_num: usize,
-    chart: Option<(&str, usize)>,
-    raw_rels: &[duke_sheets_core::RawRel],
-) -> XlsxResult<()> {
-    let mut rels: Vec<PlannedRel> = Vec::new();
-    if let Some((rid, cn)) = chart {
-        rels.push(PlannedRel {
-            id: rid.to_string(),
-            rel_type: RelationshipKind::Chart.uri().to_string(),
-            target: format!("../charts/chart{}.xml", cn),
-            external: false,
-        });
-    }
-    for rel in raw_rels {
-        rels.push(PlannedRel {
-            id: rel.id.clone(),
-            rel_type: rel.rel_type.clone(),
-            target: rel.target.clone(),
-            external: rel.external,
-        });
-    }
-    write_drawing_rels(zip, drawing_num, &rels)
 }
 
 /// Write the raw image bytes as a part `xl/media/imageN.<ext>` inside
