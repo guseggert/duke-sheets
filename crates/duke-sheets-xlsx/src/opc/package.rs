@@ -5,17 +5,13 @@ use std::sync::Arc;
 use super::content_types::ContentTypes;
 use super::diagnostics::{DiagnosticSink, XlsxDiagnostic, XlsxDiagnosticCode, XlsxPackagePolicy};
 use super::part_name::PartName;
-use super::relationship_kind::{ContentTypeExpectation, RelationshipKind};
+use super::relationship_kind::{
+    ContentTypeExpectation, RelationshipKind, CT_MACRO_TEMPLATE, CT_MACRO_WORKBOOK, CT_TEMPLATE,
+    CT_WORKBOOK,
+};
 use super::relationships::{RelationshipSet, RelationshipSource};
 use crate::error::{XlsxError, XlsxResult};
 
-pub(crate) const CT_WORKBOOK: &str =
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml";
-pub(crate) const CT_TEMPLATE: &str =
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.template.main+xml";
-pub(crate) const CT_MACRO_WORKBOOK: &str = "application/vnd.ms-excel.sheet.macroEnabled.main+xml";
-pub(crate) const CT_MACRO_TEMPLATE: &str =
-    "application/vnd.ms-excel.template.macroEnabled.main+xml";
 pub(crate) const WORKBOOK_CONTENT_TYPES: &[&str] = &[
     CT_WORKBOOK,
     CT_TEMPLATE,

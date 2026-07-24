@@ -13,7 +13,7 @@ pub use diagnostics::{
 };
 pub(crate) use package::OpcPackage;
 pub(crate) use part_name::PartName;
-pub(crate) use relationship_kind::{ContentTypeExpectation, RelationshipKind};
+pub(crate) use relationship_kind::*;
 pub(crate) use relationships::{Relationship, RelationshipSet, RelationshipSource};
 
 /// Resolve an internal OPC relationship target to its ZIP entry name.

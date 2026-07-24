@@ -4,6 +4,49 @@ pub(crate) enum ContentTypeExpectation {
     Prefix(&'static str),
 }
 
+pub(crate) const CT_WORKBOOK: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml";
+pub(crate) const CT_TEMPLATE: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.template.main+xml";
+pub(crate) const CT_MACRO_WORKBOOK: &str = "application/vnd.ms-excel.sheet.macroEnabled.main+xml";
+pub(crate) const CT_MACRO_TEMPLATE: &str =
+    "application/vnd.ms-excel.template.macroEnabled.main+xml";
+pub(crate) const CT_WORKSHEET: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
+pub(crate) const CT_CHARTSHEET: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml";
+pub(crate) const CT_DIALOGSHEET: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.dialogsheet+xml";
+pub(crate) const CT_MACROSHEET: &str = "application/vnd.ms-excel.macrosheet+xml";
+pub(crate) const CT_INTL_MACROSHEET: &str = "application/vnd.ms-excel.intlmacrosheet+xml";
+pub(crate) const CT_STYLES: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml";
+pub(crate) const CT_SHARED_STRINGS: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml";
+pub(crate) const CT_THEME: &str = "application/vnd.openxmlformats-officedocument.theme+xml";
+pub(crate) const CT_COMMENTS: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml";
+pub(crate) const CT_VML_DRAWING: &str = "application/vnd.openxmlformats-officedocument.vmlDrawing";
+pub(crate) const CT_TABLE: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml";
+pub(crate) const CT_CONTROL_PROPERTIES: &str = "application/vnd.ms-excel.controlproperties+xml";
+pub(crate) const CT_SHEET_METADATA: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.metadata+xml";
+pub(crate) const CT_DRAWING: &str = "application/vnd.openxmlformats-officedocument.drawing+xml";
+pub(crate) const CT_CHART: &str =
+    "application/vnd.openxmlformats-officedocument.drawingml.chart+xml";
+pub(crate) const CT_CHART_EX: &str = "application/vnd.ms-office.chartex+xml";
+pub(crate) const CT_CHART_STYLE: &str = "application/vnd.ms-office.chartstyle+xml";
+pub(crate) const CT_CHART_COLOR_STYLE: &str = "application/vnd.ms-office.chartcolorstyle+xml";
+pub(crate) const CT_DIAGRAM_DATA: &str =
+    "application/vnd.openxmlformats-officedocument.drawingml.diagramData+xml";
+pub(crate) const CT_DIAGRAM_LAYOUT: &str =
+    "application/vnd.openxmlformats-officedocument.drawingml.diagramLayout+xml";
+pub(crate) const CT_DIAGRAM_STYLE: &str =
+    "application/vnd.openxmlformats-officedocument.drawingml.diagramStyle+xml";
+pub(crate) const CT_DIAGRAM_COLORS: &str =
+    "application/vnd.openxmlformats-officedocument.drawingml.diagramColors+xml";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RelationshipKind {
     OfficeDocument,
@@ -174,63 +217,29 @@ impl RelationshipKind {
     pub(crate) const fn content_type(self) -> Option<ContentTypeExpectation> {
         use ContentTypeExpectation::{Exact, Prefix};
         match self {
-            Self::Worksheet => Some(Exact(
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml",
-            )),
-            Self::Chartsheet => Some(Exact(
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml",
-            )),
-            Self::Dialogsheet => Some(Exact(
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.dialogsheet+xml",
-            )),
-            Self::MacroSheet => Some(Exact("application/vnd.ms-excel.macrosheet+xml")),
-            Self::IntlMacroSheet => Some(Exact("application/vnd.ms-excel.intlmacrosheet+xml")),
-            Self::Styles => Some(Exact(
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml",
-            )),
-            Self::SharedStrings => Some(Exact(
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml",
-            )),
-            Self::Theme => Some(Exact(
-                "application/vnd.openxmlformats-officedocument.theme+xml",
-            )),
-            Self::Comments => Some(Exact(
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml",
-            )),
-            Self::VmlDrawing => Some(Exact(
-                "application/vnd.openxmlformats-officedocument.vmlDrawing",
-            )),
-            Self::Table => Some(Exact(
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml",
-            )),
-            Self::ControlProperties => {
-                Some(Exact("application/vnd.ms-excel.controlproperties+xml"))
-            }
-            Self::SheetMetadata => Some(Exact(
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.metadata+xml",
-            )),
-            Self::Drawing => Some(Exact(
-                "application/vnd.openxmlformats-officedocument.drawing+xml",
-            )),
-            Self::Chart => Some(Exact(
-                "application/vnd.openxmlformats-officedocument.drawingml.chart+xml",
-            )),
-            Self::ChartEx => Some(Exact("application/vnd.ms-office.chartex+xml")),
-            Self::ChartStyle => Some(Exact("application/vnd.ms-office.chartstyle+xml")),
-            Self::ChartColorStyle => Some(Exact("application/vnd.ms-office.chartcolorstyle+xml")),
+            Self::Worksheet => Some(Exact(CT_WORKSHEET)),
+            Self::Chartsheet => Some(Exact(CT_CHARTSHEET)),
+            Self::Dialogsheet => Some(Exact(CT_DIALOGSHEET)),
+            Self::MacroSheet => Some(Exact(CT_MACROSHEET)),
+            Self::IntlMacroSheet => Some(Exact(CT_INTL_MACROSHEET)),
+            Self::Styles => Some(Exact(CT_STYLES)),
+            Self::SharedStrings => Some(Exact(CT_SHARED_STRINGS)),
+            Self::Theme => Some(Exact(CT_THEME)),
+            Self::Comments => Some(Exact(CT_COMMENTS)),
+            Self::VmlDrawing => Some(Exact(CT_VML_DRAWING)),
+            Self::Table => Some(Exact(CT_TABLE)),
+            Self::ControlProperties => Some(Exact(CT_CONTROL_PROPERTIES)),
+            Self::SheetMetadata => Some(Exact(CT_SHEET_METADATA)),
+            Self::Drawing => Some(Exact(CT_DRAWING)),
+            Self::Chart => Some(Exact(CT_CHART)),
+            Self::ChartEx => Some(Exact(CT_CHART_EX)),
+            Self::ChartStyle => Some(Exact(CT_CHART_STYLE)),
+            Self::ChartColorStyle => Some(Exact(CT_CHART_COLOR_STYLE)),
             Self::Image => Some(Prefix("image/")),
-            Self::DiagramData => Some(Exact(
-                "application/vnd.openxmlformats-officedocument.drawingml.diagramData+xml",
-            )),
-            Self::DiagramLayout => Some(Exact(
-                "application/vnd.openxmlformats-officedocument.drawingml.diagramLayout+xml",
-            )),
-            Self::DiagramQuickStyle => Some(Exact(
-                "application/vnd.openxmlformats-officedocument.drawingml.diagramStyle+xml",
-            )),
-            Self::DiagramColors => Some(Exact(
-                "application/vnd.openxmlformats-officedocument.drawingml.diagramColors+xml",
-            )),
+            Self::DiagramData => Some(Exact(CT_DIAGRAM_DATA)),
+            Self::DiagramLayout => Some(Exact(CT_DIAGRAM_LAYOUT)),
+            Self::DiagramQuickStyle => Some(Exact(CT_DIAGRAM_STYLE)),
+            Self::DiagramColors => Some(Exact(CT_DIAGRAM_COLORS)),
             Self::OfficeDocument | Self::Hyperlink => None,
         }
     }

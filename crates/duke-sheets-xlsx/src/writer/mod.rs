@@ -9,7 +9,12 @@ use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
 
 use crate::error::{XlsxError, XlsxResult};
-use crate::opc::{resolve_internal_target, ContentTypeExpectation, RelationshipKind};
+use crate::opc::{
+    resolve_internal_target, ContentTypeExpectation, RelationshipKind, CT_CHART,
+    CT_CHARTSHEET, CT_CHART_COLOR_STYLE, CT_CHART_EX, CT_CHART_STYLE, CT_COMMENTS,
+    CT_CONTROL_PROPERTIES, CT_DRAWING, CT_SHARED_STRINGS, CT_SHEET_METADATA, CT_STYLES,
+    CT_TABLE, CT_THEME, CT_VML_DRAWING, CT_WORKBOOK, CT_WORKSHEET,
+};
 use crate::styles::{roundtrip_theme_data_for, XlsxStyleTable};
 use duke_sheets_core::style::Color;
 use duke_sheets_core::{CellAddress, CellRange, SheetSlot, Workbook};
@@ -26,31 +31,7 @@ mod manifest;
 mod tables;
 
 const NS_SPREADSHEET: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
-const NS_RELATIONSHIPS: &str = "http://schemas.openxmlformats.org/package/2006/relationships";
 const NS_DOC_RELS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
-
-// Content types
-const CT_WORKBOOK: &str =
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml";
-const CT_STYLES: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml";
-const CT_SST: &str =
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml";
-const CT_WORKSHEET: &str =
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
-const CT_COMMENTS: &str =
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml";
-const CT_CTRLPROP: &str = "application/vnd.ms-excel.controlproperties+xml";
-const CT_THEME: &str = "application/vnd.openxmlformats-officedocument.theme+xml";
-const CT_TABLE: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml";
-const CT_METADATA: &str =
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.metadata+xml";
-const CT_DRAWING: &str = "application/vnd.openxmlformats-officedocument.drawing+xml";
-const CT_CHART: &str = "application/vnd.openxmlformats-officedocument.drawingml.chart+xml";
-const CT_CHARTSHEET: &str =
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml";
-const CT_CHART_STYLE: &str = "application/vnd.ms-office.chartstyle+xml";
-const CT_CHART_COLOR_STYLE: &str = "application/vnd.ms-office.chartcolorstyle+xml";
-const CT_CHART_EX: &str = "application/vnd.ms-office.chartex+xml";
 
 const DEFAULT_THEME_XML: &str = r#"<?xml version="1.0"?>
 <a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Office Theme">
@@ -370,7 +351,7 @@ fn raw_part_content_type(rel_type: &str, path: &str) -> &'static str {
                     .map(drawing::image_format_mime)
                     .or_else(|| match extension.as_str() {
                         "xml" => Some("application/xml"),
-                        "vml" => Some("application/vnd.openxmlformats-officedocument.vmlDrawing"),
+                        "vml" => Some(CT_VML_DRAWING),
                         _ => None,
                     })
             })
@@ -874,16 +855,8 @@ impl XlsxWriter {
             &cs_chart_numbering,
             needs_metadata,
         )?;
-        manifest.write(&mut zip)?;
-
-        // Write _rels/.rels
-        Self::write_root_rels(&mut zip)?;
-
         // Write xl/workbook.xml
         Self::write_workbook_xml(&mut zip, workbook)?;
-
-        // Write xl/_rels/workbook.xml.rels
-        Self::write_workbook_rels(&mut zip, workbook, &sst, needs_metadata)?;
 
         // Write xl/styles.xml
         Self::write_styles_xml(&mut zip, &style_table)?;
@@ -944,13 +917,10 @@ impl XlsxWriter {
                 manifest.register_relationship(
                     Some(&worksheet_source),
                     &relationship.id,
+                    relationship.rel_type,
                     &relationship.target,
                     relationship.target_mode == Some("External"),
                 )?;
-            }
-
-            if !rels.is_empty() {
-                Self::write_worksheet_rels(&mut zip, i, &rels)?;
             }
 
             let sheet_controls = form_controls::sheet_controls(sheet);
@@ -1020,12 +990,12 @@ impl XlsxWriter {
                     manifest.register_relationship(
                         Some(&drawing_source),
                         &relationship.id,
+                        &relationship.rel_type,
                         &relationship.target,
                         relationship.external,
                     )?;
                 }
                 drawing::write_drawing(&mut zip, sheet, i, &plan, dn)?;
-                drawing::write_drawing_rels(&mut zip, dn, &plan.rels)?;
 
                 // Write image binary parts (xl/media/imageN.<ext>).
                 for (img, &(gn, ext)) in image_payloads.iter().zip(&image_parts) {
@@ -1061,7 +1031,6 @@ impl XlsxWriter {
                     chart_ex::write_chart_ex_style_color_parts(
                         &mut zip,
                         sheet_charts_ex[ji].payload,
-                        gn,
                         style_num,
                     )?;
                 }
@@ -1088,6 +1057,7 @@ impl XlsxWriter {
             manifest.register_relationship(
                 Some(&chartsheet_source),
                 "rId1",
+                RelationshipKind::Drawing.uri(),
                 &format!("../drawings/drawing{dn}.xml"),
                 false,
             )?;
@@ -1096,6 +1066,7 @@ impl XlsxWriter {
                 manifest.register_relationship(
                     Some(&drawing_source),
                     &plan.chart_rid,
+                    RelationshipKind::Chart.uri(),
                     &format!("../charts/chart{chart_num}.xml"),
                     false,
                 )?;
@@ -1104,18 +1075,12 @@ impl XlsxWriter {
                 manifest.register_relationship(
                     Some(&drawing_source),
                     &relationship.id,
+                    &relationship.rel_type,
                     &relationship.target,
                     relationship.external,
                 )?;
             }
-            Self::write_chartsheet_rels(&mut zip, i, dn)?;
             drawing::write_chartsheet_drawing(&mut zip, &plan, cs_cn.is_some(), dn)?;
-            drawing::write_chartsheet_drawing_rels(
-                &mut zip,
-                dn,
-                cs_cn.map(|cn| (plan.chart_rid.as_str(), cn)),
-                &plan.raw_rels,
-            )?;
             // Captured internal parts land back at their original
             // paths (deduplicated against worksheet raw parts).
             for rel in &plan.raw_rels {
@@ -1141,6 +1106,8 @@ impl XlsxWriter {
                 Self::write_chart_style_color_parts(&mut zip, &cs.chart, cn)?;
             }
         }
+        manifest.write_content_types(&mut zip)?;
+        manifest.write_relationships(&mut zip)?;
         zip.finish()?;
         Ok(())
     }
@@ -1168,7 +1135,7 @@ impl XlsxWriter {
         manifest.register_part("xl/styles.xml", CT_STYLES)?;
         manifest.register_part("xl/theme/theme1.xml", CT_THEME)?;
         if !sst.is_empty() {
-            manifest.register_part("xl/sharedStrings.xml", CT_SST)?;
+            manifest.register_part("xl/sharedStrings.xml", CT_SHARED_STRINGS)?;
         }
         for index in 0..workbook.sheet_count() {
             manifest.register_part(
@@ -1188,17 +1155,17 @@ impl XlsxWriter {
         if !sheets_with_vml.is_empty() {
             manifest.register_default(
                 "vml",
-                "application/vnd.openxmlformats-officedocument.vmlDrawing",
+                CT_VML_DRAWING,
             )?;
             for &sheet_index in sheets_with_vml {
                 manifest.register_part(
                     &format!("xl/drawings/vmlDrawing{}.vml", sheet_index + 1),
-                    "application/vnd.openxmlformats-officedocument.vmlDrawing",
+                    CT_VML_DRAWING,
                 )?;
             }
         }
         for number in 1..=total_ctrl_props {
-            manifest.register_part(&format!("xl/ctrlProps/ctrlProp{number}.xml"), CT_CTRLPROP)?;
+            manifest.register_part(&format!("xl/ctrlProps/ctrlProp{number}.xml"), CT_CONTROL_PROPERTIES)?;
         }
         for &(_, _, global_num) in table_numbering {
             manifest.register_part(&format!("xl/tables/table{global_num}.xml"), CT_TABLE)?;
@@ -1223,6 +1190,7 @@ impl XlsxWriter {
                     manifest.register_relationship(
                         Some(&chart_source),
                         &format!("rId{relationship_id}"),
+                        RelationshipKind::ChartStyle.uri(),
                         &format!("style{global_num}.xml"),
                         false,
                     )?;
@@ -1236,6 +1204,7 @@ impl XlsxWriter {
                     manifest.register_relationship(
                         Some(&chart_source),
                         &format!("rId{relationship_id}"),
+                        RelationshipKind::ChartColorStyle.uri(),
                         &format!("colors{global_num}.xml"),
                         false,
                     )?;
@@ -1259,6 +1228,7 @@ impl XlsxWriter {
                     manifest.register_relationship(
                         Some(&chart_source),
                         &format!("rId{relationship_id}"),
+                        RelationshipKind::ChartStyle.uri(),
                         &format!("style{global_num}.xml"),
                         false,
                     )?;
@@ -1272,6 +1242,7 @@ impl XlsxWriter {
                     manifest.register_relationship(
                         Some(&chart_source),
                         &format!("rId{relationship_id}"),
+                        RelationshipKind::ChartColorStyle.uri(),
                         &format!("colors{global_num}.xml"),
                         false,
                     )?;
@@ -1296,6 +1267,7 @@ impl XlsxWriter {
                     manifest.register_relationship(
                         Some(&chart_source),
                         &format!("rId{relationship_id}"),
+                        RelationshipKind::ChartStyle.uri(),
                         &format!("style{style_num}.xml"),
                         false,
                     )?;
@@ -1309,6 +1281,7 @@ impl XlsxWriter {
                     manifest.register_relationship(
                         Some(&chart_source),
                         &format!("rId{relationship_id}"),
+                        RelationshipKind::ChartColorStyle.uri(),
                         &format!("colors{style_num}.xml"),
                         false,
                     )?;
@@ -1335,9 +1308,15 @@ impl XlsxWriter {
             manifest.register_part(&raw_part.path, content_type)?;
         }
         if has_metadata {
-            manifest.register_part("xl/metadata.xml", CT_METADATA)?;
+            manifest.register_part("xl/metadata.xml", CT_SHEET_METADATA)?;
         }
-        manifest.register_relationship(None, "rId1", "xl/workbook.xml", false)?;
+        manifest.register_relationship(
+            None,
+            "rId1",
+            RelationshipKind::OfficeDocument.uri(),
+            "xl/workbook.xml",
+            false,
+        )?;
 
         let order = Self::effective_sheet_order(workbook);
         let mut worksheet_number = 0usize;
@@ -1356,6 +1335,10 @@ impl XlsxWriter {
             manifest.register_relationship(
                 Some("xl/workbook.xml"),
                 &format!("rId{}", tab_index + 1),
+                match slot {
+                    SheetSlot::Worksheet(_) => RelationshipKind::Worksheet.uri(),
+                    SheetSlot::ChartSheet(_) => RelationshipKind::Chartsheet.uri(),
+                },
                 &target,
                 false,
             )?;
@@ -1364,6 +1347,7 @@ impl XlsxWriter {
         manifest.register_relationship(
             Some("xl/workbook.xml"),
             &format!("rId{next_id}"),
+            RelationshipKind::Styles.uri(),
             "styles.xml",
             false,
         )?;
@@ -1372,6 +1356,7 @@ impl XlsxWriter {
             manifest.register_relationship(
                 Some("xl/workbook.xml"),
                 &format!("rId{next_id}"),
+                RelationshipKind::SharedStrings.uri(),
                 "sharedStrings.xml",
                 false,
             )?;
@@ -1380,6 +1365,7 @@ impl XlsxWriter {
         manifest.register_relationship(
             Some("xl/workbook.xml"),
             &format!("rId{next_id}"),
+            RelationshipKind::Theme.uri(),
             "theme/theme1.xml",
             false,
         )?;
@@ -1388,28 +1374,12 @@ impl XlsxWriter {
             manifest.register_relationship(
                 Some("xl/workbook.xml"),
                 &format!("rId{next_id}"),
+                RelationshipKind::SheetMetadata.uri(),
                 "metadata.xml",
                 false,
             )?;
         }
         Ok(manifest)
-    }
-
-    fn write_root_rels<W: Write + Seek>(zip: &mut zip::ZipWriter<W>) -> XlsxResult<()> {
-        write_xml_part(zip, "_rels/.rels", |w| {
-            let mut tag = BytesStart::new("Relationships");
-            tag.push_attribute(("xmlns", NS_RELATIONSHIPS));
-            w.write_event(Event::Start(tag))?;
-
-            w.create_element("Relationship")
-                .with_attribute(("Id", "rId1"))
-                .with_attribute(("Type", RelationshipKind::OfficeDocument.uri()))
-                .with_attribute(("Target", "xl/workbook.xml"))
-                .write_empty()?;
-
-            w.write_event(Event::End(BytesEnd::new("Relationships")))?;
-            Ok(())
-        })
     }
 
     fn write_workbook_xml<W: Write + Seek>(
@@ -1557,94 +1527,6 @@ impl XlsxWriter {
         })
     }
 
-    fn write_workbook_rels<W: Write + Seek>(
-        zip: &mut zip::ZipWriter<W>,
-        workbook: &Workbook,
-        sst: &SharedStringTable,
-        has_metadata: bool,
-    ) -> XlsxResult<()> {
-        write_xml_part(zip, "xl/_rels/workbook.xml.rels", |w| {
-            let mut tag = BytesStart::new("Relationships");
-            tag.push_attribute(("xmlns", NS_RELATIONSHIPS));
-            w.write_event(Event::Start(tag))?;
-
-            // Sheet relationships in tab-bar order.
-            // Part paths use independent numbering per type (worksheets/sheet{N}.xml,
-            // chartsheets/sheet{N}.xml), but rIds follow tab order.
-            let order = Self::effective_sheet_order(workbook);
-            let mut ws_part_num = 0usize;
-            let mut cs_part_num = 0usize;
-            for (tab_idx, slot) in order.iter().enumerate() {
-                let rid = format!("rId{}", tab_idx + 1);
-                let (rel_type, target) = match slot {
-                    SheetSlot::Worksheet(ws_idx) => {
-                        let _ = ws_idx;
-                        ws_part_num += 1;
-                        (
-                            RelationshipKind::Worksheet.uri(),
-                            format!("worksheets/sheet{}.xml", ws_part_num),
-                        )
-                    }
-                    SheetSlot::ChartSheet(cs_idx) => {
-                        let _ = cs_idx;
-                        cs_part_num += 1;
-                        (
-                            RelationshipKind::Chartsheet.uri(),
-                            format!("chartsheets/sheet{}.xml", cs_part_num),
-                        )
-                    }
-                };
-                w.create_element("Relationship")
-                    .with_attribute(("Id", rid.as_str()))
-                    .with_attribute(("Type", rel_type))
-                    .with_attribute(("Target", target.as_str()))
-                    .write_empty()?;
-            }
-
-            // Styles
-            let mut next_rid = order.len() + 1;
-            let rid = format!("rId{}", next_rid);
-            w.create_element("Relationship")
-                .with_attribute(("Id", rid.as_str()))
-                .with_attribute(("Type", RelationshipKind::Styles.uri()))
-                .with_attribute(("Target", "styles.xml"))
-                .write_empty()?;
-            next_rid += 1;
-
-            // Shared strings
-            if !sst.is_empty() {
-                let rid = format!("rId{}", next_rid);
-                w.create_element("Relationship")
-                    .with_attribute(("Id", rid.as_str()))
-                    .with_attribute(("Type", RelationshipKind::SharedStrings.uri()))
-                    .with_attribute(("Target", "sharedStrings.xml"))
-                    .write_empty()?;
-                next_rid += 1;
-            }
-
-            // Theme
-            let rid = format!("rId{}", next_rid);
-            w.create_element("Relationship")
-                .with_attribute(("Id", rid.as_str()))
-                .with_attribute(("Type", RelationshipKind::Theme.uri()))
-                .with_attribute(("Target", "theme/theme1.xml"))
-                .write_empty()?;
-            next_rid += 1;
-
-            if has_metadata {
-                let rid = format!("rId{}", next_rid);
-                w.create_element("Relationship")
-                    .with_attribute(("Id", rid.as_str()))
-                    .with_attribute(("Type", RelationshipKind::SheetMetadata.uri()))
-                    .with_attribute(("Target", "metadata.xml"))
-                    .write_empty()?;
-            }
-
-            w.write_event(Event::End(BytesEnd::new("Relationships")))?;
-            Ok(())
-        })
-    }
-
     /// Return the effective tab-bar order. If the workbook has an explicit
     /// sheet_order, use it. Otherwise synthesize the default: all worksheets
     /// first, then all chartsheets.
@@ -1692,29 +1574,6 @@ impl XlsxWriter {
         })
     }
 
-    fn write_chartsheet_rels<W: Write + Seek>(
-        zip: &mut zip::ZipWriter<W>,
-        index: usize,
-        drawing_num: usize,
-    ) -> XlsxResult<()> {
-        let path = format!("xl/chartsheets/_rels/sheet{}.xml.rels", index + 1);
-        write_xml_part(zip, &path, |w| {
-            let mut tag = BytesStart::new("Relationships");
-            tag.push_attribute(("xmlns", NS_RELATIONSHIPS));
-            w.write_event(Event::Start(tag))?;
-
-            let target = format!("../drawings/drawing{}.xml", drawing_num);
-            w.create_element("Relationship")
-                .with_attribute(("Id", "rId1"))
-                .with_attribute(("Type", RelationshipKind::Drawing.uri()))
-                .with_attribute(("Target", target.as_str()))
-                .write_empty()?;
-
-            w.write_event(Event::End(BytesEnd::new("Relationships")))?;
-            Ok(())
-        })
-    }
-
     fn write_chart_style_color_parts<W: Write + Seek>(
         zip: &mut zip::ZipWriter<W>,
         chart: &duke_sheets_chart::Chart,
@@ -1726,37 +1585,16 @@ impl XlsxWriter {
             return Ok(());
         }
         let options = zip::write::SimpleFileOptions::default();
-        let mut rel_id = 1u32;
-        let mut rels_xml = String::from(
-            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
-        );
         if let Some(ref bytes) = chart.raw_chart_style {
             let style_path = format!("xl/charts/style{}.xml", chart_num);
             zip.start_file(&style_path, options)?;
             zip.write_all(bytes)?;
-            rels_xml.push_str(&format!(
-                r#"<Relationship Id="rId{}" Type="{}" Target="style{}.xml"/>"#,
-                rel_id,
-                RelationshipKind::ChartStyle.uri(),
-                chart_num
-            ));
-            rel_id += 1;
         }
         if let Some(ref bytes) = chart.raw_chart_color_style {
             let color_path = format!("xl/charts/colors{}.xml", chart_num);
             zip.start_file(&color_path, options)?;
             zip.write_all(bytes)?;
-            rels_xml.push_str(&format!(
-                r#"<Relationship Id="rId{}" Type="{}" Target="colors{}.xml"/>"#,
-                rel_id,
-                RelationshipKind::ChartColorStyle.uri(),
-                chart_num
-            ));
         }
-        rels_xml.push_str("</Relationships>");
-        let rels_path = format!("xl/charts/_rels/chart{}.xml.rels", chart_num);
-        zip.start_file(&rels_path, options)?;
-        zip.write_all(rels_xml.as_bytes())?;
         Ok(())
     }
 
@@ -3462,33 +3300,6 @@ impl XlsxWriter {
         target.contains("://") || target.starts_with("mailto:") || target.starts_with("file:")
     }
 
-    fn write_worksheet_rels<W: Write + Seek>(
-        zip: &mut zip::ZipWriter<W>,
-        sheet_index: usize,
-        rels: &[WorksheetRelationship],
-    ) -> XlsxResult<()> {
-        let path = format!("xl/worksheets/_rels/sheet{}.xml.rels", sheet_index + 1);
-        write_xml_part(zip, &path, |w| {
-            let mut tag = BytesStart::new("Relationships");
-            tag.push_attribute(("xmlns", NS_RELATIONSHIPS));
-            w.write_event(Event::Start(tag))?;
-
-            for rel in rels {
-                let mut relationship = w
-                    .create_element("Relationship")
-                    .with_attribute(("Id", rel.id.as_str()))
-                    .with_attribute(("Type", rel.rel_type))
-                    .with_attribute(("Target", rel.target.as_str()));
-                if let Some(target_mode) = rel.target_mode {
-                    relationship = relationship.with_attribute(("TargetMode", target_mode));
-                }
-                relationship.write_empty()?;
-            }
-
-            w.write_event(Event::End(BytesEnd::new("Relationships")))?;
-            Ok(())
-        })
-    }
 }
 
 #[cfg(test)]
