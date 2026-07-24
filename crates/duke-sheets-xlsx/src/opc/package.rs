@@ -25,7 +25,7 @@ pub(crate) const WORKBOOK_CONTENT_TYPES: &[&str] = &[
 
 pub(crate) struct OpcPackage<R: Read + Seek> {
     archive: zip::ZipArchive<R>,
-    entries: HashMap<PartName, usize>,
+    entries: HashMap<PartName, PackageEntry>,
     content_types: ContentTypes,
     /// False when `[Content_Types].xml` was unreadable and Compatible
     /// mode degraded to an empty map; content-type checks are skipped.
@@ -33,6 +33,15 @@ pub(crate) struct OpcPackage<R: Read + Seek> {
     relationships: HashMap<RelationshipSource, Arc<RelationshipSet>>,
     validated_content_types: HashSet<PartName>,
     diagnostics: DiagnosticSink,
+}
+
+struct PackageEntry {
+    variants: Vec<EntryVariant>,
+}
+
+struct EntryVariant {
+    index: usize,
+    name: String,
 }
 
 impl<R: Read + Seek> OpcPackage<R> {
@@ -46,7 +55,7 @@ impl<R: Read + Seek> OpcPackage<R> {
         policy: XlsxPackagePolicy,
     ) -> XlsxResult<Self> {
         let mut diagnostics = DiagnosticSink::new(policy);
-        let mut entries = HashMap::new();
+        let mut entries: HashMap<PartName, PackageEntry> = HashMap::new();
         let mut ordered_names = Vec::new();
         let mut content_types_index = None;
 
@@ -84,7 +93,7 @@ impl<R: Read + Seek> OpcPackage<R> {
                     continue;
                 }
             };
-            if entries.contains_key(&part_name) {
+            if let Some(existing) = entries.get_mut(&part_name) {
                 diagnostics.violation(
                     XlsxDiagnosticCode::EquivalentPartName,
                     format!("equivalent OPC part names include {part_name}"),
@@ -92,10 +101,22 @@ impl<R: Read + Seek> OpcPackage<R> {
                     None,
                     Some(part_name.as_str()),
                 )?;
+                existing.variants.push(EntryVariant {
+                    index,
+                    name: raw_name,
+                });
                 continue;
             }
             ordered_names.push(part_name.clone());
-            entries.insert(part_name, index);
+            entries.insert(
+                part_name,
+                PackageEntry {
+                    variants: vec![EntryVariant {
+                        index,
+                        name: raw_name,
+                    }],
+                },
+            );
         }
 
         let lowercased: HashSet<String> = ordered_names
@@ -316,12 +337,28 @@ impl<R: Read + Seek> OpcPackage<R> {
 
     pub(crate) fn open_part(&mut self, part_name: &PartName) -> XlsxResult<zip::read::ZipFile<'_>> {
         self.validate_content_type_presence(part_name)?;
-        let index = self
+        let entry = self
             .entries
             .get(part_name)
-            .copied()
+            .ok_or_else(|| XlsxError::MissingPart(part_name.zip_name().to_string()))?;
+        let index = entry
+            .variants
+            .iter()
+            .find(|variant| variant.name == part_name.zip_name())
+            .or_else(|| {
+                entry
+                    .variants
+                    .iter()
+                    .find(|variant| !variant.name.contains('\\'))
+            })
+            .or_else(|| entry.variants.first())
+            .map(|variant| variant.index)
             .ok_or_else(|| XlsxError::MissingPart(part_name.zip_name().to_string()))?;
         Ok(self.archive.by_index(index)?)
+    }
+
+    pub(crate) fn open_zip_name(&mut self, path: &str) -> XlsxResult<zip::read::ZipFile<'_>> {
+        self.open_part(&PartName::from_zip_name(path)?)
     }
 
     pub(crate) fn relationships(
@@ -423,10 +460,6 @@ impl<R: Read + Seek> OpcPackage<R> {
             None,
             None,
         )
-    }
-
-    pub(crate) fn archive_mut(&mut self) -> &mut zip::ZipArchive<R> {
-        &mut self.archive
     }
 
     pub(crate) fn into_diagnostics(self) -> Vec<XlsxDiagnostic> {
@@ -638,6 +671,47 @@ mod tests {
             .read_to_string(&mut contents)
             .unwrap();
         assert_eq!(contents, "workbook");
+    }
+
+    #[test]
+    fn package_accepts_backslash_entry_names_in_compatible_mode() {
+        let content_types = br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>"#;
+        let mut package = package(
+            &[
+                ("[Content_Types].xml", content_types),
+                ("xl\\workbook.xml", b"workbook"),
+            ],
+            XlsxPackagePolicy::Compatible,
+        )
+        .unwrap();
+        let mut contents = String::new();
+        package
+            .open_zip_name("xl/workbook.xml")
+            .unwrap()
+            .read_to_string(&mut contents)
+            .unwrap();
+        assert_eq!(contents, "workbook");
+    }
+
+    #[test]
+    fn package_prefers_exact_entry_name_among_equivalents() {
+        let content_types = br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>"#;
+        let mut package = package(
+            &[
+                ("[Content_Types].xml", content_types),
+                ("xl\\workbook.xml", b"backslash"),
+                ("xl/workbook.xml", b"exact"),
+            ],
+            XlsxPackagePolicy::Compatible,
+        )
+        .unwrap();
+        let mut contents = String::new();
+        package
+            .open_zip_name("xl/workbook.xml")
+            .unwrap()
+            .read_to_string(&mut contents)
+            .unwrap();
+        assert_eq!(contents, "exact");
     }
 
     #[test]

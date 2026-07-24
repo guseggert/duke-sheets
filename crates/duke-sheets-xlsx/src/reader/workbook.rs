@@ -8,7 +8,6 @@ use quick_xml::events::Event;
 use quick_xml::name::ResolveResult;
 use quick_xml::reader::NsReader;
 
-use super::archive_by_name;
 use crate::error::{XlsxError, XlsxResult};
 use crate::opc::{OpcPackage, PartName, RelationshipKind, RelationshipSet, RelationshipSource};
 use crate::XlsxPackagePolicy;
@@ -41,18 +40,13 @@ pub(super) struct SheetEntry {
 
 /// Read workbook.xml to get sheet names, rIds, workbook properties,
 /// and defined names.
-pub(super) fn read_workbook_xml<R: Read + Seek>(
-    archive: &mut zip::ZipArchive<R>,
-    workbook_path: &str,
+pub(super) fn read_workbook_xml<R: Read>(
+    reader: R,
     policy: XlsxPackagePolicy,
 ) -> XlsxResult<WorkbookProps> {
     use duke_sheets_core::named_range::{NameScope, NamedRange};
 
-    let file = archive_by_name(archive, workbook_path)
-        .map_err(|_| XlsxError::MissingPart(workbook_path.into()))?;
-
-    let reader = BufReader::new(file);
-    let mut xml_reader = NsReader::from_reader(reader);
+    let mut xml_reader = NsReader::from_reader(BufReader::new(reader));
     xml_reader.config_mut().trim_text(true);
 
     let mut buf = Vec::new();

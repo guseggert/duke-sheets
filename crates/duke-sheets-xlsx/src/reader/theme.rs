@@ -1,9 +1,8 @@
-use std::io::{BufReader, Read, Seek};
+use std::io::{BufReader, Read};
 
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
-use super::archive_by_name;
 use crate::error::{XlsxError, XlsxResult};
 
 pub(crate) use duke_sheets_core::style::ThemePalette;
@@ -20,21 +19,11 @@ fn parse_ooxml_hex(hex: &str) -> Option<(u8, u8, u8)> {
     Some((r, g, b))
 }
 
-pub(super) fn read_theme_palette<R: Read + Seek>(
-    archive: &mut zip::ZipArchive<R>,
-    theme_path: Option<&str>,
-) -> XlsxResult<(Option<ThemePalette>, Option<Vec<u8>>)> {
-    let Some(path) = theme_path else {
-        return Ok((None, None));
-    };
-    let mut file = match archive_by_name(archive, path) {
-        Ok(file) => file,
-        Err(_) => return Ok((None, None)),
-    };
+pub(super) fn read_theme_palette<R: Read>(mut reader: R) -> XlsxResult<(ThemePalette, Vec<u8>)> {
     let mut raw_bytes = Vec::new();
-    file.read_to_end(&mut raw_bytes)?;
+    reader.read_to_end(&mut raw_bytes)?;
     let palette = parse_theme_palette(std::io::Cursor::new(&raw_bytes))?;
-    Ok((Some(palette), Some(raw_bytes)))
+    Ok((palette, raw_bytes))
 }
 
 pub(super) fn parse_theme_palette<R: Read>(reader: R) -> XlsxResult<ThemePalette> {
