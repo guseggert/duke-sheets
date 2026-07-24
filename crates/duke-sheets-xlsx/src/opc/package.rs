@@ -6,8 +6,8 @@ use super::content_types::ContentTypes;
 use super::diagnostics::{DiagnosticSink, XlsxDiagnostic, XlsxDiagnosticCode, XlsxPackagePolicy};
 use super::part_name::PartName;
 use super::relationship_kind::{
-    ContentTypeExpectation, RelationshipKind, CT_MACRO_TEMPLATE, CT_MACRO_WORKBOOK, CT_TEMPLATE,
-    CT_WORKBOOK,
+    ContentTypeExpectation, RelationshipKind, TargetModePolicy, CT_MACRO_TEMPLATE,
+    CT_MACRO_WORKBOOK, CT_TEMPLATE, CT_WORKBOOK,
 };
 use super::relationships::{RelationshipSet, RelationshipSource};
 use crate::error::{XlsxError, XlsxResult};
@@ -215,20 +215,6 @@ impl<R: Read + Seek> OpcPackage<R> {
             let mut targets: Vec<PartName> = Vec::new();
             for relationship in office_relationships {
                 let Some(part_name) = relationship.internal_part().cloned() else {
-                    // External mode is diagnosed here; unresolved internal
-                    // targets were already diagnosed while parsing.
-                    if relationship.is_external() {
-                        self.diagnostics.violation(
-                            XlsxDiagnosticCode::MalformedRelationship,
-                            format!(
-                                "officeDocument relationship {} must target an internal part",
-                                relationship.id
-                            ),
-                            None,
-                            Some(&relationship.id),
-                            Some(&relationship.raw_target),
-                        )?;
-                    }
                     continue;
                 };
                 // Missing targets were diagnosed while parsing the set.
@@ -585,6 +571,24 @@ impl<R: Read + Seek> OpcPackage<R> {
         relationships: &RelationshipSet,
     ) -> XlsxResult<()> {
         for relationship in relationships.iter() {
+            if relationship.is_external()
+                && relationship
+                    .kind()
+                    .is_some_and(|kind| kind.target_mode_policy() == TargetModePolicy::InternalOnly)
+            {
+                self.diagnostics.violation(
+                    XlsxDiagnosticCode::MalformedRelationship,
+                    format!(
+                        "relationship {} from {} must have an internal target",
+                        relationship.id,
+                        source.display_name()
+                    ),
+                    source.part_name().map(PartName::as_str),
+                    Some(&relationship.id),
+                    Some(&relationship.raw_target),
+                )?;
+                continue;
+            }
             let Some(part_name) = relationship.internal_part() else {
                 continue;
             };
@@ -753,5 +757,23 @@ mod tests {
             .unwrap();
         assert_eq!(first, second);
         assert_eq!(first.len(), 1);
+    }
+
+    #[test]
+    fn strict_mode_allows_external_image_relationships() {
+        let content_types = br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/></Types>"#;
+        let rels = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="https://example.com/image.png" TargetMode="External"/></Relationships>"#;
+        let mut package = package(
+            &[
+                ("[Content_Types].xml", content_types),
+                ("xl/drawings/drawing1.xml", b"drawing"),
+                ("xl/drawings/_rels/drawing1.xml.rels", rels),
+            ],
+            XlsxPackagePolicy::Strict,
+        )
+        .unwrap();
+        let source = RelationshipSource::Part(PartName::new("/xl/drawings/drawing1.xml").unwrap());
+        let relationships = package.relationships(&source, true).unwrap();
+        assert!(relationships.get("rId1").unwrap().is_external());
     }
 }

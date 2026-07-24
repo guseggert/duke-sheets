@@ -4,6 +4,12 @@ pub(crate) enum ContentTypeExpectation {
     Prefix(&'static str),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TargetModePolicy {
+    InternalOnly,
+    InternalOrExternal,
+}
+
 pub(crate) const CT_WORKBOOK: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml";
 pub(crate) const CT_TEMPLATE: &str =
@@ -201,8 +207,11 @@ impl RelationshipKind {
         }
     }
 
-    pub(crate) const fn requires_internal_target(self) -> bool {
-        !matches!(self, Self::Hyperlink)
+    pub(crate) const fn target_mode_policy(self) -> TargetModePolicy {
+        match self {
+            Self::Hyperlink | Self::Image => TargetModePolicy::InternalOrExternal,
+            _ => TargetModePolicy::InternalOnly,
+        }
     }
 
     pub(crate) const fn unmodeled_sheet_label(self) -> Option<&'static str> {
@@ -210,6 +219,15 @@ impl RelationshipKind {
             Self::Dialogsheet => Some("Dialog"),
             Self::MacroSheet => Some("Macro"),
             Self::IntlMacroSheet => Some("International macro"),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn conventional_workbook_target(self) -> Option<&'static str> {
+        match self {
+            Self::SharedStrings => Some("sharedStrings.xml"),
+            Self::Styles => Some("styles.xml"),
+            Self::Theme => Some("theme/theme1.xml"),
             _ => None,
         }
     }

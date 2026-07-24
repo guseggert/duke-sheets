@@ -10,8 +10,8 @@ use quick_xml::reader::Reader;
 
 use crate::error::{XlsxError, XlsxResult};
 use crate::opc::{
-    resolve_internal_target, OpcPackage, PartName, Relationship, RelationshipKind, RelationshipSet,
-    XlsxDiagnosticCode, XlsxPackagePolicy,
+    resolve_internal_target, ContentTypeExpectation, OpcPackage, PartName, Relationship,
+    RelationshipKind, RelationshipSet, XlsxDiagnosticCode, XlsxPackagePolicy,
 };
 use crate::styles::{
     read_styles_xml, register_roundtrip_style_data, register_roundtrip_theme_data, ParsedStyles,
@@ -495,8 +495,7 @@ fn workbook_resource_path<R: Read + Seek>(
     package: &mut OpcPackage<R>,
     workbook_path: &PartName,
     relationship_path: Option<&str>,
-    conventional_target: &str,
-    expected_content_type: &str,
+    kind: RelationshipKind,
 ) -> XlsxResult<Option<String>> {
     if let Some(path) = relationship_path {
         let part_name = PartName::from_zip_name(path)?;
@@ -514,10 +513,15 @@ fn workbook_resource_path<R: Read + Seek>(
     }
 
     if package.policy() == XlsxPackagePolicy::Compatible {
+        let Some(conventional_target) = kind.conventional_workbook_target() else {
+            return Ok(None);
+        };
         let path = resolve_internal_target(workbook_path.zip_name(), conventional_target)?;
         let part_name = PartName::from_zip_name(&path)?;
         if package.part_exists(&part_name) {
-            package.validate_part_content_type(&part_name, expected_content_type)?;
+            if let Some(ContentTypeExpectation::Exact(expected)) = kind.content_type() {
+                package.validate_part_content_type(&part_name, expected)?;
+            }
             package.diagnostics_mut().recovery(
                 XlsxDiagnosticCode::CanonicalPartFallback,
                 format!(
@@ -670,22 +674,19 @@ impl XlsxReader {
             &mut package,
             &workbook_path,
             workbook_rels.shared_strings_path.as_deref(),
-            "sharedStrings.xml",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml",
+            RelationshipKind::SharedStrings,
         )?;
         let styles_path = workbook_resource_path(
             &mut package,
             &workbook_path,
             workbook_rels.styles_path.as_deref(),
-            "styles.xml",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml",
+            RelationshipKind::Styles,
         )?;
         let theme_path = workbook_resource_path(
             &mut package,
             &workbook_path,
             workbook_rels.theme_path.as_deref(),
-            "theme/theme1.xml",
-            "application/vnd.openxmlformats-officedocument.theme+xml",
+            RelationshipKind::Theme,
         )?;
         let shared_strings = match shared_strings_path.as_deref() {
             Some(path) => shared_strings::parse_shared_strings(package.open_zip_name(path)?)?,

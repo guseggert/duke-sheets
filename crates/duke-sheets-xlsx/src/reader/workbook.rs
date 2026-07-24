@@ -280,19 +280,6 @@ pub(super) fn read_workbook_rels<R: Read + Seek>(
         // Valid OOXML sheet kinds this library does not model yet; a
         // capability limitation, never a conformance violation.
         if let Some(label) = kind.unmodeled_sheet_label() {
-            if relationship.internal_part().is_none() {
-                package.diagnostics_mut().violation(
-                    crate::opc::XlsxDiagnosticCode::MalformedRelationship,
-                    format!(
-                        "Workbook relationship {} must have an internal target",
-                        relationship.id
-                    ),
-                    Some(workbook_path.as_str()),
-                    Some(&relationship.id),
-                    Some(&relationship.raw_target),
-                )?;
-                continue;
-            }
             if package.open_related_part(relationship)?.is_none() {
                 continue;
             }
@@ -317,16 +304,6 @@ pub(super) fn read_workbook_rels<R: Read + Seek>(
             continue;
         }
         let Some(path) = relationship.internal_path() else {
-            package.diagnostics_mut().violation(
-                crate::opc::XlsxDiagnosticCode::MalformedRelationship,
-                format!(
-                    "Workbook relationship {} must have an internal target",
-                    relationship.id
-                ),
-                Some(workbook_path.as_str()),
-                Some(&relationship.id),
-                Some(&relationship.raw_target),
-            )?;
             continue;
         };
         if package.open_related_part(relationship)?.is_none() {
@@ -361,24 +338,5 @@ pub(super) fn read_part_rels<R: Read + Seek>(
     part_path: &str,
 ) -> XlsxResult<Arc<RelationshipSet>> {
     let source = RelationshipSource::Part(PartName::from_zip_name(part_path)?);
-    let relationships = package.relationships(&source, false)?;
-    for relationship in relationships.iter() {
-        if relationship
-            .kind()
-            .is_some_and(RelationshipKind::requires_internal_target)
-            && relationship.internal_part().is_none()
-        {
-            package.diagnostics_mut().violation(
-                crate::opc::XlsxDiagnosticCode::MalformedRelationship,
-                format!(
-                    "relationship {} from {} must have an internal target",
-                    relationship.id, part_path
-                ),
-                Some(source.display_name()),
-                Some(&relationship.id),
-                Some(&relationship.raw_target),
-            )?;
-        }
-    }
-    Ok(relationships)
+    package.relationships(&source, false)
 }

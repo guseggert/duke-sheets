@@ -9,8 +9,15 @@ use crate::opc::PartName;
 #[derive(Debug, Default)]
 pub(super) struct OpcManifest {
     defaults: BTreeMap<String, String>,
-    parts: HashMap<PartName, String>,
+    parts: HashMap<PartName, ManifestPart>,
     relationships: BTreeMap<String, Vec<ManifestRelationship>>,
+    relationship_parts: std::collections::HashSet<PartName>,
+}
+
+#[derive(Debug)]
+struct ManifestPart {
+    content_type: String,
+    raw: bool,
 }
 
 #[derive(Debug)]
@@ -53,15 +60,56 @@ impl OpcManifest {
     pub(super) fn register_part(&mut self, zip_path: &str, content_type: &str) -> XlsxResult<()> {
         let part_name = PartName::from_zip_name(zip_path)?;
         if let Some(existing) = self.parts.get(&part_name) {
-            if existing != content_type {
+            if existing.raw {
                 return Err(XlsxError::InvalidFormat(format!(
-                    "conflicting content types for {part_name}: {existing} and {content_type}"
+                    "emitted part {part_name} collides with a raw preserved part"
+                )));
+            }
+            if existing.content_type != content_type {
+                return Err(XlsxError::InvalidFormat(format!(
+                    "conflicting content types for {part_name}: {} and {content_type}",
+                    existing.content_type
                 )));
             }
             return Ok(());
         }
-        self.parts.insert(part_name, content_type.to_string());
+        self.parts.insert(
+            part_name,
+            ManifestPart {
+                content_type: content_type.to_string(),
+                raw: false,
+            },
+        );
         Ok(())
+    }
+
+    pub(super) fn register_raw_part(
+        &mut self,
+        zip_path: &str,
+        content_type: &str,
+    ) -> XlsxResult<()> {
+        let part_name = PartName::from_zip_name(zip_path)?;
+        if self.parts.contains_key(&part_name) || self.relationship_parts.contains(&part_name) {
+            return Err(XlsxError::InvalidFormat(format!(
+                "raw part {part_name} collides with an emitted package part"
+            )));
+        }
+        self.parts.insert(
+            part_name,
+            ManifestPart {
+                content_type: content_type.to_string(),
+                raw: true,
+            },
+        );
+        Ok(())
+    }
+
+    pub(super) fn generated_zip_paths(&self) -> impl Iterator<Item = &str> {
+        self.parts
+            .iter()
+            .filter(|(_, part)| !part.raw)
+            .map(|(name, _)| name.zip_name())
+            .chain(self.relationship_parts.iter().map(PartName::zip_name))
     }
 
     pub(super) fn write_content_types<W: Write + Seek>(
@@ -89,7 +137,8 @@ impl OpcManifest {
                     .to_ascii_lowercase()
                     .cmp(&right.as_str().to_ascii_lowercase())
             });
-            for (part_name, content_type) in parts {
+            for (part_name, part) in parts {
+                let content_type = &part.content_type;
                 let extension = part_name
                     .zip_name()
                     .rsplit('/')
@@ -123,7 +172,7 @@ impl OpcManifest {
         target: &str,
         external: bool,
     ) -> XlsxResult<()> {
-        let source = match source_zip_path {
+        let (source, relationships_part) = match source_zip_path {
             Some(path) => {
                 let source_part = PartName::from_zip_name(path)?;
                 if !self.parts.contains_key(&source_part) {
@@ -131,10 +180,21 @@ impl OpcManifest {
                         "relationship source {source_part} is not an emitted part"
                     )));
                 }
-                source_part.as_str().to_string()
+                let relationships_part = source_part.relationships_part()?;
+                (source_part.as_str().to_string(), relationships_part)
             }
-            None => "/".to_string(),
+            None => ("/".to_string(), PartName::new("/_rels/.rels")?),
         };
+        if self
+            .parts
+            .get(&relationships_part)
+            .is_some_and(|part| part.raw)
+        {
+            return Err(XlsxError::InvalidFormat(format!(
+                "relationships part {relationships_part} collides with a raw preserved part"
+            )));
+        }
+        self.relationship_parts.insert(relationships_part);
         let relationships = self
             .relationships
             .entry(source.to_ascii_lowercase())
@@ -245,6 +305,51 @@ mod tests {
             .unwrap();
         assert!(manifest
             .register_part("xl/workbook.xml", "different/type")
+            .is_err());
+    }
+
+    #[test]
+    fn raw_parts_cannot_claim_generated_paths() {
+        let mut manifest = OpcManifest::new().unwrap();
+        manifest
+            .register_part("xl/charts/chart1.xml", "chart/type")
+            .unwrap();
+        assert!(manifest
+            .register_raw_part("XL/charts/chart1.xml", "chart/type")
+            .is_err());
+    }
+
+    #[test]
+    fn generated_parts_cannot_claim_raw_paths() {
+        let mut manifest = OpcManifest::new().unwrap();
+        manifest
+            .register_raw_part("xl/metadata.xml", "metadata/type")
+            .unwrap();
+        assert!(manifest
+            .register_part("xl/metadata.xml", "metadata/type")
+            .is_err());
+    }
+
+    #[test]
+    fn raw_parts_cannot_claim_relationship_paths() {
+        let mut manifest = OpcManifest::new().unwrap();
+        manifest
+            .register_part("xl/workbook.xml", "workbook/type")
+            .unwrap();
+        manifest
+            .register_raw_part(
+                "xl/_rels/workbook.xml.rels",
+                "application/vnd.openxmlformats-package.relationships+xml",
+            )
+            .unwrap();
+        assert!(manifest
+            .register_relationship(
+                Some("xl/workbook.xml"),
+                "rId1",
+                RelationshipKind::Styles.uri(),
+                "styles.xml",
+                false,
+            )
             .is_err());
     }
 
