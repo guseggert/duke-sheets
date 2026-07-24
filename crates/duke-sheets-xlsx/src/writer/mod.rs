@@ -873,12 +873,9 @@ impl XlsxWriter {
             Self::write_metadata_xml(&mut zip)?;
         }
 
-        // Reserve generated VML paths before raw parts can claim them.
-        let mut written_parts: HashSet<String> = sheets_with_vml
-            .iter()
-            .map(|sheet_index| {
-                format!("xl/drawings/vmlDrawing{}.vml", sheet_index + 1).to_ascii_lowercase()
-            })
+        let mut written_parts: HashSet<String> = manifest
+            .generated_zip_paths()
+            .map(str::to_ascii_lowercase)
             .collect();
 
         // Write worksheets and their relationships
@@ -1305,7 +1302,7 @@ impl XlsxWriter {
         }
         for raw_part in raw_media_parts {
             let content_type = raw_part.content_type;
-            manifest.register_part(&raw_part.path, content_type)?;
+            manifest.register_raw_part(&raw_part.path, content_type)?;
         }
         if has_metadata {
             manifest.register_part("xl/metadata.xml", CT_SHEET_METADATA)?;

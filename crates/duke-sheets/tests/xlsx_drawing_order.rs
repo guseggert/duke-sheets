@@ -398,6 +398,35 @@ fn xlsx_same_document_raw_relationship_does_not_duplicate_drawing_part() {
     assert_eq!(raw.rels[0].part, None);
 }
 
+#[test]
+fn xlsx_raw_part_cannot_overwrite_generated_chart() {
+    use duke_sheets::{Chart, ChartType, RawDrawing, RawRel};
+
+    let raw = DrawingObject::raw(RawDrawing {
+        bytes: br#"<xdr:twoCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:row>0</xdr:row></xdr:from><xdr:to><xdr:col>1</xdr:col><xdr:row>1</xdr:row></xdr:to><xdr:graphicFrame><a:graphic><a:graphicData><c:chart r:id="rId7"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor>"#.to_vec(),
+        rels: vec![RawRel {
+            id: "rId7".to_string(),
+            rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart"
+                .to_string(),
+            target: "../charts/chart1.xml".to_string(),
+            external: false,
+            part: Some(b"raw chart bytes".to_vec()),
+        }],
+    })
+    .with_anchor(two_cell(0, 0, 1, 1));
+
+    let mut workbook = Workbook::new();
+    let sheet = workbook.worksheet_mut(0).unwrap();
+    sheet.add_drawing(raw).unwrap();
+    sheet
+        .add_chart(Chart::new(ChartType::Line), two_cell(2, 0, 6, 8))
+        .unwrap();
+
+    let mut output = Cursor::new(Vec::new());
+    let error = XlsxWriter::write(&workbook, &mut output).unwrap_err();
+    assert!(error.to_string().contains("collides with an emitted package part"));
+}
+
 /// A foreign file whose control twin carries a txBody for a
 /// caption-less control kind (scrollbars, spinners, list boxes) must
 /// not crash the reader; the stray text is ignored.

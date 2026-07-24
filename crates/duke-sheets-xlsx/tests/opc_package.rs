@@ -82,6 +82,29 @@ fn without_part(bytes: Vec<u8>, omitted: &str) -> Vec<u8> {
     target.finish().expect("finish copied package").into_inner()
 }
 
+fn rename_parts(bytes: Vec<u8>, renames: &[(&str, &str)]) -> Vec<u8> {
+    let mut source = zip::ZipArchive::new(Cursor::new(bytes)).expect("open package");
+    let mut target = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for index in 0..source.len() {
+        let mut file = source.by_index(index).expect("source part");
+        let name = renames
+            .iter()
+            .find_map(|(from, to)| (file.name() == *from).then_some(*to))
+            .unwrap_or(file.name())
+            .to_string();
+        let mut contents = Vec::new();
+        file.read_to_end(&mut contents).expect("read source part");
+        target
+            .start_file(name, zip::write::SimpleFileOptions::default())
+            .expect("start renamed part");
+        target.write_all(&contents).expect("write renamed part");
+    }
+    target
+        .finish()
+        .expect("finish renamed package")
+        .into_inner()
+}
+
 fn rewrite_text_part(
     bytes: Vec<u8>,
     rewritten: &str,
@@ -115,6 +138,35 @@ fn reads_relocated_workbook_and_resources_from_relative_relationships() {
 #[test]
 fn reads_relocated_workbook_from_root_relative_relationship() {
     assert_relocated_package(relocated_package("/pkg/main/book.xml"));
+}
+
+#[test]
+fn compatible_finds_conventional_resources_without_relationships() {
+    let bytes = rewrite_text_part(
+        relocated_package("pkg/main/book.xml"),
+        "pkg/main/_rels/book.xml.rels",
+        |relationships| {
+            relationships
+                .replace(r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="../resources/strings.xml"/>"#, "")
+                .replace(r#"<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="../resources/styles.xml"/>"#, "")
+                .replace(r#"<Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="../theme/custom.xml"/>"#, "")
+        },
+    );
+    let bytes = rewrite_text_part(bytes, "[Content_Types].xml", |content_types| {
+        content_types
+            .replace("/pkg/resources/strings.xml", "/pkg/main/sharedStrings.xml")
+            .replace("/pkg/resources/styles.xml", "/pkg/main/styles.xml")
+            .replace("/pkg/theme/custom.xml", "/pkg/main/theme/theme1.xml")
+    });
+    let bytes = rename_parts(
+        bytes,
+        &[
+            ("pkg/resources/strings.xml", "pkg/main/sharedStrings.xml"),
+            ("pkg/resources/styles.xml", "pkg/main/styles.xml"),
+            ("pkg/theme/custom.xml", "pkg/main/theme/theme1.xml"),
+        ],
+    );
+    assert_relocated_package(bytes);
 }
 
 #[test]
