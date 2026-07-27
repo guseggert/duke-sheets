@@ -214,6 +214,10 @@ impl XlsbWriter {
         let mut next_chart_num = 1usize;
         let mut next_chartex_num = 1usize;
         let mut next_image_num = max_claimed_image_num + 1;
+        let total_standard_charts: usize = (0..workbook.sheet_count())
+            .filter_map(|i| workbook.worksheet(i))
+            .map(|ws| drawing::sheet_charts(ws).len())
+            .sum();
 
         let mut global_table_num = 1usize;
         let mut table_global_nums: Vec<Vec<usize>> = Vec::new();
@@ -276,6 +280,7 @@ impl XlsbWriter {
                     chart_start: next_chart_num,
                     chartex_start: next_chartex_num,
                     image_start: next_image_num,
+                    total_standard_charts,
                 };
                 next_drawing_num += 1;
                 next_chart_num += drawing::sheet_charts(ws).len();

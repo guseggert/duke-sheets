@@ -17,7 +17,7 @@ use duke_sheets_core::{
     DrawingKind, DrawingMeta, RawRel, Shape, ShapeFill, ShapeGeometry, Worksheet,
 };
 
-use crate::error::XlsbResult;
+use crate::error::{XlsbError, XlsbResult};
 
 const CT_DRAWING: &str = "application/vnd.openxmlformats-officedocument.drawing+xml";
 const CT_CHART: &str = "application/vnd.openxmlformats-officedocument.drawingml.chart+xml";
@@ -281,6 +281,11 @@ pub(crate) struct DrawingNumbering {
     pub chartex_start: usize,
     /// Global number of this sheet's first media part.
     pub image_start: usize,
+    /// Workbook-wide standard chart count. Standard charts and chartEx
+    /// charts are numbered independently but share the styleN.xml and
+    /// colorsN.xml part names, so chartEx style parts continue above
+    /// the standard charts' to keep the names unique.
+    pub total_standard_charts: usize,
 }
 
 /// Write every drawing-related part for one worksheet: the drawing
@@ -360,7 +365,14 @@ pub(crate) fn write_drawing_parts<W: Write + Seek>(
         zip.start_file(&path, *options)?;
         zip.write_all(&bytes)?;
         overrides.push((format!("/{}", path), CT_CHART_EX.to_string()));
-        write_chart_ex_style_color_parts(zip, options, chart_ex, gn, &mut overrides)?;
+        write_chart_ex_style_color_parts(
+            zip,
+            options,
+            chart_ex,
+            gn,
+            numbering.total_standard_charts + gn,
+            &mut overrides,
+        )?;
     }
 
     // Media parts (xl/media/imageN.<ext>).
@@ -447,44 +459,63 @@ fn write_chart_style_color_parts<W: Write + Seek>(
     Ok(())
 }
 
+/// Excel refuses to open a workbook whose chartEx part has no chart
+/// style sibling or no chart colour style sibling, so both parts are
+/// always written: caller-supplied bytes are checked, and a chart with
+/// none gets generated defaults, mirroring the XLSX writer.
 fn write_chart_ex_style_color_parts<W: Write + Seek>(
     zip: &mut ZipWriter<W>,
     options: &SimpleFileOptions,
     chart_ex: &duke_sheets_chart::ChartEx,
     chart_ex_num: usize,
+    style_color_num: usize,
     overrides: &mut Vec<(String, String)>,
 ) -> XlsbResult<()> {
-    let has_style = chart_ex.raw_chart_style.is_some();
-    let has_color = chart_ex.raw_chart_color_style.is_some();
-    if !has_style && !has_color {
-        return Ok(());
-    }
-    let mut rel_id = 1u32;
-    let mut rels_xml = String::from(
-        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
+    let style = match chart_ex.raw_chart_style {
+        Some(ref bytes) => {
+            duke_sheets_chart::write::validate_chart_style_part(bytes).map_err(|e| {
+                XlsbError::InvalidFormat(format!(
+                    "chartEx raw_chart_style is not a part Excel will accept: {e}. \
+                     Leave it unset to emit a generated default."
+                ))
+            })?;
+            bytes.clone()
+        }
+        None => duke_sheets_chart::write::default_chart_style_bytes(),
+    };
+    let colors = match chart_ex.raw_chart_color_style {
+        Some(ref bytes) => {
+            duke_sheets_chart::write::validate_chart_color_style_part(bytes).map_err(|e| {
+                XlsbError::InvalidFormat(format!(
+                    "chartEx raw_chart_color_style is not a part Excel will accept: {e}. \
+                     Leave it unset to emit a generated default."
+                ))
+            })?;
+            bytes.clone()
+        }
+        None => duke_sheets_chart::write::default_chart_color_style_bytes(),
+    };
+
+    let style_path = format!("xl/charts/style{}.xml", style_color_num);
+    zip.start_file(&style_path, *options)?;
+    zip.write_all(&style)?;
+    overrides.push((format!("/{}", style_path), CT_CHART_STYLE.to_string()));
+
+    let color_path = format!("xl/charts/colors{}.xml", style_color_num);
+    zip.start_file(&color_path, *options)?;
+    zip.write_all(&colors)?;
+    overrides.push((format!("/{}", color_path), CT_CHART_COLOR_STYLE.to_string()));
+
+    let rels_xml = format!(
+        concat!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
+            r#"<Relationship Id="rId1" Type="{}" Target="style{}.xml"/>"#,
+            r#"<Relationship Id="rId2" Type="{}" Target="colors{}.xml"/>"#,
+            "</Relationships>"
+        ),
+        RT_CHART_STYLE, style_color_num, RT_CHART_COLOR_STYLE, style_color_num
     );
-    if let Some(ref bytes) = chart_ex.raw_chart_style {
-        let style_path = format!("xl/charts/style{}.xml", chart_ex_num);
-        zip.start_file(&style_path, *options)?;
-        zip.write_all(bytes)?;
-        overrides.push((format!("/{}", style_path), CT_CHART_STYLE.to_string()));
-        rels_xml.push_str(&format!(
-            r#"<Relationship Id="rId{}" Type="{}" Target="style{}.xml"/>"#,
-            rel_id, RT_CHART_STYLE, chart_ex_num
-        ));
-        rel_id += 1;
-    }
-    if let Some(ref bytes) = chart_ex.raw_chart_color_style {
-        let color_path = format!("xl/charts/colors{}.xml", chart_ex_num);
-        zip.start_file(&color_path, *options)?;
-        zip.write_all(bytes)?;
-        overrides.push((format!("/{}", color_path), CT_CHART_COLOR_STYLE.to_string()));
-        rels_xml.push_str(&format!(
-            r#"<Relationship Id="rId{}" Type="{}" Target="colors{}.xml"/>"#,
-            rel_id, RT_CHART_COLOR_STYLE, chart_ex_num
-        ));
-    }
-    rels_xml.push_str("</Relationships>");
     let rels_path = format!("xl/charts/_rels/chartEx{}.xml.rels", chart_ex_num);
     zip.start_file(&rels_path, *options)?;
     zip.write_all(rels_xml.as_bytes())?;
