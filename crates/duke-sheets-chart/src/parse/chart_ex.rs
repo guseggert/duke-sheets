@@ -42,6 +42,7 @@ pub fn parse_chart_ex_xml<R: Read>(reader: R) -> ChartParseResult<ChartEx> {
     })
 }
 
+#[derive(Debug, Default)]
 struct ParsedChartEx {
     title: Option<ChartExTitle>,
     data: Vec<ChartExData>,
@@ -56,51 +57,54 @@ struct ParsedChartEx {
     fallback_img: Option<String>,
 }
 
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum SpCtx {
-        None,
-        ChartSpace,
-        Series,
-        DataPt,
-        Legend,
-        Axis,
-        AxisTitle,
-        Title,
-        MajorGrid,
-        MinorGrid,
-        DataLabels,
-        DataLabel,
-        PlotSurface,
-    }
+/// What a `cx:spPr` subtree currently belongs to. The element itself is
+/// identical wherever it appears, so its owner has to be tracked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum SpCtx {
+    #[default]
+    None,
+    ChartSpace,
+    Series,
+    DataPt,
+    Legend,
+    Axis,
+    AxisTitle,
+    Title,
+    MajorGrid,
+    MinorGrid,
+    DataLabels,
+    DataLabel,
+    PlotSurface,
+}
 
 /// Streaming state for one chartEx part.
-///
-/// The document is deep and its elements are context sensitive, so
-/// parsing is a state machine rather than a recursive descent: the
-/// fields below are what a start tag, a text node or an end tag needs
-/// to know about where it sits. Holding them on one value keeps the
-/// three event handlers to a single definition each, which is what
-/// stops the handling of an element drifting between them.
-struct ChartExParser {
-    result: ParsedChartEx,
-    in_chart_space: bool,
-    in_chart_data: bool,
-    in_chart: bool,
-    in_plot_area: bool,
-    in_plot_area_region: bool,
-    in_data: bool,
-    data_id: u32,
-    data_dims: Vec<ChartExDimension>,
+/// Where in the document tree the cursor sits.
+#[derive(Debug, Default)]
+struct DocPos {
+    chart_space: bool,
+    chart_data: bool,
+    chart: bool,
+    plot_area: bool,
+    plot_area_region: bool,
+    plot_surface: bool,
+}
+
+/// One `cx:data` block and the dimension or level being read.
+#[derive(Debug)]
+struct DataState {
+    open: bool,
+    id: u32,
+    dims: Vec<ChartExDimension>,
     in_str_dim: bool,
     in_num_dim: bool,
-    dim_str_type: StringDimType,
-    dim_num_type: NumericDimType,
-    dim_formula: Option<String>,
-    dim_nf: Option<String>,
-    in_dim_f: bool,
-    in_dim_nf: bool,
-    dim_levels: Vec<ChartExStringLevel>,
-    dim_num_levels: Vec<ChartExNumericLevel>,
+    str_type: StringDimType,
+    num_type: NumericDimType,
+    formula: Option<String>,
+    nf: Option<String>,
+    in_f: bool,
+    in_nf: bool,
+    str_levels: Vec<ChartExStringLevel>,
+    num_levels: Vec<ChartExNumericLevel>,
     in_lvl: bool,
     lvl_pt_count: u32,
     lvl_name: Option<String>,
@@ -110,171 +114,24 @@ struct ChartExParser {
     in_lvl_pt: bool,
     lvl_pt_idx: u32,
     in_lvl_pt_text: bool,
-    in_title: bool,
-    title_pos: Option<String>,
-    title_align: Option<String>,
-    title_overlay: Option<bool>,
-    in_title_tx: bool,
-    in_title_tx_data: bool,
-    in_title_tx_data_v: bool,
-    in_title_tx_data_f: bool,
-    title_text: Option<String>,
-    title_sp: Option<ChartShapeProperties>,
-    in_series: bool,
-    ser_layout: ChartExLayout,
-    ser_unique_id: Option<String>,
-    ser_hidden: Option<bool>,
-    ser_owner_idx: Option<u32>,
-    ser_format_idx: Option<u32>,
-    ser_text: Option<ChartExText>,
-    ser_data_id: u32,
-    ser_data_labels: Option<ChartExDataLabels>,
-    ser_data_points: Vec<ChartExDataPoint>,
-    ser_layout_pr: Option<ChartExLayoutPr>,
-    ser_axis_ids: Vec<u32>,
-    ser_value_colors: Option<ChartExValueColors>,
-    ser_value_color_positions: Option<ChartExValueColorPositions>,
-    ser_shape_properties: Option<ChartShapeProperties>,
-    in_ser_tx: bool,
-    in_ser_tx_data: bool,
-    in_ser_tx_data_v: bool,
-    in_ser_tx_data_f: bool,
-    ser_tx_value: Option<String>,
-    ser_tx_formula: Option<String>,
-    in_data_id: bool,
-    in_data_labels: bool,
-    dlbl_pos: Option<String>,
-    dlbl_vis_series: Option<bool>,
-    dlbl_vis_cat: Option<bool>,
-    dlbl_vis_val: Option<bool>,
-    dlbl_num_fmt: Option<NumberFormat>,
-    dlbl_separator: Option<String>,
-    dlbl_sp: Option<ChartShapeProperties>,
-    in_dlbl_separator: bool,
-    dl_overrides: Vec<ChartExDataLabel>,
-    dl_hidden: Vec<u32>,
-    in_data_label: bool,
-    lbl_idx: u32,
-    lbl_pos: Option<String>,
-    lbl_vis_series: Option<bool>,
-    lbl_vis_cat: Option<bool>,
-    lbl_vis_val: Option<bool>,
-    lbl_num_fmt: Option<NumberFormat>,
-    lbl_separator: Option<String>,
-    lbl_sp: Option<ChartShapeProperties>,
-    in_lbl_separator: bool,
-    in_data_pt: bool,
-    dpt_idx: u32,
-    dpt_sp: Option<ChartShapeProperties>,
-    in_layout_pr: bool,
-    layout_pr: ChartExLayoutPr,
-    in_subtotals: bool,
-    in_binning: bool,
-    in_geography: bool,
-    geo_cache_writer: Option<Writer<Cursor<Vec<u8>>>>,
-    geo_cache_depth: u32,
-    in_statistics: bool,
-    in_layout_visibility: bool,
-    in_axis_id: bool,
-    in_value_colors: bool,
-    vc_capturing_tag: Option<String>,
-    vc_writer: Option<Writer<Cursor<Vec<u8>>>>,
-    vc_depth: u32,
-    in_value_color_positions: bool,
-    vcp: ChartExValueColorPositions,
-    in_vcp_min: bool,
-    in_vcp_mid: bool,
-    in_vcp_max: bool,
-    in_axis: bool,
-    ax_id: u32,
-    ax_hidden: Option<bool>,
-    ax_scaling: ChartExScaling,
-    ax_title: Option<ChartExAxisTitle>,
-    ax_units: Option<ChartExAxisUnits>,
-    ax_major_gridlines: Option<ChartExGridlines>,
-    ax_minor_gridlines: Option<ChartExGridlines>,
-    ax_major_tick_marks: Option<String>,
-    ax_minor_tick_marks: Option<String>,
-    ax_tick_labels: bool,
-    ax_num_fmt: Option<NumberFormat>,
-    ax_shape_properties: Option<ChartShapeProperties>,
-    in_cat_scaling: bool,
-    in_val_scaling: bool,
-    in_ax_title: bool,
-    in_ax_title_tx: bool,
-    in_ax_title_tx_data: bool,
-    in_ax_title_tx_data_v: bool,
-    ax_title_text: Option<String>,
-    ax_title_sp: Option<ChartShapeProperties>,
-    in_units: bool,
-    units_unit: Option<String>,
-    in_major_gridlines: bool,
-    in_minor_gridlines: bool,
-    in_legend: bool,
-    legend_pos: Option<String>,
-    legend_align: Option<String>,
-    legend_overlay: Option<bool>,
-    legend_sp: Option<ChartShapeProperties>,
-    in_sp_pr: bool,
-    sp_pr_depth: u32,
-    sp_solid_fill: Option<ChartColor>,
-    sp_no_fill: bool,
-    sp_line: Option<ChartLine>,
-    in_sp_ln: bool,
-    sp_ln_width: Option<i64>,
-    sp_ln_solid_fill: Option<ChartColor>,
-    sp_ln_no_fill: bool,
-    sp_ln_dash: Option<String>,
-    sp_ctx: SpCtx,
-    in_print_settings: bool,
-    print_settings: ChartExPrintSettings,
-    in_ps_header_footer: bool,
-    ps_hf: ChartExHeaderFooter,
-    in_ps_hf_odd_header: bool,
-    in_ps_hf_odd_footer: bool,
-    in_ps_hf_even_header: bool,
-    in_ps_hf_even_footer: bool,
-    in_ps_hf_first_header: bool,
-    in_ps_hf_first_footer: bool,
-    skip_depth: u32,
-    skipping: bool,
-    in_plot_surface: bool,
 }
 
-impl ChartExParser {
-    fn new() -> Self {
+impl Default for DataState {
+    fn default() -> Self {
         Self {
-            result: ParsedChartEx {
-                title: None,
-                data: Vec::new(),
-                plot_area: ChartExPlotArea::default(),
-                legend: None,
-                shape_properties: None,
-                print_settings: None,
-                raw_extensions: std::collections::HashMap::new(),
-                external_data: None,
-                version: None,
-                feature_list: None,
-                fallback_img: None,
-            },
-            in_chart_space: false,
-            in_chart_data: false,
-            in_chart: false,
-            in_plot_area: false,
-            in_plot_area_region: false,
-            in_data: false,
-            data_id: 0,
-            data_dims: Vec::new(),
+            open: false,
+            id: 0,
+            dims: Vec::new(),
             in_str_dim: false,
             in_num_dim: false,
-            dim_str_type: StringDimType::Cat,
-            dim_num_type: NumericDimType::Val,
-            dim_formula: None,
-            dim_nf: None,
-            in_dim_f: false,
-            in_dim_nf: false,
-            dim_levels: Vec::new(),
-            dim_num_levels: Vec::new(),
+            str_type: StringDimType::Cat,
+            num_type: NumericDimType::Val,
+            formula: None,
+            nf: None,
+            in_f: false,
+            in_nf: false,
+            str_levels: Vec::new(),
+            num_levels: Vec::new(),
             in_lvl: false,
             lvl_pt_count: 0,
             lvl_name: None,
@@ -284,138 +141,282 @@ impl ChartExParser {
             in_lvl_pt: false,
             lvl_pt_idx: 0,
             in_lvl_pt_text: false,
+        }
+    }
+}
+
+/// The chart-level `cx:title`.
+#[derive(Debug, Default)]
+struct TitleState {
+    open: bool,
+    pos: Option<String>,
+    align: Option<String>,
+    overlay: Option<bool>,
+    in_tx: bool,
+    in_tx_data: bool,
+    in_tx_data_v: bool,
+    in_tx_data_f: bool,
+    text: Option<String>,
+    sp: Option<ChartShapeProperties>,
+}
+
+/// The `cx:series` being read.
+#[derive(Debug)]
+struct SeriesState {
+    open: bool,
+    layout: ChartExLayout,
+    unique_id: Option<String>,
+    hidden: Option<bool>,
+    owner_idx: Option<u32>,
+    format_idx: Option<u32>,
+    text: Option<ChartExText>,
+    data_id: u32,
+    data_labels: Option<ChartExDataLabels>,
+    data_points: Vec<ChartExDataPoint>,
+    layout_pr: Option<ChartExLayoutPr>,
+    axis_ids: Vec<u32>,
+    value_colors: Option<ChartExValueColors>,
+    value_color_positions: Option<ChartExValueColorPositions>,
+    shape_properties: Option<ChartShapeProperties>,
+    in_tx: bool,
+    in_tx_data: bool,
+    in_tx_data_v: bool,
+    in_tx_data_f: bool,
+    tx_value: Option<String>,
+    tx_formula: Option<String>,
+    in_data_id: bool,
+    in_axis_id: bool,
+    in_value_colors: bool,
+}
+
+impl Default for SeriesState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            layout: ChartExLayout::Unknown("unknown".into()),
+            unique_id: None,
+            hidden: None,
+            owner_idx: None,
+            format_idx: None,
+            text: None,
+            data_id: 0,
+            data_labels: None,
+            data_points: Vec::new(),
+            layout_pr: None,
+            axis_ids: Vec::new(),
+            value_colors: None,
+            value_color_positions: None,
+            shape_properties: None,
+            in_tx: false,
+            in_tx_data: false,
+            in_tx_data_v: false,
+            in_tx_data_f: false,
+            tx_value: None,
+            tx_formula: None,
+            in_data_id: false,
+            in_axis_id: false,
+            in_value_colors: false,
+        }
+    }
+}
+
+/// Series-level `cx:dataLabels`.
+#[derive(Debug, Default)]
+struct DataLabelsState {
+    open: bool,
+    pos: Option<String>,
+    vis_series: Option<bool>,
+    vis_cat: Option<bool>,
+    vis_val: Option<bool>,
+    num_fmt: Option<NumberFormat>,
+    separator: Option<String>,
+    sp: Option<ChartShapeProperties>,
+    in_separator: bool,
+    overrides: Vec<ChartExDataLabel>,
+    hidden: Vec<u32>,
+}
+
+/// A per-point `cx:dataLabel` override.
+#[derive(Debug, Default)]
+struct LabelOverrideState {
+    open: bool,
+    idx: u32,
+    pos: Option<String>,
+    vis_series: Option<bool>,
+    vis_cat: Option<bool>,
+    vis_val: Option<bool>,
+    num_fmt: Option<NumberFormat>,
+    separator: Option<String>,
+    sp: Option<ChartShapeProperties>,
+    in_separator: bool,
+}
+
+/// A `cx:dataPt`.
+#[derive(Debug, Default)]
+struct DataPointState {
+    open: bool,
+    idx: u32,
+    sp: Option<ChartShapeProperties>,
+}
+
+/// `cx:layoutPr` and the layout-specific child being read.
+#[derive(Debug, Default)]
+struct LayoutPrState {
+    open: bool,
+    pr: ChartExLayoutPr,
+    in_subtotals: bool,
+    in_binning: bool,
+    in_geography: bool,
+    in_statistics: bool,
+    in_visibility: bool,
+}
+
+/// `cx:valueColorPositions`.
+#[derive(Debug, Default)]
+struct ColorPositionsState {
+    open: bool,
+    value: ChartExValueColorPositions,
+    in_min: bool,
+    in_mid: bool,
+    in_max: bool,
+}
+
+/// The `cx:axis` being read, including its title and units.
+#[derive(Debug)]
+struct AxisState {
+    open: bool,
+    id: u32,
+    hidden: Option<bool>,
+    scaling: ChartExScaling,
+    title: Option<ChartExAxisTitle>,
+    units: Option<ChartExAxisUnits>,
+    major_gridlines: Option<ChartExGridlines>,
+    minor_gridlines: Option<ChartExGridlines>,
+    major_tick_marks: Option<String>,
+    minor_tick_marks: Option<String>,
+    tick_labels: bool,
+    num_fmt: Option<NumberFormat>,
+    shape_properties: Option<ChartShapeProperties>,
+    in_cat_scaling: bool,
+    in_val_scaling: bool,
+    in_title: bool,
+    in_title_tx: bool,
+    in_title_tx_data: bool,
+    in_title_tx_data_v: bool,
+    title_text: Option<String>,
+    title_sp: Option<ChartShapeProperties>,
+    in_units: bool,
+    units_unit: Option<String>,
+    in_major_gridlines: bool,
+    in_minor_gridlines: bool,
+}
+
+impl Default for AxisState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            id: 0,
+            hidden: None,
+            scaling: ChartExScaling::Category { gap_width: None },
+            title: None,
+            units: None,
+            major_gridlines: None,
+            minor_gridlines: None,
+            major_tick_marks: None,
+            minor_tick_marks: None,
+            tick_labels: false,
+            num_fmt: None,
+            shape_properties: None,
+            in_cat_scaling: false,
+            in_val_scaling: false,
             in_title: false,
-            title_pos: None,
-            title_align: None,
-            title_overlay: None,
             in_title_tx: false,
             in_title_tx_data: false,
             in_title_tx_data_v: false,
-            in_title_tx_data_f: false,
             title_text: None,
             title_sp: None,
-            in_series: false,
-            ser_layout: ChartExLayout::Unknown("unknown".into()),
-            ser_unique_id: None,
-            ser_hidden: None,
-            ser_owner_idx: None,
-            ser_format_idx: None,
-            ser_text: None,
-            ser_data_id: 0,
-            ser_data_labels: None,
-            ser_data_points: Vec::new(),
-            ser_layout_pr: None,
-            ser_axis_ids: Vec::new(),
-            ser_value_colors: None,
-            ser_value_color_positions: None,
-            ser_shape_properties: None,
-            in_ser_tx: false,
-            in_ser_tx_data: false,
-            in_ser_tx_data_v: false,
-            in_ser_tx_data_f: false,
-            ser_tx_value: None,
-            ser_tx_formula: None,
-            in_data_id: false,
-            in_data_labels: false,
-            dlbl_pos: None,
-            dlbl_vis_series: None,
-            dlbl_vis_cat: None,
-            dlbl_vis_val: None,
-            dlbl_num_fmt: None,
-            dlbl_separator: None,
-            dlbl_sp: None,
-            in_dlbl_separator: false,
-            dl_overrides: Vec::new(),
-            dl_hidden: Vec::new(),
-            in_data_label: false,
-            lbl_idx: 0,
-            lbl_pos: None,
-            lbl_vis_series: None,
-            lbl_vis_cat: None,
-            lbl_vis_val: None,
-            lbl_num_fmt: None,
-            lbl_separator: None,
-            lbl_sp: None,
-            in_lbl_separator: false,
-            in_data_pt: false,
-            dpt_idx: 0,
-            dpt_sp: None,
-            in_layout_pr: false,
-            layout_pr: ChartExLayoutPr::default(),
-            in_subtotals: false,
-            in_binning: false,
-            in_geography: false,
-            geo_cache_writer: None,
-            geo_cache_depth: 0,
-            in_statistics: false,
-            in_layout_visibility: false,
-            in_axis_id: false,
-            in_value_colors: false,
-            vc_capturing_tag: None,
-            vc_writer: None,
-            vc_depth: 0,
-            in_value_color_positions: false,
-            vcp: ChartExValueColorPositions::default(),
-            in_vcp_min: false,
-            in_vcp_mid: false,
-            in_vcp_max: false,
-            in_axis: false,
-            ax_id: 0,
-            ax_hidden: None,
-            ax_scaling: ChartExScaling::Category { gap_width: None },
-            ax_title: None,
-            ax_units: None,
-            ax_major_gridlines: None,
-            ax_minor_gridlines: None,
-            ax_major_tick_marks: None,
-            ax_minor_tick_marks: None,
-            ax_tick_labels: false,
-            ax_num_fmt: None,
-            ax_shape_properties: None,
-            in_cat_scaling: false,
-            in_val_scaling: false,
-            in_ax_title: false,
-            in_ax_title_tx: false,
-            in_ax_title_tx_data: false,
-            in_ax_title_tx_data_v: false,
-            ax_title_text: None,
-            ax_title_sp: None,
             in_units: false,
             units_unit: None,
             in_major_gridlines: false,
             in_minor_gridlines: false,
-            in_legend: false,
-            legend_pos: None,
-            legend_align: None,
-            legend_overlay: None,
-            legend_sp: None,
-            in_sp_pr: false,
-            sp_pr_depth: 0,
-            sp_solid_fill: None,
-            sp_no_fill: false,
-            sp_line: None,
-            in_sp_ln: false,
-            sp_ln_width: None,
-            sp_ln_solid_fill: None,
-            sp_ln_no_fill: false,
-            sp_ln_dash: None,
-            sp_ctx: SpCtx::None,
-            in_print_settings: false,
-            print_settings: ChartExPrintSettings::default(),
-            in_ps_header_footer: false,
-            ps_hf: ChartExHeaderFooter::default(),
-            in_ps_hf_odd_header: false,
-            in_ps_hf_odd_footer: false,
-            in_ps_hf_even_header: false,
-            in_ps_hf_even_footer: false,
-            in_ps_hf_first_header: false,
-            in_ps_hf_first_footer: false,
-            skip_depth: 0,
-            skipping: false,
-            in_plot_surface: false,
         }
     }
+}
 
+/// `cx:legend`.
+#[derive(Debug, Default)]
+struct LegendState {
+    open: bool,
+    pos: Option<String>,
+    align: Option<String>,
+    overlay: Option<bool>,
+    sp: Option<ChartShapeProperties>,
+}
+
+/// The `cx:spPr` subtree being read and what it belongs to.
+#[derive(Debug, Default)]
+struct SpPrState {
+    open: bool,
+    depth: u32,
+    solid_fill: Option<ChartColor>,
+    no_fill: bool,
+    line: Option<ChartLine>,
+    in_ln: bool,
+    ln_width: Option<i64>,
+    ln_solid_fill: Option<ChartColor>,
+    ln_no_fill: bool,
+    ln_dash: Option<String>,
+    ctx: SpCtx,
+}
+
+/// `cx:printSettings`.
+#[derive(Debug, Default)]
+struct PrintSettingsState {
+    open: bool,
+    settings: ChartExPrintSettings,
+    in_header_footer: bool,
+    hf: ChartExHeaderFooter,
+    in_hf_odd_header: bool,
+    in_hf_odd_footer: bool,
+    in_hf_even_header: bool,
+    in_hf_even_footer: bool,
+    in_hf_first_header: bool,
+    in_hf_first_footer: bool,
+}
+
+/// Streaming state for one chartEx part.
+///
+/// The document is deep and its elements are context sensitive, so
+/// parsing is a state machine rather than a recursive descent. State is
+/// grouped by the element it belongs to, so a handler names the region
+/// it is working in.
+#[derive(Default)]
+struct ChartExParser {
+    result: ParsedChartEx,
+    pos: DocPos,
+    data: DataState,
+    title: TitleState,
+    series: SeriesState,
+    labels: DataLabelsState,
+    label: LabelOverrideState,
+    data_pt: DataPointState,
+    layout: LayoutPrState,
+    color_pos: ColorPositionsState,
+    axis: AxisState,
+    legend: LegendState,
+    sp: SpPrState,
+    print: PrintSettingsState,
+    // Opaque subtrees: raw byte capture, and skipping.
+    geo_cache_writer: Option<Writer<Cursor<Vec<u8>>>>,
+    geo_cache_depth: u32,
+    vc_capturing_tag: Option<String>,
+    vc_writer: Option<Writer<Cursor<Vec<u8>>>>,
+    vc_depth: u32,
+    skip_depth: u32,
+    skipping: bool,
+}
+
+impl ChartExParser {
     /// A raw-capture region reproduces source bytes, so while one is
     /// open the driver must not split a self-closing element.
     fn in_raw_capture(&self) -> bool {
@@ -449,13 +450,13 @@ impl ChartExParser {
         // synthesized for a self-closing element. Tracked here
         // rather than in individual arms so that adding an arm
         // cannot unbalance it.
-        if self.in_sp_pr {
-            self.sp_pr_depth += 1;
+        if self.sp.open {
+            self.sp.depth += 1;
         }
 
         match tag {
             b"chartSpace" => {
-                self.in_chart_space = true;
+                self.pos.chart_space = true;
                 for attr in e.attributes().flatten() {
                     let value = attr.unescape_value().ok().map(|v| v.to_string());
                     match attr.key.local_name().as_ref() {
@@ -466,14 +467,14 @@ impl ChartExParser {
                     }
                 }
             }
-            b"chartData" if self.in_chart_space => self.in_chart_data = true,
-            b"data" if self.in_chart_data => {
-                self.in_data = true;
-                self.data_id = 0;
-                self.data_dims.clear();
+            b"chartData" if self.pos.chart_space => self.pos.chart_data = true,
+            b"data" if self.pos.chart_data => {
+                self.data.open = true;
+                self.data.id = 0;
+                self.data.dims.clear();
                 for attr in e.attributes().flatten() {
                     if attr.key.local_name().as_ref() == b"id" {
-                        self.data_id = attr
+                        self.data.id = attr
                             .unescape_value()
                             .ok()
                             .and_then(|s| s.parse().ok())
@@ -481,16 +482,16 @@ impl ChartExParser {
                     }
                 }
             }
-            b"strDim" if self.in_data => {
-                self.in_str_dim = true;
-                self.dim_formula = None;
-                self.dim_nf = None;
-                self.dim_levels.clear();
-                self.dim_str_type = StringDimType::Cat;
+            b"strDim" if self.data.open => {
+                self.data.in_str_dim = true;
+                self.data.formula = None;
+                self.data.nf = None;
+                self.data.str_levels.clear();
+                self.data.str_type = StringDimType::Cat;
                 for attr in e.attributes().flatten() {
                     if attr.key.local_name().as_ref() == b"type" {
                         if let Ok(v) = attr.unescape_value() {
-                            self.dim_str_type = match v.as_ref() {
+                            self.data.str_type = match v.as_ref() {
                                 "colorStr" => StringDimType::ColorStr,
                                 "entityId" => StringDimType::EntityId,
                                 _ => StringDimType::Cat,
@@ -499,16 +500,16 @@ impl ChartExParser {
                     }
                 }
             }
-            b"numDim" if self.in_data => {
-                self.in_num_dim = true;
-                self.dim_formula = None;
-                self.dim_nf = None;
-                self.dim_num_levels.clear();
-                self.dim_num_type = NumericDimType::Val;
+            b"numDim" if self.data.open => {
+                self.data.in_num_dim = true;
+                self.data.formula = None;
+                self.data.nf = None;
+                self.data.num_levels.clear();
+                self.data.num_type = NumericDimType::Val;
                 for attr in e.attributes().flatten() {
                     if attr.key.local_name().as_ref() == b"type" {
                         if let Ok(v) = attr.unescape_value() {
-                            self.dim_num_type = match v.as_ref() {
+                            self.data.num_type = match v.as_ref() {
                                 "x" => NumericDimType::X,
                                 "y" => NumericDimType::Y,
                                 "size" => NumericDimType::Size,
@@ -519,66 +520,66 @@ impl ChartExParser {
                     }
                 }
             }
-            b"f" if (self.in_str_dim || self.in_num_dim) && !self.in_lvl => self.in_dim_f = true,
-            b"nf" if (self.in_str_dim || self.in_num_dim) && !self.in_lvl => self.in_dim_nf = true,
-            b"lvl" if self.in_str_dim || self.in_num_dim => {
-                self.in_lvl = true;
-                self.lvl_pt_count = 0;
-                self.lvl_name = None;
-                self.lvl_format_code = None;
-                self.lvl_str_points.clear();
-                self.lvl_num_points.clear();
+            b"f" if (self.data.in_str_dim || self.data.in_num_dim) && !self.data.in_lvl => self.data.in_f = true,
+            b"nf" if (self.data.in_str_dim || self.data.in_num_dim) && !self.data.in_lvl => self.data.in_nf = true,
+            b"lvl" if self.data.in_str_dim || self.data.in_num_dim => {
+                self.data.in_lvl = true;
+                self.data.lvl_pt_count = 0;
+                self.data.lvl_name = None;
+                self.data.lvl_format_code = None;
+                self.data.lvl_str_points.clear();
+                self.data.lvl_num_points.clear();
                 for attr in e.attributes().flatten() {
                     match attr.key.local_name().as_ref() {
                         b"ptCount" => {
-                            self.lvl_pt_count = attr
+                            self.data.lvl_pt_count = attr
                                 .unescape_value()
                                 .ok()
                                 .and_then(|s| s.parse().ok())
                                 .unwrap_or(0);
                         }
                         b"name" => {
-                            self.lvl_name = attr.unescape_value().ok().map(|s| s.to_string());
+                            self.data.lvl_name = attr.unescape_value().ok().map(|s| s.to_string());
                         }
                         b"formatCode" => {
-                            self.lvl_format_code =
+                            self.data.lvl_format_code =
                                 attr.unescape_value().ok().map(|s| s.to_string());
                         }
                         _ => {}
                     }
                 }
             }
-            b"pt" if self.in_lvl => {
-                self.in_lvl_pt = true;
-                self.lvl_pt_idx = 0;
+            b"pt" if self.data.in_lvl => {
+                self.data.in_lvl_pt = true;
+                self.data.lvl_pt_idx = 0;
                 for attr in e.attributes().flatten() {
                     if attr.key.local_name().as_ref() == b"idx" {
-                        self.lvl_pt_idx = attr
+                        self.data.lvl_pt_idx = attr
                             .unescape_value()
                             .ok()
                             .and_then(|s| s.parse().ok())
                             .unwrap_or(0);
                     }
                 }
-                self.in_lvl_pt_text = true;
+                self.data.in_lvl_pt_text = true;
             }
-            b"chart" if self.in_chart_space && !self.in_chart => self.in_chart = true,
-            b"title" if self.in_chart && !self.in_plot_area && !self.in_axis && !self.in_title => {
-                self.in_title = true;
-                self.title_pos = None;
-                self.title_align = None;
-                self.title_overlay = None;
-                self.title_text = None;
+            b"chart" if self.pos.chart_space && !self.pos.chart => self.pos.chart = true,
+            b"title" if self.pos.chart && !self.pos.plot_area && !self.axis.open && !self.title.open => {
+                self.title.open = true;
+                self.title.pos = None;
+                self.title.align = None;
+                self.title.overlay = None;
+                self.title.text = None;
                 for attr in e.attributes().flatten() {
                     match attr.key.local_name().as_ref() {
                         b"pos" => {
-                            self.title_pos = attr.unescape_value().ok().map(|s| s.to_string())
+                            self.title.pos = attr.unescape_value().ok().map(|s| s.to_string())
                         }
                         b"align" => {
-                            self.title_align = attr.unescape_value().ok().map(|s| s.to_string())
+                            self.title.align = attr.unescape_value().ok().map(|s| s.to_string())
                         }
                         b"overlay" => {
-                            self.title_overlay = attr
+                            self.title.overlay = attr
                                 .unescape_value()
                                 .ok()
                                 .map(|s| s == "1" || s.as_ref() == "true")
@@ -587,74 +588,74 @@ impl ChartExParser {
                     }
                 }
             }
-            b"tx" if self.in_title && !self.in_series => self.in_title_tx = true,
-            b"txData" if self.in_title_tx && !self.in_series => self.in_title_tx_data = true,
-            b"v" if self.in_title_tx_data && !self.in_series => self.in_title_tx_data_v = true,
-            b"f" if self.in_title_tx_data && !self.in_series => self.in_title_tx_data_f = true,
-            b"plotArea" if self.in_chart => self.in_plot_area = true,
-            b"plotAreaRegion" if self.in_plot_area => self.in_plot_area_region = true,
-            b"plotSurface" if self.in_plot_area && !self.in_plot_area_region => {
-                self.in_plot_surface = true;
+            b"tx" if self.title.open && !self.series.open => self.title.in_tx = true,
+            b"txData" if self.title.in_tx && !self.series.open => self.title.in_tx_data = true,
+            b"v" if self.title.in_tx_data && !self.series.open => self.title.in_tx_data_v = true,
+            b"f" if self.title.in_tx_data && !self.series.open => self.title.in_tx_data_f = true,
+            b"plotArea" if self.pos.chart => self.pos.plot_area = true,
+            b"plotAreaRegion" if self.pos.plot_area => self.pos.plot_area_region = true,
+            b"plotSurface" if self.pos.plot_area && !self.pos.plot_area_region => {
+                self.pos.plot_surface = true;
             }
-            b"series" if self.in_plot_area_region => {
-                self.in_series = true;
-                self.ser_layout = ChartExLayout::Unknown("unknown".into());
-                self.ser_unique_id = None;
-                self.ser_hidden = None;
-                self.ser_owner_idx = None;
-                self.ser_format_idx = None;
-                self.ser_text = None;
-                self.ser_data_id = 0;
-                self.ser_data_labels = None;
-                self.ser_data_points.clear();
-                self.ser_layout_pr = None;
-                self.ser_axis_ids.clear();
-                self.ser_value_colors = None;
-                self.ser_value_color_positions = None;
-                self.ser_shape_properties = None;
+            b"series" if self.pos.plot_area_region => {
+                self.series.open = true;
+                self.series.layout = ChartExLayout::Unknown("unknown".into());
+                self.series.unique_id = None;
+                self.series.hidden = None;
+                self.series.owner_idx = None;
+                self.series.format_idx = None;
+                self.series.text = None;
+                self.series.data_id = 0;
+                self.series.data_labels = None;
+                self.series.data_points.clear();
+                self.series.layout_pr = None;
+                self.series.axis_ids.clear();
+                self.series.value_colors = None;
+                self.series.value_color_positions = None;
+                self.series.shape_properties = None;
 
                 for attr in e.attributes().flatten() {
                     match attr.key.local_name().as_ref() {
                         b"layoutId" => {
                             if let Ok(v) = attr.unescape_value() {
-                                self.ser_layout = parse_layout_id(&v);
+                                self.series.layout = parse_layout_id(&v);
                             }
                         }
                         b"uniqueId" => {
-                            self.ser_unique_id =
+                            self.series.unique_id =
                                 attr.unescape_value().ok().map(|s| s.to_string())
                         }
                         b"hidden" => {
-                            self.ser_hidden = attr
+                            self.series.hidden = attr
                                 .unescape_value()
                                 .ok()
                                 .map(|s| s == "1" || s.as_ref() == "true")
                         }
                         b"ownerIdx" => {
-                            self.ser_owner_idx =
+                            self.series.owner_idx =
                                 attr.unescape_value().ok().and_then(|s| s.parse().ok())
                         }
                         b"formatIdx" => {
-                            self.ser_format_idx =
+                            self.series.format_idx =
                                 attr.unescape_value().ok().and_then(|s| s.parse().ok())
                         }
                         _ => {}
                     }
                 }
             }
-            b"tx" if self.in_series && !self.in_data_labels => {
-                self.in_ser_tx = true;
-                self.ser_tx_value = None;
-                self.ser_tx_formula = None;
+            b"tx" if self.series.open && !self.labels.open => {
+                self.series.in_tx = true;
+                self.series.tx_value = None;
+                self.series.tx_formula = None;
             }
-            b"txData" if self.in_ser_tx => self.in_ser_tx_data = true,
-            b"v" if self.in_ser_tx_data => self.in_ser_tx_data_v = true,
-            b"f" if self.in_ser_tx_data => self.in_ser_tx_data_f = true,
-            b"dataId" if self.in_series && !self.in_data_labels => {
-                self.in_data_id = true;
+            b"txData" if self.series.in_tx => self.series.in_tx_data = true,
+            b"v" if self.series.in_tx_data => self.series.in_tx_data_v = true,
+            b"f" if self.series.in_tx_data => self.series.in_tx_data_f = true,
+            b"dataId" if self.series.open && !self.labels.open => {
+                self.series.in_data_id = true;
                 for attr in e.attributes().flatten() {
                     if attr.key.local_name().as_ref() == b"val" {
-                        self.ser_data_id = attr
+                        self.series.data_id = attr
                             .unescape_value()
                             .ok()
                             .and_then(|s| s.parse().ok())
@@ -662,64 +663,64 @@ impl ChartExParser {
                     }
                 }
             }
-            b"dataLabels" if self.in_series => {
-                self.in_data_labels = true;
-                self.dl_overrides = Vec::new();
-                self.dl_hidden = Vec::new();
-                self.dlbl_pos = None;
-                self.dlbl_vis_series = None;
-                self.dlbl_vis_cat = None;
-                self.dlbl_vis_val = None;
-                self.dlbl_num_fmt = None;
-                self.dlbl_separator = None;
+            b"dataLabels" if self.series.open => {
+                self.labels.open = true;
+                self.labels.overrides = Vec::new();
+                self.labels.hidden = Vec::new();
+                self.labels.pos = None;
+                self.labels.vis_series = None;
+                self.labels.vis_cat = None;
+                self.labels.vis_val = None;
+                self.labels.num_fmt = None;
+                self.labels.separator = None;
                 for attr in e.attributes().flatten() {
                     if attr.key.local_name().as_ref() == b"pos" {
-                        self.dlbl_pos = attr.unescape_value().ok().map(|s| s.to_string());
+                        self.labels.pos = attr.unescape_value().ok().map(|s| s.to_string());
                     }
                 }
             }
-            b"dataLabel" if self.in_data_labels && !self.in_data_label => {
-                self.in_data_label = true;
-                self.lbl_idx = 0;
-                self.lbl_pos = None;
-                self.lbl_vis_series = None;
-                self.lbl_vis_cat = None;
-                self.lbl_vis_val = None;
-                self.lbl_num_fmt = None;
-                self.lbl_separator = None;
-                self.lbl_sp = None;
+            b"dataLabel" if self.labels.open && !self.label.open => {
+                self.label.open = true;
+                self.label.idx = 0;
+                self.label.pos = None;
+                self.label.vis_series = None;
+                self.label.vis_cat = None;
+                self.label.vis_val = None;
+                self.label.num_fmt = None;
+                self.label.separator = None;
+                self.label.sp = None;
                 for attr in e.attributes().flatten() {
                     match attr.key.local_name().as_ref() {
                         b"idx" => {
-                            self.lbl_idx = attr
+                            self.label.idx = attr
                                 .unescape_value()
                                 .ok()
                                 .and_then(|s| s.parse().ok())
                                 .unwrap_or(0);
                         }
                         b"pos" => {
-                            self.lbl_pos = attr.unescape_value().ok().map(|s| s.to_string());
+                            self.label.pos = attr.unescape_value().ok().map(|s| s.to_string());
                         }
                         _ => {}
                     }
                 }
             }
-            b"dataLabelHidden" if self.in_data_labels => {
+            b"dataLabelHidden" if self.labels.open => {
                 if let Some(idx) =
                     get_val_attr_named(e, b"idx").and_then(|s| s.parse().ok())
                 {
-                    self.dl_hidden.push(idx);
+                    self.labels.hidden.push(idx);
                 }
             }
-            b"separator" if self.in_data_label => self.in_lbl_separator = true,
-            b"separator" if self.in_data_labels => self.in_dlbl_separator = true,
-            b"dataPt" if self.in_series && !self.in_data_labels => {
-                self.in_data_pt = true;
-                self.dpt_idx = 0;
-                self.dpt_sp = None;
+            b"separator" if self.label.open => self.label.in_separator = true,
+            b"separator" if self.labels.open => self.labels.in_separator = true,
+            b"dataPt" if self.series.open && !self.labels.open => {
+                self.data_pt.open = true;
+                self.data_pt.idx = 0;
+                self.data_pt.sp = None;
                 for attr in e.attributes().flatten() {
                     if attr.key.local_name().as_ref() == b"idx" {
-                        self.dpt_idx = attr
+                        self.data_pt.idx = attr
                             .unescape_value()
                             .ok()
                             .and_then(|s| s.parse().ok())
@@ -727,17 +728,17 @@ impl ChartExParser {
                     }
                 }
             }
-            b"layoutPr" if self.in_series => {
-                self.in_layout_pr = true;
-                self.layout_pr = ChartExLayoutPr::default();
+            b"layoutPr" if self.series.open => {
+                self.layout.open = true;
+                self.layout.pr = ChartExLayoutPr::default();
             }
-            b"subtotals" if self.in_layout_pr => {
-                self.in_subtotals = true;
-                self.layout_pr.subtotals.get_or_insert_with(Vec::new);
+            b"subtotals" if self.layout.open => {
+                self.layout.in_subtotals = true;
+                self.layout.pr.subtotals.get_or_insert_with(Vec::new);
             }
-            b"idx" if self.in_subtotals => push_subtotal_idx(&mut self.layout_pr, e),
-            b"binning" if self.in_layout_pr => {
-                self.in_binning = true;
+            b"idx" if self.layout.in_subtotals => push_subtotal_idx(&mut self.layout.pr, e),
+            b"binning" if self.layout.open => {
+                self.layout.in_binning = true;
                 let mut binning = ChartExBinning::default();
                 for attr in e.attributes().flatten() {
                     match attr.key.local_name().as_ref() {
@@ -756,23 +757,23 @@ impl ChartExParser {
                         _ => {}
                     }
                 }
-                self.layout_pr.binning = Some(binning);
+                self.layout.pr.binning = Some(binning);
             }
-            b"binSize" if self.in_binning => {
-                if let (Some(v), Some(b)) = (get_val_f64(e), self.layout_pr.binning.as_mut()) {
+            b"binSize" if self.layout.in_binning => {
+                if let (Some(v), Some(b)) = (get_val_f64(e), self.layout.pr.binning.as_mut()) {
                     b.bin_size = Some(v);
                 }
             }
-            b"binCount" if self.in_binning => {
+            b"binCount" if self.layout.in_binning => {
                 if let (Some(v), Some(b)) = (
                     get_val_attr(e).and_then(|s| s.parse().ok()),
-                    self.layout_pr.binning.as_mut(),
+                    self.layout.pr.binning.as_mut(),
                 ) {
                     b.bin_count = Some(v);
                 }
             }
-            b"geography" if self.in_layout_pr => {
-                self.in_geography = true;
+            b"geography" if self.layout.open => {
+                self.layout.in_geography = true;
                 let mut geo = ChartExGeography::default();
                 for attr in e.attributes().flatten() {
                     match attr.key.local_name().as_ref() {
@@ -799,16 +800,16 @@ impl ChartExParser {
                         _ => {}
                     }
                 }
-                self.layout_pr.geography = Some(geo);
+                self.layout.pr.geography = Some(geo);
             }
-            b"geoCache" if self.in_geography => {
+            b"geoCache" if self.layout.in_geography => {
                 let mut w = Writer::new(Cursor::new(Vec::new()));
                 let _ = w.write_event(Event::Start(e.clone().into_owned()));
                 self.geo_cache_depth = 1;
                 self.geo_cache_writer = Some(w);
             }
-            b"statistics" if self.in_layout_pr => {
-                self.in_statistics = true;
+            b"statistics" if self.layout.open => {
+                self.layout.in_statistics = true;
                 let mut stats = ChartExStatistics::default();
                 for attr in e.attributes().flatten() {
                     if attr.key.local_name().as_ref() == b"quartileMethod" {
@@ -816,10 +817,10 @@ impl ChartExParser {
                             attr.unescape_value().ok().map(|s| s.to_string());
                     }
                 }
-                self.layout_pr.statistics = Some(stats);
+                self.layout.pr.statistics = Some(stats);
             }
-            b"visibility" if self.in_layout_pr && !self.in_data_labels => {
-                self.in_layout_visibility = true;
+            b"visibility" if self.layout.open && !self.labels.open => {
+                self.layout.in_visibility = true;
                 let mut vis = ChartExSeriesVisibility::default();
                 for attr in e.attributes().flatten() {
                     match attr.key.local_name().as_ref() {
@@ -831,15 +832,15 @@ impl ChartExParser {
                         _ => {}
                     }
                 }
-                self.layout_pr.visibility = Some(vis);
+                self.layout.pr.visibility = Some(vis);
             }
-            b"axisId" if self.in_series && !self.in_axis => self.in_axis_id = true,
-            b"valueColors" if self.in_series => {
-                self.in_value_colors = true;
-                self.ser_value_colors = Some(ChartExValueColors::default());
+            b"axisId" if self.series.open && !self.axis.open => self.series.in_axis_id = true,
+            b"valueColors" if self.series.open => {
+                self.series.in_value_colors = true;
+                self.series.value_colors = Some(ChartExValueColors::default());
             }
             b"minColor" | b"midColor" | b"maxColor"
-                if self.in_value_colors && self.vc_writer.is_none() =>
+                if self.series.in_value_colors && self.vc_writer.is_none() =>
             {
                 let tag_name = std::str::from_utf8(tag).unwrap_or("").to_string();
                 self.vc_capturing_tag = Some(tag_name);
@@ -848,44 +849,44 @@ impl ChartExParser {
                 self.vc_depth = 1;
                 self.vc_writer = Some(w);
             }
-            b"valueColorPositions" if self.in_series => {
-                self.in_value_color_positions = true;
-                self.vcp = ChartExValueColorPositions::default();
+            b"valueColorPositions" if self.series.open => {
+                self.color_pos.open = true;
+                self.color_pos.value = ChartExValueColorPositions::default();
                 for attr in e.attributes().flatten() {
                     if attr.key.local_name().as_ref() == b"count" {
-                        self.vcp.count = attr.unescape_value().ok().and_then(|s| s.parse().ok());
+                        self.color_pos.value.count = attr.unescape_value().ok().and_then(|s| s.parse().ok());
                     }
                 }
             }
-            b"min" if self.in_value_color_positions => self.in_vcp_min = true,
-            b"mid" if self.in_value_color_positions => self.in_vcp_mid = true,
-            b"max" if self.in_value_color_positions => self.in_vcp_max = true,
-            b"axis" if self.in_plot_area && !self.in_plot_area_region => {
-                self.in_axis = true;
-                self.ax_id = 0;
-                self.ax_hidden = None;
-                self.ax_scaling = ChartExScaling::Category { gap_width: None };
-                self.ax_title = None;
-                self.ax_units = None;
-                self.ax_major_gridlines = None;
-                self.ax_minor_gridlines = None;
-                self.ax_major_tick_marks = None;
-                self.ax_minor_tick_marks = None;
-                self.ax_tick_labels = false;
-                self.ax_num_fmt = None;
-                self.ax_shape_properties = None;
+            b"min" if self.color_pos.open => self.color_pos.in_min = true,
+            b"mid" if self.color_pos.open => self.color_pos.in_mid = true,
+            b"max" if self.color_pos.open => self.color_pos.in_max = true,
+            b"axis" if self.pos.plot_area && !self.pos.plot_area_region => {
+                self.axis.open = true;
+                self.axis.id = 0;
+                self.axis.hidden = None;
+                self.axis.scaling = ChartExScaling::Category { gap_width: None };
+                self.axis.title = None;
+                self.axis.units = None;
+                self.axis.major_gridlines = None;
+                self.axis.minor_gridlines = None;
+                self.axis.major_tick_marks = None;
+                self.axis.minor_tick_marks = None;
+                self.axis.tick_labels = false;
+                self.axis.num_fmt = None;
+                self.axis.shape_properties = None;
 
                 for attr in e.attributes().flatten() {
                     match attr.key.local_name().as_ref() {
                         b"id" => {
-                            self.ax_id = attr
+                            self.axis.id = attr
                                 .unescape_value()
                                 .ok()
                                 .and_then(|s| s.parse().ok())
                                 .unwrap_or(0)
                         }
                         b"hidden" => {
-                            self.ax_hidden = attr
+                            self.axis.hidden = attr
                                 .unescape_value()
                                 .ok()
                                 .map(|s| s == "1" || s.as_ref() == "true")
@@ -894,18 +895,18 @@ impl ChartExParser {
                     }
                 }
             }
-            b"catScaling" if self.in_axis => {
-                self.in_cat_scaling = true;
+            b"catScaling" if self.axis.open => {
+                self.axis.in_cat_scaling = true;
                 let mut gw = None;
                 for attr in e.attributes().flatten() {
                     if attr.key.local_name().as_ref() == b"gapWidth" {
                         gw = attr.unescape_value().ok().and_then(|s| s.parse().ok());
                     }
                 }
-                self.ax_scaling = ChartExScaling::Category { gap_width: gw };
+                self.axis.scaling = ChartExScaling::Category { gap_width: gw };
             }
-            b"valScaling" if self.in_axis => {
-                self.in_val_scaling = true;
+            b"valScaling" if self.axis.open => {
+                self.axis.in_val_scaling = true;
                 let mut min = None;
                 let mut max = None;
                 let mut major = None;
@@ -927,53 +928,53 @@ impl ChartExParser {
                         _ => {}
                     }
                 }
-                self.ax_scaling = ChartExScaling::Value {
+                self.axis.scaling = ChartExScaling::Value {
                     min,
                     max,
                     major_unit: major,
                     minor_unit: minor,
                 };
             }
-            b"title" if self.in_axis => {
-                self.in_ax_title = true;
-                self.ax_title_text = None;
+            b"title" if self.axis.open => {
+                self.axis.in_title = true;
+                self.axis.title_text = None;
             }
-            b"tx" if self.in_ax_title => self.in_ax_title_tx = true,
-            b"txData" if self.in_ax_title_tx => self.in_ax_title_tx_data = true,
-            b"v" if self.in_ax_title_tx_data => self.in_ax_title_tx_data_v = true,
-            b"units" if self.in_axis => {
-                self.in_units = true;
-                self.units_unit = None;
+            b"tx" if self.axis.in_title => self.axis.in_title_tx = true,
+            b"txData" if self.axis.in_title_tx => self.axis.in_title_tx_data = true,
+            b"v" if self.axis.in_title_tx_data => self.axis.in_title_tx_data_v = true,
+            b"units" if self.axis.open => {
+                self.axis.in_units = true;
+                self.axis.units_unit = None;
                 for attr in e.attributes().flatten() {
                     if attr.key.local_name().as_ref() == b"unit" {
-                        self.units_unit = attr.unescape_value().ok().map(|s| s.to_string());
+                        self.axis.units_unit = attr.unescape_value().ok().map(|s| s.to_string());
                     }
                 }
             }
-            b"majorGridlines" if self.in_axis => {
-                self.in_major_gridlines = true;
-                self.ax_major_gridlines = Some(ChartExGridlines::default());
+            b"majorGridlines" if self.axis.open => {
+                self.axis.in_major_gridlines = true;
+                self.axis.major_gridlines = Some(ChartExGridlines::default());
             }
-            b"minorGridlines" if self.in_axis => {
-                self.in_minor_gridlines = true;
-                self.ax_minor_gridlines = Some(ChartExGridlines::default());
+            b"minorGridlines" if self.axis.open => {
+                self.axis.in_minor_gridlines = true;
+                self.axis.minor_gridlines = Some(ChartExGridlines::default());
             }
-            b"legend" if self.in_chart && !self.in_plot_area => {
-                self.in_legend = true;
-                self.legend_pos = None;
-                self.legend_align = None;
-                self.legend_overlay = None;
-                self.legend_sp = None;
+            b"legend" if self.pos.chart && !self.pos.plot_area => {
+                self.legend.open = true;
+                self.legend.pos = None;
+                self.legend.align = None;
+                self.legend.overlay = None;
+                self.legend.sp = None;
                 for attr in e.attributes().flatten() {
                     match attr.key.local_name().as_ref() {
                         b"pos" => {
-                            self.legend_pos = attr.unescape_value().ok().map(|s| s.to_string())
+                            self.legend.pos = attr.unescape_value().ok().map(|s| s.to_string())
                         }
                         b"align" => {
-                            self.legend_align = attr.unescape_value().ok().map(|s| s.to_string())
+                            self.legend.align = attr.unescape_value().ok().map(|s| s.to_string())
                         }
                         b"overlay" => {
-                            self.legend_overlay = attr
+                            self.legend.overlay = attr
                                 .unescape_value()
                                 .ok()
                                 .map(|s| s == "1" || s.as_ref() == "true")
@@ -982,80 +983,80 @@ impl ChartExParser {
                     }
                 }
             }
-            b"printSettings" if self.in_chart_space => {
-                self.in_print_settings = true;
-                self.print_settings = ChartExPrintSettings::default();
+            b"printSettings" if self.pos.chart_space => {
+                self.print.open = true;
+                self.print.settings = ChartExPrintSettings::default();
             }
-            b"headerFooter" if self.in_print_settings => {
-                self.in_ps_header_footer = true;
-                self.ps_hf = ChartExHeaderFooter::default();
+            b"headerFooter" if self.print.open => {
+                self.print.in_header_footer = true;
+                self.print.hf = ChartExHeaderFooter::default();
                 for attr in e.attributes().flatten() {
                     match attr.key.local_name().as_ref() {
                         b"alignWithMargins" => {
-                            self.ps_hf.align_with_margins = parse_bool_attr(&attr)
+                            self.print.hf.align_with_margins = parse_bool_attr(&attr)
                         }
                         b"differentOddEven" => {
-                            self.ps_hf.different_odd_even = parse_bool_attr(&attr)
+                            self.print.hf.different_odd_even = parse_bool_attr(&attr)
                         }
-                        b"differentFirst" => self.ps_hf.different_first = parse_bool_attr(&attr),
+                        b"differentFirst" => self.print.hf.different_first = parse_bool_attr(&attr),
                         _ => {}
                     }
                 }
             }
-            b"oddHeader" if self.in_ps_header_footer => self.in_ps_hf_odd_header = true,
-            b"oddFooter" if self.in_ps_header_footer => self.in_ps_hf_odd_footer = true,
-            b"evenHeader" if self.in_ps_header_footer => self.in_ps_hf_even_header = true,
-            b"evenFooter" if self.in_ps_header_footer => self.in_ps_hf_even_footer = true,
-            b"firstHeader" if self.in_ps_header_footer => self.in_ps_hf_first_header = true,
-            b"firstFooter" if self.in_ps_header_footer => self.in_ps_hf_first_footer = true,
-            b"spPr" if !self.in_sp_pr => {
-                self.in_sp_pr = true;
-                self.sp_pr_depth = 1;
-                self.sp_solid_fill = None;
-                self.sp_no_fill = false;
-                self.sp_line = None;
-                self.in_sp_ln = false;
-                self.sp_ln_width = None;
-                self.sp_ln_solid_fill = None;
-                self.sp_ln_no_fill = false;
-                self.sp_ln_dash = None;
-                if self.in_data_pt {
-                    self.sp_ctx = SpCtx::DataPt;
-                } else if self.in_data_label {
-                    self.sp_ctx = SpCtx::DataLabel;
-                } else if self.in_data_labels {
-                    self.sp_ctx = SpCtx::DataLabels;
-                } else if self.in_series {
-                    self.sp_ctx = SpCtx::Series;
-                } else if self.in_major_gridlines {
-                    self.sp_ctx = SpCtx::MajorGrid;
-                } else if self.in_minor_gridlines {
-                    self.sp_ctx = SpCtx::MinorGrid;
-                } else if self.in_ax_title {
-                    self.sp_ctx = SpCtx::AxisTitle;
-                } else if self.in_axis {
-                    self.sp_ctx = SpCtx::Axis;
-                } else if self.in_title {
-                    self.sp_ctx = SpCtx::Title;
-                } else if self.in_legend {
-                    self.sp_ctx = SpCtx::Legend;
-                } else if self.in_plot_surface {
-                    self.sp_ctx = SpCtx::PlotSurface;
-                } else if self.in_chart_space && !self.in_chart {
-                    self.sp_ctx = SpCtx::ChartSpace;
+            b"oddHeader" if self.print.in_header_footer => self.print.in_hf_odd_header = true,
+            b"oddFooter" if self.print.in_header_footer => self.print.in_hf_odd_footer = true,
+            b"evenHeader" if self.print.in_header_footer => self.print.in_hf_even_header = true,
+            b"evenFooter" if self.print.in_header_footer => self.print.in_hf_even_footer = true,
+            b"firstHeader" if self.print.in_header_footer => self.print.in_hf_first_header = true,
+            b"firstFooter" if self.print.in_header_footer => self.print.in_hf_first_footer = true,
+            b"spPr" if !self.sp.open => {
+                self.sp.open = true;
+                self.sp.depth = 1;
+                self.sp.solid_fill = None;
+                self.sp.no_fill = false;
+                self.sp.line = None;
+                self.sp.in_ln = false;
+                self.sp.ln_width = None;
+                self.sp.ln_solid_fill = None;
+                self.sp.ln_no_fill = false;
+                self.sp.ln_dash = None;
+                if self.data_pt.open {
+                    self.sp.ctx = SpCtx::DataPt;
+                } else if self.label.open {
+                    self.sp.ctx = SpCtx::DataLabel;
+                } else if self.labels.open {
+                    self.sp.ctx = SpCtx::DataLabels;
+                } else if self.series.open {
+                    self.sp.ctx = SpCtx::Series;
+                } else if self.axis.in_major_gridlines {
+                    self.sp.ctx = SpCtx::MajorGrid;
+                } else if self.axis.in_minor_gridlines {
+                    self.sp.ctx = SpCtx::MinorGrid;
+                } else if self.axis.in_title {
+                    self.sp.ctx = SpCtx::AxisTitle;
+                } else if self.axis.open {
+                    self.sp.ctx = SpCtx::Axis;
+                } else if self.title.open {
+                    self.sp.ctx = SpCtx::Title;
+                } else if self.legend.open {
+                    self.sp.ctx = SpCtx::Legend;
+                } else if self.pos.plot_surface {
+                    self.sp.ctx = SpCtx::PlotSurface;
+                } else if self.pos.chart_space && !self.pos.chart {
+                    self.sp.ctx = SpCtx::ChartSpace;
                 } else {
-                    self.sp_ctx = SpCtx::None;
+                    self.sp.ctx = SpCtx::None;
                 }
             }
-            b"ln" if self.in_sp_pr => {
-                self.in_sp_ln = true;
-                self.sp_ln_width = None;
-                self.sp_ln_solid_fill = None;
-                self.sp_ln_no_fill = false;
-                self.sp_ln_dash = None;
+            b"ln" if self.sp.open => {
+                self.sp.in_ln = true;
+                self.sp.ln_width = None;
+                self.sp.ln_solid_fill = None;
+                self.sp.ln_no_fill = false;
+                self.sp.ln_dash = None;
                 for attr in e.attributes().flatten() {
                     if attr.key.local_name().as_ref() == b"w" {
-                        self.sp_ln_width =
+                        self.sp.ln_width =
                             attr.unescape_value().ok().and_then(|s| s.parse().ok());
                     }
                 }
@@ -1083,7 +1084,7 @@ impl ChartExParser {
             // Handling merged from the former separate arm for
             // empty elements, which a self-closing element no
             // longer reaches.
-            b"externalData" if self.in_chart_data => {
+            b"externalData" if self.pos.chart_data => {
                 let mut rel_id = String::new();
                 let mut auto_update = None;
                 for attr in e.attributes().flatten() {
@@ -1108,69 +1109,69 @@ impl ChartExParser {
                     auto_update,
                 });
             }
-            b"visibility" if self.in_data_label => {
+            b"visibility" if self.label.open => {
                 for attr in e.attributes().flatten() {
                     match attr.key.local_name().as_ref() {
-                        b"seriesName" => self.lbl_vis_series = parse_bool_attr(&attr),
-                        b"categoryName" => self.lbl_vis_cat = parse_bool_attr(&attr),
-                        b"value" => self.lbl_vis_val = parse_bool_attr(&attr),
+                        b"seriesName" => self.label.vis_series = parse_bool_attr(&attr),
+                        b"categoryName" => self.label.vis_cat = parse_bool_attr(&attr),
+                        b"value" => self.label.vis_val = parse_bool_attr(&attr),
                         _ => {}
                     }
                 }
             }
-            b"visibility" if self.in_data_labels => {
+            b"visibility" if self.labels.open => {
                 for attr in e.attributes().flatten() {
                     match attr.key.local_name().as_ref() {
-                        b"seriesName" => self.dlbl_vis_series = parse_bool_attr(&attr),
-                        b"categoryName" => self.dlbl_vis_cat = parse_bool_attr(&attr),
-                        b"value" => self.dlbl_vis_val = parse_bool_attr(&attr),
+                        b"seriesName" => self.labels.vis_series = parse_bool_attr(&attr),
+                        b"categoryName" => self.labels.vis_cat = parse_bool_attr(&attr),
+                        b"value" => self.labels.vis_val = parse_bool_attr(&attr),
                         _ => {}
                     }
                 }
             }
-            b"numFmt" if self.in_data_label => self.lbl_num_fmt = Some(parse_num_fmt(e)),
-            b"numFmt" if self.in_data_labels => self.dlbl_num_fmt = Some(parse_num_fmt(e)),
-            b"numFmt" if self.in_axis && !self.in_data_labels => {
-                self.ax_num_fmt = Some(parse_num_fmt(e));
+            b"numFmt" if self.label.open => self.label.num_fmt = Some(parse_num_fmt(e)),
+            b"numFmt" if self.labels.open => self.labels.num_fmt = Some(parse_num_fmt(e)),
+            b"numFmt" if self.axis.open && !self.labels.open => {
+                self.axis.num_fmt = Some(parse_num_fmt(e));
             }
-            b"parentLabelLayout" if self.in_layout_pr => {
-                self.layout_pr.parent_label_layout = get_val_attr(e);
+            b"parentLabelLayout" if self.layout.open => {
+                self.layout.pr.parent_label_layout = get_val_attr(e);
             }
-            b"regionLabelLayout" if self.in_layout_pr => {
-                self.layout_pr.region_label_layout = get_val_attr(e);
+            b"regionLabelLayout" if self.layout.open => {
+                self.layout.pr.region_label_layout = get_val_attr(e);
             }
-            b"aggregation" if self.in_layout_pr => self.layout_pr.aggregation = true,
-            b"majorTickMarks" if self.in_axis => {
+            b"aggregation" if self.layout.open => self.layout.pr.aggregation = true,
+            b"majorTickMarks" if self.axis.open => {
                 for attr in e.attributes().flatten() {
                     if attr.key.local_name().as_ref() == b"type" {
-                        self.ax_major_tick_marks =
+                        self.axis.major_tick_marks =
                             attr.unescape_value().ok().map(|s| s.to_string());
                     }
                 }
             }
-            b"minorTickMarks" if self.in_axis => {
+            b"minorTickMarks" if self.axis.open => {
                 for attr in e.attributes().flatten() {
                     if attr.key.local_name().as_ref() == b"type" {
-                        self.ax_minor_tick_marks =
+                        self.axis.minor_tick_marks =
                             attr.unescape_value().ok().map(|s| s.to_string());
                     }
                 }
             }
-            b"tickLabels" if self.in_axis => self.ax_tick_labels = true,
-            b"srgbClr" if self.in_sp_pr && !self.in_sp_ln => {
+            b"tickLabels" if self.axis.open => self.axis.tick_labels = true,
+            b"srgbClr" if self.sp.open && !self.sp.in_ln => {
                 if let Some(hex) = get_val_attr(e) {
-                    self.sp_solid_fill = Some(ChartColor { hex });
+                    self.sp.solid_fill = Some(ChartColor { hex });
                 }
             }
-            b"srgbClr" if self.in_sp_ln => {
+            b"srgbClr" if self.sp.in_ln => {
                 if let Some(hex) = get_val_attr(e) {
-                    self.sp_ln_solid_fill = Some(ChartColor { hex });
+                    self.sp.ln_solid_fill = Some(ChartColor { hex });
                 }
             }
-            b"noFill" if self.in_sp_pr && !self.in_sp_ln => self.sp_no_fill = true,
-            b"noFill" if self.in_sp_ln => self.sp_ln_no_fill = true,
-            b"prstDash" if self.in_sp_ln => self.sp_ln_dash = get_val_attr(e),
-            b"pageMargins" if self.in_print_settings => {
+            b"noFill" if self.sp.open && !self.sp.in_ln => self.sp.no_fill = true,
+            b"noFill" if self.sp.in_ln => self.sp.ln_no_fill = true,
+            b"prstDash" if self.sp.in_ln => self.sp.ln_dash = get_val_attr(e),
+            b"pageMargins" if self.print.open => {
                 let mut pm = ChartExPageMargins::default();
                 for attr in e.attributes().flatten() {
                     match attr.key.local_name().as_ref() {
@@ -1200,9 +1201,9 @@ impl ChartExParser {
                         _ => {}
                     }
                 }
-                self.print_settings.page_margins = Some(pm);
+                self.print.settings.page_margins = Some(pm);
             }
-            b"pageSetup" if self.in_print_settings => {
+            b"pageSetup" if self.print.open => {
                 let mut ps = ChartExPageSetup::default();
                 for attr in e.attributes().flatten() {
                     match attr.key.local_name().as_ref() {
@@ -1238,45 +1239,45 @@ impl ChartExParser {
                         _ => {}
                     }
                 }
-                self.print_settings.page_setup = Some(ps);
+                self.print.settings.page_setup = Some(ps);
             }
-            b"extremeValue" if self.in_vcp_min => {
-                self.vcp.min = Some(ChartExColorPosition::ExtremeValue)
+            b"extremeValue" if self.color_pos.in_min => {
+                self.color_pos.value.min = Some(ChartExColorPosition::ExtremeValue)
             }
-            b"extremeValue" if self.in_vcp_mid => {
-                self.vcp.mid = Some(ChartExColorPosition::ExtremeValue)
+            b"extremeValue" if self.color_pos.in_mid => {
+                self.color_pos.value.mid = Some(ChartExColorPosition::ExtremeValue)
             }
-            b"extremeValue" if self.in_vcp_max => {
-                self.vcp.max = Some(ChartExColorPosition::ExtremeValue)
+            b"extremeValue" if self.color_pos.in_max => {
+                self.color_pos.value.max = Some(ChartExColorPosition::ExtremeValue)
             }
-            b"number" if self.in_vcp_min => {
+            b"number" if self.color_pos.in_min => {
                 if let Some(v) = get_val_f64(e) {
-                    self.vcp.min = Some(ChartExColorPosition::Number(v));
+                    self.color_pos.value.min = Some(ChartExColorPosition::Number(v));
                 }
             }
-            b"number" if self.in_vcp_mid => {
+            b"number" if self.color_pos.in_mid => {
                 if let Some(v) = get_val_f64(e) {
-                    self.vcp.mid = Some(ChartExColorPosition::Number(v));
+                    self.color_pos.value.mid = Some(ChartExColorPosition::Number(v));
                 }
             }
-            b"number" if self.in_vcp_max => {
+            b"number" if self.color_pos.in_max => {
                 if let Some(v) = get_val_f64(e) {
-                    self.vcp.max = Some(ChartExColorPosition::Number(v));
+                    self.color_pos.value.max = Some(ChartExColorPosition::Number(v));
                 }
             }
-            b"percent" if self.in_vcp_min => {
+            b"percent" if self.color_pos.in_min => {
                 if let Some(v) = get_val_f64(e) {
-                    self.vcp.min = Some(ChartExColorPosition::Percent(v));
+                    self.color_pos.value.min = Some(ChartExColorPosition::Percent(v));
                 }
             }
-            b"percent" if self.in_vcp_mid => {
+            b"percent" if self.color_pos.in_mid => {
                 if let Some(v) = get_val_f64(e) {
-                    self.vcp.mid = Some(ChartExColorPosition::Percent(v));
+                    self.color_pos.value.mid = Some(ChartExColorPosition::Percent(v));
                 }
             }
-            b"percent" if self.in_vcp_max => {
+            b"percent" if self.color_pos.in_max => {
                 if let Some(v) = get_val_f64(e) {
-                    self.vcp.max = Some(ChartExColorPosition::Percent(v));
+                    self.color_pos.value.max = Some(ChartExColorPosition::Percent(v));
                 }
             }
             _ => {}
@@ -1307,46 +1308,46 @@ impl ChartExParser {
         }
         if let Ok(text) = e.unescape() {
             let t = text.as_ref();
-            if self.in_dim_f {
-                self.dim_formula = Some(t.to_string());
-            } else if self.in_dim_nf {
-                self.dim_nf = Some(t.to_string());
-            } else if self.in_lvl_pt_text && self.in_lvl_pt {
-                if self.in_str_dim {
-                    self.lvl_str_points.push((self.lvl_pt_idx, t.to_string()));
-                } else if self.in_num_dim {
-                    self.lvl_num_points.push((self.lvl_pt_idx, t.to_string()));
+            if self.data.in_f {
+                self.data.formula = Some(t.to_string());
+            } else if self.data.in_nf {
+                self.data.nf = Some(t.to_string());
+            } else if self.data.in_lvl_pt_text && self.data.in_lvl_pt {
+                if self.data.in_str_dim {
+                    self.data.lvl_str_points.push((self.data.lvl_pt_idx, t.to_string()));
+                } else if self.data.in_num_dim {
+                    self.data.lvl_num_points.push((self.data.lvl_pt_idx, t.to_string()));
                 }
-            } else if self.in_title_tx_data_v {
-                self.title_text = Some(t.to_string());
-            } else if self.in_title_tx_data_f {
-                self.title_text = Some(t.to_string());
-            } else if self.in_ser_tx_data_v {
-                self.ser_tx_value = Some(t.to_string());
-            } else if self.in_ser_tx_data_f {
-                self.ser_tx_formula = Some(t.to_string());
-            } else if self.in_axis_id {
+            } else if self.title.in_tx_data_v {
+                self.title.text = Some(t.to_string());
+            } else if self.title.in_tx_data_f {
+                self.title.text = Some(t.to_string());
+            } else if self.series.in_tx_data_v {
+                self.series.tx_value = Some(t.to_string());
+            } else if self.series.in_tx_data_f {
+                self.series.tx_formula = Some(t.to_string());
+            } else if self.series.in_axis_id {
                 if let Ok(id) = t.parse::<u32>() {
-                    self.ser_axis_ids.push(id);
+                    self.series.axis_ids.push(id);
                 }
-            } else if self.in_ax_title_tx_data_v {
-                self.ax_title_text = Some(t.to_string());
-            } else if self.in_lbl_separator {
-                self.lbl_separator = Some(t.to_string());
-            } else if self.in_dlbl_separator {
-                self.dlbl_separator = Some(t.to_string());
-            } else if self.in_ps_hf_odd_header {
-                self.ps_hf.odd_header = Some(t.to_string());
-            } else if self.in_ps_hf_odd_footer {
-                self.ps_hf.odd_footer = Some(t.to_string());
-            } else if self.in_ps_hf_even_header {
-                self.ps_hf.even_header = Some(t.to_string());
-            } else if self.in_ps_hf_even_footer {
-                self.ps_hf.even_footer = Some(t.to_string());
-            } else if self.in_ps_hf_first_header {
-                self.ps_hf.first_header = Some(t.to_string());
-            } else if self.in_ps_hf_first_footer {
-                self.ps_hf.first_footer = Some(t.to_string());
+            } else if self.axis.in_title_tx_data_v {
+                self.axis.title_text = Some(t.to_string());
+            } else if self.label.in_separator {
+                self.label.separator = Some(t.to_string());
+            } else if self.labels.in_separator {
+                self.labels.separator = Some(t.to_string());
+            } else if self.print.in_hf_odd_header {
+                self.print.hf.odd_header = Some(t.to_string());
+            } else if self.print.in_hf_odd_footer {
+                self.print.hf.odd_footer = Some(t.to_string());
+            } else if self.print.in_hf_even_header {
+                self.print.hf.even_header = Some(t.to_string());
+            } else if self.print.in_hf_even_footer {
+                self.print.hf.even_footer = Some(t.to_string());
+            } else if self.print.in_hf_first_header {
+                self.print.hf.first_header = Some(t.to_string());
+            } else if self.print.in_hf_first_footer {
+                self.print.hf.first_footer = Some(t.to_string());
             }
         }
     }
@@ -1358,7 +1359,7 @@ impl ChartExParser {
             let _ = w.write_event(Event::End(e.clone().into_owned()));
             if self.geo_cache_depth == 0 {
                 if let Some(w) = self.geo_cache_writer.take() {
-                    if let Some(ref mut geo) = self.layout_pr.geography {
+                    if let Some(ref mut geo) = self.layout.pr.geography {
                         geo.raw_geo_cache = Some(w.into_inner().into_inner());
                     }
                 }
@@ -1372,7 +1373,7 @@ impl ChartExParser {
             if self.vc_depth == 0 {
                 if let Some(w) = self.vc_writer.take() {
                     let bytes = w.into_inner().into_inner();
-                    if let Some(ref mut vc) = self.ser_value_colors {
+                    if let Some(ref mut vc) = self.series.value_colors {
                         match self.vc_capturing_tag.as_deref() {
                             Some("minColor") => vc.min_color = Some(bytes),
                             Some("midColor") => vc.mid_color = Some(bytes),
@@ -1394,8 +1395,8 @@ impl ChartExParser {
                 // subtree ends here. It cannot close the spPr
                 // itself, since the spPr's own start put the
                 // depth at 1 before the opener raised it.
-                if self.in_sp_pr {
-                    self.sp_pr_depth = self.sp_pr_depth.saturating_sub(1);
+                if self.sp.open {
+                    self.sp.depth = self.sp.depth.saturating_sub(1);
                 }
             }
             return;
@@ -1404,61 +1405,61 @@ impl ChartExParser {
         let local = e.name().local_name();
         let tag = local.as_ref();
         match tag {
-            b"chartSpace" => self.in_chart_space = false,
-            b"chartData" => self.in_chart_data = false,
-            b"data" if self.in_data => {
+            b"chartSpace" => self.pos.chart_space = false,
+            b"chartData" => self.pos.chart_data = false,
+            b"data" if self.data.open => {
                 self.result.data.push(ChartExData {
-                    id: self.data_id,
-                    dimensions: std::mem::take(&mut self.data_dims),
+                    id: self.data.id,
+                    dimensions: std::mem::take(&mut self.data.dims),
                     extensions: None,
                 });
-                self.in_data = false;
+                self.data.open = false;
             }
-            b"strDim" if self.in_str_dim => {
-                self.data_dims.push(ChartExDimension::String {
-                    dim_type: self.dim_str_type.clone(),
-                    formula: self.dim_formula.take(),
-                    nf_formula: self.dim_nf.take(),
-                    levels: std::mem::take(&mut self.dim_levels),
+            b"strDim" if self.data.in_str_dim => {
+                self.data.dims.push(ChartExDimension::String {
+                    dim_type: self.data.str_type.clone(),
+                    formula: self.data.formula.take(),
+                    nf_formula: self.data.nf.take(),
+                    levels: std::mem::take(&mut self.data.str_levels),
                 });
-                self.in_str_dim = false;
+                self.data.in_str_dim = false;
             }
-            b"numDim" if self.in_num_dim => {
-                self.data_dims.push(ChartExDimension::Numeric {
-                    dim_type: self.dim_num_type.clone(),
-                    formula: self.dim_formula.take(),
-                    nf_formula: self.dim_nf.take(),
-                    levels: std::mem::take(&mut self.dim_num_levels),
+            b"numDim" if self.data.in_num_dim => {
+                self.data.dims.push(ChartExDimension::Numeric {
+                    dim_type: self.data.num_type.clone(),
+                    formula: self.data.formula.take(),
+                    nf_formula: self.data.nf.take(),
+                    levels: std::mem::take(&mut self.data.num_levels),
                 });
-                self.in_num_dim = false;
+                self.data.in_num_dim = false;
             }
-            b"f" if self.in_dim_f => self.in_dim_f = false,
-            b"nf" if self.in_dim_nf => self.in_dim_nf = false,
-            b"lvl" if self.in_lvl => {
-                if self.in_str_dim {
-                    self.dim_levels.push(ChartExStringLevel {
-                        pt_count: self.lvl_pt_count,
-                        name: self.lvl_name.take(),
-                        points: std::mem::take(&mut self.lvl_str_points),
+            b"f" if self.data.in_f => self.data.in_f = false,
+            b"nf" if self.data.in_nf => self.data.in_nf = false,
+            b"lvl" if self.data.in_lvl => {
+                if self.data.in_str_dim {
+                    self.data.str_levels.push(ChartExStringLevel {
+                        pt_count: self.data.lvl_pt_count,
+                        name: self.data.lvl_name.take(),
+                        points: std::mem::take(&mut self.data.lvl_str_points),
                     });
-                } else if self.in_num_dim {
-                    self.dim_num_levels.push(ChartExNumericLevel {
-                        pt_count: self.lvl_pt_count,
-                        format_code: self.lvl_format_code.take(),
-                        name: self.lvl_name.take(),
-                        points: std::mem::take(&mut self.lvl_num_points),
+                } else if self.data.in_num_dim {
+                    self.data.num_levels.push(ChartExNumericLevel {
+                        pt_count: self.data.lvl_pt_count,
+                        format_code: self.data.lvl_format_code.take(),
+                        name: self.data.lvl_name.take(),
+                        points: std::mem::take(&mut self.data.lvl_num_points),
                     });
                 }
-                self.in_lvl = false;
+                self.data.in_lvl = false;
             }
-            b"pt" if self.in_lvl_pt => {
-                self.in_lvl_pt = false;
-                self.in_lvl_pt_text = false;
+            b"pt" if self.data.in_lvl_pt => {
+                self.data.in_lvl_pt = false;
+                self.data.in_lvl_pt_text = false;
             }
-            b"chart" if self.in_chart => self.in_chart = false,
-            b"title" if self.in_ax_title => {
+            b"chart" if self.pos.chart => self.pos.chart = false,
+            b"title" if self.axis.in_title => {
                 let title = ChartExAxisTitle {
-                    text: self.ax_title_text.take().map(|t| ChartExText {
+                    text: self.axis.title_text.take().map(|t| ChartExText {
                         data: Some(ChartExTextData {
                             formula: None,
                             value: Some(t),
@@ -1466,221 +1467,221 @@ impl ChartExParser {
                         rich: None,
                     }),
                     offset: None,
-                    shape_properties: self.ax_title_sp.take(),
+                    shape_properties: self.axis.title_sp.take(),
                     text_properties: None,
                     extensions: None,
                 };
-                self.ax_title = Some(title);
-                self.in_ax_title = false;
-                self.in_ax_title_tx = false;
-                self.in_ax_title_tx_data = false;
-                self.in_ax_title_tx_data_v = false;
+                self.axis.title = Some(title);
+                self.axis.in_title = false;
+                self.axis.in_title_tx = false;
+                self.axis.in_title_tx_data = false;
+                self.axis.in_title_tx_data_v = false;
             }
-            b"title" if self.in_title => {
+            b"title" if self.title.open => {
                 self.result.title = Some(ChartExTitle {
-                    text: self.title_text.take(),
+                    text: self.title.text.take(),
                     rich_text: None,
-                    position: self.title_pos.take(),
-                    align: self.title_align.take(),
-                    overlay: self.title_overlay.take(),
+                    position: self.title.pos.take(),
+                    align: self.title.align.take(),
+                    overlay: self.title.overlay.take(),
                     offset: None,
-                    shape_properties: self.title_sp.take(),
+                    shape_properties: self.title.sp.take(),
                     text_properties: None,
                     extensions: None,
                 });
-                self.in_title = false;
-                self.in_title_tx = false;
-                self.in_title_tx_data = false;
+                self.title.open = false;
+                self.title.in_tx = false;
+                self.title.in_tx_data = false;
             }
-            b"tx" if self.in_title_tx && !self.in_series => self.in_title_tx = false,
-            b"txData" if self.in_title_tx_data && !self.in_series => self.in_title_tx_data = false,
-            b"v" if self.in_title_tx_data_v && !self.in_series => self.in_title_tx_data_v = false,
-            b"f" if self.in_title_tx_data_f && !self.in_series => self.in_title_tx_data_f = false,
-            b"plotArea" => self.in_plot_area = false,
-            b"plotAreaRegion" => self.in_plot_area_region = false,
-            b"plotSurface" if self.in_plot_surface => self.in_plot_surface = false,
-            b"series" if self.in_series => {
+            b"tx" if self.title.in_tx && !self.series.open => self.title.in_tx = false,
+            b"txData" if self.title.in_tx_data && !self.series.open => self.title.in_tx_data = false,
+            b"v" if self.title.in_tx_data_v && !self.series.open => self.title.in_tx_data_v = false,
+            b"f" if self.title.in_tx_data_f && !self.series.open => self.title.in_tx_data_f = false,
+            b"plotArea" => self.pos.plot_area = false,
+            b"plotAreaRegion" => self.pos.plot_area_region = false,
+            b"plotSurface" if self.pos.plot_surface => self.pos.plot_surface = false,
+            b"series" if self.series.open => {
                 let series = ChartExSeries {
-                    layout: self.ser_layout.clone(),
-                    unique_id: self.ser_unique_id.take(),
-                    hidden: self.ser_hidden.take(),
-                    owner_idx: self.ser_owner_idx.take(),
-                    format_idx: self.ser_format_idx.take(),
-                    text: self.ser_text.take(),
-                    data_id: self.ser_data_id,
-                    data_labels: self.ser_data_labels.take(),
-                    data_points: std::mem::take(&mut self.ser_data_points),
-                    layout_properties: self.ser_layout_pr.take(),
-                    axis_ids: std::mem::take(&mut self.ser_axis_ids),
-                    value_colors: self.ser_value_colors.take(),
-                    value_color_positions: self.ser_value_color_positions.take(),
-                    shape_properties: self.ser_shape_properties.take(),
+                    layout: self.series.layout.clone(),
+                    unique_id: self.series.unique_id.take(),
+                    hidden: self.series.hidden.take(),
+                    owner_idx: self.series.owner_idx.take(),
+                    format_idx: self.series.format_idx.take(),
+                    text: self.series.text.take(),
+                    data_id: self.series.data_id,
+                    data_labels: self.series.data_labels.take(),
+                    data_points: std::mem::take(&mut self.series.data_points),
+                    layout_properties: self.series.layout_pr.take(),
+                    axis_ids: std::mem::take(&mut self.series.axis_ids),
+                    value_colors: self.series.value_colors.take(),
+                    value_color_positions: self.series.value_color_positions.take(),
+                    shape_properties: self.series.shape_properties.take(),
                     extensions: None,
                 };
                 self.result.plot_area.series.push(series);
-                self.in_series = false;
+                self.series.open = false;
             }
-            b"tx" if self.in_ser_tx => {
-                self.ser_text = Some(ChartExText {
+            b"tx" if self.series.in_tx => {
+                self.series.text = Some(ChartExText {
                     data: Some(ChartExTextData {
-                        formula: self.ser_tx_formula.take(),
-                        value: self.ser_tx_value.take(),
+                        formula: self.series.tx_formula.take(),
+                        value: self.series.tx_value.take(),
                     }),
                     rich: None,
                 });
-                self.in_ser_tx = false;
-                self.in_ser_tx_data = false;
+                self.series.in_tx = false;
+                self.series.in_tx_data = false;
             }
-            b"txData" if self.in_ser_tx_data => self.in_ser_tx_data = false,
-            b"v" if self.in_ser_tx_data_v => self.in_ser_tx_data_v = false,
-            b"f" if self.in_ser_tx_data_f => self.in_ser_tx_data_f = false,
-            b"dataId" if self.in_data_id => self.in_data_id = false,
-            b"dataLabels" if self.in_data_labels => {
-                self.ser_data_labels = Some(ChartExDataLabels {
-                    position: self.dlbl_pos.take(),
-                    visibility_series_name: self.dlbl_vis_series.take(),
-                    visibility_category_name: self.dlbl_vis_cat.take(),
-                    visibility_value: self.dlbl_vis_val.take(),
-                    number_format: self.dlbl_num_fmt.take(),
-                    separator: self.dlbl_separator.take(),
-                    shape_properties: self.dlbl_sp.take(),
-                    overrides: std::mem::take(&mut self.dl_overrides),
-                    hidden_labels: std::mem::take(&mut self.dl_hidden),
+            b"txData" if self.series.in_tx_data => self.series.in_tx_data = false,
+            b"v" if self.series.in_tx_data_v => self.series.in_tx_data_v = false,
+            b"f" if self.series.in_tx_data_f => self.series.in_tx_data_f = false,
+            b"dataId" if self.series.in_data_id => self.series.in_data_id = false,
+            b"dataLabels" if self.labels.open => {
+                self.series.data_labels = Some(ChartExDataLabels {
+                    position: self.labels.pos.take(),
+                    visibility_series_name: self.labels.vis_series.take(),
+                    visibility_category_name: self.labels.vis_cat.take(),
+                    visibility_value: self.labels.vis_val.take(),
+                    number_format: self.labels.num_fmt.take(),
+                    separator: self.labels.separator.take(),
+                    shape_properties: self.labels.sp.take(),
+                    overrides: std::mem::take(&mut self.labels.overrides),
+                    hidden_labels: std::mem::take(&mut self.labels.hidden),
                     text_properties: None,
                     extensions: None,
                 });
-                self.in_data_labels = false;
+                self.labels.open = false;
             }
-            b"dataLabel" if self.in_data_label => {
-                self.dl_overrides.push(ChartExDataLabel {
-                    idx: self.lbl_idx,
-                    position: self.lbl_pos.take(),
-                    visibility_series_name: self.lbl_vis_series.take(),
-                    visibility_category_name: self.lbl_vis_cat.take(),
-                    visibility_value: self.lbl_vis_val.take(),
-                    number_format: self.lbl_num_fmt.take(),
-                    separator: self.lbl_separator.take(),
-                    shape_properties: self.lbl_sp.take(),
+            b"dataLabel" if self.label.open => {
+                self.labels.overrides.push(ChartExDataLabel {
+                    idx: self.label.idx,
+                    position: self.label.pos.take(),
+                    visibility_series_name: self.label.vis_series.take(),
+                    visibility_category_name: self.label.vis_cat.take(),
+                    visibility_value: self.label.vis_val.take(),
+                    number_format: self.label.num_fmt.take(),
+                    separator: self.label.separator.take(),
+                    shape_properties: self.label.sp.take(),
                     text_properties: None,
                     extensions: None,
                 });
-                self.in_data_label = false;
+                self.label.open = false;
             }
-            b"separator" if self.in_lbl_separator => self.in_lbl_separator = false,
-            b"separator" if self.in_dlbl_separator => self.in_dlbl_separator = false,
-            b"dataPt" if self.in_data_pt => {
-                self.ser_data_points.push(ChartExDataPoint {
-                    idx: self.dpt_idx,
-                    shape_properties: self.dpt_sp.take(),
+            b"separator" if self.label.in_separator => self.label.in_separator = false,
+            b"separator" if self.labels.in_separator => self.labels.in_separator = false,
+            b"dataPt" if self.data_pt.open => {
+                self.series.data_points.push(ChartExDataPoint {
+                    idx: self.data_pt.idx,
+                    shape_properties: self.data_pt.sp.take(),
                     extensions: None,
                 });
-                self.in_data_pt = false;
+                self.data_pt.open = false;
             }
-            b"layoutPr" if self.in_layout_pr => {
-                self.ser_layout_pr = Some(std::mem::take(&mut self.layout_pr));
-                self.in_layout_pr = false;
+            b"layoutPr" if self.layout.open => {
+                self.series.layout_pr = Some(std::mem::take(&mut self.layout.pr));
+                self.layout.open = false;
             }
-            b"subtotals" if self.in_subtotals => self.in_subtotals = false,
-            b"binning" if self.in_binning => self.in_binning = false,
-            b"geography" if self.in_geography => self.in_geography = false,
-            b"statistics" if self.in_statistics => self.in_statistics = false,
-            b"visibility" if self.in_layout_visibility => self.in_layout_visibility = false,
-            b"axisId" if self.in_axis_id => self.in_axis_id = false,
-            b"valueColors" if self.in_value_colors => self.in_value_colors = false,
-            b"valueColorPositions" if self.in_value_color_positions => {
-                self.ser_value_color_positions = Some(self.vcp.clone());
-                self.in_value_color_positions = false;
-                self.in_vcp_min = false;
-                self.in_vcp_mid = false;
-                self.in_vcp_max = false;
+            b"subtotals" if self.layout.in_subtotals => self.layout.in_subtotals = false,
+            b"binning" if self.layout.in_binning => self.layout.in_binning = false,
+            b"geography" if self.layout.in_geography => self.layout.in_geography = false,
+            b"statistics" if self.layout.in_statistics => self.layout.in_statistics = false,
+            b"visibility" if self.layout.in_visibility => self.layout.in_visibility = false,
+            b"axisId" if self.series.in_axis_id => self.series.in_axis_id = false,
+            b"valueColors" if self.series.in_value_colors => self.series.in_value_colors = false,
+            b"valueColorPositions" if self.color_pos.open => {
+                self.series.value_color_positions = Some(self.color_pos.value.clone());
+                self.color_pos.open = false;
+                self.color_pos.in_min = false;
+                self.color_pos.in_mid = false;
+                self.color_pos.in_max = false;
             }
-            b"min" if self.in_vcp_min => self.in_vcp_min = false,
-            b"mid" if self.in_vcp_mid => self.in_vcp_mid = false,
-            b"max" if self.in_vcp_max => self.in_vcp_max = false,
-            b"axis" if self.in_axis => {
+            b"min" if self.color_pos.in_min => self.color_pos.in_min = false,
+            b"mid" if self.color_pos.in_mid => self.color_pos.in_mid = false,
+            b"max" if self.color_pos.in_max => self.color_pos.in_max = false,
+            b"axis" if self.axis.open => {
                 self.result.plot_area.axes.push(ChartExAxis {
-                    id: self.ax_id,
-                    hidden: self.ax_hidden.take(),
-                    scaling: self.ax_scaling.clone(),
-                    title: self.ax_title.take(),
-                    units: self.ax_units.take(),
-                    major_gridlines: self.ax_major_gridlines.take(),
-                    minor_gridlines: self.ax_minor_gridlines.take(),
-                    major_tick_marks: self.ax_major_tick_marks.take(),
-                    minor_tick_marks: self.ax_minor_tick_marks.take(),
-                    tick_labels: self.ax_tick_labels,
-                    number_format: self.ax_num_fmt.take(),
-                    shape_properties: self.ax_shape_properties.take(),
+                    id: self.axis.id,
+                    hidden: self.axis.hidden.take(),
+                    scaling: self.axis.scaling.clone(),
+                    title: self.axis.title.take(),
+                    units: self.axis.units.take(),
+                    major_gridlines: self.axis.major_gridlines.take(),
+                    minor_gridlines: self.axis.minor_gridlines.take(),
+                    major_tick_marks: self.axis.major_tick_marks.take(),
+                    minor_tick_marks: self.axis.minor_tick_marks.take(),
+                    tick_labels: self.axis.tick_labels,
+                    number_format: self.axis.num_fmt.take(),
+                    shape_properties: self.axis.shape_properties.take(),
                     text_properties: None,
                     extensions: None,
                 });
-                self.in_axis = false;
-                self.in_cat_scaling = false;
-                self.in_val_scaling = false;
+                self.axis.open = false;
+                self.axis.in_cat_scaling = false;
+                self.axis.in_val_scaling = false;
             }
-            b"catScaling" if self.in_cat_scaling => self.in_cat_scaling = false,
-            b"valScaling" if self.in_val_scaling => self.in_val_scaling = false,
-            b"tx" if self.in_ax_title_tx => self.in_ax_title_tx = false,
-            b"txData" if self.in_ax_title_tx_data => self.in_ax_title_tx_data = false,
-            b"v" if self.in_ax_title_tx_data_v => self.in_ax_title_tx_data_v = false,
-            b"units" if self.in_units => {
-                self.ax_units = Some(ChartExAxisUnits {
-                    unit: self.units_unit.take(),
+            b"catScaling" if self.axis.in_cat_scaling => self.axis.in_cat_scaling = false,
+            b"valScaling" if self.axis.in_val_scaling => self.axis.in_val_scaling = false,
+            b"tx" if self.axis.in_title_tx => self.axis.in_title_tx = false,
+            b"txData" if self.axis.in_title_tx_data => self.axis.in_title_tx_data = false,
+            b"v" if self.axis.in_title_tx_data_v => self.axis.in_title_tx_data_v = false,
+            b"units" if self.axis.in_units => {
+                self.axis.units = Some(ChartExAxisUnits {
+                    unit: self.axis.units_unit.take(),
                     label: None,
                     extensions: None,
                 });
-                self.in_units = false;
+                self.axis.in_units = false;
             }
-            b"majorGridlines" if self.in_major_gridlines => self.in_major_gridlines = false,
-            b"minorGridlines" if self.in_minor_gridlines => self.in_minor_gridlines = false,
-            b"legend" if self.in_legend => {
+            b"majorGridlines" if self.axis.in_major_gridlines => self.axis.in_major_gridlines = false,
+            b"minorGridlines" if self.axis.in_minor_gridlines => self.axis.in_minor_gridlines = false,
+            b"legend" if self.legend.open => {
                 self.result.legend = Some(ChartExLegend {
-                    position: self.legend_pos.take(),
-                    align: self.legend_align.take(),
-                    overlay: self.legend_overlay.take(),
+                    position: self.legend.pos.take(),
+                    align: self.legend.align.take(),
+                    overlay: self.legend.overlay.take(),
                     offset: None,
-                    shape_properties: self.legend_sp.take(),
+                    shape_properties: self.legend.sp.take(),
                     text_properties: None,
                     extensions: None,
                 });
-                self.in_legend = false;
+                self.legend.open = false;
             }
-            b"printSettings" if self.in_print_settings => {
-                self.result.print_settings = Some(self.print_settings.clone());
-                self.in_print_settings = false;
+            b"printSettings" if self.print.open => {
+                self.result.print_settings = Some(self.print.settings.clone());
+                self.print.open = false;
             }
-            b"headerFooter" if self.in_ps_header_footer => {
-                self.print_settings.header_footer = Some(self.ps_hf.clone());
-                self.in_ps_header_footer = false;
+            b"headerFooter" if self.print.in_header_footer => {
+                self.print.settings.header_footer = Some(self.print.hf.clone());
+                self.print.in_header_footer = false;
             }
-            b"oddHeader" => self.in_ps_hf_odd_header = false,
-            b"oddFooter" => self.in_ps_hf_odd_footer = false,
-            b"evenHeader" => self.in_ps_hf_even_header = false,
-            b"evenFooter" => self.in_ps_hf_even_footer = false,
-            b"firstHeader" => self.in_ps_hf_first_header = false,
-            b"firstFooter" => self.in_ps_hf_first_footer = false,
-            b"ln" if self.in_sp_ln => {
-                self.sp_line = Some(ChartLine {
-                    width: self.sp_ln_width.take(),
-                    solid_fill: self.sp_ln_solid_fill.take(),
-                    no_fill: self.sp_ln_no_fill,
-                    dash_style: self.sp_ln_dash.take(),
+            b"oddHeader" => self.print.in_hf_odd_header = false,
+            b"oddFooter" => self.print.in_hf_odd_footer = false,
+            b"evenHeader" => self.print.in_hf_even_header = false,
+            b"evenFooter" => self.print.in_hf_even_footer = false,
+            b"firstHeader" => self.print.in_hf_first_header = false,
+            b"firstFooter" => self.print.in_hf_first_footer = false,
+            b"ln" if self.sp.in_ln => {
+                self.sp.line = Some(ChartLine {
+                    width: self.sp.ln_width.take(),
+                    solid_fill: self.sp.ln_solid_fill.take(),
+                    no_fill: self.sp.ln_no_fill,
+                    dash_style: self.sp.ln_dash.take(),
                 });
-                self.in_sp_ln = false;
-                self.sp_ln_no_fill = false;
-                self.sp_pr_depth = self.sp_pr_depth.saturating_sub(1);
+                self.sp.in_ln = false;
+                self.sp.ln_no_fill = false;
+                self.sp.depth = self.sp.depth.saturating_sub(1);
             }
-            b"spPr" if self.in_sp_pr => {
-                self.sp_pr_depth = self.sp_pr_depth.saturating_sub(1);
-                if self.sp_pr_depth == 0 {
+            b"spPr" if self.sp.open => {
+                self.sp.depth = self.sp.depth.saturating_sub(1);
+                if self.sp.depth == 0 {
                     let props = ChartShapeProperties {
-                        solid_fill: self.sp_solid_fill.take(),
-                        no_fill: self.sp_no_fill,
-                        line: self.sp_line.take(),
+                        solid_fill: self.sp.solid_fill.take(),
+                        no_fill: self.sp.no_fill,
+                        line: self.sp.line.take(),
                     };
                     let has =
                         props.solid_fill.is_some() || props.no_fill || props.line.is_some();
-                    match self.sp_ctx {
+                    match self.sp.ctx {
                         SpCtx::ChartSpace => {
                             if has {
                                 self.result.shape_properties = Some(props);
@@ -1688,49 +1689,49 @@ impl ChartExParser {
                         }
                         SpCtx::Series => {
                             if has {
-                                self.ser_shape_properties = Some(props);
+                                self.series.shape_properties = Some(props);
                             }
                         }
                         SpCtx::DataPt => {
-                            self.dpt_sp = if has { Some(props) } else { None };
+                            self.data_pt.sp = if has { Some(props) } else { None };
                         }
                         SpCtx::DataLabels => {
                             if has {
-                                self.dlbl_sp = Some(props);
+                                self.labels.sp = Some(props);
                             }
                         }
                         SpCtx::DataLabel => {
                             if has {
-                                self.lbl_sp = Some(props);
+                                self.label.sp = Some(props);
                             }
                         }
                         SpCtx::AxisTitle => {
                             if has {
-                                self.ax_title_sp = Some(props);
+                                self.axis.title_sp = Some(props);
                             }
                         }
                         SpCtx::Title => {
                             if has {
-                                self.title_sp = Some(props);
+                                self.title.sp = Some(props);
                             }
                         }
                         SpCtx::Legend => {
                             if has {
-                                self.legend_sp = Some(props);
+                                self.legend.sp = Some(props);
                             }
                         }
                         SpCtx::Axis => {
                             if has {
-                                self.ax_shape_properties = Some(props);
+                                self.axis.shape_properties = Some(props);
                             }
                         }
                         SpCtx::MajorGrid => {
-                            self.ax_major_gridlines
+                            self.axis.major_gridlines
                                 .get_or_insert_with(ChartExGridlines::default)
                                 .shape_properties = Some(props);
                         }
                         SpCtx::MinorGrid => {
-                            self.ax_minor_gridlines
+                            self.axis.minor_gridlines
                                 .get_or_insert_with(ChartExGridlines::default)
                                 .shape_properties = Some(props);
                         }
@@ -1741,18 +1742,18 @@ impl ChartExParser {
                         }
                         SpCtx::None => {}
                     }
-                    self.in_sp_pr = false;
-                    self.sp_no_fill = false;
-                    self.sp_ctx = SpCtx::None;
+                    self.sp.open = false;
+                    self.sp.no_fill = false;
+                    self.sp.ctx = SpCtx::None;
                 }
             }
             _ => {
-                if self.in_sp_pr {
-                    self.sp_pr_depth = self.sp_pr_depth.saturating_sub(1);
-                    if self.sp_pr_depth == 0 {
-                        self.in_sp_pr = false;
-                        self.sp_no_fill = false;
-                        self.sp_ctx = SpCtx::None;
+                if self.sp.open {
+                    self.sp.depth = self.sp.depth.saturating_sub(1);
+                    if self.sp.depth == 0 {
+                        self.sp.open = false;
+                        self.sp.no_fill = false;
+                        self.sp.ctx = SpCtx::None;
                     }
                 }
             }
@@ -1768,7 +1769,7 @@ fn parse_chart_ex_xml_inner<R: Read>(
     xml_reader: &mut Reader<BufReader<R>>,
     buf: &mut Vec<u8>,
 ) -> ChartParseResult<ParsedChartEx> {
-    let mut parser = ChartExParser::new();
+    let mut parser = ChartExParser::default();
     // `<x/>` and `<x></x>` are the same document, so a self-closing
     // element is split into the start and end its expanded form would
     // produce and handled by one code path; keeping two let them drift.
