@@ -158,7 +158,6 @@ fn parse_chart_ex_xml_inner<R: Read>(
     let mut in_layout_pr = false;
     let mut layout_pr = ChartExLayoutPr::default();
     let mut in_subtotals = false;
-    let mut in_subtotal_idx = false;
     let mut in_binning = false;
     let mut in_geography = false;
     let mut _in_geo_cache = false;
@@ -524,8 +523,11 @@ fn parse_chart_ex_xml_inner<R: Read>(
                         in_layout_pr = true;
                         layout_pr = ChartExLayoutPr::default();
                     }
-                    b"subtotals" if in_layout_pr => in_subtotals = true,
-                    b"idx" if in_subtotals => in_subtotal_idx = true,
+                    b"subtotals" if in_layout_pr => {
+                        in_subtotals = true;
+                        layout_pr.subtotals.get_or_insert_with(Vec::new);
+                    }
+                    b"idx" if in_subtotals => push_subtotal_idx(&mut layout_pr, e),
                     b"binning" if in_layout_pr => {
                         in_binning = true;
                         let mut binning = ChartExBinning::default();
@@ -947,6 +949,10 @@ fn parse_chart_ex_xml_inner<R: Read>(
                         layout_pr.region_label_layout = get_val_attr(e);
                     }
                     b"aggregation" if in_layout_pr => layout_pr.aggregation = true,
+                    b"subtotals" if in_layout_pr => {
+                        layout_pr.subtotals.get_or_insert_with(Vec::new);
+                    }
+                    b"idx" if in_subtotals => push_subtotal_idx(&mut layout_pr, e),
                     b"statistics" if in_layout_pr => {
                         let mut stats = ChartExStatistics::default();
                         for attr in e.attributes().flatten() {
@@ -1194,10 +1200,6 @@ fn parse_chart_ex_xml_inner<R: Read>(
                         }
                     } else if in_ax_title_tx_data_v {
                         ax_title_text = Some(t.to_string());
-                    } else if in_subtotal_idx {
-                        if let Ok(idx) = t.parse::<u32>() {
-                            layout_pr.subtotals.push(idx);
-                        }
                     } else if in_bin_size {
                         if let Some(ref mut b) = layout_pr.binning {
                             b.bin_size = t.parse().ok();
@@ -1433,7 +1435,6 @@ fn parse_chart_ex_xml_inner<R: Read>(
                         in_layout_pr = false;
                     }
                     b"subtotals" if in_subtotals => in_subtotals = false,
-                    b"idx" if in_subtotal_idx => in_subtotal_idx = false,
                     b"binning" if in_binning => {
                         in_binning = false;
                         in_bin_size = false;
@@ -1648,6 +1649,15 @@ fn parse_bool_attr(attr: &quick_xml::events::attributes::Attribute) -> Option<bo
         .map(|s| s == "1" || s.as_ref() == "true")
 }
 
+/// Record one `cx:idx` of a `cx:subtotals` list. The index rides the `val`
+/// attribute ([MS-ODRAWXML] §5.22 `CT_SubtotalIndex`), and the element is
+/// normally self-closing, so both the `Start` and `Empty` arms route here.
+fn push_subtotal_idx(layout_pr: &mut ChartExLayoutPr, e: &quick_xml::events::BytesStart) {
+    if let Some(idx) = get_val_attr(e).and_then(|s| s.parse::<u32>().ok()) {
+        layout_pr.subtotals.get_or_insert_with(Vec::new).push(idx);
+    }
+}
+
 fn parse_num_fmt(e: &quick_xml::events::BytesStart) -> NumberFormat {
     let mut nf = NumberFormat::default();
     for attr in e.attributes().flatten() {
@@ -1665,4 +1675,62 @@ fn parse_num_fmt(e: &quick_xml::events::BytesStart) -> NumberFormat {
         }
     }
     nf
+}
+
+#[cfg(test)]
+mod subtotal_tests {
+    use super::*;
+
+    /// Wrap `layout_pr` in the smallest chartEx document that parses.
+    fn doc_with_layout_pr(layout_pr: &str) -> Vec<u8> {
+        format!(
+            r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex"><cx:chartData><cx:data id="0"><cx:numDim type="val"><cx:f>Sheet1!$B$1</cx:f></cx:numDim></cx:data></cx:chartData><cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="waterfall"><cx:dataId val="0"/>{layout_pr}</cx:series></cx:plotAreaRegion></cx:plotArea></cx:chart></cx:chartSpace>"#
+        )
+        .into_bytes()
+    }
+
+    fn subtotals_of(layout_pr: &str) -> Option<Vec<u32>> {
+        let doc = doc_with_layout_pr(layout_pr);
+        let cx = parse_chart_ex_xml(&doc[..]).expect("parse");
+        cx.plot_area.series[0]
+            .layout_properties
+            .as_ref()
+            .expect("layoutPr")
+            .subtotals
+            .clone()
+    }
+
+    /// `cx:idx` carries its value in the `val` attribute on a self-closing
+    /// element ([MS-ODRAWXML] CT_SubtotalIndex), not in a text node.
+    #[test]
+    fn subtotal_indices_parse_from_val_attribute() {
+        assert_eq!(
+            subtotals_of(r#"<cx:layoutPr><cx:subtotals><cx:idx val="0"/><cx:idx val="2"/></cx:subtotals></cx:layoutPr>"#),
+            Some(vec![0, 2])
+        );
+    }
+
+    /// The wrapper is optional (`minOccurs="0"`) but real waterfall charts
+    /// carry it empty, so present-but-empty must be distinguishable.
+    #[test]
+    fn empty_subtotals_element_parses_as_present_and_empty() {
+        assert_eq!(
+            subtotals_of(r#"<cx:layoutPr><cx:subtotals/></cx:layoutPr>"#),
+            Some(Vec::new())
+        );
+    }
+
+    #[test]
+    fn absent_subtotals_element_parses_as_none() {
+        assert_eq!(subtotals_of(r#"<cx:layoutPr></cx:layoutPr>"#), None);
+    }
+
+    /// Non-self-closing form must parse identically.
+    #[test]
+    fn subtotal_indices_parse_from_expanded_form() {
+        assert_eq!(
+            subtotals_of(r#"<cx:layoutPr><cx:subtotals><cx:idx val="3"></cx:idx></cx:subtotals></cx:layoutPr>"#),
+            Some(vec![3])
+        );
+    }
 }

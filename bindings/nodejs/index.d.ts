@@ -191,7 +191,8 @@ export interface JsChartExLayoutPr {
   binning?: JsChartExBinning
   geography?: JsChartExGeography
   statistics?: JsChartExStatistics
-  subtotals: number[]
+  /** Absent when the `cx:subtotals` element is absent; `[]` when it is present but empty. */
+  subtotals?: number[]
 }
 
 export interface JsChartExAxis {

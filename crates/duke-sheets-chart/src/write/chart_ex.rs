@@ -571,11 +571,22 @@ fn write_layout_properties(w: &mut XmlWriter, lp: &ChartExLayoutPr) -> XlsxResul
         w.write_event(Event::Empty(tag))?;
     }
 
-    for &idx in &lp.subtotals {
-        let s = idx.to_string();
-        w.create_element("cx:idx")
-            .with_attribute(("val", s.as_str()))
-            .write_empty()?;
+    // `cx:idx` children must sit inside the `cx:subtotals` wrapper
+    // ([MS-ODRAWXML] §5.22 `CT_Subtotals`), which is itself last in
+    // `CT_SeriesLayoutProperties` before `extLst`.
+    if let Some(ref subtotals) = lp.subtotals {
+        if subtotals.is_empty() {
+            w.write_event(Event::Empty(BytesStart::new("cx:subtotals")))?;
+        } else {
+            w.write_event(Event::Start(BytesStart::new("cx:subtotals")))?;
+            for &idx in subtotals {
+                let s = idx.to_string();
+                w.create_element("cx:idx")
+                    .with_attribute(("val", s.as_str()))
+                    .write_empty()?;
+            }
+            w.write_event(Event::End(BytesEnd::new("cx:subtotals")))?;
+        }
     }
 
     w.write_event(Event::End(BytesEnd::new("cx:layoutPr")))?;
@@ -1045,4 +1056,73 @@ fn write_cx_number_format(w: &mut XmlWriter, nf: &NumberFormat) -> XlsxResult<()
     }
     w.write_event(Event::Empty(el))?;
     Ok(())
+}
+
+#[cfg(all(test, feature = "parse"))]
+mod subtotal_tests {
+    use crate::parse::parse_chart_ex_xml;
+
+    fn doc_with_layout_pr(layout_pr: &str) -> Vec<u8> {
+        format!(
+            r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex"><cx:chartData><cx:data id="0"><cx:numDim type="val"><cx:f>Sheet1!$B$1</cx:f></cx:numDim></cx:data></cx:chartData><cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="waterfall"><cx:dataId val="0"/>{layout_pr}</cx:series></cx:plotAreaRegion></cx:plotArea></cx:chart></cx:chartSpace>"#
+        )
+        .into_bytes()
+    }
+
+    fn written(layout_pr: &str) -> String {
+        let cx = parse_chart_ex_xml(&doc_with_layout_pr(layout_pr)[..]).expect("parse");
+        String::from_utf8(super::chart_ex_part_bytes(&cx).expect("write")).expect("utf8")
+    }
+
+    /// Indices must be wrapped in `cx:subtotals`; emitting bare `cx:idx`
+    /// children of `cx:layoutPr` is schema-invalid.
+    #[test]
+    fn subtotal_indices_are_written_inside_the_wrapper() {
+        let out = written(
+            r#"<cx:layoutPr><cx:subtotals><cx:idx val="0"/><cx:idx val="2"/></cx:subtotals></cx:layoutPr>"#,
+        );
+        assert!(
+            out.contains(r#"<cx:subtotals><cx:idx val="0"/><cx:idx val="2"/></cx:subtotals>"#),
+            "wrapper missing or malformed: {out}"
+        );
+    }
+
+    #[test]
+    fn present_but_empty_subtotals_writes_a_bare_wrapper() {
+        let out = written(r#"<cx:layoutPr><cx:subtotals/></cx:layoutPr>"#);
+        assert!(out.contains("<cx:subtotals/>"), "expected bare wrapper: {out}");
+    }
+
+    #[test]
+    fn absent_subtotals_writes_no_wrapper() {
+        let out = written(r#"<cx:layoutPr></cx:layoutPr>"#);
+        assert!(!out.contains("subtotals"), "unexpected wrapper: {out}");
+    }
+
+    /// read -> write -> read must preserve the indices and the distinction
+    /// between an absent and a present-but-empty wrapper.
+    #[test]
+    fn subtotals_survive_a_round_trip() {
+        for (layout_pr, expected) in [
+            (
+                r#"<cx:layoutPr><cx:subtotals><cx:idx val="0"/><cx:idx val="2"/><cx:idx val="5"/></cx:subtotals></cx:layoutPr>"#,
+                Some(vec![0, 2, 5]),
+            ),
+            (r#"<cx:layoutPr><cx:subtotals/></cx:layoutPr>"#, Some(vec![])),
+            (r#"<cx:layoutPr></cx:layoutPr>"#, None),
+        ] {
+            let first = parse_chart_ex_xml(&doc_with_layout_pr(layout_pr)[..]).expect("parse 1");
+            let bytes = super::chart_ex_part_bytes(&first).expect("write");
+            let second = parse_chart_ex_xml(&bytes[..]).expect("parse 2");
+
+            let got = second.plot_area.series[0]
+                .layout_properties
+                .as_ref()
+                .expect("layoutPr")
+                .subtotals
+                .clone();
+            assert_eq!(got, expected, "round trip changed subtotals for {layout_pr}");
+            assert_eq!(first, second, "round trip not idempotent for {layout_pr}");
+        }
+    }
 }

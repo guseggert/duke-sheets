@@ -840,7 +840,7 @@ export interface JsChartExLayoutPr {
   binning?: JsChartExBinning
   geography?: JsChartExGeography
   statistics?: JsChartExStatistics
-  subtotals: Array<number>
+  subtotals?: Array<number>
 }
 
 export interface JsChartExLegend {

@@ -4905,7 +4905,7 @@ pub struct PyChartExLayoutPr {
     #[pyo3(get)]
     pub statistics: Option<PyChartExStatistics>,
     #[pyo3(get)]
-    pub subtotals: Vec<u32>,
+    pub subtotals: Option<Vec<u32>>,
 }
 
 impl From<&chart::ChartExLayoutPr> for PyChartExLayoutPr {
