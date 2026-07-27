@@ -272,17 +272,11 @@ fn parse_chart_ex_xml_inner<R: Read>(
     let mut in_plot_surface = false;
 
     // `<x/>` and `<x></x>` are the same document, so a self-closing
-    // element is split into the start and end events its expanded form
-    // would produce and handled by exactly one code path. Handling the
-    // two forms separately is what let them drift: whole subtrees
-    // (`cx:series`, `cx:layoutPr`, `cx:spPr`) were dropped in the
-    // self-closing form, while attributes read only from the empty form
-    // (`cx:tickLabels`, `cx:numFmt`, `a:srgbClr`, …) were lost from the
-    // expanded one.
-    //
-    // The raw-capture regions below are the exception: they reproduce
-    // source bytes, so they must see the original event and keep
-    // `<x/>` as `<x/>`.
+    // element is split into the start and end its expanded form would
+    // produce and handled by one code path; keeping two let them drift.
+    // Elements inside a raw-capture region are exempt so the captured
+    // bytes match the source (a self-closing capture *opener* is still
+    // split, since the capture starts after it).
     let mut pending_end: Option<Event<'static>> = None;
 
     loop {
@@ -306,26 +300,23 @@ fn parse_chart_ex_xml_inner<R: Read>(
             }
         };
 
-        match Ok::<_, ChartParseError>(event) {
-            Ok(Event::Start(ref e)) => {
+        match event {
+            Event::Start(ref e) => {
                 // geoCache raw capture
                 if let Some(ref mut w) = geo_cache_writer {
                     let _ = w.write_event(Event::Start(e.clone().into_owned()));
                     geo_cache_depth += 1;
-                    buf.clear();
                     continue;
                 }
                 // valueColors raw capture
                 if let Some(ref mut w) = vc_writer {
                     let _ = w.write_event(Event::Start(e.clone().into_owned()));
                     vc_depth += 1;
-                    buf.clear();
                     continue;
                 }
                 // skip unmodeled
                 if skipping {
                     skip_depth += 1;
-                    buf.clear();
                     continue;
                 }
 
@@ -1120,31 +1111,25 @@ fn parse_chart_ex_xml_inner<R: Read>(
                     _ => {}
                 }
             }
-            Ok(Event::Empty(ref e)) => {
-                // Only reached inside a raw-capture region: everywhere
-                // else a self-closing element was split into a start and
-                // an end above, so it cannot be handled differently from
-                // its expanded form. Captures keep the original event so
-                // the bytes they replay match the source.
+            Event::Empty(ref e) => {
+                // Only reached inside a raw-capture region; everywhere
+                // else the read site split the element into start + end.
                 if let Some(ref mut w) = geo_cache_writer {
                     let _ = w.write_event(Event::Empty(e.clone().into_owned()));
                 } else if let Some(ref mut w) = vc_writer {
                     let _ = w.write_event(Event::Empty(e.clone().into_owned()));
                 }
             }
-            Ok(Event::Text(ref e)) => {
+            Event::Text(ref e) => {
                 if let Some(ref mut w) = geo_cache_writer {
                     let _ = w.write_event(Event::Text(e.clone().into_owned()));
-                    buf.clear();
                     continue;
                 }
                 if let Some(ref mut w) = vc_writer {
                     let _ = w.write_event(Event::Text(e.clone().into_owned()));
-                    buf.clear();
                     continue;
                 }
                 if skipping {
-                    buf.clear();
                     continue;
                 }
                 if let Ok(text) = e.unescape() {
@@ -1198,7 +1183,7 @@ fn parse_chart_ex_xml_inner<R: Read>(
                     }
                 }
             }
-            Ok(Event::End(ref e)) => {
+            Event::End(ref e) => {
                 // geoCache raw capture
                 if let Some(ref mut w) = geo_cache_writer {
                     geo_cache_depth -= 1;
@@ -1211,7 +1196,6 @@ fn parse_chart_ex_xml_inner<R: Read>(
                         }
                         _in_geo_cache = false;
                     }
-                    buf.clear();
                     continue;
                 }
                 // valueColor capture
@@ -1232,7 +1216,6 @@ fn parse_chart_ex_xml_inner<R: Read>(
                             vc_capturing_tag = None;
                         }
                     }
-                    buf.clear();
                     continue;
                 }
                 if skipping {
@@ -1248,7 +1231,6 @@ fn parse_chart_ex_xml_inner<R: Read>(
                             sp_pr_depth = sp_pr_depth.saturating_sub(1);
                         }
                     }
-                    buf.clear();
                     continue;
                 }
 
@@ -1582,8 +1564,7 @@ fn parse_chart_ex_xml_inner<R: Read>(
                     }
                 }
             }
-            Ok(Event::Eof) => break,
-            Err(e) => return Err(e),
+            Event::Eof => break,
             _ => {}
         }
     }
@@ -1626,8 +1607,8 @@ fn parse_bool_attr(attr: &quick_xml::events::attributes::Attribute) -> Option<bo
 }
 
 /// Record one `cx:idx` of a `cx:subtotals` list. The index rides the `val`
-/// attribute ([MS-ODRAWXML] §5.22 `CT_SubtotalIndex`), and the element is
-/// normally self-closing, so both the `Start` and `Empty` arms route here.
+/// attribute ([MS-ODRAWXML] §5.22 `CT_SubtotalIndex`) of a normally
+/// self-closing element, not a text node.
 fn push_subtotal_idx(layout_pr: &mut ChartExLayoutPr, e: &quick_xml::events::BytesStart) {
     if let Some(idx) = get_val_attr(e).and_then(|s| s.parse::<u32>().ok()) {
         layout_pr.subtotals.get_or_insert_with(Vec::new).push(idx);
