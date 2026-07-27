@@ -3399,14 +3399,30 @@ impl From<&duke_sheets_chart::ChartExLayoutPr> for JsChartExLayoutPr {
 }
 
 #[napi(object)]
+pub struct JsChartExGridlines {
+    pub shape_properties: Option<JsChartShapeProperties>,
+}
+
+impl From<&duke_sheets_chart::ChartExGridlines> for JsChartExGridlines {
+    fn from(g: &duke_sheets_chart::ChartExGridlines) -> Self {
+        Self {
+            shape_properties: g
+                .shape_properties
+                .as_ref()
+                .map(JsChartShapeProperties::from),
+        }
+    }
+}
+
+#[napi(object)]
 pub struct JsChartExAxis {
     pub id: u32,
     pub hidden: Option<bool>,
     pub scaling: JsChartExScaling,
     pub title: Option<JsChartExAxisTitle>,
     pub units: Option<JsChartExAxisUnits>,
-    pub major_gridlines: Option<JsChartShapeProperties>,
-    pub minor_gridlines: Option<JsChartShapeProperties>,
+    pub major_gridlines: Option<JsChartExGridlines>,
+    pub minor_gridlines: Option<JsChartExGridlines>,
     pub major_tick_marks: Option<String>,
     pub minor_tick_marks: Option<String>,
     pub tick_labels: bool,
@@ -3422,8 +3438,8 @@ impl From<&duke_sheets_chart::ChartExAxis> for JsChartExAxis {
             scaling: JsChartExScaling::from(&a.scaling),
             title: a.title.as_ref().map(JsChartExAxisTitle::from),
             units: a.units.as_ref().map(JsChartExAxisUnits::from),
-            major_gridlines: a.major_gridlines.as_ref().map(JsChartShapeProperties::from),
-            minor_gridlines: a.minor_gridlines.as_ref().map(JsChartShapeProperties::from),
+            major_gridlines: a.major_gridlines.as_ref().map(JsChartExGridlines::from),
+            minor_gridlines: a.minor_gridlines.as_ref().map(JsChartExGridlines::from),
             major_tick_marks: a.major_tick_marks.clone(),
             minor_tick_marks: a.minor_tick_marks.clone(),
             tick_labels: a.tick_labels,

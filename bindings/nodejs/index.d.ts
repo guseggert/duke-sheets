@@ -195,14 +195,18 @@ export interface JsChartExLayoutPr {
   subtotals?: number[]
 }
 
+export interface JsChartExGridlines {
+  shapeProperties?: import('./generated').JsChartShapeProperties
+}
+
 export interface JsChartExAxis {
   id: number
   hidden?: boolean
   scaling: JsChartExScaling
   title?: JsChartExAxisTitle
   units?: JsChartExAxisUnits
-  majorGridlines?: import('./generated').JsChartShapeProperties
-  minorGridlines?: import('./generated').JsChartShapeProperties
+  majorGridlines?: JsChartExGridlines
+  minorGridlines?: JsChartExGridlines
   majorTickMarks?: string
   minorTickMarks?: string
   tickLabels: boolean

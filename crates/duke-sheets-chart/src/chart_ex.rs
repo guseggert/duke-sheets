@@ -399,10 +399,10 @@ pub struct ChartExAxis {
     pub title: Option<ChartExAxisTitle>,
     /// Axis units (`cx:units`)
     pub units: Option<ChartExAxisUnits>,
-    /// Major gridlines shape properties (`cx:majorGridlines > cx:spPr`)
-    pub major_gridlines: Option<ChartShapeProperties>,
-    /// Minor gridlines shape properties (`cx:minorGridlines > cx:spPr`)
-    pub minor_gridlines: Option<ChartShapeProperties>,
+    /// Major gridlines (`cx:majorGridlines`)
+    pub major_gridlines: Option<ChartExGridlines>,
+    /// Minor gridlines (`cx:minorGridlines`)
+    pub minor_gridlines: Option<ChartExGridlines>,
     /// Major tick mark type (`in`, `out`, `cross`, `none`)
     pub major_tick_marks: Option<String>,
     /// Minor tick mark type
@@ -417,6 +417,21 @@ pub struct ChartExAxis {
     pub text_properties: Option<TextProperties>,
     /// Extension list (`cx:extLst`, raw XML bytes)
     pub extensions: Option<Vec<u8>>,
+}
+
+/// Gridlines on a ChartEx axis (`cx:majorGridlines` / `cx:minorGridlines`).
+///
+/// Presence of the element is what turns gridlines on; the formatting
+/// override is separate and optional, so `CT_Gridlines`
+/// ([MS-ODRAWXML] §5.22) is modelled as its own type rather than as a
+/// bare `Option<ChartShapeProperties>`. That keeps a bare
+/// `<cx:majorGridlines/>` - the form Excel writes - distinct from one
+/// carrying a `cx:spPr`, and stops the writer inventing an empty
+/// `cx:spPr` for gridlines that never had one.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChartExGridlines {
+    /// Formatting override (`cx:spPr`), absent for plain gridlines.
+    pub shape_properties: Option<ChartShapeProperties>,
 }
 
 /// Axis scaling - either category-based or value-based.

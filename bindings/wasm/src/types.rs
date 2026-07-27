@@ -3430,14 +3430,31 @@ impl From<&duke_sheets_chart::ChartExLayoutPr> for WasmChartExLayoutPr {
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
+pub struct WasmChartExGridlines {
+    pub shape_properties: Option<WasmChartShapeProperties>,
+}
+
+impl From<&duke_sheets_chart::ChartExGridlines> for WasmChartExGridlines {
+    fn from(g: &duke_sheets_chart::ChartExGridlines) -> Self {
+        Self {
+            shape_properties: g
+                .shape_properties
+                .as_ref()
+                .map(WasmChartShapeProperties::from),
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct WasmChartExAxis {
     pub id: u32,
     pub hidden: Option<bool>,
     pub scaling: WasmChartExScaling,
     pub title: Option<WasmChartExAxisTitle>,
     pub units: Option<WasmChartExAxisUnits>,
-    pub major_gridlines: Option<WasmChartShapeProperties>,
-    pub minor_gridlines: Option<WasmChartShapeProperties>,
+    pub major_gridlines: Option<WasmChartExGridlines>,
+    pub minor_gridlines: Option<WasmChartExGridlines>,
     pub major_tick_marks: Option<String>,
     pub minor_tick_marks: Option<String>,
     pub tick_labels: bool,
@@ -3453,14 +3470,8 @@ impl From<&duke_sheets_chart::ChartExAxis> for WasmChartExAxis {
             scaling: WasmChartExScaling::from(&a.scaling),
             title: a.title.as_ref().map(WasmChartExAxisTitle::from),
             units: a.units.as_ref().map(WasmChartExAxisUnits::from),
-            major_gridlines: a
-                .major_gridlines
-                .as_ref()
-                .map(WasmChartShapeProperties::from),
-            minor_gridlines: a
-                .minor_gridlines
-                .as_ref()
-                .map(WasmChartShapeProperties::from),
+            major_gridlines: a.major_gridlines.as_ref().map(WasmChartExGridlines::from),
+            minor_gridlines: a.minor_gridlines.as_ref().map(WasmChartExGridlines::from),
             major_tick_marks: a.major_tick_marks.clone(),
             minor_tick_marks: a.minor_tick_marks.clone(),
             tick_labels: a.tick_labels,

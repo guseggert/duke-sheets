@@ -774,19 +774,12 @@ fn write_axis(w: &mut XmlWriter, axis: &ChartExAxis) -> XlsxResult<()> {
         write_axis_units(w, units)?;
     }
 
-    if let Some(ref sp) = axis.major_gridlines {
-        w.write_event(Event::Start(BytesStart::new("cx:majorGridlines")))?;
-        write_cx_shape_properties(w, sp)?;
-        w.write_event(Event::End(BytesEnd::new("cx:majorGridlines")))?;
-    } else if axis.major_gridlines.is_none() {
-        // Only emit empty element if the axis had major gridlines read
-        // Actually, we don't emit anything if None - only if Some
+    if let Some(ref gl) = axis.major_gridlines {
+        write_gridlines(w, "cx:majorGridlines", gl)?;
     }
 
-    if let Some(ref sp) = axis.minor_gridlines {
-        w.write_event(Event::Start(BytesStart::new("cx:minorGridlines")))?;
-        write_cx_shape_properties(w, sp)?;
-        w.write_event(Event::End(BytesEnd::new("cx:minorGridlines")))?;
+    if let Some(ref gl) = axis.minor_gridlines {
+        write_gridlines(w, "cx:minorGridlines", gl)?;
     }
 
     if let Some(ref mtm) = axis.major_tick_marks {
@@ -814,6 +807,20 @@ fn write_axis(w: &mut XmlWriter, axis: &ChartExAxis) -> XlsxResult<()> {
     }
 
     w.write_event(Event::End(BytesEnd::new("cx:axis")))?;
+    Ok(())
+}
+
+/// Gridlines are turned on by the element's presence; `cx:spPr` is an
+/// optional override, so gridlines without one stay a bare empty element.
+fn write_gridlines(w: &mut XmlWriter, tag: &str, gl: &ChartExGridlines) -> XlsxResult<()> {
+    match gl.shape_properties {
+        Some(ref sp) => {
+            w.write_event(Event::Start(BytesStart::new(tag)))?;
+            write_cx_shape_properties(w, sp)?;
+            w.write_event(Event::End(BytesEnd::new(tag)))?;
+        }
+        None => w.write_event(Event::Empty(BytesStart::new(tag)))?,
+    }
     Ok(())
 }
 
@@ -1124,5 +1131,90 @@ mod subtotal_tests {
             assert_eq!(got, expected, "round trip changed subtotals for {layout_pr}");
             assert_eq!(first, second, "round trip not idempotent for {layout_pr}");
         }
+    }
+}
+
+#[cfg(all(test, feature = "parse"))]
+mod gridline_tests {
+    use crate::chart_ex::ChartExGridlines;
+    use crate::parse::parse_chart_ex_xml;
+
+    fn doc_with_axis(axis_children: &str) -> Vec<u8> {
+        format!(
+            r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><cx:chartData><cx:data id="0"><cx:numDim type="val"><cx:f>Sheet1!$B$1</cx:f></cx:numDim></cx:data></cx:chartData><cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="waterfall"><cx:dataId val="0"/></cx:series></cx:plotAreaRegion><cx:axis id="1"><cx:valScaling/>{axis_children}</cx:axis></cx:plotArea></cx:chart></cx:chartSpace>"#
+        )
+        .into_bytes()
+    }
+
+    fn major_gridlines_of(axis_children: &str) -> Option<ChartExGridlines> {
+        let cx = parse_chart_ex_xml(&doc_with_axis(axis_children)[..]).expect("parse");
+        cx.plot_area.axes[0].major_gridlines.clone()
+    }
+
+    fn written(axis_children: &str) -> String {
+        let cx = parse_chart_ex_xml(&doc_with_axis(axis_children)[..]).expect("parse");
+        String::from_utf8(super::chart_ex_part_bytes(&cx).expect("write")).expect("utf8")
+    }
+
+    /// A bare `cx:majorGridlines` means "draw gridlines, no formatting
+    /// override". It must not acquire a `cx:spPr` child on write: Excel
+    /// emits the bare form for its own charts.
+    #[test]
+    fn bare_gridlines_round_trip_without_gaining_shape_properties() {
+        assert_eq!(
+            major_gridlines_of("<cx:majorGridlines/>"),
+            Some(ChartExGridlines {
+                shape_properties: None
+            })
+        );
+        let out = written("<cx:majorGridlines/>");
+        assert!(out.contains("<cx:majorGridlines/>"), "not bare: {out}");
+        assert!(
+            !out.contains("<cx:majorGridlines><cx:spPr>"),
+            "injected empty spPr: {out}"
+        );
+    }
+
+    /// A present but empty `cx:spPr` is a different document from an
+    /// absent one, and must survive as such.
+    #[test]
+    fn present_but_empty_shape_properties_survive() {
+        let axis = "<cx:majorGridlines><cx:spPr></cx:spPr></cx:majorGridlines>";
+        let g = major_gridlines_of(axis).expect("gridlines");
+        assert!(
+            g.shape_properties.is_some(),
+            "empty spPr must stay present, got {g:?}"
+        );
+        assert!(written(axis).contains("<cx:spPr>"), "spPr dropped");
+    }
+
+    #[test]
+    fn gridline_formatting_survives_a_round_trip() {
+        let axis = r#"<cx:majorGridlines><cx:spPr><a:ln><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln></cx:spPr></cx:majorGridlines>"#;
+        let first = parse_chart_ex_xml(&doc_with_axis(axis)[..]).expect("parse 1");
+        let bytes = super::chart_ex_part_bytes(&first).expect("write");
+        let second = parse_chart_ex_xml(&bytes[..]).expect("parse 2");
+        assert_eq!(first, second, "gridline formatting changed on round trip");
+
+        let line = second.plot_area.axes[0]
+            .major_gridlines
+            .as_ref()
+            .expect("gridlines")
+            .shape_properties
+            .as_ref()
+            .expect("spPr")
+            .line
+            .as_ref()
+            .expect("line");
+        assert_eq!(
+            line.solid_fill.as_ref().map(|c| c.hex.as_str()),
+            Some("FF0000")
+        );
+    }
+
+    #[test]
+    fn absent_gridlines_stay_absent() {
+        assert_eq!(major_gridlines_of("<cx:tickLabels/>"), None);
+        assert!(!written("<cx:tickLabels/>").contains("Gridlines"));
     }
 }

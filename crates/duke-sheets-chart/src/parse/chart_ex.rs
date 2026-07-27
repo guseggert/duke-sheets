@@ -193,8 +193,8 @@ fn parse_chart_ex_xml_inner<R: Read>(
     let mut ax_scaling: ChartExScaling = ChartExScaling::Category { gap_width: None };
     let mut ax_title: Option<ChartExAxisTitle> = None;
     let mut ax_units: Option<ChartExAxisUnits> = None;
-    let mut ax_major_gridlines: Option<ChartShapeProperties> = None;
-    let mut ax_minor_gridlines: Option<ChartShapeProperties> = None;
+    let mut ax_major_gridlines: Option<ChartExGridlines> = None;
+    let mut ax_minor_gridlines: Option<ChartExGridlines> = None;
     let mut ax_major_tick_marks: Option<String> = None;
     let mut ax_minor_tick_marks: Option<String> = None;
     let mut ax_tick_labels = false;
@@ -732,8 +732,14 @@ fn parse_chart_ex_xml_inner<R: Read>(
                             }
                         }
                     }
-                    b"majorGridlines" if in_axis => in_major_gridlines = true,
-                    b"minorGridlines" if in_axis => in_minor_gridlines = true,
+                    b"majorGridlines" if in_axis => {
+                        in_major_gridlines = true;
+                        ax_major_gridlines = Some(ChartExGridlines::default());
+                    }
+                    b"minorGridlines" if in_axis => {
+                        in_minor_gridlines = true;
+                        ax_minor_gridlines = Some(ChartExGridlines::default());
+                    }
                     b"legend" if in_chart && !in_plot_area => {
                         in_legend = true;
                         legend_pos = None;
@@ -1019,10 +1025,10 @@ fn parse_chart_ex_xml_inner<R: Read>(
                     }
                     b"tickLabels" if in_axis => ax_tick_labels = true,
                     b"majorGridlines" if in_axis => {
-                        ax_major_gridlines = Some(ChartShapeProperties::default());
+                        ax_major_gridlines = Some(ChartExGridlines::default());
                     }
                     b"minorGridlines" if in_axis => {
-                        ax_minor_gridlines = Some(ChartShapeProperties::default());
+                        ax_minor_gridlines = Some(ChartExGridlines::default());
                     }
                     b"srgbClr" if in_sp_pr && !in_sp_ln => {
                         if let Some(hex) = get_val_attr(e) {
@@ -1568,18 +1574,14 @@ fn parse_chart_ex_xml_inner<R: Read>(
                                     }
                                 }
                                 SpCtx::MajorGrid => {
-                                    ax_major_gridlines = if has {
-                                        Some(props)
-                                    } else {
-                                        Some(ChartShapeProperties::default())
-                                    };
+                                    ax_major_gridlines
+                                        .get_or_insert_with(ChartExGridlines::default)
+                                        .shape_properties = Some(props);
                                 }
                                 SpCtx::MinorGrid => {
-                                    ax_minor_gridlines = if has {
-                                        Some(props)
-                                    } else {
-                                        Some(ChartShapeProperties::default())
-                                    };
+                                    ax_minor_gridlines
+                                        .get_or_insert_with(ChartExGridlines::default)
+                                        .shape_properties = Some(props);
                                 }
                                 SpCtx::PlotSurface => {
                                     if has {
