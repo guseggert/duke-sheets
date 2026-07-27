@@ -34,9 +34,9 @@ pub fn parse_chart_ex_xml<R: Read>(reader: R) -> ChartParseResult<ChartEx> {
         raw_chart_color_style: None,
         raw_extensions: parsed.raw_extensions,
         raw_mc_fallback: None,
-        version: None,
-        feature_list: None,
-        fallback_img: None,
+        version: parsed.version,
+        feature_list: parsed.feature_list,
+        fallback_img: parsed.fallback_img,
         external_data: parsed.external_data,
         extensions: None,
     })
@@ -51,6 +51,9 @@ struct ParsedChartEx {
     print_settings: Option<ChartExPrintSettings>,
     raw_extensions: std::collections::HashMap<String, Vec<u8>>,
     external_data: Option<ChartExExternalData>,
+    version: Option<String>,
+    feature_list: Option<String>,
+    fallback_img: Option<String>,
 }
 
 fn parse_chart_ex_xml_inner<R: Read>(
@@ -66,6 +69,9 @@ fn parse_chart_ex_xml_inner<R: Read>(
         print_settings: None,
         raw_extensions: std::collections::HashMap::new(),
         external_data: None,
+        version: None,
+        feature_list: None,
+        fallback_img: None,
     };
 
     let mut in_chart_space = false;
@@ -336,7 +342,18 @@ fn parse_chart_ex_xml_inner<R: Read>(
                 }
 
                 match tag {
-                    b"chartSpace" => in_chart_space = true,
+                    b"chartSpace" => {
+                        in_chart_space = true;
+                        for attr in e.attributes().flatten() {
+                            let value = attr.unescape_value().ok().map(|v| v.to_string());
+                            match attr.key.local_name().as_ref() {
+                                b"version" => result.version = value,
+                                b"featureList" => result.feature_list = value,
+                                b"fallbackImg" => result.fallback_img = value,
+                                _ => {}
+                            }
+                        }
+                    }
                     b"chartData" if in_chart_space => in_chart_data = true,
                     b"data" if in_chart_data => {
                         in_data = true;

@@ -30,6 +30,15 @@ fn write_chart_space(w: &mut XmlWriter, cx: &ChartEx) -> XlsxResult<()> {
     tag.push_attribute(("xmlns:cx", NS_CX));
     tag.push_attribute(("xmlns:a", NS_DRAWING_MAIN));
     tag.push_attribute(("xmlns:r", NS_DOC_RELS));
+    if let Some(ref v) = cx.version {
+        tag.push_attribute(("version", v.as_str()));
+    }
+    if let Some(ref v) = cx.feature_list {
+        tag.push_attribute(("featureList", v.as_str()));
+    }
+    if let Some(ref v) = cx.fallback_img {
+        tag.push_attribute(("fallbackImg", v.as_str()));
+    }
     w.write_event(Event::Start(tag))?;
 
     write_chart_data(w, &cx.data, &cx.external_data)?;

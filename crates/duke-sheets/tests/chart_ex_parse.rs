@@ -292,3 +292,20 @@ fn raw_captured_regions_keep_self_closing_tags_verbatim() {
     let again = duke_sheets_chart::parse::parse_chart_ex_xml(&bytes[..]).expect("reparse");
     assert_eq!(cx, again, "raw geoCache capture changed on round trip");
 }
+
+/// `version`, `featureList` and `fallbackImg` are `CT_ChartSpace`
+/// attributes; both sides used to drop them, so they vanished from any
+/// file that carried them.
+#[test]
+fn chart_space_attributes_round_trip() {
+    let doc = r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" version="1.5" featureList="waterfall" fallbackImg="rId7"><cx:chartData><cx:data id="0"><cx:numDim type="val"><cx:f>Sheet1!$B$1</cx:f></cx:numDim></cx:data></cx:chartData><cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="waterfall"><cx:dataId val="0"/></cx:series></cx:plotAreaRegion></cx:plotArea></cx:chart></cx:chartSpace>"#;
+
+    let cx = parse(doc);
+    assert_eq!(cx.version.as_deref(), Some("1.5"));
+    assert_eq!(cx.feature_list.as_deref(), Some("waterfall"));
+    assert_eq!(cx.fallback_img.as_deref(), Some("rId7"));
+
+    let bytes = duke_sheets_chart::write::chart_ex_part_bytes(&cx).expect("write");
+    let again = duke_sheets_chart::parse::parse_chart_ex_xml(&bytes[..]).expect("reparse");
+    assert_eq!(cx, again, "chartSpace attributes lost on round trip");
+}
