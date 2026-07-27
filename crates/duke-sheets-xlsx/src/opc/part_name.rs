@@ -9,7 +9,18 @@ pub(crate) struct PartName(String);
 impl PartName {
     pub(crate) fn new(value: impl Into<String>) -> XlsxResult<Self> {
         let value = value.into();
-        validate_part_name(&value)?;
+        validate_structure(&value)?;
+        validate_conformance(&value)?;
+        Ok(Self(value))
+    }
+
+    /// Accept a name that addresses a part unambiguously but breaks
+    /// ECMA-376 Part 2 §6.2.2.2 character rules, so Compatible mode can
+    /// still read parts that non-conforming producers emit (spaces,
+    /// brackets, redundant percent-encoding).
+    pub(crate) fn new_lenient(value: impl Into<String>) -> XlsxResult<Self> {
+        let value = value.into();
+        validate_structure(&value)?;
         Ok(Self(value))
     }
 
@@ -24,7 +35,18 @@ impl PartName {
             )));
         }
         let normalized = value.replace('\\', "/");
-        Self::new(format!("/{}", normalized.trim_start_matches('/')))
+        let name = format!("/{}", normalized.trim_start_matches('/'));
+        if compatible {
+            Self::new_lenient(name)
+        } else {
+            Self::new(name)
+        }
+    }
+
+    /// Describe how this name breaks the OPC character rules, for
+    /// diagnostics when it was accepted leniently.
+    pub(crate) fn conformance_error(&self) -> Option<String> {
+        validate_conformance(&self.0).err().map(|e| e.to_string())
     }
 
     pub(crate) fn as_str(&self) -> &str {
@@ -57,7 +79,9 @@ impl PartName {
         } else {
             format!("{parent}/_rels/{file}.rels")
         };
-        Self::new(path)
+        // Conformance was already decided for the owner; the added
+        // segments are always valid, so never re-reject here.
+        Self::new_lenient(path)
     }
 }
 
@@ -83,17 +107,31 @@ impl std::fmt::Display for PartName {
     }
 }
 
-fn validate_part_name(value: &str) -> XlsxResult<()> {
+/// Rules that must hold for a name to address one part unambiguously.
+/// Violating these is unrecoverable in any policy.
+fn validate_structure(value: &str) -> XlsxResult<()> {
     if value == "/" || !value.starts_with('/') || value.contains(['?', '#', '\\']) {
         return Err(XlsxError::InvalidFormat(format!(
             "invalid OPC part name: {value}"
         )));
     }
-
     for segment in value[1..].split('/') {
-        if segment.is_empty() || matches!(segment, "." | "..") || segment.ends_with('.') {
+        if segment.is_empty() || matches!(segment, "." | "..") {
             return Err(XlsxError::InvalidFormat(format!(
                 "invalid OPC part name segment in {value}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// ECMA-376 Part 2 §6.2.2.2 character and encoding rules. Breaking these
+/// makes a package non-conforming without making the name ambiguous.
+fn validate_conformance(value: &str) -> XlsxResult<()> {
+    for segment in value[1..].split('/') {
+        if segment.ends_with('.') {
+            return Err(XlsxError::InvalidFormat(format!(
+                "OPC part name segment ends with a dot in {value}"
             )));
         }
         if segment.chars().any(|character| {
@@ -236,7 +274,12 @@ pub(crate) fn resolve_internal_target_with_policy(
             "relationship target does not name a package part: target={target}"
         )));
     }
-    PartName::new(format!("/{}", parts.join("/")))
+    let resolved = format!("/{}", parts.join("/"));
+    if compatible {
+        PartName::new_lenient(resolved)
+    } else {
+        PartName::new(resolved)
+    }
 }
 
 fn decode_percent_encoded_unreserved(value: &str) -> String {

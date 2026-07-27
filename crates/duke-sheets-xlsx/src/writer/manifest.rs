@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Seek, Write};
 
 use quick_xml::events::{BytesEnd, BytesStart, Event};
@@ -10,8 +10,33 @@ use crate::opc::PartName;
 pub(super) struct OpcManifest {
     defaults: BTreeMap<String, String>,
     parts: HashMap<PartName, ManifestPart>,
-    relationships: BTreeMap<String, Vec<ManifestRelationship>>,
-    relationship_parts: std::collections::HashSet<PartName>,
+    relationships: HashMap<ManifestSource, Vec<ManifestRelationship>>,
+    relationship_parts: HashSet<PartName>,
+}
+
+/// Owner of a relationships part: the package itself or one part.
+/// `PartName` compares case-insensitively, so this must keep the
+/// original spelling to derive a correctly cased `.rels` name.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ManifestSource {
+    Package,
+    Part(PartName),
+}
+
+impl ManifestSource {
+    fn relationships_part(&self) -> XlsxResult<PartName> {
+        match self {
+            Self::Package => PartName::new("/_rels/.rels"),
+            Self::Part(part_name) => part_name.relationships_part(),
+        }
+    }
+
+    fn display_name(&self) -> &str {
+        match self {
+            Self::Package => "/",
+            Self::Part(part_name) => part_name.as_str(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -172,7 +197,35 @@ impl OpcManifest {
         target: &str,
         external: bool,
     ) -> XlsxResult<()> {
-        let (source, relationships_part) = match source_zip_path {
+        self.register(source_zip_path, id, rel_type, target, external, false)
+    }
+
+    /// Register a relationship round-tripped from the source package.
+    /// A preserved internal target whose part we never captured is
+    /// dropped with a warning: emitting a relationship to a part that
+    /// is not in the package would make the output non-conforming
+    /// (ECMA-376 Part 2 §9.3.1), and we cannot invent the bytes.
+    pub(super) fn register_preserved_relationship(
+        &mut self,
+        source_zip_path: Option<&str>,
+        id: &str,
+        rel_type: &str,
+        target: &str,
+        external: bool,
+    ) -> XlsxResult<()> {
+        self.register(source_zip_path, id, rel_type, target, external, true)
+    }
+
+    fn register(
+        &mut self,
+        source_zip_path: Option<&str>,
+        id: &str,
+        rel_type: &str,
+        target: &str,
+        external: bool,
+        preserved: bool,
+    ) -> XlsxResult<()> {
+        let source = match source_zip_path {
             Some(path) => {
                 let source_part = PartName::from_zip_name(path)?;
                 if !self.parts.contains_key(&source_part) {
@@ -180,11 +233,11 @@ impl OpcManifest {
                         "relationship source {source_part} is not an emitted part"
                     )));
                 }
-                let relationships_part = source_part.relationships_part()?;
-                (source_part.as_str().to_string(), relationships_part)
+                ManifestSource::Part(source_part)
             }
-            None => ("/".to_string(), PartName::new("/_rels/.rels")?),
+            None => ManifestSource::Package,
         };
+        let relationships_part = source.relationships_part()?;
         if self
             .parts
             .get(&relationships_part)
@@ -194,28 +247,51 @@ impl OpcManifest {
                 "relationships part {relationships_part} collides with a raw preserved part"
             )));
         }
+        if !external {
+            let source_path = source_zip_path.unwrap_or("");
+            let resolved = match crate::opc::resolve_internal_target(source_path, target) {
+                Ok(resolved) => Some(resolved),
+                Err(error) if preserved => {
+                    log::warn!(
+                        "dropping preserved relationship {id} from {}: {error}",
+                        source.display_name()
+                    );
+                    return Ok(());
+                }
+                Err(error) => return Err(error),
+            };
+            let target_part = resolved
+                .as_deref()
+                .map(PartName::from_zip_name)
+                .transpose()?;
+            if target_part
+                .as_ref()
+                .is_none_or(|part| !self.parts.contains_key(part))
+            {
+                if preserved {
+                    log::warn!(
+                        "dropping preserved relationship {id} from {}: target part {target} is not in the package",
+                        source.display_name()
+                    );
+                    return Ok(());
+                }
+                return Err(XlsxError::InvalidFormat(format!(
+                    "relationship {id} from {} targets unregistered part {}",
+                    source.display_name(),
+                    target_part.map_or_else(|| target.to_string(), |part| part.to_string())
+                )));
+            }
+        }
         self.relationship_parts.insert(relationships_part);
-        let relationships = self
-            .relationships
-            .entry(source.to_ascii_lowercase())
-            .or_default();
+        let display_name = source.display_name().to_string();
+        let relationships = self.relationships.entry(source).or_default();
         if relationships
             .iter()
             .any(|relationship| relationship.id == id)
         {
             return Err(XlsxError::InvalidFormat(format!(
-                "duplicate relationship id {id} for {source}"
+                "duplicate relationship id {id} for {display_name}"
             )));
-        }
-        if !external {
-            let source_path = source_zip_path.unwrap_or("");
-            let resolved = crate::opc::resolve_internal_target(source_path, target)?;
-            let target_part = PartName::from_zip_name(&resolved)?;
-            if !self.parts.contains_key(&target_part) {
-                return Err(XlsxError::InvalidFormat(format!(
-                    "relationship {id} from {source} targets unregistered part {target_part}"
-                )));
-            }
         }
         relationships.push(ManifestRelationship {
             id: id.to_string(),
@@ -230,15 +306,11 @@ impl OpcManifest {
         &self,
         zip: &mut zip::ZipWriter<W>,
     ) -> XlsxResult<()> {
-        for (source, relationships) in &self.relationships {
-            let path = if source == "/" {
-                "_rels/.rels".to_string()
-            } else {
-                PartName::new(source.clone())?
-                    .relationships_part()?
-                    .zip_name()
-                    .to_string()
-            };
+        let mut sources: Vec<_> = self.relationships.keys().collect();
+        sources.sort_by_key(|source| source.display_name().to_ascii_lowercase());
+        for source in sources {
+            let relationships = &self.relationships[source];
+            let path = source.relationships_part()?.zip_name().to_string();
             super::write_xml_part(zip, &path, |writer| {
                 let mut root = BytesStart::new("Relationships");
                 root.push_attribute((
@@ -417,5 +489,33 @@ mod tests {
             .read_to_string(&mut workbook)
             .unwrap();
         assert!(workbook.contains("Target=\"worksheets/sheet1.xml\""));
+    }
+
+    /// A case-insensitive reader cannot catch a mis-cased `.rels` name,
+    /// so assert the ZIP entry spelling directly.
+    #[test]
+    fn relationship_part_names_preserve_owner_casing() {
+        let mut manifest = OpcManifest::new().unwrap();
+        manifest
+            .register_part("xl/charts/chartEx1.xml", "chartex/type")
+            .unwrap();
+        manifest
+            .register_part("xl/charts/style1.xml", "chartstyle/type")
+            .unwrap();
+        manifest
+            .register_relationship(
+                Some("xl/charts/chartEx1.xml"),
+                "rId1",
+                RelationshipKind::ChartStyle.uri(),
+                "style1.xml",
+                false,
+            )
+            .unwrap();
+
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        manifest.write_relationships(&mut zip).unwrap();
+        let archive = zip::ZipArchive::new(zip.finish().unwrap()).unwrap();
+        let names: Vec<_> = archive.file_names().collect();
+        assert_eq!(names, vec!["xl/charts/_rels/chartEx1.xml.rels"]);
     }
 }

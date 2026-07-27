@@ -89,6 +89,15 @@ impl<R: Read + Seek> OpcPackage<R> {
                     continue;
                 }
             };
+            if let Some(problem) = part_name.conformance_error() {
+                diagnostics.warning(
+                    XlsxDiagnosticCode::InvalidPartName,
+                    problem,
+                    None,
+                    None,
+                    Some(&raw_name),
+                );
+            }
             if let Some(existing) = entries.get_mut(&part_name) {
                 diagnostics.violation(
                     XlsxDiagnosticCode::EquivalentPartName,
@@ -237,6 +246,14 @@ impl<R: Read + Seek> OpcPackage<R> {
                 .or_else(|| targets.iter().position(|target| target == &canonical))
                 .unwrap_or(0);
             let workbook = targets.remove(preferred);
+            // A relationship pointing at a non-workbook part is more
+            // likely wrong than the content types are, so let the
+            // content-type scan have the last word before giving up.
+            if !self.has_workbook_content_type(&workbook) {
+                if let Ok(fallback) = self.discover_workbook_fallback() {
+                    return Ok(fallback);
+                }
+            }
             self.validate_workbook_content_type(&workbook)?;
             return Ok(workbook);
         }
