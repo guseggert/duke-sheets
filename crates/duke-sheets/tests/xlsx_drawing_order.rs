@@ -493,6 +493,32 @@ fn xlsx_model_built_chart_ex_gets_generated_style_and_color_parts() {
     assert!(colors.contains("<cs:colorStyle "), "colour style malformed");
 }
 
+/// Caller-supplied raw style bytes become an entire package part, so
+/// bytes Excel would reject must fail the write with an error naming
+/// the problem instead of producing an unopenable file.
+// features: ChartEx: Waterfall
+#[test]
+fn xlsx_write_rejects_a_raw_chart_style_excel_would_refuse() {
+    let mut chart_ex = duke_sheets_chart::parse::parse_chart_ex_xml(WATERFALL_CHART_EX)
+        .expect("parse chartEx");
+    chart_ex.raw_chart_style = Some(b"<cs:chartStyle/>".to_vec());
+
+    let mut workbook = Workbook::new();
+    workbook
+        .worksheet_mut(0)
+        .unwrap()
+        .add_drawing(DrawingObject::chart_ex(chart_ex).with_anchor(two_cell(0, 0, 4, 4)))
+        .unwrap();
+
+    let err = XlsxWriter::write(&workbook, Cursor::new(Vec::new()))
+        .expect_err("garbage raw_chart_style must fail the write");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("raw_chart_style") && msg.contains("not bound"),
+        "error must name the field and the defect: {msg}"
+    );
+}
+
 /// A picture whose blip resolves through an external relationship must
 /// keep the linked URI, not the relationship id it was looked up by.
 #[test]
