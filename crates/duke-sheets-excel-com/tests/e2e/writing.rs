@@ -2275,4 +2275,14 @@ fn excel_opens_a_model_built_waterfall_chart_ex() {
         Some(vec![0, 2]),
         "subtotal bars must survive Excel's re-save"
     );
+    let value_axis = chart
+        .plot_area
+        .axes
+        .iter()
+        .find(|a| matches!(a.scaling, duke_sheets_chart::ChartExScaling::Value { .. }))
+        .expect("value axis survives");
+    assert!(
+        value_axis.major_gridlines.is_some(),
+        "major gridlines must survive Excel's re-save"
+    );
 }

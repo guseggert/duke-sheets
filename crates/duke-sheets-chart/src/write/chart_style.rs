@@ -481,11 +481,14 @@ mod tests {
         let xml = String::from_utf8(default_chart_style_bytes()).unwrap();
         let mut cursor = 0usize;
         for name in SCHEMA_ORDER {
-            let needle = format!("<cs:{name}");
-            let at = xml[cursor..]
-                .find(&needle)
+            // Boundary-terminated so `<cs:dataPoint` cannot satisfy the
+            // search for `<cs:dataPoint3D` and vice versa.
+            let hit = [">", " ", "/"]
+                .iter()
+                .filter_map(|end| xml[cursor..].find(&format!("<cs:{name}{end}")))
+                .min()
                 .unwrap_or_else(|| panic!("{name} missing from generated chart style"));
-            cursor += at + needle.len();
+            cursor += hit + name.len();
         }
     }
 

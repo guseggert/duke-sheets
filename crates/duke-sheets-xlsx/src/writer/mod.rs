@@ -1281,6 +1281,12 @@ impl XlsxWriter {
         // Excel rejects a chartEx whose style or colour style part is
         // missing, so both are always registered; the writer falls back to
         // generated defaults when the model carries no raw bytes.
+        //
+        // rId1/rId2 are safe to hardcode: style and colour style are the
+        // only chartEx-part relationships this writer emits. A preserved
+        // cx:externalData r:id is written back verbatim without its
+        // relationship (a pre-existing gap), so it dangled before this
+        // and dangles now.
         for &(_, _, global_num) in chart_ex_numbering {
             manifest.register_part(&format!("xl/charts/chartEx{global_num}.xml"), CT_CHART_EX)?;
             let style_num = chart_ex_style_num(total_standard_charts, global_num);
