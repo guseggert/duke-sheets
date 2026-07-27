@@ -3380,7 +3380,7 @@ pub struct JsChartExLayoutPr {
     pub binning: Option<JsChartExBinning>,
     pub geography: Option<JsChartExGeography>,
     pub statistics: Option<JsChartExStatistics>,
-    pub subtotals: Vec<u32>,
+    pub subtotals: Option<Vec<u32>>,
 }
 
 impl From<&duke_sheets_chart::ChartExLayoutPr> for JsChartExLayoutPr {

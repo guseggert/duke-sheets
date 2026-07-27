@@ -319,8 +319,14 @@ pub struct ChartExLayoutPr {
     pub geography: Option<ChartExGeography>,
     /// Box & whisker statistics settings
     pub statistics: Option<ChartExStatistics>,
-    /// Waterfall subtotal bar indices
-    pub subtotals: Vec<u32>,
+    /// Waterfall subtotal bar indices (`cx:subtotals`).
+    ///
+    /// `None` is an absent `cx:subtotals` element; `Some(vec![])` is a
+    /// present but empty one, which is what Excel writes for a waterfall
+    /// with no subtotal bars. The wrapper is `minOccurs="0"` in
+    /// [MS-ODRAWXML] §5.22 `CT_SeriesLayoutProperties`, so the two are
+    /// distinct documents and round-trip separately.
+    pub subtotals: Option<Vec<u32>>,
     /// Extension list (`cx:extLst`, raw XML bytes)
     pub extensions: Option<Vec<u8>>,
 }
