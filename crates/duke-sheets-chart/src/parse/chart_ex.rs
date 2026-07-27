@@ -1,6 +1,6 @@
 use std::io::{BufReader, Cursor, Read};
 
-use quick_xml::events::Event;
+use quick_xml::events::{BytesEnd, Event};
 use quick_xml::reader::Reader;
 use quick_xml::Writer;
 
@@ -265,8 +265,42 @@ fn parse_chart_ex_xml_inner<R: Read>(
 
     let mut in_plot_surface = false;
 
+    // `<x/>` and `<x></x>` are the same document, so a self-closing
+    // element is split into the start and end events its expanded form
+    // would produce and handled by exactly one code path. Handling the
+    // two forms separately is what let them drift: whole subtrees
+    // (`cx:series`, `cx:layoutPr`, `cx:spPr`) were dropped in the
+    // self-closing form, while attributes read only from the empty form
+    // (`cx:tickLabels`, `cx:numFmt`, `a:srgbClr`, …) were lost from the
+    // expanded one.
+    //
+    // The raw-capture regions below are the exception: they reproduce
+    // source bytes, so they must see the original event and keep
+    // `<x/>` as `<x/>`.
+    let mut pending_end: Option<Event<'static>> = None;
+
     loop {
-        match xml_reader.read_event_into(buf) {
+        let event: Event<'static> = match pending_end.take() {
+            Some(end) => end,
+            None => {
+                let read = match xml_reader.read_event_into(buf) {
+                    Ok(ev) => ev.into_owned(),
+                    Err(e) => return Err(ChartParseError::Xml(e)),
+                };
+                buf.clear();
+                match read {
+                    Event::Empty(e) if geo_cache_writer.is_none() && vc_writer.is_none() => {
+                        pending_end = Some(Event::End(BytesEnd::new(
+                            String::from_utf8_lossy(e.name().as_ref()).into_owned(),
+                        )));
+                        Event::Start(e)
+                    }
+                    other => other,
+                }
+            }
+        };
+
+        match Ok::<_, ChartParseError>(event) {
             Ok(Event::Start(ref e)) => {
                 // geoCache raw capture
                 if let Some(ref mut w) = geo_cache_writer {
@@ -291,6 +325,15 @@ fn parse_chart_ex_xml_inner<R: Read>(
 
                 let local = e.name().local_name();
                 let tag = local.as_ref();
+
+                // Inside a cx:spPr every element start deepens the
+                // nesting and its end unwinds it, including the end
+                // synthesized for a self-closing element. Tracked here
+                // rather than in individual arms so that adding an arm
+                // cannot unbalance it.
+                if in_sp_pr {
+                    sp_pr_depth += 1;
+                }
 
                 match tag {
                     b"chartSpace" => in_chart_space = true,
@@ -550,8 +593,21 @@ fn parse_chart_ex_xml_inner<R: Read>(
                         }
                         layout_pr.binning = Some(binning);
                     }
-                    b"binSize" if in_binning => in_bin_size = true,
-                    b"binCount" if in_binning => in_bin_count = true,
+                    b"binSize" if in_binning => {
+                        in_bin_size = true;
+                        if let (Some(v), Some(b)) = (get_val_f64(e), layout_pr.binning.as_mut()) {
+                            b.bin_size = Some(v);
+                        }
+                    }
+                    b"binCount" if in_binning => {
+                        in_bin_count = true;
+                        if let (Some(v), Some(b)) = (
+                            get_val_attr(e).and_then(|s| s.parse().ok()),
+                            layout_pr.binning.as_mut(),
+                        ) {
+                            b.bin_count = Some(v);
+                        }
+                    }
                     b"geography" if in_layout_pr => {
                         in_geography = true;
                         let mut geo = ChartExGeography::default();
@@ -824,7 +880,6 @@ fn parse_chart_ex_xml_inner<R: Read>(
                         }
                     }
                     b"ln" if in_sp_pr => {
-                        sp_pr_depth += 1;
                         in_sp_ln = true;
                         sp_ln_width = None;
                         sp_ln_solid_fill = None;
@@ -837,7 +892,6 @@ fn parse_chart_ex_xml_inner<R: Read>(
                             }
                         }
                     }
-                    b"solidFill" if in_sp_pr => sp_pr_depth += 1,
                     b"txPr" if !skipping => {
                         skipping = true;
                         skip_depth = 1;
@@ -858,32 +912,9 @@ fn parse_chart_ex_xml_inner<R: Read>(
                         skipping = true;
                         skip_depth = 1;
                     }
-                    _ => {
-                        if in_sp_pr {
-                            sp_pr_depth += 1;
-                        }
-                    }
-                }
-            }
-            Ok(Event::Empty(ref e)) => {
-                if let Some(ref mut w) = geo_cache_writer {
-                    let _ = w.write_event(Event::Empty(e.clone().into_owned()));
-                    buf.clear();
-                    continue;
-                }
-                if let Some(ref mut w) = vc_writer {
-                    let _ = w.write_event(Event::Empty(e.clone().into_owned()));
-                    buf.clear();
-                    continue;
-                }
-                if skipping {
-                    buf.clear();
-                    continue;
-                }
-
-                let local = e.name().local_name();
-                let tag = local.as_ref();
-                match tag {
+                    // Handling merged from the former separate arm for
+                    // empty elements, which a self-closing element no
+                    // longer reaches.
                     b"externalData" if in_chart_data => {
                         let mut rel_id = String::new();
                         let mut auto_update = None;
@@ -909,17 +940,6 @@ fn parse_chart_ex_xml_inner<R: Read>(
                             auto_update,
                         });
                     }
-                    b"dataId" if in_series && !in_data_labels => {
-                        for attr in e.attributes().flatten() {
-                            if attr.key.local_name().as_ref() == b"val" {
-                                ser_data_id = attr
-                                    .unescape_value()
-                                    .ok()
-                                    .and_then(|s| s.parse().ok())
-                                    .unwrap_or(0);
-                            }
-                        }
-                    }
                     b"visibility" if in_data_labels => {
                         for attr in e.attributes().flatten() {
                             match attr.key.local_name().as_ref() {
@@ -934,20 +954,6 @@ fn parse_chart_ex_xml_inner<R: Read>(
                     b"numFmt" if in_axis && !in_data_labels => {
                         ax_num_fmt = Some(parse_num_fmt(e));
                     }
-                    b"visibility" if in_layout_pr && !in_data_labels => {
-                        let mut vis = ChartExSeriesVisibility::default();
-                        for attr in e.attributes().flatten() {
-                            match attr.key.local_name().as_ref() {
-                                b"connectorLines" => vis.connector_lines = parse_bool_attr(&attr),
-                                b"meanLine" => vis.mean_line = parse_bool_attr(&attr),
-                                b"meanMarker" => vis.mean_marker = parse_bool_attr(&attr),
-                                b"nonoutliers" => vis.nonoutliers = parse_bool_attr(&attr),
-                                b"outliers" => vis.outliers = parse_bool_attr(&attr),
-                                _ => {}
-                            }
-                        }
-                        layout_pr.visibility = Some(vis);
-                    }
                     b"parentLabelLayout" if in_layout_pr => {
                         layout_pr.parent_label_layout = get_val_attr(e);
                     }
@@ -955,58 +961,6 @@ fn parse_chart_ex_xml_inner<R: Read>(
                         layout_pr.region_label_layout = get_val_attr(e);
                     }
                     b"aggregation" if in_layout_pr => layout_pr.aggregation = true,
-                    b"subtotals" if in_layout_pr => {
-                        layout_pr.subtotals.get_or_insert_with(Vec::new);
-                    }
-                    b"idx" if in_subtotals => push_subtotal_idx(&mut layout_pr, e),
-                    b"statistics" if in_layout_pr => {
-                        let mut stats = ChartExStatistics::default();
-                        for attr in e.attributes().flatten() {
-                            if attr.key.local_name().as_ref() == b"quartileMethod" {
-                                stats.quartile_method =
-                                    attr.unescape_value().ok().map(|s| s.to_string());
-                            }
-                        }
-                        layout_pr.statistics = Some(stats);
-                    }
-                    b"catScaling" if in_axis => {
-                        let mut gw = None;
-                        for attr in e.attributes().flatten() {
-                            if attr.key.local_name().as_ref() == b"gapWidth" {
-                                gw = attr.unescape_value().ok().and_then(|s| s.parse().ok());
-                            }
-                        }
-                        ax_scaling = ChartExScaling::Category { gap_width: gw };
-                    }
-                    b"valScaling" if in_axis => {
-                        let mut min = None;
-                        let mut max = None;
-                        let mut major = None;
-                        let mut minor = None;
-                        for attr in e.attributes().flatten() {
-                            match attr.key.local_name().as_ref() {
-                                b"min" => {
-                                    min = attr.unescape_value().ok().and_then(|s| s.parse().ok())
-                                }
-                                b"max" => {
-                                    max = attr.unescape_value().ok().and_then(|s| s.parse().ok())
-                                }
-                                b"majorUnit" => {
-                                    major = attr.unescape_value().ok().and_then(|s| s.parse().ok())
-                                }
-                                b"minorUnit" => {
-                                    minor = attr.unescape_value().ok().and_then(|s| s.parse().ok())
-                                }
-                                _ => {}
-                            }
-                        }
-                        ax_scaling = ChartExScaling::Value {
-                            min,
-                            max,
-                            major_unit: major,
-                            minor_unit: minor,
-                        };
-                    }
                     b"majorTickMarks" if in_axis => {
                         for attr in e.attributes().flatten() {
                             if attr.key.local_name().as_ref() == b"type" {
@@ -1024,12 +978,6 @@ fn parse_chart_ex_xml_inner<R: Read>(
                         }
                     }
                     b"tickLabels" if in_axis => ax_tick_labels = true,
-                    b"majorGridlines" if in_axis => {
-                        ax_major_gridlines = Some(ChartExGridlines::default());
-                    }
-                    b"minorGridlines" if in_axis => {
-                        ax_minor_gridlines = Some(ChartExGridlines::default());
-                    }
                     b"srgbClr" if in_sp_pr && !in_sp_ln => {
                         if let Some(hex) = get_val_attr(e) {
                             sp_solid_fill = Some(ChartColor { hex });
@@ -1152,17 +1100,19 @@ fn parse_chart_ex_xml_inner<R: Read>(
                             vcp.max = Some(ChartExColorPosition::Percent(v));
                         }
                     }
-                    b"binSize" if in_binning => {
-                        if let Some(ref mut b) = layout_pr.binning {
-                            b.bin_size = get_val_f64(e);
-                        }
-                    }
-                    b"binCount" if in_binning => {
-                        if let Some(ref mut b) = layout_pr.binning {
-                            b.bin_count = get_val_attr(e).and_then(|s| s.parse().ok());
-                        }
-                    }
                     _ => {}
+                }
+            }
+            Ok(Event::Empty(ref e)) => {
+                // Only reached inside a raw-capture region: everywhere
+                // else a self-closing element was split into a start and
+                // an end above, so it cannot be handled differently from
+                // its expanded form. Captures keep the original event so
+                // the bytes they replay match the source.
+                if let Some(ref mut w) = geo_cache_writer {
+                    let _ = w.write_event(Event::Empty(e.clone().into_owned()));
+                } else if let Some(ref mut w) = vc_writer {
+                    let _ = w.write_event(Event::Empty(e.clone().into_owned()));
                 }
             }
             Ok(Event::Text(ref e)) => {
@@ -1608,10 +1558,9 @@ fn parse_chart_ex_xml_inner<R: Read>(
                 }
             }
             Ok(Event::Eof) => break,
-            Err(e) => return Err(ChartParseError::Xml(e)),
+            Err(e) => return Err(e),
             _ => {}
         }
-        buf.clear();
     }
 
     Ok(result)

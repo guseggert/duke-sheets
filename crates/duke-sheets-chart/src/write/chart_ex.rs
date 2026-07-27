@@ -676,14 +676,16 @@ fn write_value_color_positions(
     }
     w.write_event(Event::Start(tag))?;
 
+    // CT_ValueColorPositions names these min/mid/max, not
+    // minPosition/midPosition/maxPosition ([MS-ODRAWXML] §5.22).
     if let Some(ref pos) = vcp.min {
-        write_color_position(w, "cx:minPosition", pos)?;
+        write_color_position(w, "cx:min", pos)?;
     }
     if let Some(ref pos) = vcp.mid {
-        write_color_position(w, "cx:midPosition", pos)?;
+        write_color_position(w, "cx:mid", pos)?;
     }
     if let Some(ref pos) = vcp.max {
-        write_color_position(w, "cx:maxPosition", pos)?;
+        write_color_position(w, "cx:max", pos)?;
     }
 
     w.write_event(Event::End(BytesEnd::new("cx:valueColorPositions")))?;
