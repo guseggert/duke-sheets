@@ -248,12 +248,12 @@ fn write_title(w: &mut XmlWriter, title: &ChartExTitle) -> XlsxResult<()> {
         w.write_event(Event::End(BytesEnd::new("cx:tx")))?;
     }
 
-    if let Some(ref offset) = title.offset {
-        write_offset(w, offset)?;
-    }
-
     if let Some(ref sp) = title.shape_properties {
         write_cx_shape_properties(w, sp)?;
+    }
+
+    if let Some(ref offset) = title.offset {
+        write_offset(w, offset)?;
     }
 
     w.write_event(Event::End(BytesEnd::new("cx:title")))?;
@@ -331,6 +331,15 @@ fn write_series(w: &mut XmlWriter, series: &ChartExSeries) -> XlsxResult<()> {
         write_cx_shape_properties(w, sp)?;
     }
 
+    // CT_Series places the value colours between spPr and dataPt.
+    if let Some(ref vc) = series.value_colors {
+        write_value_colors(w, vc)?;
+    }
+
+    if let Some(ref vcp) = series.value_color_positions {
+        write_value_color_positions(w, vcp)?;
+    }
+
     for dp in &series.data_points {
         write_data_point(w, dp)?;
     }
@@ -352,14 +361,6 @@ fn write_series(w: &mut XmlWriter, series: &ChartExSeries) -> XlsxResult<()> {
         let s = axis_id.to_string();
         w.create_element("cx:axisId")
             .write_text_content(BytesText::new(&s))?;
-    }
-
-    if let Some(ref vc) = series.value_colors {
-        write_value_colors(w, vc)?;
-    }
-
-    if let Some(ref vcp) = series.value_color_positions {
-        write_value_color_positions(w, vcp)?;
     }
 
     w.write_event(Event::End(BytesEnd::new("cx:series")))?;
@@ -472,31 +473,21 @@ fn write_data_label_override(w: &mut XmlWriter, dl: &ChartExDataLabel) -> XlsxRe
     let idx_s = dl.idx.to_string();
     let mut tag = BytesStart::new("cx:dataLabel");
     tag.push_attribute(("idx", idx_s.as_str()));
+    if let Some(ref pos) = dl.position {
+        tag.push_attribute(("pos", pos.as_str()));
+    }
     w.write_event(Event::Start(tag))?;
 
+    // CT_DataLabel order: numFmt, spPr, txPr, visibility, separator.
     if let Some(ref nf) = dl.number_format {
         write_cx_number_format(w, nf)?;
     }
 
-    if let Some(ref pos) = dl.position {
-        let mut vis_tag = BytesStart::new("cx:visibility");
-        if let Some(v) = dl.visibility_series_name {
-            vis_tag.push_attribute(("seriesName", if v { "1" } else { "0" }));
-        }
-        if let Some(v) = dl.visibility_category_name {
-            vis_tag.push_attribute(("categoryName", if v { "1" } else { "0" }));
-        }
-        if let Some(v) = dl.visibility_value {
-            vis_tag.push_attribute(("value", if v { "1" } else { "0" }));
-        }
-        // position is on the parent dataLabel, not visibility.
-        // We already wrote idx above; need to write pos attr on a layout wrapper
-        // Actually, per spec, position on a dataLabel is an attr on the element itself.
-        // Let's handle this differently - we set pos on the cx:dataLabel element.
-        // But we already opened cx:dataLabel without pos. Let's just emit visibility.
-        let _ = pos; // pos is on the dataLabel attr, but we already opened the tag
-        w.write_event(Event::Empty(vis_tag))?;
-    } else if dl.visibility_series_name.is_some()
+    if let Some(ref sp) = dl.shape_properties {
+        write_cx_shape_properties(w, sp)?;
+    }
+
+    if dl.visibility_series_name.is_some()
         || dl.visibility_category_name.is_some()
         || dl.visibility_value.is_some()
     {
@@ -516,10 +507,6 @@ fn write_data_label_override(w: &mut XmlWriter, dl: &ChartExDataLabel) -> XlsxRe
     if let Some(ref sep) = dl.separator {
         w.create_element("cx:separator")
             .write_text_content(BytesText::new(sep))?;
-    }
-
-    if let Some(ref sp) = dl.shape_properties {
-        write_cx_shape_properties(w, sp)?;
     }
 
     w.write_event(Event::End(BytesEnd::new("cx:dataLabel")))?;
@@ -843,12 +830,12 @@ fn write_axis_title(w: &mut XmlWriter, title: &ChartExAxisTitle) -> XlsxResult<(
         write_cx_text(w, text)?;
     }
 
-    if let Some(ref offset) = title.offset {
-        write_offset(w, offset)?;
-    }
-
     if let Some(ref sp) = title.shape_properties {
         write_cx_shape_properties(w, sp)?;
+    }
+
+    if let Some(ref offset) = title.offset {
+        write_offset(w, offset)?;
     }
 
     w.write_event(Event::End(BytesEnd::new("cx:title")))?;

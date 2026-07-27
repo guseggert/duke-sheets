@@ -24,13 +24,13 @@ const KITCHEN_SINK: &str = r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.
 <cx:externalData r:id="rId9" autoUpdate="0"/>
 </cx:chartData>
 <cx:chart>
-<cx:title pos="t" align="ctr" overlay="0"><cx:tx><cx:txData><cx:v>My Title</cx:v></cx:txData></cx:tx></cx:title>
+<cx:title pos="t" align="ctr" overlay="0"><cx:tx><cx:txData><cx:v>My Title</cx:v></cx:txData></cx:tx><cx:spPr><a:solidFill><a:srgbClr val="112233"/></a:solidFill></cx:spPr></cx:title>
 <cx:plotArea>
 <cx:plotAreaRegion>
 <cx:series layoutId="waterfall" uniqueId="{AAAA0000-1111-2222-3333-444455556666}" hidden="0" ownerIdx="1" formatIdx="2">
 <cx:tx><cx:txData><cx:f>Sheet1!$B$1</cx:f><cx:v>Series1</cx:v></cx:txData></cx:tx>
 <cx:dataId val="0"/>
-<cx:dataLabels pos="ctr"><cx:numFmt formatCode="0.00" sourceLinked="0"/><cx:spPr><a:solidFill><a:srgbClr val="0000FF"/></a:solidFill></cx:spPr><cx:visibility seriesName="0" categoryName="1" value="1"/><cx:separator>;</cx:separator></cx:dataLabels>
+<cx:dataLabels pos="ctr"><cx:numFmt formatCode="0.00" sourceLinked="0"/><cx:spPr><a:solidFill><a:srgbClr val="0000FF"/></a:solidFill></cx:spPr><cx:visibility seriesName="0" categoryName="1" value="1"/><cx:separator>;</cx:separator><cx:dataLabel idx="1" pos="r"><cx:numFmt formatCode="0.000" sourceLinked="0"/><cx:spPr><a:solidFill><a:srgbClr val="FF00FF"/></a:solidFill></cx:spPr><cx:visibility seriesName="1" categoryName="0" value="1"/><cx:separator>|</cx:separator></cx:dataLabel><cx:dataLabelHidden idx="2"/></cx:dataLabels>
 <cx:dataPt idx="1"><cx:spPr><a:solidFill><a:srgbClr val="00FF00"/></a:solidFill></cx:spPr></cx:dataPt>
 <cx:layoutPr><cx:visibility connectorLines="1" meanLine="0" meanMarker="1" nonoutliers="0" outliers="1"/><cx:statistics quartileMethod="inclusive"/><cx:subtotals><cx:idx val="0"/><cx:idx val="2"/></cx:subtotals></cx:layoutPr>
 <cx:axisId>0</cx:axisId>
@@ -45,7 +45,7 @@ const KITCHEN_SINK: &str = r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.
 </cx:series>
 <cx:plotSurface><cx:spPr><a:noFill/></cx:spPr></cx:plotSurface>
 </cx:plotAreaRegion>
-<cx:axis id="0" hidden="0"><cx:catScaling gapWidth="0.5"/><cx:title><cx:tx><cx:txData><cx:v>Cat Axis</cx:v></cx:txData></cx:tx></cx:title><cx:majorTickMarks type="out"/><cx:minorTickMarks type="none"/><cx:tickLabels/><cx:numFmt formatCode="General" sourceLinked="1"/></cx:axis>
+<cx:axis id="0" hidden="0"><cx:catScaling gapWidth="0.5"/><cx:title><cx:tx><cx:txData><cx:v>Cat Axis</cx:v></cx:txData></cx:tx><cx:spPr><a:solidFill><a:srgbClr val="445566"/></a:solidFill></cx:spPr></cx:title><cx:majorTickMarks type="out"/><cx:minorTickMarks type="none"/><cx:tickLabels/><cx:numFmt formatCode="General" sourceLinked="1"/></cx:axis>
 <cx:axis id="1"><cx:valScaling min="0" max="10" majorUnit="2" minorUnit="1"/><cx:units unit="hundreds"/><cx:majorGridlines/><cx:minorGridlines><cx:spPr><a:ln><a:solidFill><a:srgbClr val="AABBCC"/></a:solidFill></a:ln><a:extLst><a:ext uri="{GG00}"/></a:extLst></cx:spPr></cx:minorGridlines><cx:tickLabels/></cx:axis>
 </cx:plotArea>
 <cx:legend pos="b" align="ctr" overlay="1"><cx:spPr><a:noFill/></cx:spPr></cx:legend>
@@ -206,6 +206,15 @@ fn kitchen_sink_parses_to_the_expected_model() {
         cx.title.as_ref().and_then(|t| t.text.clone()).as_deref(),
         Some("My Title")
     );
+    assert_eq!(
+        cx.title
+            .as_ref()
+            .and_then(|t| t.shape_properties.as_ref())
+            .and_then(|sp| sp.solid_fill.as_ref())
+            .map(|c| c.hex.as_str()),
+        Some("112233"),
+        "chart title spPr must land on the title"
+    );
     let legend = cx.legend.as_ref().expect("legend");
     assert_eq!(legend.position.as_deref(), Some("b"));
     assert_eq!(legend.overlay, Some(true));
@@ -228,6 +237,30 @@ fn kitchen_sink_parses_to_the_expected_model() {
         Some("0000FF"),
         "dataLabels spPr must be modelled, not parsed and dropped"
     );
+    assert_eq!(
+        labels.number_format.as_ref().map(|nf| nf.format_code.as_str()),
+        Some("0.00"),
+        "a per-label override must not replace the series-level numFmt"
+    );
+    assert_eq!(labels.hidden_labels, vec![2]);
+    assert_eq!(labels.overrides.len(), 1, "cx:dataLabel override must be modelled");
+    let ovr = &labels.overrides[0];
+    assert_eq!(ovr.idx, 1);
+    assert_eq!(ovr.position.as_deref(), Some("r"));
+    assert_eq!(
+        ovr.number_format.as_ref().map(|nf| nf.format_code.as_str()),
+        Some("0.000")
+    );
+    assert_eq!(
+        ovr.shape_properties
+            .as_ref()
+            .and_then(|sp| sp.solid_fill.as_ref())
+            .map(|c| c.hex.as_str()),
+        Some("FF00FF")
+    );
+    assert_eq!(ovr.separator.as_deref(), Some("|"));
+    assert_eq!(ovr.visibility_series_name, Some(true));
+    assert_eq!(ovr.visibility_category_name, Some(false));
     let lp = s.layout_properties.as_ref().expect("layoutPr");
     assert_eq!(lp.subtotals, Some(vec![0, 2]));
     assert_eq!(
@@ -241,6 +274,20 @@ fn kitchen_sink_parses_to_the_expected_model() {
     // axes
     assert_eq!(cx.plot_area.axes.len(), 2);
     let cat_axis = &cx.plot_area.axes[0];
+    assert_eq!(
+        cat_axis
+            .title
+            .as_ref()
+            .and_then(|t| t.shape_properties.as_ref())
+            .and_then(|sp| sp.solid_fill.as_ref())
+            .map(|c| c.hex.as_str()),
+        Some("445566"),
+        "axis title spPr must land on the title"
+    );
+    assert!(
+        cat_axis.shape_properties.is_none(),
+        "axis title spPr must not be attributed to the axis itself"
+    );
     assert!(matches!(
         cat_axis.scaling,
         ChartExScaling::Category {
@@ -394,4 +441,66 @@ fn ext_lst_inside_shape_properties_does_not_poison_later_ones() {
         assert_eq!(fill(0), Some("FF0000".into()), "first spPr lost ({ext})");
         assert_eq!(fill(1), Some("00FF00".into()), "later spPr lost ({ext})");
     }
+}
+
+/// The writer must emit CT_Series children in schema order; the reader
+/// is order-blind, so round-trip equality cannot see a violation.
+#[test]
+fn series_children_are_written_in_schema_order() {
+    let doc = r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><cx:chartData><cx:data id="0"><cx:numDim type="val"><cx:f>Sheet1!$B$1</cx:f></cx:numDim></cx:data></cx:chartData><cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="regionMap"><cx:tx><cx:txData><cx:v>S</cx:v></cx:txData></cx:tx><cx:spPr><a:solidFill><a:srgbClr val="123456"/></a:solidFill></cx:spPr><cx:valueColors><cx:minColor><a:srgbClr val="FF0000"/></cx:minColor></cx:valueColors><cx:valueColorPositions count="2"><cx:min><cx:extremeValue/></cx:min></cx:valueColorPositions><cx:dataPt idx="0"><cx:spPr><a:noFill/></cx:spPr></cx:dataPt><cx:dataLabels pos="ctr"><cx:numFmt formatCode="0.0" sourceLinked="0"/><cx:spPr><a:noFill/></cx:spPr><cx:visibility value="1"/><cx:separator>;</cx:separator><cx:dataLabel idx="0" pos="r"><cx:numFmt formatCode="0.00" sourceLinked="0"/><cx:spPr><a:noFill/></cx:spPr><cx:visibility value="0"/><cx:separator>,</cx:separator></cx:dataLabel></cx:dataLabels><cx:dataId val="0"/><cx:layoutPr><cx:subtotals/></cx:layoutPr><cx:axisId>0</cx:axisId></cx:series></cx:plotAreaRegion></cx:plotArea></cx:chart></cx:chartSpace>"#;
+
+    let cx = parse(doc);
+    let out = String::from_utf8(duke_sheets_chart::write::chart_ex_part_bytes(&cx).unwrap()).unwrap();
+
+    let series = &out[out.find("<cx:series").unwrap()..out.find("</cx:series>").unwrap()];
+    let pos = |needle: &str| {
+        series
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle} missing from written series: {series}"))
+    };
+    // CT_Series sequence.
+    let order = [
+        "<cx:tx>",
+        "<cx:spPr>",
+        "<cx:valueColors>",
+        "<cx:valueColorPositions",
+        "<cx:dataPt",
+        "<cx:dataLabels",
+        "<cx:dataId",
+        "<cx:layoutPr>",
+        "<cx:axisId>",
+    ];
+    for pair in order.windows(2) {
+        assert!(
+            pos(pair[0]) < pos(pair[1]),
+            "{} must precede {} in CT_Series; got: {series}",
+            pair[0],
+            pair[1]
+        );
+    }
+
+    // CT_DataLabel sequence inside the override.
+    let lbl = &series[pos("<cx:dataLabel ")..series.find("</cx:dataLabel>").unwrap()];
+    assert!(
+        lbl.contains(r#"idx="0""#) && lbl.contains(r#"pos="r""#),
+        "override must keep idx and pos attributes: {lbl}"
+    );
+    let lpos = |needle: &str| lbl.find(needle).unwrap_or_else(|| panic!("{needle} missing: {lbl}"));
+    for pair in ["<cx:numFmt", "<cx:spPr>", "<cx:visibility", "<cx:separator>"].windows(2) {
+        assert!(
+            lpos(pair[0]) < lpos(pair[1]),
+            "{} must precede {} in CT_DataLabel; got: {lbl}",
+            pair[0],
+            pair[1]
+        );
+    }
+
+    // CT_ChartTitle sequence: tx then spPr.
+    let cx2 = parse(KITCHEN_SINK);
+    let out2 = String::from_utf8(duke_sheets_chart::write::chart_ex_part_bytes(&cx2).unwrap()).unwrap();
+    let title = &out2[out2.find("<cx:title").unwrap()..out2.find("</cx:title>").unwrap()];
+    assert!(
+        title.find("<cx:tx>").unwrap() < title.find("<cx:spPr>").unwrap(),
+        "tx must precede spPr in CT_ChartTitle: {title}"
+    );
 }
