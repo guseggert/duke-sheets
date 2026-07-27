@@ -116,6 +116,7 @@ fn parse_chart_ex_xml_inner<R: Read>(
     let mut in_title_tx_data_v = false;
     let mut in_title_tx_data_f = false;
     let mut title_text: Option<String> = None;
+    let mut title_sp: Option<ChartShapeProperties> = None;
 
     // Series state
     let mut in_series = false;
@@ -155,6 +156,20 @@ fn parse_chart_ex_xml_inner<R: Read>(
     let mut dlbl_separator: Option<String> = None;
     let mut dlbl_sp: Option<ChartShapeProperties> = None;
     let mut in_dlbl_separator = false;
+    let mut dl_overrides: Vec<ChartExDataLabel> = Vec::new();
+    let mut dl_hidden: Vec<u32> = Vec::new();
+
+    // Per-label override state (cx:dataLabel, singular).
+    let mut in_data_label = false;
+    let mut lbl_idx: u32 = 0;
+    let mut lbl_pos: Option<String> = None;
+    let mut lbl_vis_series: Option<bool> = None;
+    let mut lbl_vis_cat: Option<bool> = None;
+    let mut lbl_vis_val: Option<bool> = None;
+    let mut lbl_num_fmt: Option<NumberFormat> = None;
+    let mut lbl_separator: Option<String> = None;
+    let mut lbl_sp: Option<ChartShapeProperties> = None;
+    let mut in_lbl_separator = false;
 
     // dataPt state
     let mut in_data_pt = false;
@@ -212,6 +227,7 @@ fn parse_chart_ex_xml_inner<R: Read>(
     let mut in_ax_title_tx_data = false;
     let mut in_ax_title_tx_data_v = false;
     let mut ax_title_text: Option<String> = None;
+    let mut ax_title_sp: Option<ChartShapeProperties> = None;
     let mut in_units = false;
     let mut units_unit: Option<String> = None;
     let mut in_major_gridlines = false;
@@ -244,9 +260,12 @@ fn parse_chart_ex_xml_inner<R: Read>(
         DataPt,
         Legend,
         Axis,
+        AxisTitle,
+        Title,
         MajorGrid,
         MinorGrid,
         DataLabels,
+        DataLabel,
         PlotSurface,
     }
     let mut sp_ctx = SpCtx::None;
@@ -541,6 +560,8 @@ fn parse_chart_ex_xml_inner<R: Read>(
                     }
                     b"dataLabels" if in_series => {
                         in_data_labels = true;
+                        dl_overrides = Vec::new();
+                        dl_hidden = Vec::new();
                         dlbl_pos = None;
                         dlbl_vis_series = None;
                         dlbl_vis_cat = None;
@@ -553,6 +574,40 @@ fn parse_chart_ex_xml_inner<R: Read>(
                             }
                         }
                     }
+                    b"dataLabel" if in_data_labels && !in_data_label => {
+                        in_data_label = true;
+                        lbl_idx = 0;
+                        lbl_pos = None;
+                        lbl_vis_series = None;
+                        lbl_vis_cat = None;
+                        lbl_vis_val = None;
+                        lbl_num_fmt = None;
+                        lbl_separator = None;
+                        lbl_sp = None;
+                        for attr in e.attributes().flatten() {
+                            match attr.key.local_name().as_ref() {
+                                b"idx" => {
+                                    lbl_idx = attr
+                                        .unescape_value()
+                                        .ok()
+                                        .and_then(|s| s.parse().ok())
+                                        .unwrap_or(0);
+                                }
+                                b"pos" => {
+                                    lbl_pos = attr.unescape_value().ok().map(|s| s.to_string());
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    b"dataLabelHidden" if in_data_labels => {
+                        if let Some(idx) =
+                            get_val_attr_named(e, b"idx").and_then(|s| s.parse().ok())
+                        {
+                            dl_hidden.push(idx);
+                        }
+                    }
+                    b"separator" if in_data_label => in_lbl_separator = true,
                     b"separator" if in_data_labels => in_dlbl_separator = true,
                     b"dataPt" if in_series && !in_data_labels => {
                         in_data_pt = true;
@@ -862,6 +917,8 @@ fn parse_chart_ex_xml_inner<R: Read>(
                         sp_ln_dash = None;
                         if in_data_pt {
                             sp_ctx = SpCtx::DataPt;
+                        } else if in_data_label {
+                            sp_ctx = SpCtx::DataLabel;
                         } else if in_data_labels {
                             sp_ctx = SpCtx::DataLabels;
                         } else if in_series {
@@ -870,8 +927,12 @@ fn parse_chart_ex_xml_inner<R: Read>(
                             sp_ctx = SpCtx::MajorGrid;
                         } else if in_minor_gridlines {
                             sp_ctx = SpCtx::MinorGrid;
+                        } else if in_ax_title {
+                            sp_ctx = SpCtx::AxisTitle;
                         } else if in_axis {
                             sp_ctx = SpCtx::Axis;
+                        } else if in_title {
+                            sp_ctx = SpCtx::Title;
                         } else if in_legend {
                             sp_ctx = SpCtx::Legend;
                         } else if in_plot_surface {
@@ -943,6 +1004,16 @@ fn parse_chart_ex_xml_inner<R: Read>(
                             auto_update,
                         });
                     }
+                    b"visibility" if in_data_label => {
+                        for attr in e.attributes().flatten() {
+                            match attr.key.local_name().as_ref() {
+                                b"seriesName" => lbl_vis_series = parse_bool_attr(&attr),
+                                b"categoryName" => lbl_vis_cat = parse_bool_attr(&attr),
+                                b"value" => lbl_vis_val = parse_bool_attr(&attr),
+                                _ => {}
+                            }
+                        }
+                    }
                     b"visibility" if in_data_labels => {
                         for attr in e.attributes().flatten() {
                             match attr.key.local_name().as_ref() {
@@ -953,6 +1024,7 @@ fn parse_chart_ex_xml_inner<R: Read>(
                             }
                         }
                     }
+                    b"numFmt" if in_data_label => lbl_num_fmt = Some(parse_num_fmt(e)),
                     b"numFmt" if in_data_labels => dlbl_num_fmt = Some(parse_num_fmt(e)),
                     b"numFmt" if in_axis && !in_data_labels => {
                         ax_num_fmt = Some(parse_num_fmt(e));
@@ -1153,6 +1225,8 @@ fn parse_chart_ex_xml_inner<R: Read>(
                         }
                     } else if in_ax_title_tx_data_v {
                         ax_title_text = Some(t.to_string());
+                    } else if in_lbl_separator {
+                        lbl_separator = Some(t.to_string());
                     } else if in_dlbl_separator {
                         dlbl_separator = Some(t.to_string());
                     } else if in_ps_hf_odd_header {
@@ -1285,7 +1359,7 @@ fn parse_chart_ex_xml_inner<R: Read>(
                                 rich: None,
                             }),
                             offset: None,
-                            shape_properties: None,
+                            shape_properties: ax_title_sp.take(),
                             text_properties: None,
                             extensions: None,
                         };
@@ -1303,7 +1377,7 @@ fn parse_chart_ex_xml_inner<R: Read>(
                             align: title_align.take(),
                             overlay: title_overlay.take(),
                             offset: None,
-                            shape_properties: None,
+                            shape_properties: title_sp.take(),
                             text_properties: None,
                             extensions: None,
                         });
@@ -1363,13 +1437,29 @@ fn parse_chart_ex_xml_inner<R: Read>(
                             number_format: dlbl_num_fmt.take(),
                             separator: dlbl_separator.take(),
                             shape_properties: dlbl_sp.take(),
+                            overrides: std::mem::take(&mut dl_overrides),
+                            hidden_labels: std::mem::take(&mut dl_hidden),
                             text_properties: None,
-                            overrides: Vec::new(),
-                            hidden_labels: Vec::new(),
                             extensions: None,
                         });
                         in_data_labels = false;
                     }
+                    b"dataLabel" if in_data_label => {
+                        dl_overrides.push(ChartExDataLabel {
+                            idx: lbl_idx,
+                            position: lbl_pos.take(),
+                            visibility_series_name: lbl_vis_series.take(),
+                            visibility_category_name: lbl_vis_cat.take(),
+                            visibility_value: lbl_vis_val.take(),
+                            number_format: lbl_num_fmt.take(),
+                            separator: lbl_separator.take(),
+                            shape_properties: lbl_sp.take(),
+                            text_properties: None,
+                            extensions: None,
+                        });
+                        in_data_label = false;
+                    }
+                    b"separator" if in_lbl_separator => in_lbl_separator = false,
                     b"separator" if in_dlbl_separator => in_dlbl_separator = false,
                     b"dataPt" if in_data_pt => {
                         ser_data_points.push(ChartExDataPoint {
@@ -1502,6 +1592,21 @@ fn parse_chart_ex_xml_inner<R: Read>(
                                         dlbl_sp = Some(props);
                                     }
                                 }
+                                SpCtx::DataLabel => {
+                                    if has {
+                                        lbl_sp = Some(props);
+                                    }
+                                }
+                                SpCtx::AxisTitle => {
+                                    if has {
+                                        ax_title_sp = Some(props);
+                                    }
+                                }
+                                SpCtx::Title => {
+                                    if has {
+                                        title_sp = Some(props);
+                                    }
+                                }
                                 SpCtx::Legend => {
                                     if has {
                                         legend_sp = Some(props);
@@ -1570,8 +1675,12 @@ fn parse_layout_id(s: &str) -> ChartExLayout {
 }
 
 fn get_val_attr(e: &quick_xml::events::BytesStart) -> Option<String> {
+    get_val_attr_named(e, b"val")
+}
+
+fn get_val_attr_named(e: &quick_xml::events::BytesStart, name: &[u8]) -> Option<String> {
     for attr in e.attributes().flatten() {
-        if attr.key.local_name().as_ref() == b"val" {
+        if attr.key.local_name().as_ref() == name {
             return attr.unescape_value().ok().map(|s| s.to_string());
         }
     }
