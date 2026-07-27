@@ -326,8 +326,28 @@ const REQUIRED_ENTRIES: &[&str] = &[
     "wall",
 ];
 
-/// Root element name and its immediate children, in document order.
-fn scan_part(bytes: &[u8], expected_root: &str) -> Result<(Vec<String>, bool), String> {
+/// DrawingML main namespace, where the colour-choice elements live.
+const DRAWING_MAIN_NS: &[u8] = b"http://schemas.openxmlformats.org/drawingml/2006/main";
+
+/// An immediate child of the part's root element.
+struct ScannedEntry {
+    local: String,
+    /// Bound to the chartStyle namespace.
+    in_cs_ns: bool,
+    /// Bound to the DrawingML main namespace.
+    in_a_ns: bool,
+    /// Local names of chartStyle-namespace grandchildren.
+    cs_children: Vec<String>,
+}
+
+struct ScannedPart {
+    root_attr_names: Vec<String>,
+    entries: Vec<ScannedEntry>,
+}
+
+/// Root element, its attributes, and its children in document order.
+/// Rejects namespace-ill-formed documents outright, as msxml does.
+fn scan_part(bytes: &[u8], expected_root: &str) -> Result<ScannedPart, String> {
     use quick_xml::events::Event;
     use quick_xml::name::ResolveResult;
 
@@ -337,8 +357,10 @@ fn scan_part(bytes: &[u8], expected_root: &str) -> Result<(Vec<String>, bool), S
     let mut buf = Vec::new();
     let mut depth = 0usize;
     let mut seen_root = false;
-    let mut root_has_id = false;
-    let mut children = Vec::new();
+    let mut part = ScannedPart {
+        root_attr_names: Vec::new(),
+        entries: Vec::new(),
+    };
 
     loop {
         let (ns, event) = reader
@@ -362,32 +384,42 @@ fn scan_part(bytes: &[u8], expected_root: &str) -> Result<(Vec<String>, bool), S
 
         if let Some(e) = start {
             let local = String::from_utf8_lossy(e.name().local_name().as_ref()).into_owned();
+            let bound_ns = match ns {
+                ResolveResult::Unknown(prefix) => {
+                    return Err(format!(
+                        "namespace prefix `{}` on <{}> is not bound",
+                        String::from_utf8_lossy(&prefix),
+                        local
+                    ))
+                }
+                ResolveResult::Bound(n) => Some(n.as_ref().to_vec()),
+                ResolveResult::Unbound => None,
+            };
+
             if !seen_root {
-                match ns {
-                    ResolveResult::Unknown(prefix) => {
-                        return Err(format!(
-                            "namespace prefix `{}` on <{}> is not bound",
-                            String::from_utf8_lossy(&prefix),
-                            local
-                        ))
-                    }
-                    ResolveResult::Bound(n) if n.as_ref() == CHART_STYLE_NS => {}
-                    _ => {
-                        return Err(format!(
-                            "root <{local}> is not in the chartStyle namespace"
-                        ))
-                    }
+                if bound_ns.as_deref() != Some(CHART_STYLE_NS) {
+                    return Err(format!("root <{local}> is not in the chartStyle namespace"));
                 }
                 if local != expected_root {
                     return Err(format!("root is <{local}>, expected <{expected_root}>"));
                 }
                 seen_root = true;
-                root_has_id = e
+                part.root_attr_names = e
                     .attributes()
                     .flatten()
-                    .any(|a| a.key.local_name().as_ref() == b"id");
+                    .map(|a| String::from_utf8_lossy(a.key.local_name().as_ref()).into_owned())
+                    .collect();
             } else if depth == 1 {
-                children.push(local);
+                part.entries.push(ScannedEntry {
+                    local,
+                    in_cs_ns: bound_ns.as_deref() == Some(CHART_STYLE_NS),
+                    in_a_ns: bound_ns.as_deref() == Some(DRAWING_MAIN_NS),
+                    cs_children: Vec::new(),
+                });
+            } else if depth == 2 && bound_ns.as_deref() == Some(CHART_STYLE_NS) {
+                if let Some(entry) = part.entries.last_mut() {
+                    entry.cs_children.push(local);
+                }
             }
             if !is_empty {
                 depth += 1;
@@ -399,26 +431,43 @@ fn scan_part(bytes: &[u8], expected_root: &str) -> Result<(Vec<String>, bool), S
     if !seen_root {
         return Err(format!("no <{expected_root}> root element"));
     }
-    Ok((children, root_has_id))
+    Ok(part)
 }
 
-/// Check that raw chart style bytes are a part Excel will accept.
+/// Check raw chart style bytes against the requirements Excel was
+/// observed to enforce, before they become an entire package part.
 ///
 /// Excel validates this part rather than repairing it: a missing `id`,
-/// a missing required entry, or entries out of schema order all make it
-/// refuse to open the workbook. Catching that here turns an unopenable
-/// output file into an error naming the problem.
+/// a missing required entry, entries out of schema order, and entries
+/// without their four reference children all make it refuse to open
+/// the workbook. Catching those here turns an unopenable output file
+/// into an error naming the problem. This is not full `CT_ChartStyle`
+/// validation; bytes that pass can still be rejected by Excel for
+/// defects deeper than these checks look.
 pub fn validate_chart_style_part(bytes: &[u8]) -> Result<(), String> {
-    let (children, has_id) = scan_part(bytes, "chartStyle")?;
+    let part = scan_part(bytes, "chartStyle")?;
 
-    if !has_id {
+    if !part.root_attr_names.iter().any(|a| a == "id") {
         // Optional per the schema, but Excel rejects the part without it.
         return Err("<cs:chartStyle> has no id attribute".to_string());
     }
 
+    // The required entries must appear in schema order, in the chartStyle
+    // namespace, interleaved only with optional entries. Each must carry
+    // the four reference children `CT_StyleEntry` requires: Excel rejects
+    // bare entries.
     let mut next = 0usize;
-    for child in &children {
-        if next < REQUIRED_ENTRIES.len() && child == REQUIRED_ENTRIES[next] {
+    for entry in &part.entries {
+        if next < REQUIRED_ENTRIES.len() && entry.in_cs_ns && entry.local == REQUIRED_ENTRIES[next]
+        {
+            for required in ["lnRef", "fillRef", "effectRef", "fontRef"] {
+                if !entry.cs_children.iter().any(|c| c == required) {
+                    return Err(format!(
+                        "<cs:{}> is missing its required <cs:{required}> child",
+                        entry.local
+                    ));
+                }
+            }
             next += 1;
         }
     }
@@ -431,9 +480,27 @@ pub fn validate_chart_style_part(bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-/// Check that raw chart colour style bytes are a part Excel will accept.
+/// Check raw chart colour style bytes the same way: namespace
+/// well-formedness, the right root, and what `CT_ColorStyle` marks
+/// required - the `meth` attribute (`use="required"`) and at least one
+/// colour-choice child (`a:EG_ColorChoice`, `minOccurs="1"`).
 pub fn validate_chart_color_style_part(bytes: &[u8]) -> Result<(), String> {
-    scan_part(bytes, "colorStyle").map(|_| ())
+    const COLOR_CHOICES: &[&str] = &[
+        "scrgbClr", "srgbClr", "hslClr", "sysClr", "schemeClr", "prstClr",
+    ];
+
+    let part = scan_part(bytes, "colorStyle")?;
+    if !part.root_attr_names.iter().any(|a| a == "meth") {
+        return Err("<cs:colorStyle> has no meth attribute".to_string());
+    }
+    if !part
+        .entries
+        .iter()
+        .any(|e| e.in_a_ns && COLOR_CHOICES.contains(&e.local.as_str()))
+    {
+        return Err("<cs:colorStyle> has no colour-choice child".to_string());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -575,6 +642,47 @@ mod tests {
         let out_of_order = format!(r#"<cs:chartStyle {NS} id="1">{reversed}</cs:chartStyle>"#);
         let err = validate_chart_style_part(out_of_order.as_bytes()).unwrap_err();
         assert!(err.contains("schema order"), "{err}");
+    }
+
+    /// Entries only count in the chartStyle namespace; a full set of
+    /// look-alikes in a foreign namespace is not a valid part.
+    #[test]
+    fn validation_rejects_entries_in_a_foreign_namespace() {
+        let mut body = String::new();
+        for e in ENTRIES {
+            push_entry(&mut body, e);
+        }
+        let body = body.replace("<cs:", "<x:").replace("</cs:", "</x:");
+        let xml = format!(
+            r#"<cs:chartStyle {NS} xmlns:x="urn:not-chartstyle" id="1">{body}</cs:chartStyle>"#
+        );
+        let err = validate_chart_style_part(xml.as_bytes()).unwrap_err();
+        assert!(err.contains("axisTitle"), "{err}");
+    }
+
+    /// Excel rejects entries without their reference children (observed:
+    /// a part of 31 bare elements is refused).
+    #[test]
+    fn validation_rejects_entries_missing_their_reference_children() {
+        let bare: String = ENTRIES.iter().map(|e| format!("<cs:{}/>", e.name)).collect();
+        let xml = format!(r#"<cs:chartStyle {NS} id="1">{bare}</cs:chartStyle>"#);
+        let err = validate_chart_style_part(xml.as_bytes()).unwrap_err();
+        assert!(
+            err.contains("axisTitle") && err.contains("lnRef"),
+            "{err}"
+        );
+    }
+
+    /// CT_ColorStyle requires meth and at least one colour choice.
+    #[test]
+    fn validation_rejects_a_hollow_color_style() {
+        let no_meth = format!(r#"<cs:colorStyle {NS} id="10"><a:schemeClr val="accent1"/></cs:colorStyle>"#);
+        let err = validate_chart_color_style_part(no_meth.as_bytes()).unwrap_err();
+        assert!(err.contains("meth"), "{err}");
+
+        let no_colors = format!(r#"<cs:colorStyle {NS} meth="cycle" id="10"><cs:variation/></cs:colorStyle>"#);
+        let err = validate_chart_color_style_part(no_colors.as_bytes()).unwrap_err();
+        assert!(err.contains("colour-choice"), "{err}");
     }
 
     #[test]
