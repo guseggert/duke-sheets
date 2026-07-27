@@ -146,7 +146,6 @@ fn cross_sheet_absolute_ref_round_trips() {
 /// but rendered as `#REF!` in any external tool — this test
 /// reproduces the failure mode end-to-end.
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_evaluate_cross_sheet_formulas_we_emit() {
     duke_sheets_test_harness::lo::ensure_lo();
 

@@ -100,7 +100,6 @@ fn excel_authored_xlsb_formula_bytes() -> Vec<u8> {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_byte_parity_for_xlsb_formulas_we_emit() {
     let wb = xlsb_formula_workbook();
     let (_result, writer_bytes, excel_bytes) = roundtrip_through_excel_xlsb_bytes(&wb);
@@ -173,7 +172,6 @@ fn excel_authored_xlsb_atp_bytes() -> Vec<u8> {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_byte_parity_for_xlsb_atp_functions_we_emit() {
     let wb = xlsb_atp_workbook();
     let (_result, writer_bytes, excel_bytes) = roundtrip_through_excel_xlsb_bytes(&wb);
@@ -196,7 +194,6 @@ fn excel_byte_parity_for_xlsb_atp_functions_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_preserves_external_udf_xlsb_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
@@ -229,7 +226,6 @@ fn excel_preserves_external_udf_xlsb_we_emit() {
 /// against Excel's authoring is sufficient (a malformed token stream would not
 /// match Excel's bytes).
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_byte_parity_for_all_xlsb_atp_functions_we_emit() {
     use duke_sheets_xlsb::XlsbWriter;
     use std::io::Cursor;
@@ -320,7 +316,6 @@ fn excel_byte_parity_for_all_xlsb_atp_functions_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_hyperlinks_we_emit() {
     let mut wb = Workbook::new();
     wb.add_worksheet_with_name("Other").unwrap();
@@ -394,7 +389,6 @@ fn excel_can_read_hyperlinks_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_mailto_hyperlink_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
@@ -433,7 +427,6 @@ fn excel_can_read_mailto_hyperlink_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_evaluate_cross_sheet_formulas_we_emit() {
     let mut wb = Workbook::new();
     wb.rename_worksheet(0, "Calc").unwrap();
@@ -494,7 +487,6 @@ fn excel_can_evaluate_cross_sheet_formulas_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_autofilter_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
@@ -551,7 +543,6 @@ fn excel_can_read_autofilter_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_dynamic_filter_we_emit() {
     use duke_sheets_core::auto_filter::{DynamicFilter, DynamicFilterType};
 
@@ -598,7 +589,6 @@ fn excel_can_read_dynamic_filter_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_color_filter_we_emit() {
     use duke_sheets_core::auto_filter::ColorFilter;
 
@@ -641,7 +631,6 @@ fn excel_can_read_color_filter_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_custom_filter_we_emit() {
     use duke_sheets_core::auto_filter::{CustomFilterCondition, CustomFilters, FilterOperator};
 
@@ -695,7 +684,6 @@ fn excel_can_read_custom_filter_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_discrete_value_filter_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
@@ -740,7 +728,6 @@ fn excel_can_read_discrete_value_filter_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_data_validations_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
@@ -832,7 +819,6 @@ fn excel_can_read_data_validations_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_conditional_formats_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
@@ -913,7 +899,6 @@ fn excel_can_read_conditional_formats_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_preserves_xlsb_advanced_conditional_formats_we_emit() {
     use duke_sheets_core::conditional_format::{CfValueType, IconSetStyle};
 
@@ -1009,7 +994,6 @@ fn excel_preserves_xlsb_advanced_conditional_formats_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_preserves_xlsb_validation_messages_we_emit() {
     use duke_sheets_core::validation::ValidationErrorStyle;
 
@@ -1057,7 +1041,6 @@ fn excel_preserves_xlsb_validation_messages_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_preserves_xlsb_split_panes_we_emit() {
     use duke_sheets_core::worksheet::SplitPanes;
 
@@ -1084,7 +1067,6 @@ fn excel_preserves_xlsb_split_panes_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_preserves_xlsb_sheet_permission_flags_we_emit() {
     let mut wb = Workbook::new();
     wb.worksheet_mut(0)
@@ -1122,7 +1104,6 @@ fn excel_preserves_xlsb_sheet_permission_flags_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_rich_text_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
@@ -1206,7 +1187,6 @@ fn excel_can_read_rich_text_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_evaluate_named_range_formulas_we_emit() {
     let mut wb = Workbook::new();
     wb.rename_worksheet(0, "Calc").unwrap();
@@ -1281,7 +1261,6 @@ fn excel_can_evaluate_named_range_formulas_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_named_range_comment_we_emit() {
     use duke_sheets_core::named_range::{NameScope, NamedRange};
 
@@ -1304,7 +1283,6 @@ fn excel_can_read_named_range_comment_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_evaluate_intersection_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
@@ -1343,7 +1321,6 @@ fn excel_can_evaluate_intersection_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_evaluate_union_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
@@ -1379,7 +1356,6 @@ fn excel_can_evaluate_union_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_print_names_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
@@ -1418,7 +1394,6 @@ fn excel_can_read_print_names_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_visual_state_we_emit() {
     let mut wb = Workbook::new();
     wb.rename_worksheet(0, "Public").unwrap();
@@ -1493,7 +1468,6 @@ fn excel_can_read_visual_state_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_protection_state_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
@@ -1525,7 +1499,6 @@ fn excel_can_read_protection_state_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_preserves_workbook_protection_and_protected_ranges_we_emit() {
     use duke_sheets_core::{ProtectedRange, WorkbookProtection};
 
@@ -1571,7 +1544,6 @@ fn excel_preserves_workbook_protection_and_protected_ranges_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_dimensions_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
@@ -1611,7 +1583,6 @@ fn excel_can_read_dimensions_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_table_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
@@ -1719,7 +1690,6 @@ fn excel_can_read_table_we_emit() {
 /// BrtLegacyDrawing; the Repaired check also pins the corrected
 /// record id (0x0227).
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_xlsb_form_controls_we_emit() {
     use duke_sheets_chart::{CellMarker, DrawingAnchor};
     use duke_sheets_core::table::{Table, TableColumn};
@@ -1852,7 +1822,6 @@ fn excel_can_read_xlsb_form_controls_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_preserves_xlsb_custom_metric_control_anchor_we_emit() {
     use duke_sheets_chart::{CellMarker, DrawingAnchor};
     use duke_sheets_core::{CheckState, FormControl, FormControlKind};
@@ -1889,7 +1858,6 @@ fn excel_preserves_xlsb_custom_metric_control_anchor_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_preserves_xlsb_control_visual_metadata_we_emit() {
     use duke_sheets_chart::{CellMarker, DrawingAnchor};
     use duke_sheets_core::style::{HorizontalAlignment, Underline, VerticalAlignment};
@@ -1995,7 +1963,6 @@ const TEST_PNG_1X1: &[u8] = &[
 /// part must use the MS-XLSB record ids (the old 0x0278-based emit
 /// made Excel refuse the file outright).
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_xlsb_comment_we_emit() {
     use duke_sheets_core::CellComment;
 
@@ -2023,7 +1990,6 @@ fn excel_can_read_xlsb_comment_we_emit() {
 /// A PNG picture survives the Excel XLSB round-trip with its bytes
 /// verbatim (Excel re-packages media parts without re-encoding).
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_xlsb_png_image_we_emit() {
     use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
 
@@ -2072,7 +2038,6 @@ fn excel_can_read_xlsb_png_image_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_preserves_xlsb_one_cell_and_absolute_images_we_emit() {
     use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
     use duke_sheets_core::DrawingObject;
@@ -2146,7 +2111,6 @@ fn excel_preserves_xlsb_one_cell_and_absolute_images_we_emit() {
 /// old writer never emitted model charts at all, leaving a dangling
 /// BrtDrawing pointer).
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_xlsb_chart_we_emit() {
     use duke_sheets_chart::{
         CellMarker, Chart, ChartType, DataReference, DataSeries, DrawingAnchor,
@@ -2193,7 +2157,6 @@ fn excel_can_read_xlsb_chart_we_emit() {
 /// native shapes rides its com14:compatSp placeholder twin, which
 /// Excel keeps in the drawing part's document order.
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_preserves_xlsb_drawing_z_order_we_emit() {
     use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
     use duke_sheets_core::{CheckState, DrawingKind, DrawingObject, FormControl, FormControlKind};
@@ -2280,7 +2243,6 @@ fn excel_preserves_xlsb_drawing_z_order_we_emit() {
 /// part, a hidden form control rides the VML shape's
 /// `visibility:hidden` style, and the visible siblings stay visible.
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_preserves_hidden_drawing_flags_we_emit() {
     use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
     use duke_sheets_core::{CheckState, DrawingObject, FormControl, FormControlKind};
@@ -2380,7 +2342,6 @@ fn excel_preserves_hidden_drawing_flags_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_preserves_xlsb_basic_shape_we_emit() {
     use duke_sheets_chart::{CellMarker, DrawingAnchor};
     use duke_sheets_core::style::{HorizontalAlignment, VerticalAlignment};
@@ -2487,7 +2448,6 @@ fn excel_preserves_xlsb_basic_shape_we_emit() {
 /// the re-read model proves Excel re-saved the elements.
 // features: Form control unmodeled ClientData passthrough
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_preserves_unmodeled_client_data_we_emit_xlsb() {
     use duke_sheets_chart::{CellMarker, DrawingAnchor};
     use duke_sheets_core::{FormControl, FormControlKind};

@@ -51,7 +51,6 @@ fn last_sheet_active_round_trips() {
 /// LibreOffice must accept the WINDOW1 record's iTabCur (active
 /// sheet index) without rejecting the workbook.
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_read_active_sheet_we_emit() {
     duke_sheets_test_harness::lo::ensure_lo();
 

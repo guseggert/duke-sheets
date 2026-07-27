@@ -295,7 +295,6 @@ fn full_page_setup_combination_round_trips() {
 /// length, missing reserved fields) would cause LO's loader to flag
 /// the file as corrupt or recompute a different page layout.
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_read_page_setup_we_emit() {
     duke_sheets_test_harness::lo::ensure_lo();
 

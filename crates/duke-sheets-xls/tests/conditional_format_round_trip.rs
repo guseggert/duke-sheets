@@ -169,7 +169,6 @@ fn rule_with_multiple_ranges_round_trips() {
 /// and read the underlying cell values, which is enough to catch
 /// envelope-level malformations.
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_read_conditional_formats_we_emit() {
     duke_sheets_test_harness::lo::ensure_lo();
 

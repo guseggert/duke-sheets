@@ -51,7 +51,6 @@ fn write_encrypted_to_shared(profile: &EncryptionProfile) -> PathBuf {
 }
 
 #[test]
-#[ignore = "requires running LibreOffice on 127.0.0.1:2002"]
 fn lo_can_read_aes256_default_profile() {
     require_lo();
     let path = write_encrypted_to_shared(&EncryptionProfile::agile_default());

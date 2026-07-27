@@ -271,7 +271,6 @@ fn three_run_rich_text_round_trips_text_and_run_count() {
 /// fidelity isn't queried via UNO since that requires walking
 /// XTextField nodes which is fragile across LO versions.
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_read_rich_text_we_emit() {
     duke_sheets_test_harness::lo::ensure_lo();
 

@@ -806,11 +806,30 @@ fn chart_roundtrip_through_excel() {
     );
 }
 
+/// Path to `data/chart-parity.xlsx`, driving Excel to build it if it isn't
+/// there yet. Generated once per process; `data/` is gitignored, so the
+/// file is a local build artifact rather than a checked-in fixture.
+pub fn chart_parity_fixture() -> PathBuf {
+    static PATH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    PATH.get_or_init(|| {
+        let path = repo_fixture_path();
+        if !path.exists() {
+            generate_chart_parity_spreadsheet();
+        }
+        assert!(
+            path.exists(),
+            "chart parity fixture still missing after generation: {}",
+            path.display()
+        );
+        path
+    })
+    .clone()
+}
+
 /// Generate a chart parity fixture via Excel COM.
 ///
 /// Excel creates charts from scratch, giving us ground-truth chart XML.
 /// Saved to `data/chart-parity.xlsx` for offline verification.
-#[test]
 fn generate_chart_parity_spreadsheet() {
     let bridge = excel_bridge();
     let fixture = temp_fixture();
@@ -957,13 +976,20 @@ fn chart_type_equivalent(a: &ChartType, b: &ChartType) -> bool {
     )
 }
 
+fn repo_fixture_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(REPO_DATA_DIR)
+        .join("chart-parity.xlsx")
+}
+
 fn copy_fixture_into_repo(
     host_path: &std::path::Path,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()?;
-    let dest = repo_root.join(REPO_DATA_DIR).join("chart-parity.xlsx");
+    let dest = repo_fixture_path();
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     std::fs::copy(host_path, &dest)?;
     println!("Copied chart parity fixture to {}", dest.display());
     Ok(())
@@ -1440,7 +1466,6 @@ fn chart_types_bisect() {
             }
             Err(e) => (false, format!("open_workbook error: {e}")),
         };
-        drop(excel);
 
         results.push((spec.name, pass, detail));
         cleanup_fixture(&fixture);

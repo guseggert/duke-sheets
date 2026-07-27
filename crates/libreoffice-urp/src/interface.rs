@@ -41,6 +41,8 @@ pub enum ParamType {
     Enum(&'static str),
     SequenceOfPropertyValue,
     SequenceOfProtocolProperty,
+    /// `sequence<sequence<any>>` - a row-major 2D cell block.
+    SequenceOfSequenceOfAny,
 }
 
 impl ParamType {
@@ -62,6 +64,9 @@ impl ParamType {
             ParamType::SequenceOfProtocolProperty => {
                 Type::sequence("com.sun.star.bridge.ProtocolProperty")
             }
+            // sequence<sequence<any>>, the row-major payload of
+            // XCellRangeData::setDataArray.
+            ParamType::SequenceOfSequenceOfAny => Type::sequence("[]any"),
         }
     }
 }
@@ -783,6 +788,22 @@ pub fn get_data_array() -> MethodDef {
         index: 3,
         params: &[],
         return_type: Type::sequence("[]any"), // sequence<sequence<any>>
+        one_way: false,
+    }
+}
+
+/// Write a whole rectangular block in one call.
+///
+/// Each `any` must be a Double (number) or String (text); empty cells are
+/// the empty string. This exists to collapse per-cell round-trips: writing
+/// 300 cells one at a time costs ~900 round-trips at ~57ms each, versus two
+/// for the batch path.
+pub fn set_data_array() -> MethodDef {
+    MethodDef {
+        name: "setDataArray",
+        index: 4,
+        params: &[ParamType::SequenceOfSequenceOfAny],
+        return_type: Type::void(),
         one_way: false,
     }
 }

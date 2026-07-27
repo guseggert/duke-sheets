@@ -119,7 +119,6 @@ fn no_merges_emits_no_record_and_round_trips_clean() {
 }
 
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_read_merged_cells_we_emit() {
     duke_sheets_test_harness::lo::ensure_lo();
 

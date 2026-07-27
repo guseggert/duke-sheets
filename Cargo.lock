@@ -814,6 +814,7 @@ name = "duke-sheets-excel-com"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "duke-sheets",
  "duke-sheets-chart",
  "duke-sheets-core",
  "duke-sheets-crypto",

@@ -12,7 +12,6 @@ use duke_sheets_xlsx::XlsxWriter;
 use crate::{lo_bridge, runtime, temp_fixture_path};
 
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_open_xlsx_with_form_controls_we_emit() {
     let anchor = |fc: u16, fr: u32, tc: u16, tr: u32| DrawingAnchor::TwoCell {
         from: CellMarker {

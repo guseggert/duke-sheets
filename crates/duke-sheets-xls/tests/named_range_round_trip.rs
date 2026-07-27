@@ -154,7 +154,6 @@ fn multiple_names_round_trip() {
 /// — this LO test verifies the formula actually computes the right
 /// value when evaluated.
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_evaluate_named_range_formulas_we_emit() {
     duke_sheets_test_harness::lo::ensure_lo();
 

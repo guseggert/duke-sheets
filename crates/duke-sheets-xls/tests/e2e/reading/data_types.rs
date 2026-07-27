@@ -79,10 +79,13 @@ fn test_xls_large_sst_with_continue() {
         let lo = lo_bridge().await.unwrap();
         let mut b = lo.lock().await;
         let mut wb = b.create_workbook().await.unwrap();
-        for (i, s) in expected.iter().enumerate() {
-            let cell_ref = format!("A{}", i + 1);
-            wb.set_cell_value(&cell_ref, s.as_str()).await.unwrap();
-        }
+        // One setDataArray call instead of 300 per-cell writes: each of
+        // those costs ~3 URP round-trips, so this column alone was ~900.
+        let rows: Vec<Vec<duke_sheets_libreoffice::CellValue>> = expected
+            .iter()
+            .map(|s| vec![duke_sheets_libreoffice::CellValue::String(s.clone())])
+            .collect();
+        wb.set_range_values(0, 0, 0, &rows).await.unwrap();
         wb.save_as_xls(path.to_str().unwrap()).await.unwrap();
         wb.close().await.unwrap();
     });

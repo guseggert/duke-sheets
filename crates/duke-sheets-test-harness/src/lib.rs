@@ -16,5 +16,4 @@
 //! ready the test should fail loud, not silently skip.
 
 pub mod excel;
-pub mod fixture;
 pub mod lo;

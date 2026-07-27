@@ -20,10 +20,13 @@ FROM ubuntu:22.04
 # Avoid interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install LibreOffice
+# LibreOffice does the work; haproxy fronts N soffice instances on one
+# port with `balance leastconn`. Tests hold one connection per test body,
+# so "fewest active connections" is exactly "fewest running tests".
 RUN apt-get update && apt-get install -y \
     libreoffice \
     libreoffice-calc \
+    haproxy \
     && rm -rf /var/lib/apt/lists/*
 
 # Create shared temp directory for fixture files

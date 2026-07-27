@@ -96,7 +96,6 @@ fn mixed_visibility_states_in_one_workbook_round_trip() {
 
 /// LibreOffice must accept BoundSheet8.hsState = Hidden / VeryHidden.
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_read_sheet_visibility_we_emit() {
     duke_sheets_test_harness::lo::ensure_lo();
 

@@ -360,7 +360,6 @@ fn many_formulas_round_trip() {
 }
 
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_evaluate_sum_function_we_emit() {
     duke_sheets_test_harness::lo::ensure_lo();
 
@@ -404,7 +403,6 @@ fn lo_can_evaluate_sum_function_we_emit() {
 }
 
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_evaluate_arithmetic_formula_we_emit() {
     duke_sheets_test_harness::lo::ensure_lo();
 

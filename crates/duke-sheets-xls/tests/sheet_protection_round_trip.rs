@@ -177,7 +177,6 @@ fn protection_persists_per_sheet() {
 
 /// LibreOffice must accept PROTECT + PASSWORD records.
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_read_sheet_protection_we_emit() {
     duke_sheets_test_harness::lo::ensure_lo();
 
