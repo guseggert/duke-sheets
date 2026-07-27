@@ -504,6 +504,38 @@ export interface ChartExTitle {
   shapeProperties?: ChartShapeProperties;
 }
 
+export interface ChartExGridlines {
+  shapeProperties?: ChartShapeProperties;
+}
+
+export interface ChartExDataLabelOverride {
+  idx: number;
+  position?: string;
+  visibilitySeriesName?: boolean;
+  visibilityCategoryName?: boolean;
+  visibilityValue?: boolean;
+  numberFormat?: ChartNumberFormat;
+  separator?: string;
+  shapeProperties?: ChartShapeProperties;
+}
+
+export interface ChartExColorPosition {
+  positionType: 'extremeValue' | 'number' | 'percent';
+  value?: number;
+}
+
+export interface ChartExSeriesLayoutProperties {
+  parentLabelLayout?: string;
+  regionLabelLayout?: string;
+  visibility?: { connectorLines?: boolean; meanLine?: boolean; meanMarker?: boolean; nonoutliers?: boolean; outliers?: boolean };
+  aggregation: boolean;
+  binning?: { intervalClosed?: string; underflow?: string; overflow?: string; binSize?: number; binCount?: number };
+  geography?: { projectionType?: string; viewedRegionType?: string; cultureLanguage?: string; cultureRegion?: string; attribution?: string };
+  statistics?: { quartileMethod?: string };
+  /** Absent when the cx:subtotals element is absent; [] when it is present but empty. */
+  subtotals?: number[];
+}
+
 export interface ChartExSeries {
   layout: string;
   dataId: number;
@@ -512,10 +544,27 @@ export interface ChartExSeries {
   ownerIdx?: number;
   formatIdx?: number;
   text?: { formula?: string; value?: string };
-  dataLabels?: { position?: string; visibilitySeriesName?: boolean; visibilityCategoryName?: boolean; visibilityValue?: boolean; numberFormat?: ChartNumberFormat; separator?: string; shapeProperties?: ChartShapeProperties; hiddenLabels: number[] };
+  dataLabels?: { position?: string; visibilitySeriesName?: boolean; visibilityCategoryName?: boolean; visibilityValue?: boolean; numberFormat?: ChartNumberFormat; separator?: string; shapeProperties?: ChartShapeProperties; overrides: ChartExDataLabelOverride[]; hiddenLabels: number[] };
   dataPoints: Array<{ idx: number; shapeProperties?: ChartShapeProperties }>;
+  layoutProperties?: ChartExSeriesLayoutProperties;
   axisIds: number[];
   valueColors: boolean;
+  valueColorPositions?: { count?: number; min?: ChartExColorPosition; mid?: ChartExColorPosition; max?: ChartExColorPosition };
+  shapeProperties?: ChartShapeProperties;
+}
+
+export interface ChartExAxis {
+  id: number;
+  hidden?: boolean;
+  scaling: { scalingType: string; gapWidth?: number; min?: number; max?: number; majorUnit?: number; minorUnit?: number };
+  title?: { text?: string; shapeProperties?: ChartShapeProperties };
+  units?: { unit?: string };
+  majorGridlines?: ChartExGridlines;
+  minorGridlines?: ChartExGridlines;
+  majorTickMarks?: string;
+  minorTickMarks?: string;
+  tickLabels: boolean;
+  numberFormat?: ChartNumberFormat;
   shapeProperties?: ChartShapeProperties;
 }
 
@@ -526,7 +575,7 @@ export interface ChartEx {
   fallbackImg?: string;
   title?: ChartExTitle;
   data: Array<{ id: number; dimensions: Array<{ dimType: string; formula?: string; nfFormula?: string }> }>;
-  plotArea: { plotSurface?: ChartShapeProperties; series: ChartExSeries[]; axes: Array<{ id: number; hidden?: boolean; scaling: { scalingType: string; gapWidth?: number; min?: number; max?: number; majorUnit?: number; minorUnit?: number }; tickLabels: boolean; shapeProperties?: ChartShapeProperties }>; shapeProperties?: ChartShapeProperties };
+  plotArea: { plotSurface?: ChartShapeProperties; series: ChartExSeries[]; axes: ChartExAxis[]; shapeProperties?: ChartShapeProperties };
   legend?: { position?: string; align?: string; overlay?: boolean; offset?: { top?: number; left?: number }; shapeProperties?: ChartShapeProperties };
   shapeProperties?: ChartShapeProperties;
   formatOverrides: Array<{ idx: number; shapeProperties?: ChartShapeProperties }>;
