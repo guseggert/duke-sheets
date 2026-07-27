@@ -761,3 +761,142 @@ fn xlsb_empty_author_comment_keeps_attribution() {
         "anonymous comment must not inherit another author"
     );
 }
+
+const WATERFALL_CHART_EX: &[u8] = br#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><cx:chartData><cx:data id="0"><cx:strDim type="cat"><cx:f>Sheet1!$A$1:$A$3</cx:f><cx:lvl ptCount="3"><cx:pt idx="0">a</cx:pt><cx:pt idx="1">b</cx:pt><cx:pt idx="2">c</cx:pt></cx:lvl></cx:strDim><cx:numDim type="val"><cx:f>Sheet1!$B$1:$B$3</cx:f><cx:lvl ptCount="3" formatCode="General"><cx:pt idx="0">1</cx:pt><cx:pt idx="1">2</cx:pt><cx:pt idx="2">3</cx:pt></cx:lvl></cx:numDim></cx:data></cx:chartData><cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="waterfall"><cx:tx><cx:txData><cx:f>Sheet1!$B$1</cx:f><cx:v>Series1</cx:v></cx:txData></cx:tx><cx:dataId val="0"/><cx:layoutPr><cx:subtotals/></cx:layoutPr></cx:series></cx:plotAreaRegion><cx:axis id="0"><cx:catScaling gapWidth="0.5"/><cx:tickLabels/></cx:axis><cx:axis id="1"><cx:valScaling/><cx:majorGridlines/><cx:tickLabels/></cx:axis></cx:plotArea></cx:chart></cx:chartSpace>"#;
+
+/// Excel refuses a chartEx without chart style and chart colour style
+/// sibling parts in XLSB exactly as in XLSX, so the XLSB writer must
+/// also generate the defaults for a model-built chart.
+#[test]
+fn xlsb_model_built_chart_ex_gets_generated_style_and_color_parts() {
+    use std::io::Read;
+
+    let chart_ex =
+        duke_sheets_chart::parse::parse_chart_ex_xml(WATERFALL_CHART_EX).expect("parse chartEx");
+    assert!(chart_ex.raw_chart_style.is_none());
+    assert!(chart_ex.raw_chart_color_style.is_none());
+
+    let mut workbook = Workbook::new();
+    workbook
+        .worksheet_mut(0)
+        .unwrap()
+        .add_drawing(DrawingObject::chart_ex(chart_ex).with_anchor(two_cell(0, 0, 4, 4)))
+        .unwrap();
+
+    let mut output = Cursor::new(Vec::new());
+    XlsbWriter::write(&workbook, &mut output).expect("write xlsb");
+    let mut archive = zip::ZipArchive::new(Cursor::new(output.into_inner())).unwrap();
+
+    let names: Vec<String> = archive.file_names().map(str::to_string).collect();
+    for part in ["xl/charts/style1.xml", "xl/charts/colors1.xml"] {
+        assert!(names.contains(&part.to_string()), "{part} missing: {names:?}");
+    }
+
+    let mut read = |name: &str| {
+        let mut s = String::new();
+        archive.by_name(name).unwrap().read_to_string(&mut s).unwrap();
+        s
+    };
+
+    let content_types = read("[Content_Types].xml");
+    for ct in [
+        "application/vnd.ms-office.chartstyle+xml",
+        "application/vnd.ms-office.chartcolorstyle+xml",
+    ] {
+        assert!(content_types.contains(ct), "content type {ct} missing");
+    }
+
+    let rels = read("xl/charts/_rels/chartEx1.xml.rels");
+    for (kind, target) in [
+        ("chartStyle", "style1.xml"),
+        ("chartColorStyle", "colors1.xml"),
+    ] {
+        assert!(
+            rels.contains(&format!("/relationships/{kind}\"")) && rels.contains(target),
+            "chartEx rels missing {kind} -> {target}: {rels}"
+        );
+    }
+}
+
+/// Same contract as the XLSX writer: bytes Excel would reject fail the
+/// write with an error naming the field and the defect.
+#[test]
+fn xlsb_write_rejects_a_raw_chart_style_excel_would_refuse() {
+    let mut chart_ex =
+        duke_sheets_chart::parse::parse_chart_ex_xml(WATERFALL_CHART_EX).expect("parse chartEx");
+    chart_ex.raw_chart_style = Some(b"<cs:chartStyle/>".to_vec());
+
+    let mut workbook = Workbook::new();
+    workbook
+        .worksheet_mut(0)
+        .unwrap()
+        .add_drawing(DrawingObject::chart_ex(chart_ex).with_anchor(two_cell(0, 0, 4, 4)))
+        .unwrap();
+
+    let err = XlsbWriter::write(&workbook, Cursor::new(Vec::new()))
+        .expect_err("garbage raw_chart_style must fail the write");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("raw_chart_style") && msg.contains("not bound"),
+        "error must name the field and the defect: {msg}"
+    );
+}
+
+/// Standard charts and chartEx charts are numbered independently, but
+/// both families name their style parts styleN.xml/colorsN.xml, so the
+/// chartEx numbers must continue above the standard charts' or the two
+/// collide on style1.xml. Also pins that caller-supplied chartEx style
+/// bytes are written verbatim while the missing colours part gets the
+/// generated default.
+#[test]
+fn xlsb_standard_chart_and_chart_ex_style_parts_do_not_collide() {
+    use std::io::Read;
+
+    let standard_style = duke_sheets_chart::write::default_chart_style_bytes();
+    let chart_ex_style = String::from_utf8(duke_sheets_chart::write::default_chart_style_bytes())
+        .unwrap()
+        .replace(r#" id="201""#, r#" id="999""#)
+        .into_bytes();
+
+    let mut workbook = Workbook::new();
+    let sheet = workbook.worksheet_mut(0).unwrap();
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$3")));
+    chart.raw_chart_style = Some(standard_style.clone());
+    sheet.add_chart(chart, two_cell(2, 2, 8, 12)).unwrap();
+
+    let mut chart_ex =
+        duke_sheets_chart::parse::parse_chart_ex_xml(WATERFALL_CHART_EX).expect("parse chartEx");
+    chart_ex.raw_chart_style = Some(chart_ex_style.clone());
+    sheet
+        .add_drawing(DrawingObject::chart_ex(chart_ex).with_anchor(two_cell(10, 2, 16, 12)))
+        .unwrap();
+
+    let mut output = Cursor::new(Vec::new());
+    XlsbWriter::write(&workbook, &mut output).expect("write xlsb");
+    let mut archive = zip::ZipArchive::new(Cursor::new(output.into_inner())).unwrap();
+
+    let mut read = |name: &str| -> Vec<u8> {
+        let mut v = Vec::new();
+        archive
+            .by_name(name)
+            .unwrap_or_else(|_| panic!("{name} missing"))
+            .read_to_end(&mut v)
+            .unwrap();
+        v
+    };
+
+    assert_eq!(read("xl/charts/style1.xml"), standard_style, "standard chart style");
+    assert_eq!(read("xl/charts/style2.xml"), chart_ex_style, "chartEx style must be verbatim");
+    assert_eq!(
+        read("xl/charts/colors2.xml"),
+        duke_sheets_chart::write::default_chart_color_style_bytes(),
+        "chartEx colours must be the generated default"
+    );
+
+    let rels = String::from_utf8(read("xl/charts/_rels/chartEx1.xml.rels")).unwrap();
+    assert!(
+        rels.contains(r#"Target="style2.xml""#) && rels.contains(r#"Target="colors2.xml""#),
+        "chartEx rels must point at the offset numbers: {rels}"
+    );
+}
