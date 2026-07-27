@@ -1,3 +1,6 @@
+//! Reader-side parity assertions against `data/chart-parity.xlsx`,
+//! beside the generator that builds it.
+
 //! Chart parity test: read an Excel-generated chart fixture and verify
 //! that duke-sheets correctly interprets all chart types, series, and
 //! metadata that Excel wrote.
@@ -11,24 +14,11 @@
 use duke_sheets::prelude::*;
 use duke_sheets::{AxisPosition, DataReference};
 use duke_sheets_chart::{AxisType, LegendPosition};
-use duke_sheets_test_harness::fixture::ensure_via_cargo_test;
+use crate::chart_parity::chart_parity_fixture;
 
 #[test]
-#[ignore = "auto-generates data/chart-parity.xlsx via Excel COM on first run"]
 fn chart_parity_matches_excel() {
-    let fixture_path = ensure_via_cargo_test(
-        "data/chart-parity.xlsx",
-        &[
-            "-p",
-            "duke-sheets-excel-com",
-            "--test",
-            "e2e",
-            "generate_chart_parity_spreadsheet",
-            "--",
-            "--ignored",
-            "--nocapture",
-        ],
-    );
+    let fixture_path = chart_parity_fixture();
 
     let wb = XlsxReader::read_file(&fixture_path)
         .unwrap_or_else(|e| panic!("read {}: {e}", fixture_path.display()));

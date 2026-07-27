@@ -1,98 +1,94 @@
-use std::path::PathBuf;
+//! XLSB parity fixtures: Excel converts the XLSX parity workbooks to
+//! `.xlsb` via SaveAs, giving ground-truth BIFF12 to read back.
+//!
+//! Both fixtures chain to their XLSX source, which generates itself if
+//! absent, so a clean checkout needs no manual fixture step.
 
+use std::path::PathBuf;
+use std::sync::OnceLock;
+
+use crate::chart_parity::chart_parity_fixture;
+use crate::formula_parity::formula_parity_fixture;
 use crate::{ensure_vm_temp_dir, excel_bridge, pull_file_from_vm, push_file_to_vm, TempFixture};
 
-const XLSX_FIXTURE_PATH: &str = "data/formula-parity.xlsx";
-const XLSB_REPO_PATH: &str = "data/formula-parity.xlsb";
-const VM_INPUT: &str = r"C:\temp\formula_parity_src.xlsx";
-const VM_OUTPUT: &str = r"C:\temp\formula_parity.xlsb";
+/// `xlExcel12` - the `.xlsb` SaveAs FileFormat.
+const XL_EXCEL12: i32 = 50;
 
-const CHART_XLSX_PATH: &str = "data/chart-parity.xlsx";
-const CHART_XLSB_PATH: &str = "data/chart-parity.xlsb";
-const CHART_VM_INPUT: &str = r"C:\temp\chart_parity_src.xlsx";
-const CHART_VM_OUTPUT: &str = r"C:\temp\chart_parity.xlsb";
-
-#[test]
-fn generate_xlsb_parity_from_xlsx() {
-    let xlsx_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+fn repo_path(relative: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
-        .join(XLSX_FIXTURE_PATH);
-    if !xlsx_path.exists() {
-        panic!("{XLSX_FIXTURE_PATH} not found - run `mise run generate:formula-parity` first");
-    }
+        .join(relative)
+}
 
+/// Convert `source_xlsx` to XLSB through Excel and copy the result to
+/// `repo_relative`, returning its path.
+fn convert_to_xlsb(source_xlsx: &PathBuf, stem: &str, repo_relative: &str) -> PathBuf {
     let bridge = excel_bridge();
     let excel = bridge.lock().unwrap();
     ensure_vm_temp_dir();
 
-    let input_fixture = TempFixture {
-        host_path: xlsx_path.clone(),
-        vm_path: VM_INPUT.to_string(),
-        name: "formula_parity_src.xlsx".to_string(),
-    };
-    push_file_to_vm(&input_fixture);
+    let vm_input = format!(r"C:\temp\{stem}_src.xlsx");
+    let vm_output = format!(r"C:\temp\{stem}.xlsb");
+
+    push_file_to_vm(&TempFixture {
+        host_path: source_xlsx.clone(),
+        vm_path: vm_input.clone(),
+        name: format!("{stem}_src.xlsx"),
+    });
 
     let wb = excel
-        .open_workbook(VM_INPUT)
-        .expect("open formula-parity.xlsx");
-
-    // FileFormat=50 = xlExcel12 (.xlsb)
-    wb.save_as(VM_OUTPUT, 50).expect("SaveAs XLSB");
+        .open_workbook(&vm_input)
+        .unwrap_or_else(|e| panic!("open {}: {e}", source_xlsx.display()));
+    wb.save_as(&vm_output, XL_EXCEL12).expect("SaveAs XLSB");
     wb.close().expect("close");
 
-    let output_fixture = TempFixture {
-        host_path: PathBuf::from("/tmp/duke-sheets-excel/formula_parity.xlsb"),
-        vm_path: VM_OUTPUT.to_string(),
-        name: "formula_parity.xlsb".to_string(),
+    let pulled = TempFixture {
+        host_path: PathBuf::from(format!("/tmp/duke-sheets-excel/{stem}.xlsb")),
+        vm_path: vm_output,
+        name: format!("{stem}.xlsb"),
     };
     let _ = std::fs::create_dir_all("/tmp/duke-sheets-excel");
-    pull_file_from_vm(&output_fixture);
+    pull_file_from_vm(&pulled);
 
-    let dest = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join(XLSB_REPO_PATH);
-    std::fs::copy(&output_fixture.host_path, &dest).expect("copy to data/formula-parity.xlsb");
-    println!("Generated {}", dest.display());
+    let dest = repo_path(repo_relative);
+    if let Some(parent) = dest.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::copy(&pulled.host_path, &dest)
+        .unwrap_or_else(|e| panic!("copy to {}: {e}", dest.display()));
+    dest
+}
+
+/// Path to `data/formula-parity.xlsb`, generating it (and its XLSX source)
+/// if absent.
+pub fn formula_parity_xlsb() -> PathBuf {
+    static PATH: OnceLock<PathBuf> = OnceLock::new();
+    PATH.get_or_init(|| {
+        let dest = repo_path("data/formula-parity.xlsb");
+        if dest.exists() {
+            return dest;
+        }
+        convert_to_xlsb(&formula_parity_fixture(), "formula_parity", "data/formula-parity.xlsb")
+    })
+    .clone()
+}
+
+/// Path to `data/chart-parity.xlsb`, generating it (and its XLSX source)
+/// if absent.
+pub fn chart_parity_xlsb() -> PathBuf {
+    static PATH: OnceLock<PathBuf> = OnceLock::new();
+    PATH.get_or_init(|| {
+        let dest = repo_path("data/chart-parity.xlsb");
+        if dest.exists() {
+            return dest;
+        }
+        convert_to_xlsb(&chart_parity_fixture(), "chart_parity", "data/chart-parity.xlsb")
+    })
+    .clone()
 }
 
 #[test]
-fn generate_xlsb_chart_parity_from_xlsx() {
-    let xlsx_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join(CHART_XLSX_PATH);
-    if !xlsx_path.exists() {
-        panic!("{CHART_XLSX_PATH} not found - run `mise run generate:chart-parity` first");
-    }
-
-    let bridge = excel_bridge();
-    let excel = bridge.lock().unwrap();
-    ensure_vm_temp_dir();
-
-    let input_fixture = TempFixture {
-        host_path: xlsx_path.clone(),
-        vm_path: CHART_VM_INPUT.to_string(),
-        name: "chart_parity_src.xlsx".to_string(),
-    };
-    push_file_to_vm(&input_fixture);
-
-    let wb = excel
-        .open_workbook(CHART_VM_INPUT)
-        .expect("open chart-parity.xlsx");
-
-    wb.save_as(CHART_VM_OUTPUT, 50).expect("SaveAs XLSB");
-    wb.close().expect("close");
-
-    let output_fixture = TempFixture {
-        host_path: PathBuf::from("/tmp/duke-sheets-excel/chart_parity.xlsb"),
-        vm_path: CHART_VM_OUTPUT.to_string(),
-        name: "chart_parity.xlsb".to_string(),
-    };
-    let _ = std::fs::create_dir_all("/tmp/duke-sheets-excel");
-    pull_file_from_vm(&output_fixture);
-
-    let dest = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join(CHART_XLSB_PATH);
-    std::fs::copy(&output_fixture.host_path, &dest).expect("copy to data/chart-parity.xlsb");
-    println!("Generated {}", dest.display());
+fn xlsb_parity_fixtures_generate() {
+    assert!(formula_parity_xlsb().exists());
+    assert!(chart_parity_xlsb().exists());
 }

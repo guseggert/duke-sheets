@@ -110,7 +110,6 @@ fn write_to_bytes_then_read_file_round_trips() {
 /// Useful for empirical viability checks during writer development.
 /// `#[ignore]`-gated because it needs a running LO container.
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_open_skeleton_workbook() {
     duke_sheets_test_harness::lo::ensure_lo();
 
@@ -150,7 +149,6 @@ fn lo_can_open_skeleton_workbook() {
 }
 
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_read_cell_values_we_emit() {
     duke_sheets_test_harness::lo::ensure_lo();
 

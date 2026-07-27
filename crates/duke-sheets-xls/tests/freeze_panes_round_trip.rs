@@ -94,7 +94,6 @@ fn freeze_persists_per_sheet() {
 
 /// LibreOffice must accept our PANE + WINDOW2 records.
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_read_freeze_panes_we_emit() {
     duke_sheets_test_harness::lo::ensure_lo();
 

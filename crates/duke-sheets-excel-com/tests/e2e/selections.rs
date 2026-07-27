@@ -163,7 +163,6 @@ fn test_write_freeze_panes_and_multi_selection() {
     // 5. Re-save (Excel normalises the XML)
     opened.save(&output.vm_path).expect("Excel save");
     opened.close().expect("close workbook");
-    drop(excel);
 
     // 6. Read back with our reader and verify selections survive
     crate::pull_file_from_vm(&output);

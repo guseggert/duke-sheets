@@ -34,7 +34,6 @@ fn write_encrypted_to(path: &std::path::Path, profile: &EncryptionProfile) {
 }
 
 #[test]
-#[ignore = "requires running Excel COM bridge on localhost:9876 (mise run vm:start)"]
 fn excel_can_read_standard_aes128_default() {
     let fixture = fixture_path("duke_standard_aes128.xlsx");
     let _ = std::fs::remove_file(&fixture.host_path);
@@ -67,7 +66,6 @@ fn excel_can_read_standard_aes128_default() {
 }
 
 #[test]
-#[ignore = "requires running Excel COM bridge on localhost:9876 (mise run vm:start)"]
 fn excel_can_read_standard_aes256() {
     let fixture = fixture_path("duke_standard_aes256.xlsx");
     let _ = std::fs::remove_file(&fixture.host_path);

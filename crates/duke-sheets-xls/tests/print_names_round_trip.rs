@@ -146,7 +146,6 @@ fn no_print_area_means_no_name_record() {
 /// pointing at the local sheet — wrong byte order or off-by-one
 /// indices would render the file as a non-printable workbook.
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_read_print_names_we_emit() {
     duke_sheets_test_harness::lo::ensure_lo();
 

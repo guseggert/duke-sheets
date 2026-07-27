@@ -1,69 +1,22 @@
+//! Reader-side parity assertions against the XLSB fixtures, beside the
+//! generators that build them.
+
 use std::path::PathBuf;
 
 use duke_sheets::prelude::*;
 use duke_sheets_chart::ChartType;
-use duke_sheets_test_harness::fixture::ensure_via_cargo_test;
+use crate::xlsb_parity::{chart_parity_xlsb, formula_parity_xlsb};
 
 /// Generate `data/formula-parity.xlsx` (prerequisite) if missing, then
 /// `data/formula-parity.xlsb` from it.
 fn ensure_formula_xlsb_fixture() -> PathBuf {
-    let _xlsx = ensure_via_cargo_test(
-        "data/formula-parity.xlsx",
-        &[
-            "-p",
-            "duke-sheets-excel-com",
-            "--test",
-            "e2e",
-            "generate_formula_parity_spreadsheet",
-            "--",
-            "--ignored",
-            "--nocapture",
-        ],
-    );
-    ensure_via_cargo_test(
-        "data/formula-parity.xlsb",
-        &[
-            "-p",
-            "duke-sheets-excel-com",
-            "--test",
-            "e2e",
-            "generate_xlsb_parity_from_xlsx",
-            "--",
-            "--ignored",
-            "--nocapture",
-        ],
-    )
+    formula_parity_xlsb()
 }
 
 /// Generate `data/chart-parity.xlsx` (prerequisite) if missing, then
 /// `data/chart-parity.xlsb` from it.
 fn ensure_chart_xlsb_fixture() -> PathBuf {
-    let _xlsx = ensure_via_cargo_test(
-        "data/chart-parity.xlsx",
-        &[
-            "-p",
-            "duke-sheets-excel-com",
-            "--test",
-            "e2e",
-            "generate_chart_parity_spreadsheet",
-            "--",
-            "--ignored",
-            "--nocapture",
-        ],
-    );
-    ensure_via_cargo_test(
-        "data/chart-parity.xlsb",
-        &[
-            "-p",
-            "duke-sheets-excel-com",
-            "--test",
-            "e2e",
-            "generate_xlsb_chart_parity_from_xlsx",
-            "--",
-            "--ignored",
-            "--nocapture",
-        ],
-    )
+    chart_parity_xlsb()
 }
 
 #[derive(Debug, Clone)]
@@ -76,7 +29,6 @@ struct ParityCase {
 }
 
 #[test]
-#[ignore = "auto-generates data/formula-parity.xlsb via Excel COM on first run"]
 fn xlsb_parity_matches_excel_cached_values() {
     let fixture_path = ensure_formula_xlsb_fixture();
 
@@ -119,7 +71,6 @@ fn xlsb_parity_matches_excel_cached_values() {
 }
 
 #[test]
-#[ignore = "auto-generates data/formula-parity.xlsb via Excel COM on first run"]
 fn xlsb_roundtrip_preserves_values() {
     let fixture_path = ensure_formula_xlsb_fixture();
 
@@ -165,7 +116,6 @@ fn xlsb_roundtrip_preserves_values() {
 }
 
 #[test]
-#[ignore = "auto-generates data/chart-parity.xlsb via Excel COM on first run"]
 fn xlsb_chart_parity_reads_successfully() {
     let path = ensure_chart_xlsb_fixture();
     let wb = Workbook::open(&path).unwrap_or_else(|e| panic!("open chart-parity.xlsb: {e}"));
@@ -235,7 +185,6 @@ fn xlsb_chart_parity_reads_successfully() {
 }
 
 #[test]
-#[ignore = "auto-generates data/chart-parity.xlsb via Excel COM on first run"]
 fn xlsb_chart_roundtrip_preserves_data() {
     let path = ensure_chart_xlsb_fixture();
     let wb = Workbook::open(&path).unwrap_or_else(|e| panic!("open: {e}"));

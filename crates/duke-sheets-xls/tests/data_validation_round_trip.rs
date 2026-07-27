@@ -326,7 +326,6 @@ fn no_validations_emits_no_dval_record() {
 /// a custom-formula validation in one workbook so a single LO open
 /// covers the variety of DV `valType` enum values our writer emits.
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_read_data_validations_we_emit() {
     duke_sheets_test_harness::lo::ensure_lo();
 

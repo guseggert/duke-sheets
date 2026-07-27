@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use crate::{ensure_vm_temp_dir, excel_bridge, pull_file_from_vm, temp_fixture};
 use duke_sheets_excel_com::{BridgeError, ChainStep, Workbook};
@@ -43,7 +44,26 @@ fn case2(id: &str, label: &str, formula: &str, expected_type: &'static str) -> F
     }
 }
 
-#[test]
+/// Path to `data/formula-parity.xlsx`, driving Excel to build it if it
+/// isn't there yet. Generated once per process; `data/` is gitignored, so
+/// the file is a local build artifact rather than a checked-in fixture.
+pub fn formula_parity_fixture() -> PathBuf {
+    static PATH: OnceLock<PathBuf> = OnceLock::new();
+    PATH.get_or_init(|| {
+        let path = repo_fixture_path();
+        if !path.exists() {
+            generate_formula_parity_spreadsheet();
+        }
+        assert!(
+            path.exists(),
+            "formula parity fixture still missing after generation: {}",
+            path.display()
+        );
+        path
+    })
+    .clone()
+}
+
 fn generate_formula_parity_spreadsheet() {
     let bridge = excel_bridge();
     let mut fixture = temp_fixture();
@@ -71,6 +91,12 @@ fn generate_formula_parity_spreadsheet() {
 
     pull_file_from_vm(&fixture);
     copy_fixture_into_repo(&fixture.host_path).expect("copy fixture into repo data directory");
+}
+
+#[test]
+fn formula_parity_fixture_generates() {
+    let path = formula_parity_fixture();
+    assert!(path.exists());
 }
 
 fn rename_sheet(
@@ -4489,9 +4515,14 @@ fn append_tier4_validation_cases(cases: &mut Vec<FormulaCase>) {
     }
 }
 
+fn repo_fixture_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(REPO_FIXTURE_RELATIVE_PATH)
+}
+
 fn copy_fixture_into_repo(host_path: &Path) -> std::io::Result<()> {
-    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output_path = repo_root.join(REPO_FIXTURE_RELATIVE_PATH);
+    let output_path = repo_fixture_path();
     if let Some(parent) = output_path.parent() {
         std::fs::create_dir_all(parent)?;
     }

@@ -362,7 +362,6 @@ fn unmodelable_group_children_are_dropped_not_the_group() {
 /// restructured SpgrContainer / OBJ / TXO interleave that make LO's
 /// loader refuse the file.
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_open_xls_with_shape_group_we_emit() {
     duke_sheets_test_harness::lo::ensure_lo();
 

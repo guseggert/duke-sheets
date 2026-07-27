@@ -39,7 +39,6 @@ fn write_encrypted_to(path: &std::path::Path, profile: &EncryptionProfile) {
 }
 
 #[test]
-#[ignore = "requires running Excel COM bridge on localhost:9876 (mise run vm:start)"]
 fn excel_can_read_aes256_default_profile() {
     let fixture = fixture_path("duke_agile_aes256_default.xlsx");
     let _ = std::fs::remove_file(&fixture.host_path);
@@ -80,7 +79,6 @@ fn excel_can_read_aes256_default_profile() {
 }
 
 #[test]
-#[ignore = "requires running Excel COM bridge on localhost:9876 (mise run vm:start)"]
 fn excel_can_read_aes128_profile() {
     let fixture = fixture_path("duke_agile_aes128.xlsx");
     let _ = std::fs::remove_file(&fixture.host_path);

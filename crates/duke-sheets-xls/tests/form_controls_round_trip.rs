@@ -1007,7 +1007,6 @@ fn mixed_option_button_returns_a_clean_error() {
 /// errors. Deeper control inspection via UNO is fragile across LO
 /// versions, so this settles for confirming the file loads.
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_open_xls_with_form_controls_we_emit() {
     duke_sheets_test_harness::lo::ensure_lo();
 

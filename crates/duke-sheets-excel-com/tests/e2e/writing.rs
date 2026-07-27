@@ -1085,7 +1085,6 @@ fn test_write_sheet_protection() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_preserves_workbook_protection_and_protected_ranges() {
     use duke_sheets_core::{ProtectedRange, WorkbookProtection};
 
@@ -1187,7 +1186,6 @@ fn test_write_cell_protection_unlocked() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_evaluate_intersection_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
@@ -1219,7 +1217,6 @@ fn excel_can_evaluate_intersection_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_evaluate_union_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
@@ -1261,7 +1258,6 @@ const TEST_PNG_1X1: &[u8] = &[
 /// Excel must accept an XLSX with a `<xdr:oneCellAnchor>` wrapped
 /// picture and preserve the OneCell anchor through SaveAs.
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_xlsx_onecell_picture_we_emit() {
     use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
 
@@ -1315,7 +1311,6 @@ fn excel_can_read_xlsx_onecell_picture_we_emit() {
 /// Excel must accept an XLSX with a `<xdr:absoluteAnchor>` wrapped
 /// picture and preserve the Absolute anchor through SaveAs.
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_xlsx_absolute_picture_we_emit() {
     use duke_sheets_chart::{DrawingAnchor, EmbeddedImage, ImageFormat};
 
@@ -1367,7 +1362,6 @@ fn excel_can_read_xlsx_absolute_picture_we_emit() {
 /// (no `Repaired` warning) and round-trip the PNG bytes verbatim
 /// through SaveAs.
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_xlsx_png_image_we_emit() {
     use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
 
@@ -1420,7 +1414,6 @@ fn excel_can_read_xlsx_png_image_we_emit() {
 /// native shapes rides its a14 placeholder twin, which Excel keeps
 /// in the drawing part's document order.
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_preserves_xlsx_drawing_z_order_we_emit() {
     use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
     use duke_sheets_core::{CheckState, DrawingKind, DrawingObject, FormControl, FormControlKind};
@@ -1508,7 +1501,6 @@ fn excel_preserves_xlsx_drawing_z_order_we_emit() {
 /// intact; the Repaired check inside the roundtrip helper proves
 /// Excel accepts the twin markup we emit.
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_xlsx_form_controls_we_emit() {
     use duke_sheets_chart::{CellMarker, DrawingAnchor};
     use duke_sheets_core::{CheckState, FormControl, FormControlKind, ListSelection};
@@ -1642,7 +1634,6 @@ fn excel_can_read_xlsx_form_controls_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_preserves_xlsx_custom_metric_control_anchor_we_emit() {
     use duke_sheets_chart::{CellMarker, DrawingAnchor};
     use duke_sheets_core::{CheckState, FormControl, FormControlKind};
@@ -1679,7 +1670,6 @@ fn excel_preserves_xlsx_custom_metric_control_anchor_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_preserves_xlsx_control_visual_metadata_we_emit() {
     use duke_sheets_chart::{CellMarker, DrawingAnchor};
     use duke_sheets_core::style::Underline;
@@ -1781,7 +1771,6 @@ fn excel_preserves_xlsx_control_visual_metadata_we_emit() {
 /// rides the VML shape's `visibility:hidden` style, and the visible
 /// siblings stay visible.
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_preserves_hidden_drawing_flags_we_emit() {
     use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
     use duke_sheets_core::{CheckState, DrawingObject, FormControl, FormControlKind};
@@ -1884,7 +1873,6 @@ fn excel_preserves_hidden_drawing_flags_we_emit() {
 /// and popup visibility (visible notes ride the VML shape's
 /// `visibility:visible` style, hidden ones the default).
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_xlsx_comment_we_emit() {
     use duke_sheets_core::{CellComment, DrawingObject};
 
@@ -1928,7 +1916,6 @@ fn excel_can_read_xlsx_comment_we_emit() {
 }
 
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_preserves_xlsx_basic_shape_we_emit() {
     use duke_sheets_chart::{CellMarker, DrawingAnchor};
     use duke_sheets_core::{
@@ -2038,7 +2025,6 @@ fn excel_preserves_xlsx_basic_shape_we_emit() {
 /// side of it).
 // features: Form control unmodeled ClientData passthrough
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_preserves_unmodeled_client_data_we_emit() {
     use duke_sheets_chart::{CellMarker, DrawingAnchor};
     use duke_sheets_core::{CheckState, FormControl, FormControlKind};
@@ -2101,7 +2087,6 @@ fn excel_preserves_unmodeled_client_data_we_emit() {
 /// their run boundary and bold flag.
 // features: Rich text in comments
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_preserves_rich_comment_runs_we_emit() {
     use duke_sheets_core::rich_text::{RichTextRun, RunFont};
     use duke_sheets_core::{CellComment, DrawingText};
@@ -2162,7 +2147,6 @@ fn excel_preserves_rich_comment_runs_we_emit() {
 /// emission path.
 // features: Form control unmodeled ctrlProps passthrough
 #[test]
-#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_accepts_unmodeled_ctrl_props_we_emit() {
     use duke_sheets_chart::{CellMarker, DrawingAnchor};
     use duke_sheets_core::{CheckState, FormControl, FormControlKind};

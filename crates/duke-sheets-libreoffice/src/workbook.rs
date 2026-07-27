@@ -45,6 +45,15 @@ impl From<String> for CellValue {
 pub struct Workbook<'a> {
     conn: &'a mut UrpConnection,
     doc: UnoProxy,
+    /// Resolved sheet proxies, keyed by `(sheet_index, interface type)`.
+    ///
+    /// Resolving a sheet costs several URP round-trips (`getSheets`,
+    /// `queryInterface(XIndexAccess)`, `getByIndex`, then a
+    /// `queryInterface` to the requested type). Without this cache every
+    /// single cell operation repaid all of them, so writing 300 cells cost
+    /// ~1800 round-trips. Invalidated by `add_sheet`, since inserting a
+    /// sheet can shift the indices these proxies were resolved from.
+    sheet_cache: std::collections::HashMap<(i32, String), UnoProxy>,
 }
 
 // Helper: construct a UNO PropertyValue struct
@@ -96,7 +105,11 @@ fn path_to_file_url(path: &str) -> String {
 
 impl<'a> Workbook<'a> {
     pub(crate) fn new(conn: &'a mut UrpConnection, doc: UnoProxy) -> Self {
-        Self { conn, doc }
+        Self {
+            conn,
+            doc,
+            sheet_cache: std::collections::HashMap::new(),
+        }
     }
 
     /// Get direct access to the URP connection (for advanced operations).
@@ -137,6 +150,22 @@ impl<'a> Workbook<'a> {
 
     /// Get a sheet proxy by its zero-based index, typed for the given interface.
     async fn get_sheet_proxy_as(
+        &mut self,
+        sheet_index: i32,
+        iface_type_name: &str,
+    ) -> Result<UnoProxy> {
+        let key = (sheet_index, iface_type_name.to_string());
+        if let Some(cached) = self.sheet_cache.get(&key) {
+            return Ok(cached.clone());
+        }
+        let resolved = self
+            .resolve_sheet_proxy_as(sheet_index, iface_type_name)
+            .await?;
+        self.sheet_cache.insert(key, resolved.clone());
+        Ok(resolved)
+    }
+
+    async fn resolve_sheet_proxy_as(
         &mut self,
         sheet_index: i32,
         iface_type_name: &str,
@@ -266,6 +295,110 @@ impl<'a> Workbook<'a> {
         self.set_cell_value_on_proxy(&cell, value.into()).await
     }
 
+    /// Write a rectangular block of values in a single URP call.
+    ///
+    /// `rows` is row-major and must be rectangular. Only numbers and strings
+    /// are supported, which is what `XCellRangeData::setDataArray` accepts -
+    /// use [`Workbook::set_cell_value`] for formulas, styling or rich text.
+    ///
+    /// Prefer this for bulk writes. Per-cell writes cost ~3 round-trips
+    /// each (`getCellByPosition`, `queryInterface`, `setString`), so a
+    /// 300-cell column costs ~900 round-trips; this costs two regardless of
+    /// size.
+    pub async fn set_range_values(
+        &mut self,
+        sheet_index: i32,
+        start_col: i32,
+        start_row: i32,
+        rows: &[Vec<CellValue>],
+    ) -> Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let width = rows[0].len();
+        if width == 0 {
+            return Ok(());
+        }
+        if let Some(bad) = rows.iter().position(|r| r.len() != width) {
+            return Err(BridgeError::OperationFailed(format!(
+                "set_range_values needs a rectangular block: row 0 has {width} cells, \
+                 row {bad} has {}",
+                rows[bad].len()
+            )));
+        }
+        // setDataArray carries only numbers and strings. Formulas need
+        // XCellRangeFormula::setFormulaArray, so fail loudly rather than
+        // silently writing the formula text as a literal string.
+        if rows
+            .iter()
+            .flatten()
+            .any(|cv| matches!(cv, CellValue::Formula(_)))
+        {
+            return Err(BridgeError::OperationFailed(
+                "set_range_values cannot write formulas; use set_cell_value or \
+                 setFormulaArray"
+                    .into(),
+            ));
+        }
+
+        let sheet = self.get_sheet_cell_range(sheet_index).await?;
+        let range_method = interface::get_cell_range_by_position();
+        let range = self
+            .conn
+            .call(
+                &sheet,
+                &range_method,
+                &[
+                    UnoValue::Long(start_col),
+                    UnoValue::Long(start_row),
+                    UnoValue::Long(start_col + width as i32 - 1),
+                    UnoValue::Long(start_row + rows.len() as i32 - 1),
+                ],
+            )
+            .await?;
+        let range_oid = Self::require_oid(&range, "getCellRangeByPosition")?;
+        let range_proxy = UnoProxy::new(
+            range_oid,
+            Type::interface(type_names::X_CELL_RANGE_DATA),
+        );
+        let data_proxy = self
+            .qi(&range_proxy, type_names::X_CELL_RANGE_DATA)
+            .await?;
+
+        // sequence<sequence<any>>: each cell is an any holding a Double or
+        // a String. Empty cells go across as the empty string, matching
+        // what getDataArray reports for them.
+        let payload = UnoValue::Sequence(
+            rows.iter()
+                .map(|row| {
+                    UnoValue::Sequence(
+                        row.iter()
+                            .map(|cv| {
+                                let (type_desc, value) = match cv {
+                                    CellValue::Number(n) => {
+                                        (Type::double(), UnoValue::Double(*n))
+                                    }
+                                    CellValue::String(s) => {
+                                        (Type::string(), UnoValue::String(s.clone()))
+                                    }
+                                    // Rejected above.
+                                    CellValue::Empty | CellValue::Formula(_) => {
+                                        (Type::string(), UnoValue::String(String::new()))
+                                    }
+                                };
+                                UnoValue::Any(Box::new(Any { type_desc, value }))
+                            })
+                            .collect(),
+                    )
+                })
+                .collect(),
+        );
+
+        let set_method = interface::set_data_array();
+        self.conn.call(&data_proxy, &set_method, &[payload]).await?;
+        Ok(())
+    }
+
     /// Set a cell's value given its proxy.
     pub async fn set_cell_value_on_proxy(&mut self, cell: &UnoProxy, cv: CellValue) -> Result<()> {
         match cv {
@@ -368,6 +501,9 @@ impl<'a> Workbook<'a> {
 
     /// Add a new sheet with the given name at the end.
     pub async fn add_sheet(&mut self, name: &str) -> Result<()> {
+        // Inserting a sheet can shift the indices cached proxies were
+        // resolved from, so drop them.
+        self.sheet_cache.clear();
         let sheets = self.get_sheets_proxy().await?;
         // Get count first
         let idx_proxy = self.qi(&sheets, type_names::X_INDEX_ACCESS).await?;

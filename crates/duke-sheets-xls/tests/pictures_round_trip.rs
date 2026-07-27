@@ -891,7 +891,6 @@ fn pictures_on_multiple_sheets_round_trip() {
 /// (Blip/FBSE/BSTORE_CONTAINER + picture SP_CONTAINER) that would
 /// make LO refuse the file.
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_open_xls_with_picture_we_emit() {
     duke_sheets_test_harness::lo::ensure_lo();
 
