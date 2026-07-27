@@ -46,7 +46,7 @@ const KITCHEN_SINK: &str = r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.
 <cx:plotSurface><cx:spPr><a:noFill/></cx:spPr></cx:plotSurface>
 </cx:plotAreaRegion>
 <cx:axis id="0" hidden="0"><cx:catScaling gapWidth="0.5"/><cx:title><cx:tx><cx:txData><cx:v>Cat Axis</cx:v></cx:txData></cx:tx></cx:title><cx:majorTickMarks type="out"/><cx:minorTickMarks type="none"/><cx:tickLabels/><cx:numFmt formatCode="General" sourceLinked="1"/></cx:axis>
-<cx:axis id="1"><cx:valScaling min="0" max="10" majorUnit="2" minorUnit="1"/><cx:units unit="hundreds"/><cx:majorGridlines/><cx:minorGridlines><cx:spPr><a:ln><a:solidFill><a:srgbClr val="AABBCC"/></a:solidFill></a:ln></cx:spPr></cx:minorGridlines><cx:tickLabels/></cx:axis>
+<cx:axis id="1"><cx:valScaling min="0" max="10" majorUnit="2" minorUnit="1"/><cx:units unit="hundreds"/><cx:majorGridlines/><cx:minorGridlines><cx:spPr><a:ln><a:solidFill><a:srgbClr val="AABBCC"/></a:solidFill></a:ln><a:extLst><a:ext uri="{GG00}"/></a:extLst></cx:spPr></cx:minorGridlines><cx:tickLabels/></cx:axis>
 </cx:plotArea>
 <cx:legend pos="b" align="ctr" overlay="1"><cx:spPr><a:noFill/></cx:spPr></cx:legend>
 </cx:chart>
