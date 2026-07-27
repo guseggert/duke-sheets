@@ -67,9 +67,21 @@ pub struct ChartEx {
     pub format_overrides: Vec<ChartExFormatOverride>,
     /// Print settings (`cx:chartSpace > cx:printSettings`)
     pub print_settings: Option<ChartExPrintSettings>,
-    /// Raw chart style XML (preserved for roundtrip)
+    /// Chart style part, verbatim (`xl/charts/styleN.xml`).
+    ///
+    /// Set when the chart was read from a file, so the original part
+    /// round-trips byte for byte. When `None` the writer emits a
+    /// generated default: Excel refuses to open a workbook whose chartEx
+    /// part has no chart style sibling, so the part is never omitted.
+    ///
+    /// These bytes become the whole part, so they must be a complete
+    /// `cs:chartStyle` document. The writer checks them and fails rather
+    /// than emit a package Excel would reject.
     pub raw_chart_style: Option<Vec<u8>>,
-    /// Raw chart color style XML (preserved for roundtrip)
+    /// Chart colour style part, verbatim (`xl/charts/colorsN.xml`).
+    ///
+    /// Same contract as [`ChartEx::raw_chart_style`], for the
+    /// `cs:colorStyle` document.
     pub raw_chart_color_style: Option<Vec<u8>>,
     /// Extension list (`cx:extLst`, raw XML bytes)
     pub extensions: Option<Vec<u8>>,

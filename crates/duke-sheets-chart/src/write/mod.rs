@@ -4,9 +4,14 @@
 
 mod chart;
 mod chart_ex;
+mod chart_style;
 
 pub use chart::chart_part_bytes;
 pub use chart_ex::chart_ex_part_bytes;
+pub use chart_style::{
+    default_chart_color_style_bytes, default_chart_style_bytes, validate_chart_color_style_part,
+    validate_chart_style_part,
+};
 
 use std::io::Cursor;
 

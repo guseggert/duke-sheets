@@ -24,6 +24,8 @@ const PNG_1PX: &[u8] = &[
     0x42, 0x60, 0x82,
 ];
 
+const WATERFALL_CHART_EX: &[u8] = br#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><cx:chartData><cx:data id="0"><cx:strDim type="cat"><cx:f>Sheet1!$A$1:$A$3</cx:f><cx:lvl ptCount="3"><cx:pt idx="0">a</cx:pt><cx:pt idx="1">b</cx:pt><cx:pt idx="2">c</cx:pt></cx:lvl></cx:strDim><cx:numDim type="val"><cx:f>Sheet1!$B$1:$B$3</cx:f><cx:lvl ptCount="3" formatCode="General"><cx:pt idx="0">1</cx:pt><cx:pt idx="1">2</cx:pt><cx:pt idx="2">3</cx:pt></cx:lvl></cx:numDim></cx:data></cx:chartData><cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="waterfall" uniqueId="{1D8F9C4E-1C1B-4A5F-9C6B-2E7A0F3B5D11}"><cx:tx><cx:txData><cx:f>Sheet1!$B$1</cx:f><cx:v>Series1</cx:v></cx:txData></cx:tx><cx:dataId val="0"/><cx:layoutPr><cx:subtotals/></cx:layoutPr></cx:series></cx:plotAreaRegion><cx:axis id="0"><cx:catScaling gapWidth="0.5"/><cx:tickLabels/></cx:axis><cx:axis id="1"><cx:valScaling/><cx:majorGridlines/><cx:tickLabels/></cx:axis></cx:plotArea></cx:chart></cx:chartSpace>"#;
+
 fn two_cell(from_col: u16, from_row: u32, to_col: u16, to_row: u32) -> DrawingAnchor {
     DrawingAnchor::TwoCell {
         from: CellMarker {
@@ -403,12 +405,8 @@ fn xlsx_same_document_raw_relationship_does_not_duplicate_drawing_part() {
 /// up. A case-insensitive reader cannot catch it; assert the entry.
 #[test]
 fn xlsx_chart_ex_relationships_part_keeps_its_casing() {
-    let mut chart_ex = duke_sheets_chart::parse::parse_chart_ex_xml(
-        &br#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><cx:chartData><cx:data id="0"><cx:strDim type="cat"><cx:f>Sheet1!$A$1:$A$3</cx:f><cx:lvl ptCount="3"><cx:pt idx="0">a</cx:pt><cx:pt idx="1">b</cx:pt><cx:pt idx="2">c</cx:pt></cx:lvl></cx:strDim><cx:numDim type="val"><cx:f>Sheet1!$B$1:$B$3</cx:f><cx:lvl ptCount="3" formatCode="General"><cx:pt idx="0">1</cx:pt><cx:pt idx="1">2</cx:pt><cx:pt idx="2">3</cx:pt></cx:lvl></cx:numDim></cx:data></cx:chartData><cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="waterfall" uniqueId="{1D8F9C4E-1C1B-4A5F-9C6B-2E7A0F3B5D11}"><cx:tx><cx:txData><cx:f>Sheet1!$B$1</cx:f><cx:v>Series1</cx:v></cx:txData></cx:tx><cx:dataId val="0"/><cx:layoutPr><cx:subtotals/></cx:layoutPr></cx:series></cx:plotAreaRegion><cx:axis id="0"><cx:catScaling gapWidth="0.5"/><cx:tickLabels/></cx:axis><cx:axis id="1"><cx:valScaling/><cx:majorGridlines/><cx:tickLabels/></cx:axis></cx:plotArea></cx:chart></cx:chartSpace>"#[..],
-    )
-    .expect("parse chartEx");
-    chart_ex.raw_chart_style = Some(b"<cs:chartStyle/>".to_vec());
-    chart_ex.raw_chart_color_style = Some(b"<cs:colorStyle/>".to_vec());
+    let chart_ex =
+        duke_sheets_chart::parse::parse_chart_ex_xml(WATERFALL_CHART_EX).expect("parse chartEx");
 
     let mut workbook = Workbook::new();
     workbook
@@ -425,6 +423,74 @@ fn xlsx_chart_ex_relationships_part_keeps_its_casing() {
         names.contains(&"xl/charts/_rels/chartEx1.xml.rels"),
         "chartEx rels part must keep its casing, got {names:?}"
     );
+}
+
+/// Excel will not open a workbook whose chartEx part has no chart style
+/// sibling and no chart colour style sibling, and it validates the style
+/// part against CT_ChartStyle. A chart built through the model carries no
+/// raw parts to replay, so the writer has to generate both; without them
+/// every model-built chartEx produced an unopenable file.
+// features: ChartEx: Waterfall
+#[test]
+fn xlsx_model_built_chart_ex_gets_generated_style_and_color_parts() {
+    use std::io::Read;
+
+    let chart_ex = duke_sheets_chart::parse::parse_chart_ex_xml(WATERFALL_CHART_EX)
+        .expect("parse chartEx");
+    assert!(chart_ex.raw_chart_style.is_none());
+    assert!(chart_ex.raw_chart_color_style.is_none());
+
+    let mut workbook = Workbook::new();
+    workbook
+        .worksheet_mut(0)
+        .unwrap()
+        .add_drawing(DrawingObject::chart_ex(chart_ex).with_anchor(two_cell(0, 0, 4, 4)))
+        .unwrap();
+
+    let mut output = Cursor::new(Vec::new());
+    XlsxWriter::write(&workbook, &mut output).expect("write");
+    let mut archive = zip::ZipArchive::new(Cursor::new(output.into_inner())).unwrap();
+
+    let names: Vec<String> = archive.file_names().map(str::to_string).collect();
+    for part in ["xl/charts/style1.xml", "xl/charts/colors1.xml"] {
+        assert!(names.contains(&part.to_string()), "{part} missing: {names:?}");
+    }
+
+    let mut read = |name: &str| {
+        let mut s = String::new();
+        archive.by_name(name).unwrap().read_to_string(&mut s).unwrap();
+        s
+    };
+
+    let content_types = read("[Content_Types].xml");
+    for ct in [
+        "application/vnd.ms-office.chartstyle+xml",
+        "application/vnd.ms-office.chartcolorstyle+xml",
+    ] {
+        assert!(content_types.contains(ct), "content type {ct} missing");
+    }
+
+    let rels = read("xl/charts/_rels/chartEx1.xml.rels");
+    for (kind, target) in [
+        ("chartStyle", "style1.xml"),
+        ("chartColorStyle", "colors1.xml"),
+    ] {
+        assert!(
+            rels.contains(&format!("/relationships/{kind}\"")) && rels.contains(target),
+            "chartEx rels missing {kind} -> {target}: {rels}"
+        );
+    }
+
+    // Excel requires the id attribute and the full ordered entry
+    // sequence; spot-check the boundaries of the sequence.
+    let style = read("xl/charts/style1.xml");
+    assert!(style.contains("<cs:chartStyle ") && style.contains(" id=\""));
+    let first = style.find("<cs:axisTitle").expect("first entry");
+    let last = style.find("<cs:wall").expect("last entry");
+    assert!(first < last, "entries out of schema order");
+
+    let colors = read("xl/charts/colors1.xml");
+    assert!(colors.contains("<cs:colorStyle "), "colour style malformed");
 }
 
 /// A picture whose blip resolves through an external relationship must

@@ -2193,3 +2193,86 @@ fn excel_accepts_unmodeled_ctrl_props_we_emit() {
     };
     assert_eq!(*state, CheckState::Checked);
 }
+
+/// A chartEx built through the model - not read from a file - must open
+/// in Excel and keep its waterfall series and subtotal bars through
+/// Excel's own re-save.
+///
+/// Excel validates a chartEx's chart style and chart colour style
+/// siblings and refuses the whole workbook when either is missing or
+/// when the style part is not a complete `CT_ChartStyle`. Charts built
+/// through the model have no raw parts to replay, so the writer
+/// generates them; before it did, every such workbook failed to open.
+/// Nothing here depends on a corpus file.
+// features: ChartEx: Waterfall
+#[test]
+fn excel_opens_a_model_built_waterfall_chart_ex() {
+    use duke_sheets_chart::{CellMarker, DrawingAnchor};
+    use duke_sheets_core::DrawingObject;
+
+    // `cx:series` must not be self-closing: the parser only collects a
+    // series on its End event.
+    let chart_ex = duke_sheets_chart::parse::parse_chart_ex_xml(
+        &br#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><cx:chartData><cx:data id="0"><cx:strDim type="cat"><cx:f>Sheet1!$A$1:$A$3</cx:f><cx:lvl ptCount="3"><cx:pt idx="0">a</cx:pt><cx:pt idx="1">b</cx:pt><cx:pt idx="2">c</cx:pt></cx:lvl></cx:strDim><cx:numDim type="val"><cx:f>Sheet1!$B$1:$B$3</cx:f><cx:lvl ptCount="3" formatCode="General"><cx:pt idx="0">1</cx:pt><cx:pt idx="1">2</cx:pt><cx:pt idx="2">3</cx:pt></cx:lvl></cx:numDim></cx:data></cx:chartData><cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="waterfall" uniqueId="{1D8F9C4E-1C1B-4A5F-9C6B-2E7A0F3B5D11}"><cx:tx><cx:txData><cx:f>Sheet1!$B$1</cx:f><cx:v>Series1</cx:v></cx:txData></cx:tx><cx:dataId val="0"/><cx:layoutPr><cx:subtotals><cx:idx val="0"/><cx:idx val="2"/></cx:subtotals></cx:layoutPr></cx:series></cx:plotAreaRegion><cx:axis id="0"><cx:catScaling gapWidth="0.5"/><cx:tickLabels/></cx:axis><cx:axis id="1"><cx:valScaling/><cx:majorGridlines/><cx:tickLabels/></cx:axis></cx:plotArea></cx:chart></cx:chartSpace>"#[..],
+    )
+    .expect("parse chartEx");
+
+    assert_eq!(
+        chart_ex.plot_area.series[0]
+            .layout_properties
+            .as_ref()
+            .and_then(|l| l.subtotals.clone()),
+        Some(vec![0, 2]),
+        "fixture must carry subtotals for the survival assertion to mean anything"
+    );
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    for (row, (cat, val)) in [("a", 1.0), ("b", 2.0), ("c", 3.0)].iter().enumerate() {
+        let row = row + 1;
+        ws.set_cell_value(&format!("A{row}"), *cat).unwrap();
+        ws.set_cell_value(&format!("B{row}"), *val).unwrap();
+    }
+    ws.add_drawing(
+        DrawingObject::chart_ex(chart_ex).with_anchor(DrawingAnchor::TwoCell {
+            from: CellMarker {
+                col: 3,
+                col_offset_emu: 0,
+                row: 0,
+                row_offset_emu: 0,
+            },
+            to: CellMarker {
+                col: 10,
+                col_offset_emu: 0,
+                row: 15,
+                row_offset_emu: 0,
+            },
+            edit_as: None,
+        }),
+    )
+    .unwrap();
+
+    let result = roundtrip_through_excel(&wb);
+
+    let chart = result
+        .worksheet(0)
+        .unwrap()
+        .charts_ex()
+        .next()
+        .expect("chartEx must survive Excel's re-save")
+        .payload;
+    let series = chart
+        .plot_area
+        .series
+        .first()
+        .expect("waterfall series survives");
+    assert_eq!(series.layout, duke_sheets_chart::ChartExLayout::Waterfall);
+    assert_eq!(
+        series
+            .layout_properties
+            .as_ref()
+            .and_then(|l| l.subtotals.clone()),
+        Some(vec![0, 2]),
+        "subtotal bars must survive Excel's re-save"
+    );
+}
