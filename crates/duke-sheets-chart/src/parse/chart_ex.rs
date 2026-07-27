@@ -153,6 +153,7 @@ fn parse_chart_ex_xml_inner<R: Read>(
     let mut dlbl_vis_val: Option<bool> = None;
     let mut dlbl_num_fmt: Option<NumberFormat> = None;
     let mut dlbl_separator: Option<String> = None;
+    let mut dlbl_sp: Option<ChartShapeProperties> = None;
     let mut in_dlbl_separator = false;
 
     // dataPt state
@@ -1376,7 +1377,7 @@ fn parse_chart_ex_xml_inner<R: Read>(
                             visibility_value: dlbl_vis_val.take(),
                             number_format: dlbl_num_fmt.take(),
                             separator: dlbl_separator.take(),
-                            shape_properties: None,
+                            shape_properties: dlbl_sp.take(),
                             text_properties: None,
                             overrides: Vec::new(),
                             hidden_labels: Vec::new(),
@@ -1518,7 +1519,9 @@ fn parse_chart_ex_xml_inner<R: Read>(
                                     dpt_sp = if has { Some(props) } else { None };
                                 }
                                 SpCtx::DataLabels => {
-                                    // stored on data labels completion
+                                    if has {
+                                        dlbl_sp = Some(props);
+                                    }
                                 }
                                 SpCtx::Legend => {
                                     if has {
