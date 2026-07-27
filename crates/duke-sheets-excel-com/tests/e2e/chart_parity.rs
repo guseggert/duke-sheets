@@ -1507,6 +1507,132 @@ fn chart_types_bisect() {
     }
 }
 
+/// Excel authors a waterfall chartEx itself; our reader must model it.
+///
+/// The other chartEx coverage reads files from a corpus that is absent
+/// on most machines, so it silently returns and proves nothing. Excel
+/// building the chart makes the ground truth available anywhere the VM
+/// runs, and pins the layout id, dimensions and axes we parse.
+// features: ChartEx: Waterfall
+#[test]
+fn chart_ex_waterfall_authored_by_excel_reads_back() {
+    let bridge = excel_bridge();
+    let fixture = temp_fixture();
+    ensure_vm_temp_dir();
+
+    {
+        let excel = bridge.lock().unwrap();
+        let wb = excel.create_workbook().expect("create workbook");
+        wb.set_cell_value("A1", "Cat").unwrap();
+        wb.set_cell_value("B1", "Val").unwrap();
+        for (i, (cat, val)) in [("a", 1.0), ("b", 2.0), ("c", 3.0)].iter().enumerate() {
+            let row = i as u32 + 2;
+            wb.set_cell_value(&cell_addr(row - 1, 0), *cat).unwrap();
+            wb.set_cell_value(&cell_addr(row - 1, 1), *val).unwrap();
+        }
+
+        let ws = excel
+            .navigate(
+                wb.handle(),
+                vec![excel_com_protocol::SheetRef::Index(0).to_chain_step()],
+            )
+            .expect("navigate sheet");
+
+        // xlWaterfall
+        let shape = excel
+            .invoke(
+                ws,
+                vec![duke_sheets_excel_com::ChainStep::Property("Shapes".into())],
+                "AddChart2",
+                vec![
+                    serde_json::Value::from(-1),
+                    serde_json::Value::from(119),
+                    serde_json::Value::from(300.0),
+                    serde_json::Value::from(20.0),
+                    serde_json::Value::from(400.0),
+                    serde_json::Value::from(300.0),
+                ],
+            )
+            .expect("AddChart2 waterfall");
+
+        let Some(excel_com_protocol::ResponseData::Handle { handle }) = shape else {
+            panic!("AddChart2 did not return a shape handle");
+        };
+        let chart = excel
+            .navigate(
+                handle,
+                vec![duke_sheets_excel_com::ChainStep::Property("Chart".into())],
+            )
+            .expect("navigate Chart");
+        let rng = excel
+            .navigate(
+                wb.handle(),
+                vec![
+                    excel_com_protocol::SheetRef::Index(0).to_chain_step(),
+                    duke_sheets_excel_com::ChainStep::Indexed(
+                        "Range".into(),
+                        serde_json::Value::from("A1:B4"),
+                    ),
+                ],
+            )
+            .expect("navigate Range");
+        excel
+            .invoke(
+                chart,
+                vec![],
+                "SetSourceData",
+                vec![serde_json::json!({"$ref": rng})],
+            )
+            .expect("SetSourceData");
+        let _ = excel.release(rng);
+        let _ = excel.release(chart);
+        let _ = excel.release(handle);
+        let _ = excel.release(ws);
+
+        wb.save(&fixture.vm_path).expect("save");
+        wb.close().expect("close");
+    }
+
+    pull_file_from_vm(&fixture);
+    let wb = duke_sheets_core::Workbook::from(
+        duke_sheets_xlsx::XlsxReader::read_file(&fixture.host_path).expect("read"),
+    );
+
+    let chart = wb
+        .worksheet(0)
+        .expect("sheet")
+        .charts_ex()
+        .next()
+        .expect("Excel's waterfall must be read as a chartEx")
+        .payload;
+
+    let series = chart.plot_area.series.first().expect("one series");
+    assert_eq!(series.layout, duke_sheets_chart::ChartExLayout::Waterfall);
+    assert_eq!(
+        chart.data.len(),
+        1,
+        "waterfall has a single cx:data block, got {:?}",
+        chart.data.len()
+    );
+    assert_eq!(
+        chart.plot_area.axes.len(),
+        2,
+        "waterfall has a category and a value axis"
+    );
+    // Excel writes the wrapper empty for a waterfall with no subtotal
+    // bars; an absent wrapper is a different document.
+    assert_eq!(
+        series
+            .layout_properties
+            .as_ref()
+            .and_then(|l| l.subtotals.clone()),
+        Some(Vec::new()),
+        "Excel emits a present but empty cx:subtotals"
+    );
+
+    cleanup_fixture(&fixture);
+}
+
 /// Read a corpus chartEx file, write it back through duke-sheets, push to
 /// VM, verify Excel opens without repair.
 #[test]

@@ -606,6 +606,15 @@ impl Default for EncryptionProfile {
     }
 }
 
+/// Number of a chartEx chart's `styleN.xml` / `colorsN.xml` parts.
+///
+/// Standard charts number their own style and colour parts by chart
+/// number, so chartEx charts continue above them in the same series to
+/// keep both part names unique within `xl/charts/`.
+fn chart_ex_style_num(total_standard_charts: usize, chart_ex_num: usize) -> usize {
+    total_standard_charts + chart_ex_num
+}
+
 /// XLSX file writer
 pub struct XlsxWriter;
 
@@ -1048,11 +1057,10 @@ impl XlsxWriter {
                 }
                 for &(ji, gn) in &sheet_chartex_globals {
                     chart_ex::write_chart_ex_part(&mut zip, sheet_charts_ex[ji].payload, gn)?;
-                    let style_num = (global_chart_num - 1) + gn;
                     chart_ex::write_chart_ex_style_color_parts(
                         &mut zip,
                         sheet_charts_ex[ji].payload,
-                        style_num,
+                        chart_ex_style_num(global_chart_num - 1, gn),
                     )?;
                 }
             }
@@ -1270,44 +1278,34 @@ impl XlsxWriter {
                 }
             }
         }
-        for &(sheet_index, chart_index, global_num) in chart_ex_numbering {
+        // Excel rejects a chartEx whose style or colour style part is
+        // missing, so both are always registered; the writer falls back to
+        // generated defaults when the model carries no raw bytes.
+        for &(_, _, global_num) in chart_ex_numbering {
             manifest.register_part(&format!("xl/charts/chartEx{global_num}.xml"), CT_CHART_EX)?;
-            if let Some(chart) = workbook
-                .worksheet(sheet_index)
-                .and_then(|sheet| sheet.charts_ex().nth(chart_index))
-                .map(|placed| placed.payload)
-            {
-                let style_num = total_standard_charts + global_num;
-                let chart_source = format!("xl/charts/chartEx{global_num}.xml");
-                let mut relationship_id = 1usize;
-                if chart.raw_chart_style.is_some() {
-                    manifest.register_part(
-                        &format!("xl/charts/style{style_num}.xml"),
-                        CT_CHART_STYLE,
-                    )?;
-                    manifest.register_relationship(
-                        Some(&chart_source),
-                        &format!("rId{relationship_id}"),
-                        RelationshipKind::ChartStyle.uri(),
-                        &format!("style{style_num}.xml"),
-                        false,
-                    )?;
-                    relationship_id += 1;
-                }
-                if chart.raw_chart_color_style.is_some() {
-                    manifest.register_part(
-                        &format!("xl/charts/colors{style_num}.xml"),
-                        CT_CHART_COLOR_STYLE,
-                    )?;
-                    manifest.register_relationship(
-                        Some(&chart_source),
-                        &format!("rId{relationship_id}"),
-                        RelationshipKind::ChartColorStyle.uri(),
-                        &format!("colors{style_num}.xml"),
-                        false,
-                    )?;
-                }
-            }
+            let style_num = chart_ex_style_num(total_standard_charts, global_num);
+            let chart_source = format!("xl/charts/chartEx{global_num}.xml");
+
+            manifest.register_part(&format!("xl/charts/style{style_num}.xml"), CT_CHART_STYLE)?;
+            manifest.register_relationship(
+                Some(&chart_source),
+                "rId1",
+                RelationshipKind::ChartStyle.uri(),
+                &format!("style{style_num}.xml"),
+                false,
+            )?;
+
+            manifest.register_part(
+                &format!("xl/charts/colors{style_num}.xml"),
+                CT_CHART_COLOR_STYLE,
+            )?;
+            manifest.register_relationship(
+                Some(&chart_source),
+                "rId2",
+                RelationshipKind::ChartColorStyle.uri(),
+                &format!("colors{style_num}.xml"),
+                false,
+            )?;
         }
         for &(sheet_index, image_index, global_num) in image_numbering {
             let Some(image) = workbook
