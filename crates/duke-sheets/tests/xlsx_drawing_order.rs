@@ -1381,3 +1381,64 @@ fn xlsx_empty_author_comment_keeps_attribution() {
         "anonymous comment must not inherit another author"
     );
 }
+
+/// Standard charts and chartEx charts are numbered independently, but
+/// both families name their style parts styleN.xml/colorsN.xml, so the
+/// chartEx numbers must continue above the standard charts' or the two
+/// collide. Also pins that caller-supplied chartEx style bytes are
+/// written verbatim while the missing colours part gets the generated
+/// default.
+#[test]
+fn xlsx_standard_chart_and_chart_ex_style_parts_do_not_collide() {
+    use std::io::Read;
+
+    use duke_sheets::{Chart, ChartType, DataReference, DataSeries};
+
+    let standard_style = duke_sheets_chart::write::default_chart_style_bytes();
+    let chart_ex_style = String::from_utf8(duke_sheets_chart::write::default_chart_style_bytes())
+        .unwrap()
+        .replace(r#" id="201""#, r#" id="999""#)
+        .into_bytes();
+
+    let mut workbook = Workbook::new();
+    let sheet = workbook.worksheet_mut(0).unwrap();
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$3")));
+    chart.raw_chart_style = Some(standard_style.clone());
+    sheet.add_chart(chart, two_cell(2, 2, 8, 12)).unwrap();
+
+    let mut chart_ex =
+        duke_sheets_chart::parse::parse_chart_ex_xml(WATERFALL_CHART_EX).expect("parse chartEx");
+    chart_ex.raw_chart_style = Some(chart_ex_style.clone());
+    sheet
+        .add_drawing(DrawingObject::chart_ex(chart_ex).with_anchor(two_cell(10, 2, 16, 12)))
+        .unwrap();
+
+    let mut output = Cursor::new(Vec::new());
+    XlsxWriter::write(&workbook, &mut output).expect("write");
+    let mut archive = zip::ZipArchive::new(Cursor::new(output.into_inner())).unwrap();
+
+    let mut read = |name: &str| -> Vec<u8> {
+        let mut v = Vec::new();
+        archive
+            .by_name(name)
+            .unwrap_or_else(|_| panic!("{name} missing"))
+            .read_to_end(&mut v)
+            .unwrap();
+        v
+    };
+
+    assert_eq!(read("xl/charts/style1.xml"), standard_style, "standard chart style");
+    assert_eq!(read("xl/charts/style2.xml"), chart_ex_style, "chartEx style must be verbatim");
+    assert_eq!(
+        read("xl/charts/colors2.xml"),
+        duke_sheets_chart::write::default_chart_color_style_bytes(),
+        "chartEx colours must be the generated default"
+    );
+
+    let rels = String::from_utf8(read("xl/charts/_rels/chartEx1.xml.rels")).unwrap();
+    assert!(
+        rels.contains(r#"Target="style2.xml""#) && rels.contains(r#"Target="colors2.xml""#),
+        "chartEx rels must point at the offset numbers: {rels}"
+    );
+}
