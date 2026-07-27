@@ -167,7 +167,6 @@ fn parse_chart_ex_xml_inner<R: Read>(
     let mut in_subtotals = false;
     let mut in_binning = false;
     let mut in_geography = false;
-    let mut _in_geo_cache = false;
     let mut geo_cache_writer: Option<Writer<Cursor<Vec<u8>>>> = None;
     let mut geo_cache_depth: u32 = 0;
     let mut in_statistics = false;
@@ -190,8 +189,6 @@ fn parse_chart_ex_xml_inner<R: Read>(
     let mut in_vcp_max = false;
 
     // binSize / binCount text
-    let mut in_bin_size = false;
-    let mut in_bin_count = false;
 
     // Axis state
     let mut in_axis = false;
@@ -603,13 +600,11 @@ fn parse_chart_ex_xml_inner<R: Read>(
                         layout_pr.binning = Some(binning);
                     }
                     b"binSize" if in_binning => {
-                        in_bin_size = true;
                         if let (Some(v), Some(b)) = (get_val_f64(e), layout_pr.binning.as_mut()) {
                             b.bin_size = Some(v);
                         }
                     }
                     b"binCount" if in_binning => {
-                        in_bin_count = true;
                         if let (Some(v), Some(b)) = (
                             get_val_attr(e).and_then(|s| s.parse().ok()),
                             layout_pr.binning.as_mut(),
@@ -648,7 +643,6 @@ fn parse_chart_ex_xml_inner<R: Read>(
                         layout_pr.geography = Some(geo);
                     }
                     b"geoCache" if in_geography => {
-                        _in_geo_cache = true;
                         let mut w = Writer::new(Cursor::new(Vec::new()));
                         let _ = w.write_event(Event::Start(e.clone().into_owned()));
                         geo_cache_depth = 1;
@@ -855,7 +849,7 @@ fn parse_chart_ex_xml_inner<R: Read>(
                     b"evenFooter" if in_ps_header_footer => in_ps_hf_even_footer = true,
                     b"firstHeader" if in_ps_header_footer => in_ps_hf_first_header = true,
                     b"firstFooter" if in_ps_header_footer => in_ps_hf_first_footer = true,
-                    b"spPr" if !in_sp_pr && !skipping => {
+                    b"spPr" if !in_sp_pr => {
                         in_sp_pr = true;
                         sp_pr_depth = 1;
                         sp_solid_fill = None;
@@ -901,23 +895,23 @@ fn parse_chart_ex_xml_inner<R: Read>(
                             }
                         }
                     }
-                    b"txPr" if !skipping => {
+                    b"txPr" => {
                         skipping = true;
                         skip_depth = 1;
                     }
-                    b"rich" if !skipping => {
+                    b"rich" => {
                         skipping = true;
                         skip_depth = 1;
                     }
-                    b"clrMapOvr" if !skipping => {
+                    b"clrMapOvr" => {
                         skipping = true;
                         skip_depth = 1;
                     }
-                    b"fmtOvrs" if !skipping => {
+                    b"fmtOvrs" => {
                         skipping = true;
                         skip_depth = 1;
                     }
-                    b"extLst" if !skipping => {
+                    b"extLst" => {
                         skipping = true;
                         skip_depth = 1;
                     }
@@ -1159,14 +1153,6 @@ fn parse_chart_ex_xml_inner<R: Read>(
                         }
                     } else if in_ax_title_tx_data_v {
                         ax_title_text = Some(t.to_string());
-                    } else if in_bin_size {
-                        if let Some(ref mut b) = layout_pr.binning {
-                            b.bin_size = t.parse().ok();
-                        }
-                    } else if in_bin_count {
-                        if let Some(ref mut b) = layout_pr.binning {
-                            b.bin_count = t.parse().ok();
-                        }
                     } else if in_dlbl_separator {
                         dlbl_separator = Some(t.to_string());
                     } else if in_ps_hf_odd_header {
@@ -1195,7 +1181,6 @@ fn parse_chart_ex_xml_inner<R: Read>(
                                 geo.raw_geo_cache = Some(w.into_inner().into_inner());
                             }
                         }
-                        _in_geo_cache = false;
                     }
                     continue;
                 }
@@ -1399,13 +1384,7 @@ fn parse_chart_ex_xml_inner<R: Read>(
                         in_layout_pr = false;
                     }
                     b"subtotals" if in_subtotals => in_subtotals = false,
-                    b"binning" if in_binning => {
-                        in_binning = false;
-                        in_bin_size = false;
-                        in_bin_count = false;
-                    }
-                    b"binSize" if in_bin_size => in_bin_size = false,
-                    b"binCount" if in_bin_count => in_bin_count = false,
+                    b"binning" if in_binning => in_binning = false,
                     b"geography" if in_geography => in_geography = false,
                     b"statistics" if in_statistics => in_statistics = false,
                     b"visibility" if in_layout_visibility => in_layout_visibility = false,
