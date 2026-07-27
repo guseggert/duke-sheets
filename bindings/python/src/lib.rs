@@ -1112,6 +1112,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyChartExData>()?;
     m.add_class::<PyChartExDimension>()?;
     m.add_class::<PyChartExAxis>()?;
+    m.add_class::<PyChartExGridlines>()?;
     m.add_class::<PyChartExLegend>()?;
     m.add_class::<PyChartExDataLabels>()?;
     m.add_class::<PyChartExTitle>()?;
