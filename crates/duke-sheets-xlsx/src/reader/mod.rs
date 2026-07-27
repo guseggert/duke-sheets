@@ -11,7 +11,8 @@ use quick_xml::reader::Reader;
 use crate::error::{XlsxError, XlsxResult};
 use crate::opc::{
     resolve_internal_target, ContentTypeExpectation, OpcPackage, PartName, Relationship,
-    RelationshipKind, RelationshipSet, XlsxDiagnosticCode, XlsxPackagePolicy,
+    RelationshipKind, RelationshipSet, XlsxDiagnosticCode, XlsxDiagnosticSeverity,
+    XlsxPackagePolicy,
 };
 use crate::styles::{
     read_styles_xml, register_roundtrip_style_data, register_roundtrip_theme_data, ParsedStyles,
@@ -215,9 +216,9 @@ fn resolve_pic_image<R: Read + Seek>(
     };
     let image_rel_id = image.media_path.clone();
     if let Some(rel) = drawing_rels.get(&image_rel_id) {
-        let Some(path) = rel.internal_path() else {
-            return Ok(image);
-        };
+        // An external or unresolvable target keeps its raw URI so the
+        // model carries the link rather than a stale relationship id.
+        let path = rel.internal_path().unwrap_or_else(|| rel.target());
         let ext = path.rsplit('.').next().unwrap_or("");
         if let Some(fmt) = duke_sheets_chart::ImageFormat::from_extension(ext) {
             image.format = fmt;
@@ -232,9 +233,7 @@ fn resolve_pic_image<R: Read + Seek>(
     }
     if let Some(svg_rel_id) = image.svg_media_path.clone() {
         if let Some(rel) = drawing_rels.get(svg_rel_id.as_str()) {
-            let Some(path) = rel.internal_path() else {
-                return Ok(image);
-            };
+            let path = rel.internal_path().unwrap_or_else(|| rel.target());
             image.svg_media_path = Some(path.to_string());
             if let Some(mut f) = package.open_related_part(rel)? {
                 let mut buf = Vec::new();
@@ -487,7 +486,17 @@ pub struct XlsxReader;
 
 fn log_package_diagnostics(diagnostics: &[crate::opc::XlsxDiagnostic]) {
     for diagnostic in diagnostics {
-        log::warn!("{}", diagnostic.message);
+        let code = diagnostic.code;
+        let source = diagnostic.source_part.as_deref().unwrap_or("/");
+        let message = &diagnostic.message;
+        match diagnostic.severity {
+            XlsxDiagnosticSeverity::Recovery => {
+                log::info!("{code:?} in {source}: {message}");
+            }
+            XlsxDiagnosticSeverity::Warning => {
+                log::warn!("{code:?} in {source}: {message}");
+            }
+        }
     }
 }
 

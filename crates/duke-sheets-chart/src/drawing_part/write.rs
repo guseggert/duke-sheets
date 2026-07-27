@@ -133,6 +133,9 @@ pub struct PlannedRel {
     pub rel_type: String,
     pub target: String,
     pub external: bool,
+    /// Round-tripped from a raw entry rather than generated here, so its
+    /// target part may be absent if the source package lacked it.
+    pub preserved: bool,
 }
 
 /// Relationship-id assignments for a sheet's drawing part. Writer
@@ -233,6 +236,7 @@ pub fn plan_drawing_rels(
             rel_type: RT_IMAGE.to_string(),
             target: format!("../media/image{global_num}.{ext}"),
             external: false,
+            preserved: false,
         });
         plan.image_rids.push(rid);
     }
@@ -255,6 +259,7 @@ pub fn plan_drawing_rels(
                         rel_type: payload.0.clone(),
                         target: payload.1.clone(),
                         external: rel.external,
+                        preserved: true,
                     });
                     seen_raw.insert(fresh.clone(), payload);
                     remap.push((rel.id.to_string(), fresh));
@@ -265,6 +270,7 @@ pub fn plan_drawing_rels(
                         rel_type: payload.0.clone(),
                         target: payload.1.clone(),
                         external: rel.external,
+                        preserved: true,
                     });
                     seen_raw.insert(rel.id.to_string(), payload);
                 }
@@ -302,6 +308,7 @@ pub fn plan_drawing_rels(
                     rel_type: RT_CHART.to_string(),
                     target: format!("../charts/chart{}.xml", chart_globals[chart_i]),
                     external: false,
+                    preserved: false,
                 });
                 chart_i += 1;
                 plan.chart_rids.push(rid);
@@ -313,6 +320,7 @@ pub fn plan_drawing_rels(
                     rel_type: RT_CHART_EX.to_string(),
                     target: format!("../charts/chartEx{}.xml", chartex_globals[chartex_i]),
                     external: false,
+                    preserved: false,
                 });
                 chartex_i += 1;
                 plan.chartex_rids.push(rid);

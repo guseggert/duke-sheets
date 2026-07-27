@@ -398,6 +398,133 @@ fn xlsx_same_document_raw_relationship_does_not_duplicate_drawing_part() {
     assert_eq!(raw.rels[0].part, None);
 }
 
+/// `chartEx` is the only generated part with a mixed-case name, so its
+/// relationships part is where a case-folding bug in the writer shows
+/// up. A case-insensitive reader cannot catch it; assert the entry.
+#[test]
+fn xlsx_chart_ex_relationships_part_keeps_its_casing() {
+    let mut chart_ex = duke_sheets_chart::parse::parse_chart_ex_xml(
+        &br#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><cx:chartData><cx:data id="0"><cx:strDim type="cat"><cx:f>Sheet1!$A$1:$A$3</cx:f><cx:lvl ptCount="3"><cx:pt idx="0">a</cx:pt><cx:pt idx="1">b</cx:pt><cx:pt idx="2">c</cx:pt></cx:lvl></cx:strDim><cx:numDim type="val"><cx:f>Sheet1!$B$1:$B$3</cx:f><cx:lvl ptCount="3" formatCode="General"><cx:pt idx="0">1</cx:pt><cx:pt idx="1">2</cx:pt><cx:pt idx="2">3</cx:pt></cx:lvl></cx:numDim></cx:data></cx:chartData><cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="waterfall" uniqueId="{1D8F9C4E-1C1B-4A5F-9C6B-2E7A0F3B5D11}"><cx:tx><cx:txData><cx:f>Sheet1!$B$1</cx:f><cx:v>Series1</cx:v></cx:txData></cx:tx><cx:dataId val="0"/><cx:layoutPr><cx:subtotals/></cx:layoutPr></cx:series></cx:plotAreaRegion><cx:axis id="0"><cx:catScaling gapWidth="0.5"/><cx:tickLabels/></cx:axis><cx:axis id="1"><cx:valScaling/><cx:majorGridlines/><cx:tickLabels/></cx:axis></cx:plotArea></cx:chart></cx:chartSpace>"#[..],
+    )
+    .expect("parse chartEx");
+    chart_ex.raw_chart_style = Some(b"<cs:chartStyle/>".to_vec());
+    chart_ex.raw_chart_color_style = Some(b"<cs:colorStyle/>".to_vec());
+
+    let mut workbook = Workbook::new();
+    workbook
+        .worksheet_mut(0)
+        .unwrap()
+        .add_drawing(DrawingObject::chart_ex(chart_ex).with_anchor(two_cell(0, 0, 4, 4)))
+        .unwrap();
+
+    let mut output = Cursor::new(Vec::new());
+    XlsxWriter::write(&workbook, &mut output).expect("write");
+    let archive = zip::ZipArchive::new(Cursor::new(output.into_inner())).unwrap();
+    let names: Vec<_> = archive.file_names().collect();
+    assert!(
+        names.contains(&"xl/charts/_rels/chartEx1.xml.rels"),
+        "chartEx rels part must keep its casing, got {names:?}"
+    );
+}
+
+/// A picture whose blip resolves through an external relationship must
+/// keep the linked URI, not the relationship id it was looked up by.
+#[test]
+fn xlsx_external_image_relationship_keeps_its_uri() {
+    use std::io::Read;
+
+    let mut workbook = Workbook::new();
+    workbook
+        .worksheet_mut(0)
+        .unwrap()
+        .add_drawing(png("Linked").with_anchor(two_cell(0, 0, 2, 2)))
+        .unwrap();
+    let mut output = Cursor::new(Vec::new());
+    XlsxWriter::write(&workbook, &mut output).expect("write");
+
+    const URL: &str = "https://example.com/logo.png";
+    let mut archive = zip::ZipArchive::new(Cursor::new(output.into_inner())).unwrap();
+    let mut rebuilt = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for index in 0..archive.len() {
+        let mut file = archive.by_index(index).unwrap();
+        let name = file.name().to_string();
+        if name.starts_with("xl/media/") {
+            continue;
+        }
+        let mut content = Vec::new();
+        file.read_to_end(&mut content).unwrap();
+        if name == "xl/drawings/_rels/drawing1.xml.rels" {
+            let text = String::from_utf8(content).unwrap();
+            let start = text.find("Target=\"").expect("target");
+            let end = text[start + 8..].find('"').expect("target end") + start + 8;
+            content = format!(
+                "{}{URL}\" TargetMode=\"External{}",
+                &text[..start + 8],
+                &text[end..]
+            )
+            .into_bytes();
+        }
+        rebuilt
+            .start_file(name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        rebuilt.write_all(&content).unwrap();
+    }
+
+    let read = XlsxReader::read(Cursor::new(rebuilt.finish().unwrap().into_inner())).expect("read");
+    let image = read
+        .worksheet(0)
+        .unwrap()
+        .drawings()
+        .iter()
+        .find_map(|object| match &object.kind {
+            DrawingKind::Image(image) => Some(image),
+            _ => None,
+        })
+        .expect("image");
+    assert_eq!(image.media_path, URL);
+    assert!(image.data.is_empty());
+}
+
+/// A preserved relationship whose part the source package never had
+/// must not make the workbook unsavable; the relationship is dropped so
+/// the emitted package stays conforming.
+#[test]
+fn xlsx_preserved_relationship_with_absent_part_is_dropped_not_fatal() {
+    for target in ["../media/gone.png", "../../outside.png"] {
+        let mut object = raw_link(0, 11, "rId1", target);
+        let DrawingKind::Raw(raw) = &mut object.kind else {
+            panic!("raw drawing");
+        };
+        raw.rels[0].rel_type =
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image".to_string();
+        raw.rels[0].external = false;
+        raw.rels[0].part = None;
+
+        let mut workbook = Workbook::new();
+        workbook
+            .worksheet_mut(0)
+            .unwrap()
+            .add_drawing(object)
+            .unwrap();
+        let mut output = Cursor::new(Vec::new());
+        XlsxWriter::write(&workbook, &mut output)
+            .unwrap_or_else(|e| panic!("target {target} must still save: {e}"));
+
+        let bytes = output.into_inner();
+        let mut archive = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let mut rels = String::new();
+        if let Ok(mut part) = archive.by_name("xl/drawings/_rels/drawing1.xml.rels") {
+            std::io::Read::read_to_string(&mut part, &mut rels).unwrap();
+        }
+        assert!(
+            !rels.contains(target),
+            "target {target} must not be emitted as a dangling relationship"
+        );
+        drop(archive);
+        XlsxReader::read(Cursor::new(bytes)).expect("reread");
+    }
+}
+
 #[test]
 fn xlsx_raw_part_cannot_overwrite_generated_chart() {
     use duke_sheets::{Chart, ChartType, RawDrawing, RawRel};

@@ -359,6 +359,20 @@ fn raw_part_content_type(rel_type: &str, path: &str) -> &'static str {
     }
 }
 
+/// Base for resolving preserved drawing relationship targets before
+/// drawing numbers are assigned. Only its directory matters, because
+/// every drawing part is emitted into `xl/drawings/`.
+const RAW_DRAWING_BASE: &str = "xl/drawings/drawing1.xml";
+
+/// Whether a resolved target names a part the drawing writer generates,
+/// which a preserved relationship must not claim as its own raw part.
+fn is_generated_drawing_part(path: &str) -> bool {
+    path.to_ascii_lowercase()
+        .strip_prefix("xl/drawings/drawing")
+        .and_then(|rest| rest.strip_suffix(".xml"))
+        .is_some_and(|num| !num.is_empty() && num.bytes().all(|b| b.is_ascii_digit()))
+}
+
 pub(super) fn write_color_element(w: &mut XmlWriter, tag: &str, color: &Color) -> XlsxResult<()> {
     let mut el = BytesStart::new(tag);
     match color {
@@ -716,8 +730,8 @@ impl XlsxWriter {
                 if rel.external || rel.part.is_none() {
                     continue;
                 }
-                let path = resolve_internal_target("xl/drawings/drawing1.xml", &rel.target)?;
-                if path.eq_ignore_ascii_case("xl/drawings/drawing1.xml") {
+                let path = resolve_internal_target(RAW_DRAWING_BASE, &rel.target)?;
+                if is_generated_drawing_part(&path) {
                     continue;
                 }
                 let identity = path.to_ascii_lowercase();
@@ -750,8 +764,8 @@ impl XlsxWriter {
                 if rel.external || rel.part.is_none() {
                     continue;
                 }
-                let path = resolve_internal_target("xl/drawings/drawing1.xml", &rel.target)?;
-                if path.eq_ignore_ascii_case("xl/drawings/drawing1.xml") {
+                let path = resolve_internal_target(RAW_DRAWING_BASE, &rel.target)?;
+                if is_generated_drawing_part(&path) {
                     continue;
                 }
                 let identity = path.to_ascii_lowercase();
@@ -984,13 +998,23 @@ impl XlsxWriter {
                 );
                 let drawing_source = format!("xl/drawings/drawing{dn}.xml");
                 for relationship in &plan.rels {
-                    manifest.register_relationship(
-                        Some(&drawing_source),
-                        &relationship.id,
-                        &relationship.rel_type,
-                        &relationship.target,
-                        relationship.external,
-                    )?;
+                    if relationship.preserved {
+                        manifest.register_preserved_relationship(
+                            Some(&drawing_source),
+                            &relationship.id,
+                            &relationship.rel_type,
+                            &relationship.target,
+                            relationship.external,
+                        )?;
+                    } else {
+                        manifest.register_relationship(
+                            Some(&drawing_source),
+                            &relationship.id,
+                            &relationship.rel_type,
+                            &relationship.target,
+                            relationship.external,
+                        )?;
+                    }
                 }
                 drawing::write_drawing(&mut zip, sheet, i, &plan, dn)?;
 
@@ -1069,7 +1093,7 @@ impl XlsxWriter {
                 )?;
             }
             for relationship in &plan.raw_rels {
-                manifest.register_relationship(
+                manifest.register_preserved_relationship(
                     Some(&drawing_source),
                     &relationship.id,
                     &relationship.rel_type,

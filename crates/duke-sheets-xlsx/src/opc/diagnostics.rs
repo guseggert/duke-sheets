@@ -28,24 +28,44 @@ pub enum XlsxDiagnosticSeverity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum XlsxDiagnosticCode {
+    /// A ZIP entry or target breaks the OPC part-name rules.
     InvalidPartName,
+    /// Two entries differ only by ASCII case, so they name one part.
     EquivalentPartName,
+    /// One part name is a prefix of another, which OPC forbids.
     DerivablePartName,
+    /// A part has no `Default` or `Override` content type.
     MissingContentType,
+    /// An extension or part name is declared more than once.
     DuplicateContentType,
+    /// `[Content_Types].xml` is unreadable or does not match its schema.
     MalformedContentType,
+    /// A part that owns relationships has no `.rels` part.
     MissingRelationshipsPart,
+    /// A `Relationship` element is malformed or wrongly namespaced.
     MalformedRelationship,
+    /// Two relationships from one source share an `Id`.
     DuplicateRelationshipId,
+    /// `TargetMode` is neither `Internal` nor `External`, or is miscased.
     UnknownTargetMode,
+    /// An internal target could not be resolved to a part name.
     UnresolvedRelationshipTarget,
+    /// An internal target resolved but names no part in the package.
     MissingRelationshipTarget,
+    /// The package has no `/_rels/.rels`.
     MissingPackageRelationships,
+    /// Package relationships contain no `officeDocument` relationship.
     MissingOfficeDocumentRelationship,
+    /// More than one candidate Workbook part was found.
     AmbiguousOfficeDocumentRelationship,
+    /// The Workbook part's content type is not a SpreadsheetML workbook.
     WorkbookContentTypeMismatch,
+    /// A part's content type does not match its relationship type.
     PartContentTypeMismatch,
+    /// A part was located by convention because relationships were unusable.
     CanonicalPartFallback,
+    /// A valid sheet kind this library does not model, such as a dialog
+    /// or macro sheet, was skipped.
     UnsupportedSheetType,
 }
 
@@ -53,11 +73,17 @@ pub enum XlsxDiagnosticCode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct XlsxDiagnostic {
+    /// Stable category, suitable for matching.
     pub code: XlsxDiagnosticCode,
+    /// Whether data was skipped or a fallback was applied.
     pub severity: XlsxDiagnosticSeverity,
+    /// Part that owns the problem, as an OPC part name.
     pub source_part: Option<String>,
+    /// Relationship id, when the problem is relationship-scoped.
     pub relationship_id: Option<String>,
+    /// Relationship target or part name the problem refers to.
     pub target: Option<String>,
+    /// Human-readable explanation; not stable across versions.
     pub message: String,
 }
 

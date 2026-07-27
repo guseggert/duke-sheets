@@ -140,6 +140,41 @@ fn reads_relocated_workbook_from_root_relative_relationship() {
     assert_relocated_package(relocated_package("/pkg/main/book.xml"));
 }
 
+/// Part names with spaces break ECMA-376 Part 2 §6.2.2.2 but still
+/// address one part, so Compatible must read them rather than drop the
+/// entry and hand back an invented empty sheet.
+#[test]
+fn compatible_reads_parts_whose_names_break_the_character_rules() {
+    let bytes = rename_parts(
+        rewrite_text_part(
+            rewrite_text_part(
+                relocated_package("pkg/main/book.xml"),
+                "pkg/main/_rels/book.xml.rels",
+                |relationships| {
+                    relationships.replace("../../sheets/data.xml", "../../sheets/data sheet.xml")
+                },
+            ),
+            "[Content_Types].xml",
+            |content_types| content_types.replace("/sheets/data.xml", "/sheets/data sheet.xml"),
+        ),
+        &[("sheets/data.xml", "sheets/data sheet.xml")],
+    );
+
+    let report = XlsxReader::read_with_report(Cursor::new(&bytes), XlsxPackagePolicy::Compatible)
+        .expect("compatible read");
+    let sheet = report.workbook.worksheet(0).expect("worksheet");
+    assert_eq!(sheet.name(), "Moved");
+    assert_eq!(
+        sheet.cell_at(0, 0).map(|cell| &cell.value),
+        Some(&CellValue::String("relocated".into()))
+    );
+    assert!(report
+        .diagnostics
+        .iter()
+        .any(|diagnostic| { diagnostic.code == XlsxDiagnosticCode::InvalidPartName }));
+    assert!(XlsxReader::read_with_report(Cursor::new(bytes), XlsxPackagePolicy::Strict).is_err());
+}
+
 #[test]
 fn compatible_finds_conventional_resources_without_relationships() {
     let bytes = rewrite_text_part(
@@ -342,6 +377,34 @@ fn compatible_prefers_workbook_content_type_among_ambiguous_roots() {
         diagnostic.code == XlsxDiagnosticCode::AmbiguousOfficeDocumentRelationship
     }));
     assert!(XlsxReader::read_with_report(Cursor::new(bytes), XlsxPackagePolicy::Strict).is_err());
+}
+
+/// An officeDocument relationship aimed at a non-workbook part must not
+/// shadow the real workbook that the content types identify.
+#[test]
+fn compatible_recovers_when_office_document_targets_a_non_workbook_part() {
+    let bytes = rewrite_text_part(
+        relocated_package("pkg/main/book.xml"),
+        "_rels/.rels",
+        |relationships| {
+            relationships.replace(
+                r#"Target="pkg/main/book.xml""#,
+                r#"Target="pkg/resources/styles.xml""#,
+            )
+        },
+    );
+    let report = XlsxReader::read_with_report(Cursor::new(bytes), XlsxPackagePolicy::Compatible)
+        .expect("compatible read");
+    let sheet = report.workbook.worksheet(0).expect("worksheet");
+    assert_eq!(sheet.name(), "Moved");
+    assert_eq!(
+        sheet.cell_at(0, 0).map(|cell| &cell.value),
+        Some(&CellValue::String("relocated".into()))
+    );
+    assert!(report
+        .diagnostics
+        .iter()
+        .any(|diagnostic| { diagnostic.code == XlsxDiagnosticCode::CanonicalPartFallback }));
 }
 
 #[test]
