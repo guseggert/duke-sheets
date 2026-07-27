@@ -426,6 +426,11 @@ fn write_data_labels(w: &mut XmlWriter, dl: &ChartExDataLabels) -> XlsxResult<()
         write_cx_number_format(w, nf)?;
     }
 
+    // CT_DataLabels order: numFmt, spPr, txPr, visibility, separator.
+    if let Some(ref sp) = dl.shape_properties {
+        write_cx_shape_properties(w, sp)?;
+    }
+
     if dl.visibility_series_name.is_some()
         || dl.visibility_category_name.is_some()
         || dl.visibility_value.is_some()
@@ -446,10 +451,6 @@ fn write_data_labels(w: &mut XmlWriter, dl: &ChartExDataLabels) -> XlsxResult<()
     if let Some(ref sep) = dl.separator {
         w.create_element("cx:separator")
             .write_text_content(BytesText::new(sep))?;
-    }
-
-    if let Some(ref sp) = dl.shape_properties {
-        write_cx_shape_properties(w, sp)?;
     }
 
     for ovr in &dl.overrides {

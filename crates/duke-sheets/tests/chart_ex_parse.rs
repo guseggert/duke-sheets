@@ -30,7 +30,7 @@ const KITCHEN_SINK: &str = r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.
 <cx:series layoutId="waterfall" uniqueId="{AAAA0000-1111-2222-3333-444455556666}" hidden="0" ownerIdx="1" formatIdx="2">
 <cx:tx><cx:txData><cx:f>Sheet1!$B$1</cx:f><cx:v>Series1</cx:v></cx:txData></cx:tx>
 <cx:dataId val="0"/>
-<cx:dataLabels pos="ctr"><cx:visibility seriesName="0" categoryName="1" value="1"/><cx:numFmt formatCode="0.00" sourceLinked="0"/><cx:separator>;</cx:separator></cx:dataLabels>
+<cx:dataLabels pos="ctr"><cx:numFmt formatCode="0.00" sourceLinked="0"/><cx:spPr><a:solidFill><a:srgbClr val="0000FF"/></a:solidFill></cx:spPr><cx:visibility seriesName="0" categoryName="1" value="1"/><cx:separator>;</cx:separator></cx:dataLabels>
 <cx:dataPt idx="1"><cx:spPr><a:solidFill><a:srgbClr val="00FF00"/></a:solidFill></cx:spPr></cx:dataPt>
 <cx:layoutPr><cx:visibility connectorLines="1" meanLine="0" meanMarker="1" nonoutliers="0" outliers="1"/><cx:statistics quartileMethod="inclusive"/><cx:subtotals><cx:idx val="0"/><cx:idx val="2"/></cx:subtotals></cx:layoutPr>
 <cx:axisId>0</cx:axisId>
@@ -219,6 +219,15 @@ fn kitchen_sink_parses_to_the_expected_model() {
     assert_eq!(s.data_points[0].idx, 1);
     let labels = s.data_labels.as_ref().expect("dataLabels");
     assert_eq!(labels.separator.as_deref(), Some(";"));
+    assert_eq!(
+        labels
+            .shape_properties
+            .as_ref()
+            .and_then(|sp| sp.solid_fill.as_ref())
+            .map(|c| c.hex.as_str()),
+        Some("0000FF"),
+        "dataLabels spPr must be modelled, not parsed and dropped"
+    );
     let lp = s.layout_properties.as_ref().expect("layoutPr");
     assert_eq!(lp.subtotals, Some(vec![0, 2]));
     assert_eq!(
