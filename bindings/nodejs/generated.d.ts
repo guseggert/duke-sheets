@@ -731,14 +731,18 @@ export interface JsChartEx {
   externalDataAutoUpdate?: boolean
 }
 
+export interface JsChartExGridlines {
+  shapeProperties?: JsChartShapeProperties
+}
+
 export interface JsChartExAxis {
   id: number
   hidden?: boolean
   scaling: JsChartExScaling
   title?: JsChartExAxisTitle
   units?: JsChartExAxisUnits
-  majorGridlines?: JsChartShapeProperties
-  minorGridlines?: JsChartShapeProperties
+  majorGridlines?: JsChartExGridlines
+  minorGridlines?: JsChartExGridlines
   majorTickMarks?: string
   minorTickMarks?: string
   tickLabels: boolean

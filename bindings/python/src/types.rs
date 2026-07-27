@@ -4464,6 +4464,21 @@ impl From<&chart::ChartExGeography> for PyChartExGeography {
     }
 }
 
+#[pyclass(name = "ChartExGridlines")]
+#[derive(Clone)]
+pub struct PyChartExGridlines {
+    #[pyo3(get)]
+    pub shape_properties: Option<PyChartShapeProperties>,
+}
+
+impl From<&chart::ChartExGridlines> for PyChartExGridlines {
+    fn from(g: &chart::ChartExGridlines) -> Self {
+        Self {
+            shape_properties: g.shape_properties.as_ref().map(PyChartShapeProperties::from),
+        }
+    }
+}
+
 #[pyclass(name = "ChartExStatistics")]
 #[derive(Clone)]
 pub struct PyChartExStatistics {
@@ -4937,9 +4952,9 @@ pub struct PyChartExAxis {
     #[pyo3(get)]
     pub units: Option<PyChartExAxisUnits>,
     #[pyo3(get)]
-    pub major_gridlines: Option<PyChartShapeProperties>,
+    pub major_gridlines: Option<PyChartExGridlines>,
     #[pyo3(get)]
-    pub minor_gridlines: Option<PyChartShapeProperties>,
+    pub minor_gridlines: Option<PyChartExGridlines>,
     #[pyo3(get)]
     pub major_tick_marks: Option<String>,
     #[pyo3(get)]
@@ -4960,8 +4975,8 @@ impl From<&chart::ChartExAxis> for PyChartExAxis {
             scaling: PyChartExScaling::from(&a.scaling),
             title: a.title.as_ref().map(PyChartExAxisTitle::from),
             units: a.units.as_ref().map(PyChartExAxisUnits::from),
-            major_gridlines: a.major_gridlines.as_ref().map(PyChartShapeProperties::from),
-            minor_gridlines: a.minor_gridlines.as_ref().map(PyChartShapeProperties::from),
+            major_gridlines: a.major_gridlines.as_ref().map(PyChartExGridlines::from),
+            minor_gridlines: a.minor_gridlines.as_ref().map(PyChartExGridlines::from),
             major_tick_marks: a.major_tick_marks.clone(),
             minor_tick_marks: a.minor_tick_marks.clone(),
             tick_labels: a.tick_labels,
