@@ -10,10 +10,11 @@
 
 use duke_sheets_chart::{ChartEx, ChartExLayout, ChartExScaling};
 
-/// Every chartEx element the parser models, bar those whose content is
-/// captured as raw bytes (`geoCache`, `valueColors`, `clrMapOvr`,
-/// `extLst`, `rich`, `txPr`); expanding a self-closing tag inside those
-/// changes the captured bytes, so they are exercised separately.
+/// Every chartEx element the parser models, plus the subtrees it skips
+/// (`txPr`, `clrMapOvr`, `fmtOvrs`, `extLst`), whose presence must not
+/// disturb what surrounds them. Only `geoCache` and `valueColors`
+/// capture raw bytes; expanding a self-closing tag inside those changes
+/// the captured bytes, so they are exercised separately.
 const KITCHEN_SINK: &str = r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
 <cx:chartData>
 <cx:data id="0">
@@ -34,7 +35,7 @@ const KITCHEN_SINK: &str = r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.
 <cx:layoutPr><cx:visibility connectorLines="1" meanLine="0" meanMarker="1" nonoutliers="0" outliers="1"/><cx:statistics quartileMethod="inclusive"/><cx:subtotals><cx:idx val="0"/><cx:idx val="2"/></cx:subtotals></cx:layoutPr>
 <cx:axisId>0</cx:axisId>
 <cx:axisId>1</cx:axisId>
-<cx:spPr><a:solidFill><a:srgbClr val="123456"/></a:solidFill><a:ln><a:solidFill><a:srgbClr val="654321"/></a:solidFill><a:prstDash val="dash"/></a:ln></cx:spPr>
+<cx:spPr><a:solidFill><a:srgbClr val="123456"/></a:solidFill><a:ln><a:solidFill><a:srgbClr val="654321"/></a:solidFill><a:prstDash val="dash"/></a:ln><a:extLst><a:ext uri="{FF00}"><a:dummy/></a:ext></a:extLst></cx:spPr>
 </cx:series>
 <cx:series layoutId="clusteredColumn" hidden="1">
 <cx:dataId val="0"/>
@@ -50,11 +51,15 @@ const KITCHEN_SINK: &str = r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.
 <cx:legend pos="b" align="ctr" overlay="1"><cx:spPr><a:noFill/></cx:spPr></cx:legend>
 </cx:chart>
 <cx:spPr><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></cx:spPr>
+<cx:txPr><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>t</a:t></a:r></a:p></cx:txPr>
+<cx:clrMapOvr bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>
+<cx:fmtOvrs><cx:fmtOvr idx="0"><cx:spPr><a:noFill/></cx:spPr></cx:fmtOvr></cx:fmtOvrs>
 <cx:printSettings>
 <cx:headerFooter differentOddEven="0" differentFirst="0"><cx:oddHeader>H</cx:oddHeader><cx:oddFooter>F</cx:oddFooter></cx:headerFooter>
 <cx:pageMargins b="0.75" l="0.7" r="0.7" t="0.75" header="0.3" footer="0.3"/>
 <cx:pageSetup paperSize="9" orientation="landscape" blackAndWhite="0" draft="0" useFirstPageNumber="1" firstPageNumber="3" horizontalDpi="600" verticalDpi="600" copies="2"/>
 </cx:printSettings>
+<cx:extLst><cx:ext uri="{AA00}"><cx:leaf/></cx:ext></cx:extLst>
 </cx:chartSpace>"#;
 
 fn parse(xml: &str) -> ChartEx {
@@ -293,6 +298,55 @@ fn raw_captured_regions_keep_self_closing_tags_verbatim() {
     assert_eq!(cx, again, "raw geoCache capture changed on round trip");
 }
 
+/// Same contract for the other capture region: `minColor`/`midColor`/
+/// `maxColor` bodies inside `cx:valueColors` are raw bytes.
+#[test]
+fn value_color_captures_keep_self_closing_tags_verbatim() {
+    let doc = r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><cx:chartData><cx:data id="0"><cx:numDim type="val"><cx:f>Sheet1!$B$1</cx:f></cx:numDim></cx:data></cx:chartData><cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="regionMap"><cx:dataId val="0"/><cx:valueColors><cx:minColor><a:srgbClr val="FF0000"/></cx:minColor><cx:maxColor><a:schemeClr val="accent1"><a:lumMod val="60000"/></a:schemeClr></cx:maxColor></cx:valueColors></cx:series></cx:plotAreaRegion></cx:plotArea></cx:chart></cx:chartSpace>"#;
+
+    let cx = parse(doc);
+    let vc = cx.plot_area.series[0]
+        .value_colors
+        .as_ref()
+        .expect("valueColors captured");
+    let min = String::from_utf8_lossy(vc.min_color.as_ref().expect("minColor"));
+    assert!(
+        min.contains(r#"<a:srgbClr val="FF0000"/>"#),
+        "self-closing tag inside minColor was rewritten: {min}"
+    );
+    assert!(vc.mid_color.is_none());
+    let max = String::from_utf8_lossy(vc.max_color.as_ref().expect("maxColor"));
+    assert!(max.contains(r#"<a:lumMod val="60000"/>"#), "maxColor: {max}");
+
+    let bytes = duke_sheets_chart::write::chart_ex_part_bytes(&cx).expect("write");
+    let again = duke_sheets_chart::parse::parse_chart_ex_xml(&bytes[..]).expect("reparse");
+    assert_eq!(cx, again, "valueColors capture changed on round trip");
+}
+
+/// A self-closing capture opener is split before its capture writer
+/// exists, so the captured bytes come out expanded. That is a semantic
+/// no-op; this pins it as intended behaviour rather than an accident.
+#[test]
+fn self_closing_capture_opener_round_trips_as_expanded_form() {
+    let doc = r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex"><cx:chartData><cx:data id="0"><cx:numDim type="val"><cx:f>Sheet1!$B$1</cx:f></cx:numDim></cx:data></cx:chartData><cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="regionMap"><cx:dataId val="0"/><cx:layoutPr><cx:geography cultureLanguage="en-US"><cx:geoCache provider="x"/></cx:geography></cx:layoutPr></cx:series></cx:plotAreaRegion></cx:plotArea></cx:chart></cx:chartSpace>"#;
+
+    let cx = parse(doc);
+    let cache = cx.plot_area.series[0]
+        .layout_properties
+        .as_ref()
+        .and_then(|l| l.geography.as_ref())
+        .and_then(|g| g.raw_geo_cache.as_ref())
+        .expect("empty geoCache still captured");
+    assert_eq!(
+        String::from_utf8_lossy(cache),
+        r#"<cx:geoCache provider="x"></cx:geoCache>"#
+    );
+
+    let bytes = duke_sheets_chart::write::chart_ex_part_bytes(&cx).expect("write");
+    let again = duke_sheets_chart::parse::parse_chart_ex_xml(&bytes[..]).expect("reparse");
+    assert_eq!(cx, again, "empty geoCache changed on round trip");
+}
+
 /// `version`, `featureList` and `fallbackImg` are `CT_ChartSpace`
 /// attributes; both sides used to drop them, so they vanished from any
 /// file that carried them.
@@ -308,4 +362,27 @@ fn chart_space_attributes_round_trip() {
     let bytes = duke_sheets_chart::write::chart_ex_part_bytes(&cx).expect("write");
     let again = duke_sheets_chart::parse::parse_chart_ex_xml(&bytes[..]).expect("reparse");
     assert_eq!(cx, again, "chartSpace attributes lost on round trip");
+}
+
+/// `a:extLst` is a valid last child of `a:CT_ShapeProperties`. Entering
+/// its skip region must not desynchronize the `cx:spPr` nesting depth:
+/// when it did, the containing spPr never closed, its formatting was
+/// lost, and every later spPr in the document was dropped too.
+#[test]
+fn ext_lst_inside_shape_properties_does_not_poison_later_ones() {
+    for ext in ["<a:extLst><a:ext uri=\"{X}\"/></a:extLst>", "<a:extLst/>"] {
+        let doc = format!(
+            r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><cx:chartData><cx:data id="0"><cx:numDim type="val"><cx:f>Sheet1!$B$1</cx:f></cx:numDim></cx:data></cx:chartData><cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="waterfall"><cx:dataId val="0"/><cx:spPr><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>{ext}</cx:spPr></cx:series><cx:series layoutId="waterfall"><cx:dataId val="0"/><cx:spPr><a:solidFill><a:srgbClr val="00FF00"/></a:solidFill></cx:spPr></cx:series></cx:plotAreaRegion></cx:plotArea></cx:chart></cx:chartSpace>"#
+        );
+        let cx = parse(&doc);
+        let fill = |i: usize| {
+            cx.plot_area.series[i]
+                .shape_properties
+                .as_ref()
+                .and_then(|sp| sp.solid_fill.as_ref())
+                .map(|c| c.hex.as_str().to_owned())
+        };
+        assert_eq!(fill(0), Some("FF0000".into()), "first spPr lost ({ext})");
+        assert_eq!(fill(1), Some("00FF00".into()), "later spPr lost ({ext})");
+    }
 }

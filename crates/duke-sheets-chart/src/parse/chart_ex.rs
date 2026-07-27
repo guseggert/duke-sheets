@@ -1239,6 +1239,14 @@ fn parse_chart_ex_xml_inner<R: Read>(
                     skip_depth -= 1;
                     if skip_depth == 0 {
                         skipping = false;
+                        // The element that opened this skip region was
+                        // counted by the spPr depth bookkeeping; its
+                        // subtree ends here. It cannot close the spPr
+                        // itself, since the spPr's own start put the
+                        // depth at 1 before the opener raised it.
+                        if in_sp_pr {
+                            sp_pr_depth = sp_pr_depth.saturating_sub(1);
+                        }
                     }
                     buf.clear();
                     continue;
