@@ -733,3 +733,126 @@ fn extension_lists_round_trip_on_their_owner() {
     let again = duke_sheets_chart::parse::parse_chart_ex_xml(&bytes[..]).expect("reparse");
     assert_eq!(cx, again, "extension lists changed on round trip");
 }
+
+/// Every `cx:txPr` and `cx:extLst` must land on the element that held
+/// it. Misrouting is silent - the bytes still come back, just attributed
+/// to a parent or sibling - so each owner gets a distinct marker and is
+/// checked individually. Containers the model has no field for
+/// (`cx:chart`, `cx:chartData`, `cx:plotAreaRegion`, gridlines, the plot
+/// surface) must drop theirs rather than donate it to an ancestor.
+#[test]
+fn text_properties_and_extension_lists_land_on_their_own_owner() {
+    let doc = r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+<cx:chartData><cx:data id="0"><cx:numDim type="val"><cx:f>S!$B$1</cx:f></cx:numDim><cx:extLst><cx:ext uri="MARK05"></cx:ext></cx:extLst></cx:data><cx:extLst><cx:ext uri="MARK24"></cx:ext></cx:extLst></cx:chartData>
+<cx:chart>
+<cx:title><cx:tx><cx:txData><cx:v>T</cx:v></cx:txData></cx:tx><cx:txPr><a:p><a:t>MARK02</a:t></a:p></cx:txPr><cx:extLst><cx:ext uri="MARK03"></cx:ext></cx:extLst></cx:title>
+<cx:plotArea>
+<cx:plotAreaRegion>
+<cx:series layoutId="waterfall">
+<cx:dataId val="0"/>
+<cx:dataPt idx="0"><cx:extLst><cx:ext uri="MARK07"></cx:ext></cx:extLst></cx:dataPt>
+<cx:dataLabels pos="ctr"><cx:txPr><a:p><a:t>MARK09</a:t></a:p></cx:txPr><cx:dataLabel idx="0"><cx:txPr><a:p><a:t>MARK11</a:t></a:p></cx:txPr><cx:extLst><cx:ext uri="MARK12"></cx:ext></cx:extLst></cx:dataLabel><cx:extLst><cx:ext uri="MARK10"></cx:ext></cx:extLst></cx:dataLabels>
+<cx:layoutPr><cx:extLst><cx:ext uri="MARK08"></cx:ext></cx:extLst></cx:layoutPr>
+<cx:extLst><cx:ext uri="MARK06"></cx:ext></cx:extLst>
+</cx:series>
+<cx:plotSurface><cx:extLst><cx:ext uri="MARK27"></cx:ext></cx:extLst></cx:plotSurface>
+<cx:extLst><cx:ext uri="MARK25"></cx:ext></cx:extLst>
+</cx:plotAreaRegion>
+<cx:axis id="0"><cx:catScaling gapWidth="0.5"/>
+<cx:title><cx:tx><cx:txData><cx:v>AT</cx:v></cx:txData></cx:tx><cx:txPr><a:p><a:t>MARK15</a:t></a:p></cx:txPr><cx:extLst><cx:ext uri="MARK16"></cx:ext></cx:extLst></cx:title>
+<cx:units unit="hundreds"><cx:unitsLabel><cx:txPr><a:p><a:t>MARK18</a:t></a:p></cx:txPr><cx:extLst><cx:ext uri="MARK19"></cx:ext></cx:extLst></cx:unitsLabel><cx:extLst><cx:ext uri="MARK17"></cx:ext></cx:extLst></cx:units>
+<cx:majorGridlines><cx:extLst><cx:ext uri="MARK26"></cx:ext></cx:extLst></cx:majorGridlines>
+<cx:txPr><a:p><a:t>MARK13</a:t></a:p></cx:txPr><cx:extLst><cx:ext uri="MARK14"></cx:ext></cx:extLst></cx:axis>
+<cx:extLst><cx:ext uri="MARK04"></cx:ext></cx:extLst>
+</cx:plotArea>
+<cx:legend pos="b"><cx:txPr><a:p><a:t>MARK20</a:t></a:p></cx:txPr><cx:extLst><cx:ext uri="MARK21"></cx:ext></cx:extLst></cx:legend>
+<cx:extLst><cx:ext uri="MARK23"></cx:ext></cx:extLst>
+</cx:chart>
+<cx:txPr><a:p><a:t>MARK00</a:t></a:p></cx:txPr>
+<cx:fmtOvrs><cx:fmtOvr idx="0"><cx:extLst><cx:ext uri="MARK22"></cx:ext></cx:extLst></cx:fmtOvr></cx:fmtOvrs>
+<cx:extLst><cx:ext uri="MARK01"></cx:ext></cx:extLst>
+</cx:chartSpace>"#;
+
+    let cx = parse(doc);
+    let series = &cx.plot_area.series[0];
+    let axis = &cx.plot_area.axes[0];
+    let labels = series.data_labels.as_ref().expect("dataLabels");
+    let units = axis.units.as_ref().expect("units");
+
+    // (what it should hold, the marker, where it came from)
+    let cases: Vec<(&Option<Vec<u8>>, &str, &str)> = vec![
+        (&cx.text_properties, "MARK00", "chartSpace txPr"),
+        (&cx.extensions, "MARK01", "chartSpace extLst"),
+        (&cx.title.as_ref().unwrap().text_properties, "MARK02", "title txPr"),
+        (&cx.title.as_ref().unwrap().extensions, "MARK03", "title extLst"),
+        (&cx.plot_area.extensions, "MARK04", "plotArea extLst"),
+        (&cx.data[0].extensions, "MARK05", "data extLst"),
+        (&series.extensions, "MARK06", "series extLst"),
+        (&series.data_points[0].extensions, "MARK07", "dataPt extLst"),
+        (&series.layout_properties.as_ref().unwrap().extensions, "MARK08", "layoutPr extLst"),
+        (&labels.text_properties, "MARK09", "dataLabels txPr"),
+        (&labels.extensions, "MARK10", "dataLabels extLst"),
+        (&labels.overrides[0].text_properties, "MARK11", "dataLabel txPr"),
+        (&labels.overrides[0].extensions, "MARK12", "dataLabel extLst"),
+        (&axis.text_properties, "MARK13", "axis txPr"),
+        (&axis.extensions, "MARK14", "axis extLst"),
+        (&axis.title.as_ref().unwrap().text_properties, "MARK15", "axis title txPr"),
+        (&axis.title.as_ref().unwrap().extensions, "MARK16", "axis title extLst"),
+        (&units.extensions, "MARK17", "units extLst"),
+        (&units.label.as_ref().unwrap().text_properties, "MARK18", "unitsLabel txPr"),
+        (&units.label.as_ref().unwrap().extensions, "MARK19", "unitsLabel extLst"),
+        (&cx.legend.as_ref().unwrap().text_properties, "MARK20", "legend txPr"),
+        (&cx.legend.as_ref().unwrap().extensions, "MARK21", "legend extLst"),
+        (&cx.format_overrides[0].extensions, "MARK22", "fmtOvr extLst"),
+    ];
+
+    for (field, marker, what) in &cases {
+        let got = field
+            .as_ref()
+            .map(|b| String::from_utf8_lossy(b).into_owned())
+            .unwrap_or_default();
+        assert!(got.contains(marker), "{what} is missing {marker}; got {got:?}");
+    }
+
+    // No owner may hold a marker that belongs to another, which is what
+    // a misroute looks like: the bytes survive, on the wrong element.
+    for (field, marker, what) in &cases {
+        let got = String::from_utf8_lossy(field.as_ref().unwrap()).into_owned();
+        for (_, other, _) in &cases {
+            if other != marker {
+                assert!(!got.contains(other), "{what} also holds {other}");
+            }
+        }
+        for stray in ["MARK23", "MARK24", "MARK25", "MARK26", "MARK27"] {
+            assert!(
+                !got.contains(stray),
+                "{what} took {stray}, which belongs to a container the model cannot hold one for"
+            );
+        }
+    }
+}
+
+/// A `cx:extLst` on a container the model has no field for must be
+/// dropped, not handed to an ancestor. The previous test cannot see this
+/// on its own: every owner there has a list of its own that overwrites
+/// the stray, so the misattribution only shows when the real one is
+/// absent.
+#[test]
+fn extension_lists_of_unmodelled_containers_are_not_donated_upward() {
+    let doc = r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><cx:chartData><cx:data id="0"><cx:numDim type="val"><cx:f>S!$B$1</cx:f></cx:numDim></cx:data><cx:extLst><cx:ext uri="CHARTDATA"></cx:ext></cx:extLst></cx:chartData><cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="waterfall"><cx:dataId val="0"/></cx:series><cx:plotSurface><cx:extLst><cx:ext uri="PLOTSURFACE"></cx:ext></cx:extLst></cx:plotSurface><cx:extLst><cx:ext uri="PAREGION"></cx:ext></cx:extLst></cx:plotAreaRegion><cx:axis id="0"><cx:catScaling gapWidth="0.5"/><cx:majorGridlines><cx:extLst><cx:ext uri="GRIDLINES"></cx:ext></cx:extLst></cx:majorGridlines></cx:axis></cx:plotArea><cx:extLst><cx:ext uri="CHART"></cx:ext></cx:extLst></cx:chart></cx:chartSpace>"#;
+
+    let cx = parse(doc);
+    for (what, field) in [
+        ("chartSpace", &cx.extensions),
+        ("plotArea", &cx.plot_area.extensions),
+        ("axis", &cx.plot_area.axes[0].extensions),
+        ("data", &cx.data[0].extensions),
+        ("series", &cx.plot_area.series[0].extensions),
+    ] {
+        assert!(
+            field.is_none(),
+            "{what} took an extension list belonging to a container the model cannot hold one for: {:?}",
+            field.as_ref().map(|b| String::from_utf8_lossy(b).into_owned())
+        );
+    }
+}
