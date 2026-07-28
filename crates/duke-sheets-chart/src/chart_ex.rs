@@ -80,6 +80,17 @@ pub struct ChartEx {
     /// `cs:chartStyle` document. The writer checks them and fails rather
     /// than emit a package Excel would reject.
     pub raw_chart_style: Option<Vec<u8>>,
+    /// Relationships the chartEx part declares beyond its style and
+    /// colour style, captured with their target parts.
+    ///
+    /// `cx:externalData` and the `fallbackImg` attribute name
+    /// relationships by id. Those ids are written back as they were
+    /// read, so the relationships they name have to come back too or
+    /// they resolve to nothing. Kept as captured relationships rather
+    /// than modelled, since what they point at - an embedded workbook,
+    /// an image - is outside what this crate reads.
+    #[doc(hidden)]
+    pub preserved_rels: Vec<crate::raw_rel::RawRel>,
     /// Chart colour style part, verbatim (`xl/charts/colorsN.xml`).
     ///
     /// Same contract as [`ChartEx::raw_chart_style`], for the

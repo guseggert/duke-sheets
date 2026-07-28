@@ -36,6 +36,7 @@ pub fn parse_chart_ex_xml<R: Read>(reader: R) -> ChartParseResult<ChartEx> {
         print_settings: parsed.print_settings,
         raw_chart_style: None,
         raw_chart_color_style: None,
+        preserved_rels: Vec::new(),
         raw_extensions: parsed.raw_extensions,
         raw_mc_fallback: None,
         version: parsed.version,
