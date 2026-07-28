@@ -120,12 +120,10 @@ fn write_dimension(w: &mut XmlWriter, dim: &ChartExDimension) -> XlsxResult<()> 
             tag.push_attribute(("type", type_str));
             w.write_event(Event::Start(tag))?;
             if let Some(ref f) = formula {
-                w.create_element("cx:f")
-                    .write_text_content(BytesText::new(f))?;
+                write_text_element(w, "cx:f", f)?;
             }
             if let Some(ref nf) = nf_formula {
-                w.create_element("cx:nf")
-                    .write_text_content(BytesText::new(nf))?;
+                write_text_element(w, "cx:nf", nf)?;
             }
             for level in levels {
                 write_string_level(w, level)?;
@@ -149,12 +147,10 @@ fn write_dimension(w: &mut XmlWriter, dim: &ChartExDimension) -> XlsxResult<()> 
             tag.push_attribute(("type", type_str));
             w.write_event(Event::Start(tag))?;
             if let Some(ref f) = formula {
-                w.create_element("cx:f")
-                    .write_text_content(BytesText::new(f))?;
+                write_text_element(w, "cx:f", f)?;
             }
             if let Some(ref nf) = nf_formula {
-                w.create_element("cx:nf")
-                    .write_text_content(BytesText::new(nf))?;
+                write_text_element(w, "cx:nf", nf)?;
             }
             for level in levels {
                 write_numeric_level(w, level)?;
@@ -244,8 +240,7 @@ fn write_title(w: &mut XmlWriter, title: &ChartExTitle) -> XlsxResult<()> {
             w.get_mut().write_all(rich)?;
         } else if let Some(ref text) = title.text {
             w.write_event(Event::Start(BytesStart::new("cx:txData")))?;
-            w.create_element("cx:v")
-                .write_text_content(BytesText::new(text))?;
+            write_text_element(w, "cx:v", text)?;
             w.write_event(Event::End(BytesEnd::new("cx:txData")))?;
         }
         w.write_event(Event::End(BytesEnd::new("cx:tx")))?;
@@ -274,6 +269,21 @@ fn write_extensions(w: &mut XmlWriter, ext: &Option<Vec<u8>>) -> XlsxResult<()> 
     if let Some(bytes) = ext {
         w.get_mut().write_all(bytes)?;
     }
+    Ok(())
+}
+
+/// Write an element whose content is text.
+///
+/// Deliberately no `xml:space="preserve"`, though the value may have
+/// leading or trailing whitespace worth keeping: most of these elements
+/// are declared as a bare `xsd:string`, which permits no attributes at
+/// all, and Excel refuses to open a workbook whose `cx:separator`
+/// carries one. Whitespace is emitted as-is and relied on to survive.
+fn write_text_element(w: &mut XmlWriter, name: &str, value: &str) -> XlsxResult<()> {
+    let tag = BytesStart::new(name);
+    w.write_event(Event::Start(tag))?;
+    w.write_event(Event::Text(BytesText::new(value)))?;
+    w.write_event(Event::End(BytesEnd::new(name)))?;
     Ok(())
 }
 
@@ -377,8 +387,7 @@ fn write_series(w: &mut XmlWriter, series: &ChartExSeries) -> XlsxResult<()> {
 
     for axis_id in &series.axis_ids {
         let s = axis_id.to_string();
-        w.create_element("cx:axisId")
-            .write_text_content(BytesText::new(&s))?;
+        write_text_element(w, "cx:axisId", &s)?;
     }
 
     write_extensions(w, &series.extensions)?;
@@ -408,12 +417,10 @@ fn write_cx_text(w: &mut XmlWriter, text: &ChartExText) -> XlsxResult<()> {
     } else if let Some(ref data) = text.data {
         w.write_event(Event::Start(BytesStart::new("cx:txData")))?;
         if let Some(ref f) = data.formula {
-            w.create_element("cx:f")
-                .write_text_content(BytesText::new(f))?;
+            write_text_element(w, "cx:f", f)?;
         }
         if let Some(ref v) = data.value {
-            w.create_element("cx:v")
-                .write_text_content(BytesText::new(v))?;
+            write_text_element(w, "cx:v", v)?;
         }
         w.write_event(Event::End(BytesEnd::new("cx:txData")))?;
     }
@@ -472,8 +479,7 @@ fn write_data_labels(w: &mut XmlWriter, dl: &ChartExDataLabels) -> XlsxResult<()
     }
 
     if let Some(ref sep) = dl.separator {
-        w.create_element("cx:separator")
-            .write_text_content(BytesText::new(sep))?;
+        write_text_element(w, "cx:separator", sep)?;
     }
 
     for ovr in &dl.overrides {
@@ -532,8 +538,7 @@ fn write_data_label_override(w: &mut XmlWriter, dl: &ChartExDataLabel) -> XlsxRe
     }
 
     if let Some(ref sep) = dl.separator {
-        w.create_element("cx:separator")
-            .write_text_content(BytesText::new(sep))?;
+        write_text_element(w, "cx:separator", sep)?;
     }
 
     write_extensions(w, &dl.extensions)?;
@@ -968,28 +973,22 @@ fn write_print_settings(w: &mut XmlWriter, ps: &ChartExPrintSettings) -> XlsxRes
         }
         w.write_event(Event::Start(tag))?;
         if let Some(ref s) = hf.odd_header {
-            w.create_element("cx:oddHeader")
-                .write_text_content(BytesText::new(s))?;
+            write_text_element(w, "cx:oddHeader", s)?;
         }
         if let Some(ref s) = hf.odd_footer {
-            w.create_element("cx:oddFooter")
-                .write_text_content(BytesText::new(s))?;
+            write_text_element(w, "cx:oddFooter", s)?;
         }
         if let Some(ref s) = hf.even_header {
-            w.create_element("cx:evenHeader")
-                .write_text_content(BytesText::new(s))?;
+            write_text_element(w, "cx:evenHeader", s)?;
         }
         if let Some(ref s) = hf.even_footer {
-            w.create_element("cx:evenFooter")
-                .write_text_content(BytesText::new(s))?;
+            write_text_element(w, "cx:evenFooter", s)?;
         }
         if let Some(ref s) = hf.first_header {
-            w.create_element("cx:firstHeader")
-                .write_text_content(BytesText::new(s))?;
+            write_text_element(w, "cx:firstHeader", s)?;
         }
         if let Some(ref s) = hf.first_footer {
-            w.create_element("cx:firstFooter")
-                .write_text_content(BytesText::new(s))?;
+            write_text_element(w, "cx:firstFooter", s)?;
         }
         w.write_event(Event::End(BytesEnd::new("cx:headerFooter")))?;
     }

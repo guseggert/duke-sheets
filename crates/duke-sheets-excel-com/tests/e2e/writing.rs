@@ -2286,3 +2286,65 @@ fn excel_opens_a_model_built_waterfall_chart_ex() {
         "major gridlines must survive Excel's re-save"
     );
 }
+
+
+/// Whitespace inside a chartEx text element is part of the value, and
+/// `xml:space="preserve"` is what tells a consumer so. This pins that
+/// Excel agrees: it opens the file without repair and the padded
+/// separator and category survive its own re-save.
+// features: ChartEx: Waterfall
+#[test]
+fn excel_preserves_padded_chart_ex_text() {
+    use duke_sheets_chart::{CellMarker, DrawingAnchor};
+    use duke_sheets_core::DrawingObject;
+
+    let chart_ex = duke_sheets_chart::parse::parse_chart_ex_xml(
+        &br#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><cx:chartData><cx:data id="0"><cx:strDim type="cat"><cx:f>Sheet1!$A$1:$A$3</cx:f><cx:lvl ptCount="3"><cx:pt idx="0"> Q1 </cx:pt><cx:pt idx="1">b</cx:pt><cx:pt idx="2">c</cx:pt></cx:lvl></cx:strDim><cx:numDim type="val"><cx:f>Sheet1!$B$1:$B$3</cx:f><cx:lvl ptCount="3" formatCode="General"><cx:pt idx="0">1</cx:pt><cx:pt idx="1">2</cx:pt><cx:pt idx="2">3</cx:pt></cx:lvl></cx:numDim></cx:data></cx:chartData><cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="waterfall"><cx:dataId val="0"/><cx:dataLabels pos="ctr"><cx:separator> | </cx:separator></cx:dataLabels><cx:layoutPr><cx:subtotals/></cx:layoutPr></cx:series></cx:plotAreaRegion><cx:axis id="0"><cx:catScaling gapWidth="0.5"/><cx:tickLabels/></cx:axis><cx:axis id="1"><cx:valScaling/><cx:tickLabels/></cx:axis></cx:plotArea></cx:chart></cx:chartSpace>"#[..],
+    )
+    .expect("parse chartEx");
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    for (row, (cat, val)) in [(" Q1 ", 1.0), ("b", 2.0), ("c", 3.0)].iter().enumerate() {
+        let row = row + 1;
+        ws.set_cell_value(&format!("A{row}"), *cat).unwrap();
+        ws.set_cell_value(&format!("B{row}"), *val).unwrap();
+    }
+    ws.add_drawing(
+        DrawingObject::chart_ex(chart_ex).with_anchor(DrawingAnchor::TwoCell {
+            from: CellMarker { col: 3, col_offset_emu: 0, row: 0, row_offset_emu: 0 },
+            to: CellMarker { col: 10, col_offset_emu: 0, row: 15, row_offset_emu: 0 },
+            edit_as: None,
+        }),
+    )
+    .unwrap();
+
+    let result = roundtrip_through_excel(&wb);
+
+    assert_eq!(
+        result
+            .worksheet(0)
+            .unwrap()
+            .cell("A1")
+            .unwrap()
+            .map(|c| c.value.to_string())
+            .as_deref(),
+        Some(" Q1 "),
+        "the padded cell must survive Excel"
+    );
+    let chart = result
+        .worksheet(0)
+        .unwrap()
+        .charts_ex()
+        .next()
+        .expect("chartEx survives")
+        .payload;
+    assert_eq!(
+        chart.plot_area.series[0]
+            .data_labels
+            .as_ref()
+            .and_then(|d| d.separator.as_deref()),
+        Some(" | "),
+        "the padded separator must survive Excel's re-save"
+    );
+}
