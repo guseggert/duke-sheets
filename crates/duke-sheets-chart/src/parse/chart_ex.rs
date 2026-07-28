@@ -1400,40 +1400,61 @@ impl ChartExParser {
             // a:extLst inside a cx:spPr is DrawingML's own extension
             // list and is not one of these; the parser matches on local
             // names, so the containing spPr is what tells them apart.
+            // A cx:extLst belongs to the chartEx element holding it. An
+            // a:extLst inside a cx:spPr is DrawingML's own extension
+            // list and is not one of these; the parser matches on local
+            // names, so the containing spPr is what tells them apart.
             b"extLst" if self.sp.open => self.begin_skip(),
             b"extLst" => {
-                let owner = if self.axis.in_units_label {
-                    ExtLstOwner::AxisUnitsLabel
-                } else if self.label.open {
-                    ExtLstOwner::DataLabel
+                // Innermost owner first. A container the model has no
+                // field for must drop its list rather than hand it to an
+                // ancestor, which would move it onto a different element
+                // when written back.
+                let owner = if self.label.open {
+                    Some(ExtLstOwner::DataLabel)
                 } else if self.labels.open {
-                    ExtLstOwner::DataLabels
+                    Some(ExtLstOwner::DataLabels)
                 } else if self.data_pt.open {
-                    ExtLstOwner::DataPoint
+                    Some(ExtLstOwner::DataPoint)
                 } else if self.layout.open {
-                    ExtLstOwner::LayoutPr
+                    Some(ExtLstOwner::LayoutPr)
                 } else if self.series.open {
-                    ExtLstOwner::Series
-                } else if self.axis.in_title {
-                    ExtLstOwner::AxisTitle
+                    Some(ExtLstOwner::Series)
+                } else if self.axis.in_units_label {
+                    Some(ExtLstOwner::AxisUnitsLabel)
                 } else if self.axis.in_units {
-                    ExtLstOwner::AxisUnits
+                    Some(ExtLstOwner::AxisUnits)
+                } else if self.axis.in_title {
+                    Some(ExtLstOwner::AxisTitle)
+                } else if self.axis.in_major_gridlines || self.axis.in_minor_gridlines {
+                    None
                 } else if self.axis.open {
-                    ExtLstOwner::Axis
+                    Some(ExtLstOwner::Axis)
+                } else if self.pos.plot_surface {
+                    None
+                } else if self.pos.plot_area_region {
+                    None
                 } else if self.pos.plot_area {
-                    ExtLstOwner::PlotArea
+                    Some(ExtLstOwner::PlotArea)
                 } else if self.legend.open {
-                    ExtLstOwner::Legend
+                    Some(ExtLstOwner::Legend)
                 } else if self.title.open {
-                    ExtLstOwner::ChartTitle
+                    Some(ExtLstOwner::ChartTitle)
+                } else if self.pos.chart {
+                    None
                 } else if self.fmt_ovr.open {
-                    ExtLstOwner::FormatOverride
+                    Some(ExtLstOwner::FormatOverride)
                 } else if self.data.open {
-                    ExtLstOwner::Data
+                    Some(ExtLstOwner::Data)
+                } else if self.pos.chart_data {
+                    None
                 } else {
-                    ExtLstOwner::ChartSpace
+                    Some(ExtLstOwner::ChartSpace)
                 };
-                self.begin_capture(CaptureDest::Extensions(owner), e);
+                match owner {
+                    Some(owner) => self.begin_capture(CaptureDest::Extensions(owner), e),
+                    None => self.begin_skip(),
+                }
             }
             // Handling merged from the former separate arm for
             // empty elements, which a self-closing element no
