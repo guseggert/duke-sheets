@@ -27,7 +27,7 @@ pub fn parse_chart_ex_xml<R: Read>(reader: R) -> ChartParseResult<ChartEx> {
         legend: parsed.legend,
         shape_properties: parsed.shape_properties,
         text_properties: None,
-        color_map_override: None,
+        color_map_override: parsed.color_map_override,
         format_overrides: Vec::new(),
         print_settings: parsed.print_settings,
         raw_chart_style: None,
@@ -49,6 +49,7 @@ struct ParsedChartEx {
     plot_area: ChartExPlotArea,
     legend: Option<ChartExLegend>,
     shape_properties: Option<ChartShapeProperties>,
+    color_map_override: Option<Vec<u8>>,
     print_settings: Option<ChartExPrintSettings>,
     raw_extensions: std::collections::HashMap<String, Vec<u8>>,
     external_data: Option<ChartExExternalData>,
@@ -64,6 +65,17 @@ enum CaptureDest {
     GeoCache,
     /// One colour slot of the series' `cx:valueColors`.
     ValueColor(ValueColorSlot),
+    /// `cx:clrMapOvr`, whose content is entirely attributes.
+    ColorMapOverride,
+    /// A `cx:rich` text body, which belongs to whatever `cx:tx` holds it.
+    Rich(RichOwner),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum RichOwner {
+    ChartTitle,
+    AxisTitle,
+    SeriesText,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -191,6 +203,7 @@ struct TitleState {
     in_tx_data_v: bool,
     in_tx_data_f: bool,
     text: Option<String>,
+    rich: Option<Vec<u8>>,
     sp: Option<ChartShapeProperties>,
     offset: Option<ChartExOffset>,
 }
@@ -219,6 +232,7 @@ struct SeriesState {
     in_tx_data_f: bool,
     tx_value: Option<String>,
     tx_formula: Option<String>,
+    tx_rich: Option<Vec<u8>>,
     in_data_id: bool,
     in_axis_id: bool,
     in_value_colors: bool,
@@ -248,6 +262,7 @@ impl Default for SeriesState {
             in_tx_data_f: false,
             tx_value: None,
             tx_formula: None,
+            tx_rich: None,
             in_data_id: false,
             in_axis_id: false,
             in_value_colors: false,
@@ -341,6 +356,7 @@ struct AxisState {
     title_text: Option<String>,
     title_sp: Option<ChartShapeProperties>,
     title_offset: Option<ChartExOffset>,
+    title_rich: Option<Vec<u8>>,
     in_units: bool,
     units_unit: Option<String>,
     in_major_gridlines: bool,
@@ -372,6 +388,7 @@ impl Default for AxisState {
             title_text: None,
             title_sp: None,
             title_offset: None,
+            title_rich: None,
             in_units: false,
             units_unit: None,
             in_major_gridlines: false,
@@ -525,6 +542,12 @@ impl ChartExParser {
                     }
                 }
             }
+            CaptureDest::ColorMapOverride => self.result.color_map_override = Some(bytes),
+            CaptureDest::Rich(owner) => match owner {
+                RichOwner::ChartTitle => self.title.rich = Some(bytes),
+                RichOwner::AxisTitle => self.axis.title_rich = Some(bytes),
+                RichOwner::SeriesText => self.series.tx_rich = Some(bytes),
+            },
         }
     }
 
@@ -1191,7 +1214,18 @@ impl ChartExParser {
                     self.legend.offset = Some(offset);
                 }
             }
-            b"txPr" | b"rich" | b"clrMapOvr" | b"fmtOvrs" | b"extLst" => self.begin_skip(),
+            b"rich" => {
+                let owner = if self.axis.in_title {
+                    RichOwner::AxisTitle
+                } else if self.series.in_tx {
+                    RichOwner::SeriesText
+                } else {
+                    RichOwner::ChartTitle
+                };
+                self.begin_capture(CaptureDest::Rich(owner), e);
+            }
+            b"clrMapOvr" => self.begin_capture(CaptureDest::ColorMapOverride, e),
+            b"txPr" | b"fmtOvrs" | b"extLst" => self.begin_skip(),
             // Handling merged from the former separate arm for
             // empty elements, which a self-closing element no
             // longer reaches.
@@ -1500,13 +1534,20 @@ impl ChartExParser {
             b"chart" if self.pos.chart => self.pos.chart = false,
             b"title" if self.axis.in_title => {
                 let title = ChartExAxisTitle {
-                    text: self.axis.title_text.take().map(|t| ChartExText {
-                        data: Some(ChartExTextData {
-                            formula: None,
-                            value: Some(t),
+                    text: match (self.axis.title_text.take(), self.axis.title_rich.take()) {
+                        (_, Some(rich)) => Some(ChartExText {
+                            data: None,
+                            rich: Some(rich),
                         }),
-                        rich: None,
-                    }),
+                        (Some(t), None) => Some(ChartExText {
+                            data: Some(ChartExTextData {
+                                formula: None,
+                                value: Some(t),
+                            }),
+                            rich: None,
+                        }),
+                        (None, None) => None,
+                    },
                     offset: self.axis.title_offset.take(),
                     shape_properties: self.axis.title_sp.take(),
                     text_properties: None,
@@ -1521,7 +1562,7 @@ impl ChartExParser {
             b"title" if self.title.open => {
                 self.result.title = Some(ChartExTitle {
                     text: self.title.text.take(),
-                    rich_text: None,
+                    rich_text: self.title.rich.take(),
                     position: self.title.pos.take(),
                     align: self.title.align.take(),
                     overlay: self.title.overlay.take(),
@@ -1563,12 +1604,18 @@ impl ChartExParser {
                 self.series.open = false;
             }
             b"tx" if self.series.in_tx => {
-                self.series.text = Some(ChartExText {
-                    data: Some(ChartExTextData {
-                        formula: self.series.tx_formula.take(),
-                        value: self.series.tx_value.take(),
-                    }),
-                    rich: None,
+                self.series.text = Some(match self.series.tx_rich.take() {
+                    Some(rich) => ChartExText {
+                        data: None,
+                        rich: Some(rich),
+                    },
+                    None => ChartExText {
+                        data: Some(ChartExTextData {
+                            formula: self.series.tx_formula.take(),
+                            value: self.series.tx_value.take(),
+                        }),
+                        rich: None,
+                    },
                 });
                 self.series.in_tx = false;
                 self.series.in_tx_data = false;

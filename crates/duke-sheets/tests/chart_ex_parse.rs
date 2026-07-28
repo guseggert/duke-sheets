@@ -569,3 +569,43 @@ fn a_capture_inside_shape_properties_does_not_leak_depth() {
         "a later spPr was lost, so the capture leaked depth"
     );
 }
+
+/// `cx:rich` and `cx:clrMapOvr` are kept as bytes for replay. The writer
+/// could already emit both; the parser dropped them, so rich titles and
+/// colour-map overrides vanished from every file read.
+#[test]
+fn rich_text_and_color_map_override_round_trip() {
+    let doc = r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><cx:chartData><cx:data id="0"><cx:numDim type="val"><cx:f>Sheet1!$B$1</cx:f></cx:numDim></cx:data></cx:chartData><cx:chart><cx:title><cx:tx><cx:rich><a:bodyPr rot="60000"/><a:p><a:r><a:t>Rich Title</a:t></a:r></a:p></cx:rich></cx:tx></cx:title><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="waterfall"><cx:tx><cx:rich><a:p><a:r><a:t>Rich Series</a:t></a:r></a:p></cx:rich></cx:tx><cx:dataId val="0"/></cx:series></cx:plotAreaRegion><cx:axis id="0"><cx:catScaling gapWidth="0.5"/><cx:title><cx:tx><cx:rich><a:p><a:r><a:t>Rich Axis</a:t></a:r></a:p></cx:rich></cx:tx></cx:title></cx:axis></cx:plotArea></cx:chart><cx:clrMapOvr bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/></cx:chartSpace>"#;
+
+    let cx = parse(doc);
+
+    let title_rich = cx.title.as_ref().and_then(|t| t.rich_text.as_ref()).expect("title rich");
+    let title_rich = String::from_utf8_lossy(title_rich);
+    assert!(title_rich.starts_with("<cx:rich>"), "rich must be the whole element: {title_rich}");
+    assert!(title_rich.contains("Rich Title") && title_rich.contains(r#"rot="60000""#));
+
+    let series_rich = cx.plot_area.series[0]
+        .text
+        .as_ref()
+        .and_then(|t| t.rich.as_ref())
+        .expect("series rich");
+    assert!(String::from_utf8_lossy(series_rich).contains("Rich Series"));
+
+    let axis_rich = cx.plot_area.axes[0]
+        .title
+        .as_ref()
+        .and_then(|t| t.text.as_ref())
+        .and_then(|t| t.rich.as_ref())
+        .expect("axis title rich");
+    assert!(String::from_utf8_lossy(axis_rich).contains("Rich Axis"));
+
+    // The colour map is carried entirely by attributes, so the capture
+    // has to include the element itself, not just its (empty) content.
+    let cmo = cx.color_map_override.as_ref().expect("clrMapOvr");
+    let cmo = String::from_utf8_lossy(cmo);
+    assert!(cmo.contains(r#"bg1="lt1""#) && cmo.contains(r#"folHlink="folHlink""#), "{cmo}");
+
+    let bytes = duke_sheets_chart::write::chart_ex_part_bytes(&cx).expect("write");
+    let again = duke_sheets_chart::parse::parse_chart_ex_xml(&bytes[..]).expect("reparse");
+    assert_eq!(cx, again, "rich / clrMapOvr changed on round trip");
+}
