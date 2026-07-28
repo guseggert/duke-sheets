@@ -504,6 +504,49 @@ export interface ChartExTitle {
   shapeProperties?: ChartShapeProperties;
 }
 
+export interface ChartStyleReference {
+  idx: number
+  /** The colour override, as the XML it was read as. */
+  color?: string
+}
+
+export interface ChartStyleEntry {
+  lineReference: ChartStyleReference
+  lineWidthScale?: number
+  fillReference: ChartStyleReference
+  effectReference: ChartStyleReference
+  /** `major`, `minor` or `none`. */
+  fontCollection: string
+  fontColor?: string
+  /** DrawingML kept as the XML it was read as. */
+  shapeProperties?: string
+  defaultRunProperties?: string
+  bodyProperties?: string
+  mods?: string
+}
+
+/**
+ * A chart style part. `entries` is keyed by the element name the entry
+ * belongs to (`chartArea`, `dataPoint`, ...); `raw` is set instead when
+ * the part could not be modelled and is replayed as read.
+ */
+export interface ChartStyle {
+  id?: number
+  entries: Record<string, ChartStyleEntry>
+  markerSymbol?: string
+  markerSize?: number
+  raw?: string
+}
+
+/** A chart colour style part. `raw` is set when it could not be modelled. */
+export interface ChartColorStyle {
+  method?: string
+  id?: number
+  colors: string[]
+  variations: string[]
+  raw?: string
+}
+
 export interface ChartExGridlines {
   shapeProperties?: ChartShapeProperties;
 }
@@ -581,6 +624,8 @@ export interface ChartEx {
   formatOverrides: Array<{ idx: number; shapeProperties?: ChartShapeProperties }>;
   externalDataRelId?: string;
   externalDataAutoUpdate?: boolean;
+  style?: ChartStyle;
+  colorStyle?: ChartColorStyle;
 }
 
 export interface ChartExTitleInput {

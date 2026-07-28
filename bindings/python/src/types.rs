@@ -5049,6 +5049,162 @@ impl From<&chart::ChartExSeries> for PyChartExSeries {
     }
 }
 
+#[pyclass(name = "ChartStyleReference")]
+#[derive(Clone)]
+pub struct PyChartStyleReference {
+    #[pyo3(get)]
+    pub idx: u32,
+    /// The colour override, as the XML it was read as.
+    #[pyo3(get)]
+    pub color: Option<String>,
+}
+
+impl From<&chart::StyleReference> for PyChartStyleReference {
+    fn from(r: &chart::StyleReference) -> Self {
+        Self {
+            idx: r.idx,
+            color: r.color.as_ref().map(|b| String::from_utf8_lossy(b).into_owned()),
+        }
+    }
+}
+
+#[pyclass(name = "ChartStyleEntry")]
+#[derive(Clone)]
+pub struct PyChartStyleEntry {
+    #[pyo3(get)]
+    pub line_reference: PyChartStyleReference,
+    #[pyo3(get)]
+    pub line_width_scale: Option<f64>,
+    #[pyo3(get)]
+    pub fill_reference: PyChartStyleReference,
+    #[pyo3(get)]
+    pub effect_reference: PyChartStyleReference,
+    /// `major`, `minor` or `none`.
+    #[pyo3(get)]
+    pub font_collection: String,
+    #[pyo3(get)]
+    pub font_color: Option<String>,
+    /// DrawingML kept as the XML it was read as.
+    #[pyo3(get)]
+    pub shape_properties: Option<String>,
+    #[pyo3(get)]
+    pub default_run_properties: Option<String>,
+    #[pyo3(get)]
+    pub body_properties: Option<String>,
+    #[pyo3(get)]
+    pub mods: Option<String>,
+}
+
+impl From<&chart::StyleEntry> for PyChartStyleEntry {
+    fn from(e: &chart::StyleEntry) -> Self {
+        let text =
+            |b: &Option<Vec<u8>>| b.as_ref().map(|b| String::from_utf8_lossy(b).into_owned());
+        Self {
+            line_reference: (&e.line_reference).into(),
+            line_width_scale: e.line_width_scale,
+            fill_reference: (&e.fill_reference).into(),
+            effect_reference: (&e.effect_reference).into(),
+            font_collection: e.font_reference.collection.as_str().to_string(),
+            font_color: text(&e.font_reference.color),
+            shape_properties: text(&e.shape_properties),
+            default_run_properties: text(&e.default_run_properties),
+            body_properties: text(&e.body_properties),
+            mods: e.mods.clone(),
+        }
+    }
+}
+
+/// A chart style part. `entries` is keyed by the element name the entry
+/// belongs to; `raw` is set instead when the part could not be modelled
+/// and is being replayed as read.
+#[pyclass(name = "ChartStyle")]
+#[derive(Clone)]
+pub struct PyChartStyle {
+    #[pyo3(get)]
+    pub id: Option<u32>,
+    #[pyo3(get)]
+    pub entries: std::collections::BTreeMap<String, PyChartStyleEntry>,
+    #[pyo3(get)]
+    pub marker_symbol: Option<String>,
+    #[pyo3(get)]
+    pub marker_size: Option<u32>,
+    #[pyo3(get)]
+    pub raw: Option<String>,
+}
+
+impl From<&chart::ChartStylePart> for PyChartStyle {
+    fn from(part: &chart::ChartStylePart) -> Self {
+        match part {
+            chart::ChartStylePart::Raw(bytes) => Self {
+                id: None,
+                entries: std::collections::BTreeMap::new(),
+                marker_symbol: None,
+                marker_size: None,
+                raw: Some(String::from_utf8_lossy(bytes).into_owned()),
+            },
+            chart::ChartStylePart::Typed(style) => Self {
+                id: Some(style.id),
+                entries: chart::chart_style::entries_by_name(style)
+                    .into_iter()
+                    .map(|(name, entry)| (name.to_string(), entry.into()))
+                    .collect(),
+                marker_symbol: style
+                    .data_point_marker_layout
+                    .as_ref()
+                    .and_then(|m| m.symbol.clone()),
+                marker_size: style.data_point_marker_layout.as_ref().and_then(|m| m.size),
+                raw: None,
+            },
+        }
+    }
+}
+
+/// A chart colour style part. `raw` is set instead when the part could
+/// not be modelled.
+#[pyclass(name = "ChartColorStyle")]
+#[derive(Clone)]
+pub struct PyChartColorStyle {
+    #[pyo3(get)]
+    pub method: Option<String>,
+    #[pyo3(get)]
+    pub id: Option<u32>,
+    #[pyo3(get)]
+    pub colors: Vec<String>,
+    #[pyo3(get)]
+    pub variations: Vec<String>,
+    #[pyo3(get)]
+    pub raw: Option<String>,
+}
+
+impl From<&chart::ChartColorStylePart> for PyChartColorStyle {
+    fn from(part: &chart::ChartColorStylePart) -> Self {
+        match part {
+            chart::ChartColorStylePart::Raw(bytes) => Self {
+                method: None,
+                id: None,
+                colors: Vec::new(),
+                variations: Vec::new(),
+                raw: Some(String::from_utf8_lossy(bytes).into_owned()),
+            },
+            chart::ChartColorStylePart::Typed(style) => Self {
+                method: Some(style.method.as_str().to_string()),
+                id: style.id,
+                colors: style
+                    .colors
+                    .iter()
+                    .map(|b| String::from_utf8_lossy(b).into_owned())
+                    .collect(),
+                variations: style
+                    .variations
+                    .iter()
+                    .map(|b| String::from_utf8_lossy(b).into_owned())
+                    .collect(),
+                raw: None,
+            },
+        }
+    }
+}
+
 #[pyclass(name = "ChartEx")]
 #[derive(Clone)]
 pub struct PyChartEx {
@@ -5077,6 +5233,10 @@ pub struct PyChartEx {
     pub print_settings: Option<PyChartExPrintSettings>,
     pub external_data_rel_id: Option<String>,
     pub external_data_auto_update: Option<bool>,
+    #[pyo3(get)]
+    pub style: Option<PyChartStyle>,
+    #[pyo3(get)]
+    pub color_style: Option<PyChartColorStyle>,
 }
 
 impl From<&chart::ChartEx> for PyChartEx {
@@ -5109,6 +5269,8 @@ impl From<&chart::ChartEx> for PyChartEx {
             print_settings: c.print_settings.as_ref().map(PyChartExPrintSettings::from),
             external_data_rel_id: c.external_data.as_ref().map(|e| e.rel_id.clone()),
             external_data_auto_update: c.external_data.as_ref().and_then(|e| e.auto_update),
+            style: c.style.as_ref().map(PyChartStyle::from),
+            color_style: c.color_style.as_ref().map(PyChartColorStyle::from),
         }
     }
 }

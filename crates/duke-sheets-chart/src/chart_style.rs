@@ -447,3 +447,46 @@ impl Default for ChartColorStyle {
         }
     }
 }
+
+/// Every entry of a style, paired with the element name it belongs to,
+/// in `CT_ChartStyle` order. Bindings surface entries by name rather
+/// than as thirty-one fields, and this keeps that mapping in one place.
+pub fn entries_by_name(style: &ChartStyle) -> Vec<(&'static str, &StyleEntry)> {
+    let mut out = vec![
+        ("axisTitle", &style.axis_title),
+        ("categoryAxis", &style.category_axis),
+        ("chartArea", &style.chart_area),
+        ("dataLabel", &style.data_label),
+    ];
+    if let Some(ref callout) = style.data_label_callout {
+        out.push(("dataLabelCallout", callout));
+    }
+    out.extend([
+        ("dataPoint", &style.data_point),
+        ("dataPoint3D", &style.data_point_3d),
+        ("dataPointLine", &style.data_point_line),
+        ("dataPointMarker", &style.data_point_marker),
+        ("dataPointWireframe", &style.data_point_wireframe),
+        ("dataTable", &style.data_table),
+        ("downBar", &style.down_bar),
+        ("dropLine", &style.drop_line),
+        ("errorBar", &style.error_bar),
+        ("floor", &style.floor),
+        ("gridlineMajor", &style.gridline_major),
+        ("gridlineMinor", &style.gridline_minor),
+        ("hiLoLine", &style.hi_lo_line),
+        ("leaderLine", &style.leader_line),
+        ("legend", &style.legend),
+        ("plotArea", &style.plot_area),
+        ("plotArea3D", &style.plot_area_3d),
+        ("seriesAxis", &style.series_axis),
+        ("seriesLine", &style.series_line),
+        ("title", &style.title),
+        ("trendline", &style.trendline),
+        ("trendlineLabel", &style.trendline_label),
+        ("upBar", &style.up_bar),
+        ("valueAxis", &style.value_axis),
+        ("wall", &style.wall),
+    ]);
+    out
+}
