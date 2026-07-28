@@ -59,7 +59,7 @@ const KITCHEN_SINK: &str = r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.
 <cx:pageMargins b="0.75" l="0.7" r="0.7" t="0.75" header="0.3" footer="0.3"/>
 <cx:pageSetup paperSize="9" orientation="landscape" blackAndWhite="0" draft="0" useFirstPageNumber="1" firstPageNumber="3" horizontalDpi="600" verticalDpi="600" copies="2"/>
 </cx:printSettings>
-<cx:extLst><cx:ext uri="{AA00}"><cx:leaf/></cx:ext></cx:extLst>
+<cx:extLst><cx:ext uri="{AA00}"><cx:leaf></cx:leaf></cx:ext></cx:extLst>
 </cx:chartSpace>"#;
 
 fn parse(xml: &str) -> ChartEx {
@@ -324,6 +324,14 @@ fn kitchen_sink_parses_to_the_expected_model() {
     assert!(major.shape_properties.is_none());
     let minor = val_axis.minor_gridlines.as_ref().expect("minorGridlines");
     assert!(minor.shape_properties.is_some());
+
+    // extLst is kept verbatim for the elements the model can hold one for
+    assert!(
+        cx.extensions
+            .as_ref()
+            .is_some_and(|e| String::from_utf8_lossy(e).contains("{AA00}")),
+        "chartSpace extLst must be kept"
+    );
 
     // txPr is kept verbatim wherever it appears
     let chart_txpr = cx.text_properties.as_ref().expect("chartSpace txPr");
@@ -656,4 +664,45 @@ fn rich_text_and_color_map_override_round_trip() {
     let bytes = duke_sheets_chart::write::chart_ex_part_bytes(&cx).expect("write");
     let again = duke_sheets_chart::parse::parse_chart_ex_xml(&bytes[..]).expect("reparse");
     assert_eq!(cx, again, "rich / clrMapOvr changed on round trip");
+}
+
+/// `cx:extLst` carries whatever a newer Excel put there, so it has to
+/// come back out on the element it belonged to. A DrawingML `a:extLst`
+/// inside a `cx:spPr` is a different thing and must not be mistaken for
+/// the element's own.
+#[test]
+fn extension_lists_round_trip_on_their_owner() {
+    let doc = r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><cx:chartData><cx:data id="0"><cx:numDim type="val"><cx:f>Sheet1!$B$1</cx:f></cx:numDim><cx:extLst><cx:ext uri="{DATA}"></cx:ext></cx:extLst></cx:data></cx:chartData><cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="waterfall"><cx:dataId val="0"/><cx:dataPt idx="0"><cx:spPr><a:noFill></a:noFill><a:extLst><a:ext uri="{DRAWINGML}"></a:ext></a:extLst></cx:spPr><cx:extLst><cx:ext uri="{DATAPT}"></cx:ext></cx:extLst></cx:dataPt><cx:layoutPr><cx:subtotals></cx:subtotals><cx:extLst><cx:ext uri="{LAYOUT}"></cx:ext></cx:extLst></cx:layoutPr><cx:extLst><cx:ext uri="{SERIES}"></cx:ext></cx:extLst></cx:series></cx:plotAreaRegion><cx:axis id="0"><cx:catScaling gapWidth="0.5"/><cx:extLst><cx:ext uri="{AXIS}"></cx:ext></cx:extLst></cx:axis></cx:plotArea><cx:legend pos="b"><cx:extLst><cx:ext uri="{LEGEND}"></cx:ext></cx:extLst></cx:legend></cx:chart><cx:extLst><cx:ext uri="{SPACE}"></cx:ext></cx:extLst></cx:chartSpace>"#;
+
+    let cx = parse(doc);
+    let has = |ext: &Option<Vec<u8>>, uri: &str| {
+        ext.as_ref()
+            .is_some_and(|e| String::from_utf8_lossy(e).contains(uri))
+    };
+
+    assert!(has(&cx.extensions, "{SPACE}"), "chartSpace extLst");
+    assert!(has(&cx.data[0].extensions, "{DATA}"), "cx:data extLst");
+    let series = &cx.plot_area.series[0];
+    assert!(has(&series.extensions, "{SERIES}"), "series extLst");
+    assert!(has(&series.data_points[0].extensions, "{DATAPT}"), "dataPt extLst");
+    assert!(
+        has(
+            &series.layout_properties.as_ref().unwrap().extensions,
+            "{LAYOUT}"
+        ),
+        "layoutPr extLst"
+    );
+    assert!(has(&cx.plot_area.axes[0].extensions, "{AXIS}"), "axis extLst");
+    assert!(has(&cx.legend.as_ref().unwrap().extensions, "{LEGEND}"), "legend extLst");
+
+    // The DrawingML list inside the spPr is not the data point's.
+    assert!(
+        !String::from_utf8_lossy(series.data_points[0].extensions.as_ref().unwrap())
+            .contains("{DRAWINGML}"),
+        "an a:extLst inside a cx:spPr was taken for the element's own"
+    );
+
+    let bytes = duke_sheets_chart::write::chart_ex_part_bytes(&cx).expect("write");
+    let again = duke_sheets_chart::parse::parse_chart_ex_xml(&bytes[..]).expect("reparse");
+    assert_eq!(cx, again, "extension lists changed on round trip");
 }

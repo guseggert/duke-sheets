@@ -68,6 +68,8 @@ fn write_chart_space(w: &mut XmlWriter, cx: &ChartEx) -> XlsxResult<()> {
         write_print_settings(w, ps)?;
     }
 
+    write_extensions(w, &cx.extensions)?;
+
     w.write_event(Event::End(BytesEnd::new("cx:chartSpace")))?;
     Ok(())
 }
@@ -94,6 +96,7 @@ fn write_chart_data(
         for dim in &d.dimensions {
             write_dimension(w, dim)?;
         }
+        write_extensions(w, &d.extensions)?;
         w.write_event(Event::End(BytesEnd::new("cx:data")))?;
     }
     w.write_event(Event::End(BytesEnd::new("cx:chartData")))?;
@@ -260,7 +263,17 @@ fn write_title(w: &mut XmlWriter, title: &ChartExTitle) -> XlsxResult<()> {
         write_offset(w, offset)?;
     }
 
+    write_extensions(w, &title.extensions)?;
     w.write_event(Event::End(BytesEnd::new("cx:title")))?;
+    Ok(())
+}
+
+/// `cx:extLst` is the last child wherever it appears, and is replayed
+/// as the complete element it was captured as.
+fn write_extensions(w: &mut XmlWriter, ext: &Option<Vec<u8>>) -> XlsxResult<()> {
+    if let Some(bytes) = ext {
+        w.get_mut().write_all(bytes)?;
+    }
     Ok(())
 }
 
@@ -303,6 +316,7 @@ fn write_plot_area(w: &mut XmlWriter, pa: &ChartExPlotArea) -> XlsxResult<()> {
         write_cx_shape_properties(w, sp)?;
     }
 
+    write_extensions(w, &pa.extensions)?;
     w.write_event(Event::End(BytesEnd::new("cx:plotArea")))?;
     Ok(())
 }
@@ -367,6 +381,7 @@ fn write_series(w: &mut XmlWriter, series: &ChartExSeries) -> XlsxResult<()> {
             .write_text_content(BytesText::new(&s))?;
     }
 
+    write_extensions(w, &series.extensions)?;
     w.write_event(Event::End(BytesEnd::new("cx:series")))?;
     Ok(())
 }
@@ -414,6 +429,7 @@ fn write_data_point(w: &mut XmlWriter, dp: &ChartExDataPoint) -> XlsxResult<()> 
     if let Some(ref sp) = dp.shape_properties {
         write_cx_shape_properties(w, sp)?;
     }
+    write_extensions(w, &dp.extensions)?;
     w.write_event(Event::End(BytesEnd::new("cx:dataPt")))?;
     Ok(())
 }
@@ -471,6 +487,7 @@ fn write_data_labels(w: &mut XmlWriter, dl: &ChartExDataLabels) -> XlsxResult<()
             .write_empty()?;
     }
 
+    write_extensions(w, &dl.extensions)?;
     w.write_event(Event::End(BytesEnd::new("cx:dataLabels")))?;
     Ok(())
 }
@@ -519,6 +536,7 @@ fn write_data_label_override(w: &mut XmlWriter, dl: &ChartExDataLabel) -> XlsxRe
             .write_text_content(BytesText::new(sep))?;
     }
 
+    write_extensions(w, &dl.extensions)?;
     w.write_event(Event::End(BytesEnd::new("cx:dataLabel")))?;
     Ok(())
 }
@@ -596,6 +614,7 @@ fn write_layout_properties(w: &mut XmlWriter, lp: &ChartExLayoutPr) -> XlsxResul
         }
     }
 
+    write_extensions(w, &lp.extensions)?;
     w.write_event(Event::End(BytesEnd::new("cx:layoutPr")))?;
     Ok(())
 }
@@ -819,6 +838,7 @@ fn write_axis(w: &mut XmlWriter, axis: &ChartExAxis) -> XlsxResult<()> {
         w.get_mut().write_all(txpr)?;
     }
 
+    write_extensions(w, &axis.extensions)?;
     w.write_event(Event::End(BytesEnd::new("cx:axis")))?;
     Ok(())
 }
@@ -856,6 +876,7 @@ fn write_axis_title(w: &mut XmlWriter, title: &ChartExAxisTitle) -> XlsxResult<(
         write_offset(w, offset)?;
     }
 
+    write_extensions(w, &title.extensions)?;
     w.write_event(Event::End(BytesEnd::new("cx:title")))?;
     Ok(())
 }
@@ -878,6 +899,7 @@ fn write_axis_units(w: &mut XmlWriter, units: &ChartExAxisUnits) -> XlsxResult<(
         w.write_event(Event::End(BytesEnd::new("cx:unitsLabel")))?;
     }
 
+    write_extensions(w, &units.extensions)?;
     w.write_event(Event::End(BytesEnd::new("cx:units")))?;
     Ok(())
 }
@@ -908,6 +930,7 @@ fn write_legend(w: &mut XmlWriter, legend: &ChartExLegend) -> XlsxResult<()> {
         write_offset(w, offset)?;
     }
 
+    write_extensions(w, &legend.extensions)?;
     w.write_event(Event::End(BytesEnd::new("cx:legend")))?;
     Ok(())
 }
@@ -920,6 +943,7 @@ fn write_format_override(w: &mut XmlWriter, ovr: &ChartExFormatOverride) -> Xlsx
     if let Some(ref sp) = ovr.shape_properties {
         write_cx_shape_properties(w, sp)?;
     }
+    write_extensions(w, &ovr.extensions)?;
     w.write_event(Event::End(BytesEnd::new("cx:fmtOvr")))?;
     Ok(())
 }
