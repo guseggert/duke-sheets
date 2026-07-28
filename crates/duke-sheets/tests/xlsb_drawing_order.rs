@@ -900,3 +900,60 @@ fn xlsb_standard_chart_and_chart_ex_style_parts_do_not_collide() {
         "chartEx rels must point at the offset numbers: {rels}"
     );
 }
+
+/// A drawing preserved verbatim keeps its chart part at the path its own
+/// relationship names, so a chart the model writes must not be numbered
+/// onto that path. Only image numbers used to be scanned for, so a
+/// preserved chart1.xml and a model chart both claimed
+/// xl/charts/chart1.xml and the write failed outright.
+#[test]
+fn xlsb_raw_preserved_chart_part_does_not_collide_with_a_model_chart() {
+    use std::io::Read;
+
+    use duke_sheets::{Chart, ChartType, DataReference, DataSeries};
+    use duke_sheets_core::{RawDrawing, RawRel};
+
+    let preserved_chart = b"<c:chartSpace/>".to_vec();
+    let raw = RawDrawing {
+        bytes: br#"<xdr:twoCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>8</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:graphicFrame><a:graphic><a:graphicData><c:chart r:id="rId1"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor>"#.to_vec(),
+        rels: vec![RawRel {
+            id: "rId1".into(),
+            rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart"
+                .into(),
+            target: "../charts/chart1.xml".into(),
+            external: false,
+            part: Some(preserved_chart.clone()),
+        }],
+    };
+
+    let mut workbook = Workbook::new();
+    let sheet = workbook.worksheet_mut(0).unwrap();
+    sheet.add_drawing(DrawingObject::raw(raw)).unwrap();
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$3")));
+    sheet.add_chart(chart, two_cell(6, 2, 12, 12)).unwrap();
+
+    let mut output = Cursor::new(Vec::new());
+    XlsbWriter::write(&workbook, &mut output).expect("both charts must be writable");
+    let mut archive = zip::ZipArchive::new(Cursor::new(output.into_inner())).unwrap();
+
+    let mut read = |name: &str| -> Vec<u8> {
+        let mut v = Vec::new();
+        archive
+            .by_name(name)
+            .unwrap_or_else(|_| panic!("{name} missing"))
+            .read_to_end(&mut v)
+            .unwrap();
+        v
+    };
+    assert_eq!(
+        read("xl/charts/chart1.xml"),
+        preserved_chart,
+        "the preserved part must stay at the path its relationship names"
+    );
+    let model = String::from_utf8(read("xl/charts/chart2.xml")).unwrap();
+    assert!(
+        model.contains("Sheet1!$A$1:$A$3"),
+        "the model chart must be numbered clear of it: {model}"
+    );
+}

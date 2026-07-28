@@ -273,6 +273,63 @@ pub(crate) struct DrawingWriteResult {
 }
 
 /// Per-sheet global part numbering, assigned by the caller.
+#[derive(Debug, Clone, Copy)]
+enum Family {
+    Drawing,
+    Chart,
+    ChartEx,
+    Style,
+    Image,
+}
+
+/// The highest part number each family already has claimed by a
+/// preserved part, so freshly numbered parts can start above them.
+#[derive(Debug, Default)]
+pub(crate) struct ClaimedPartNumbers {
+    pub drawing: usize,
+    pub chart: usize,
+    pub chart_ex: usize,
+    pub style: usize,
+    pub image: usize,
+}
+
+impl ClaimedPartNumbers {
+    /// Record the number in a package path, if it names one this writer
+    /// would otherwise allocate. Style and colour parts share a series,
+    /// as the writer emits them as a pair.
+    pub fn note(&mut self, path: &str) {
+        // chartEx before chart, and both before style, so the longer
+        // prefix wins.
+        const FAMILIES: &[(&str, Family)] = &[
+            ("xl/drawings/drawing", Family::Drawing),
+            ("xl/charts/chartex", Family::ChartEx),
+            ("xl/charts/chart", Family::Chart),
+            ("xl/charts/style", Family::Style),
+            ("xl/charts/colors", Family::Style),
+            ("xl/media/image", Family::Image),
+        ];
+
+        let lower = path.to_ascii_lowercase();
+        for (prefix, family) in FAMILIES {
+            let Some(rest) = lower.strip_prefix(prefix) else {
+                continue;
+            };
+            let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+            if let Ok(num) = digits.parse::<usize>() {
+                let slot = match family {
+                    Family::Drawing => &mut self.drawing,
+                    Family::Chart => &mut self.chart,
+                    Family::ChartEx => &mut self.chart_ex,
+                    Family::Style => &mut self.style,
+                    Family::Image => &mut self.image,
+                };
+                *slot = (*slot).max(num);
+            }
+            break;
+        }
+    }
+}
+
 pub(crate) struct DrawingNumbering {
     pub drawing_num: usize,
     /// Global number of this sheet's first chart part.
@@ -378,7 +435,7 @@ pub(crate) fn write_drawing_parts<W: Write + Seek>(
     // Media parts (xl/media/imageN.<ext>).
     for (img, &(gn, ext)) in image_payloads.iter().zip(&image_parts) {
         let path = format!("xl/media/image{gn}.{ext}");
-        if written_media.insert(path.clone()) {
+        if written_media.insert(path.to_ascii_lowercase()) {
             zip.start_file(&path, *options)?;
             zip.write_all(&img.data)?;
         }
@@ -394,7 +451,9 @@ pub(crate) fn write_drawing_parts<W: Write + Seek>(
             continue;
         }
         let path = resolve_rel_target("xl/drawings", &rel.target);
-        if !written_media.insert(path.clone()) {
+        // Part names are compared without case in OPC, so two rels
+        // naming the same part in different case are one part.
+        if !written_media.insert(path.to_ascii_lowercase()) {
             continue;
         }
         zip.start_file(&path, *options)?;
