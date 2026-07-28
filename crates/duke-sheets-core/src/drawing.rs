@@ -697,6 +697,15 @@ pub struct RawRel {
     /// Bytes of the target part, when internal and captured.
     #[doc(hidden)]
     pub part: Option<Vec<u8>>,
+    /// The target part's own relationships, captured with their targets.
+    ///
+    /// A preserved part is not always self-contained: a diagram's data
+    /// part references its images, and a chart part references its
+    /// style and colour parts. Writing the part back without these
+    /// leaves those references dangling, and for a chartEx Excel
+    /// refuses the workbook outright.
+    #[doc(hidden)]
+    pub part_rels: Vec<RawRel>,
 }
 
 /// A shape group.

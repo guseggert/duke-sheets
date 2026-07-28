@@ -338,6 +338,30 @@ struct RawPartPlan {
     content_type: &'static str,
 }
 
+/// Record a preserved part's content type, refusing two different ones
+/// for the same path.
+fn plan_raw_part(
+    plans: &mut Vec<RawPartPlan>,
+    path: String,
+    content_type: &'static str,
+) -> XlsxResult<()> {
+    match plans
+        .iter()
+        .find(|plan| plan.path.eq_ignore_ascii_case(&path))
+    {
+        Some(existing) if existing.content_type != content_type => {
+            Err(XlsxError::InvalidFormat(format!(
+                "conflicting content types for raw part {path}"
+            )))
+        }
+        Some(_) => Ok(()),
+        None => {
+            plans.push(RawPartPlan { path, content_type });
+            Ok(())
+        }
+    }
+}
+
 fn raw_part_content_type(rel_type: &str, path: &str) -> &'static str {
     match RelationshipKind::from_uri(rel_type).and_then(RelationshipKind::content_type) {
         Some(ContentTypeExpectation::Exact(content_type)) => content_type,
@@ -615,6 +639,46 @@ enum Family {
     Image,
 }
 
+/// One preserved part: where it goes, what it is, its bytes, and the
+/// relationships it declares itself.
+struct PreservedPart<'a> {
+    path: String,
+    rel_type: &'a str,
+    bytes: &'a [u8],
+    rels: &'a [duke_sheets_core::RawRel],
+}
+
+/// Walk a preserved relationship subtree, resolving each internal target
+/// to a package path. A preserved part is not always self-contained - a
+/// diagram's data part references its images - so the whole subtree is
+/// replayed, not just the part the anchor names.
+fn preserved_parts<'a>(
+    base: &str,
+    rels: impl IntoIterator<Item = &'a duke_sheets_core::RawRel>,
+    out: &mut Vec<PreservedPart<'a>>,
+) -> XlsxResult<()> {
+    for rel in rels {
+        let Some(bytes) = rel.part.as_deref() else {
+            continue;
+        };
+        if rel.external {
+            continue;
+        }
+        let path = resolve_internal_target(base, &rel.target)?;
+        if path.eq_ignore_ascii_case(base) {
+            continue;
+        }
+        preserved_parts(&path, &rel.part_rels, out)?;
+        out.push(PreservedPart {
+            path,
+            rel_type: &rel.rel_type,
+            bytes,
+            rels: &rel.part_rels,
+        });
+    }
+    Ok(())
+}
+
 /// The highest part number each family already has claimed by a
 /// preserved part, so freshly numbered parts can start above them.
 #[derive(Debug, Default)]
@@ -805,19 +869,15 @@ impl XlsxWriter {
                     continue;
                 }
                 claimed.note(&path);
-                let content_type = raw_part_content_type(&rel.rel_type, &path);
-                if let Some(existing) = raw_media_parts
-                    .iter()
-                    .find(|part| part.path.eq_ignore_ascii_case(&path))
-                {
-                    if existing.content_type != content_type {
-                        return Err(XlsxError::InvalidFormat(format!(
-                            "conflicting content types for raw part {path}"
-                        )));
-                    }
-                } else {
-                    raw_media_parts.push(RawPartPlan { path, content_type });
+                let mut nested = Vec::new();
+                preserved_parts(&path, &rel.part_rels, &mut nested)?;
+                for part in &nested {
+                    claimed.note(&part.path);
+                    let content_type = raw_part_content_type(part.rel_type, &part.path);
+                    plan_raw_part(&mut raw_media_parts, part.path.clone(), content_type)?;
                 }
+                let content_type = raw_part_content_type(&rel.rel_type, &path);
+                plan_raw_part(&mut raw_media_parts, path, content_type)?;
             }
         }
         // Chartsheet raw anchors' captured rels: internal targets
@@ -832,19 +892,15 @@ impl XlsxWriter {
                     continue;
                 }
                 claimed.note(&path);
-                let content_type = raw_part_content_type(&rel.rel_type, &path);
-                if let Some(existing) = raw_media_parts
-                    .iter()
-                    .find(|part| part.path.eq_ignore_ascii_case(&path))
-                {
-                    if existing.content_type != content_type {
-                        return Err(XlsxError::InvalidFormat(format!(
-                            "conflicting content types for raw part {path}"
-                        )));
-                    }
-                } else {
-                    raw_media_parts.push(RawPartPlan { path, content_type });
+                let mut nested = Vec::new();
+                preserved_parts(&path, &rel.part_rels, &mut nested)?;
+                for part in &nested {
+                    claimed.note(&part.path);
+                    let content_type = raw_part_content_type(part.rel_type, &part.path);
+                    plan_raw_part(&mut raw_media_parts, part.path.clone(), content_type)?;
                 }
+                let content_type = raw_part_content_type(&rel.rel_type, &path);
+                plan_raw_part(&mut raw_media_parts, path, content_type)?;
             }
         }
 
@@ -1079,24 +1135,26 @@ impl XlsxWriter {
                     drawing::write_media_part(&mut zip, gn, ext, &img.data)?;
                     written_parts.insert(format!("xl/media/image{gn}.{ext}").to_ascii_lowercase());
                 }
-                // Write raw-preserved parts at their original paths.
-                for rel in sheet_raw_rels(sheet) {
-                    let Some(part) = rel.part.as_deref() else {
-                        continue;
-                    };
-                    if rel.external {
-                        continue;
-                    }
-                    let source_path = format!("xl/drawings/drawing{dn}.xml");
-                    let path = resolve_internal_target(&source_path, &rel.target)?;
-                    if path.eq_ignore_ascii_case(&source_path) {
+                // Write raw-preserved parts at their original paths,
+                // each with the relationships it declares itself.
+                let source_path = format!("xl/drawings/drawing{dn}.xml");
+                let mut preserved = Vec::new();
+                preserved_parts(&source_path, sheet_raw_rels(sheet), &mut preserved)?;
+                for part in &preserved {
+                    if !written_parts.insert(part.path.to_ascii_lowercase()) {
                         continue;
                     }
-                    if !written_parts.insert(path.to_ascii_lowercase()) {
-                        continue;
+                    zip.start_file(&part.path, zip::write::SimpleFileOptions::default())?;
+                    zip.write_all(part.bytes)?;
+                    for child in part.rels {
+                        manifest.register_preserved_relationship(
+                            Some(&part.path),
+                            &child.id,
+                            &child.rel_type,
+                            &child.target,
+                            child.external,
+                        )?;
                     }
-                    zip.start_file(&path, zip::write::SimpleFileOptions::default())?;
-                    zip.write_all(part)?;
                 }
                 for &(ji, gn) in &sheet_chart_globals {
                     chart::write_chart_part(&mut zip, sheet_charts[ji].payload, gn)?;

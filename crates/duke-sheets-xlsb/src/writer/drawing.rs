@@ -330,6 +330,41 @@ impl ClaimedPartNumbers {
     }
 }
 
+/// One preserved part: where it goes, its bytes, and the relationships
+/// it declares itself.
+struct PreservedPart<'a> {
+    path: String,
+    bytes: &'a [u8],
+    rels: &'a [RawRel],
+}
+
+/// Walk a preserved relationship subtree, resolving each internal target
+/// to a package path. A preserved part is not always self-contained - a
+/// diagram's data part references its images - so the whole subtree is
+/// replayed, not just the part the anchor names.
+fn collect_preserved_parts<'a>(
+    base: &str,
+    rels: impl IntoIterator<Item = &'a RawRel>,
+    out: &mut Vec<PreservedPart<'a>>,
+) {
+    for rel in rels {
+        let Some(bytes) = rel.part.as_deref() else {
+            continue;
+        };
+        if rel.external {
+            continue;
+        }
+        let path = resolve_rel_target(base, &rel.target);
+        let base_dir = path.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
+        collect_preserved_parts(base_dir, &rel.part_rels, out);
+        out.push(PreservedPart {
+            path,
+            bytes,
+            rels: &rel.part_rels,
+        });
+    }
+}
+
 pub(crate) struct DrawingNumbering {
     pub drawing_num: usize,
     /// Global number of this sheet's first chart part.
@@ -442,29 +477,48 @@ pub(crate) fn write_drawing_parts<W: Write + Seek>(
         media_exts.push(ext.to_string());
     }
 
-    // Raw-preserved parts at their original paths.
-    for rel in sheet_raw_rels(ws) {
-        let Some(part) = rel.part.as_deref() else {
-            continue;
-        };
-        if rel.external {
-            continue;
-        }
-        let path = resolve_rel_target("xl/drawings", &rel.target);
+    // Raw-preserved parts at their original paths, each with the
+    // relationships it declares itself.
+    let mut preserved = Vec::new();
+    collect_preserved_parts("xl/drawings", sheet_raw_rels(ws), &mut preserved);
+    for part in &preserved {
         // Part names are compared without case in OPC, so two rels
         // naming the same part in different case are one part.
-        if !written_media.insert(path.to_ascii_lowercase()) {
+        if !written_media.insert(part.path.to_ascii_lowercase()) {
             continue;
         }
-        zip.start_file(&path, *options)?;
-        zip.write_all(part)?;
-        if let Some(ct) = content_type_for_path(&path) {
-            overrides.push((format!("/{}", path), ct.to_string()));
-        } else if path.starts_with("xl/media/") {
-            if let Some(ext) = path.rsplit('.').next() {
+        zip.start_file(&part.path, *options)?;
+        zip.write_all(part.bytes)?;
+        if let Some(ct) = content_type_for_path(&part.path) {
+            overrides.push((format!("/{}", part.path), ct.to_string()));
+        } else if part.path.starts_with("xl/media/") {
+            if let Some(ext) = part.path.rsplit('.').next() {
                 media_exts.push(ext.to_ascii_lowercase());
             }
         }
+        if part.rels.is_empty() {
+            continue;
+        }
+        let (dir, file) = part.path.rsplit_once('/').unwrap_or(("", &part.path));
+        let mut xml = String::from(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
+        );
+        for child in part.rels {
+            xml.push_str(&format!(
+                r#"<Relationship Id="{}" Type="{}" Target="{}"{}/>"#,
+                child.id,
+                child.rel_type,
+                child.target,
+                if child.external {
+                    r#" TargetMode="External""#
+                } else {
+                    ""
+                }
+            ));
+        }
+        xml.push_str("</Relationships>");
+        zip.start_file(format!("{dir}/_rels/{file}.rels"), *options)?;
+        zip.write_all(xml.as_bytes())?;
     }
 
     Ok(DrawingWriteResult {

@@ -451,11 +451,36 @@ fn build_group<R: Read + Seek>(
 /// any attribute whose value equals a rel id in the drawing's .rels
 /// counts (r:id/r:embed/r:link, SmartArt `dgm:relIds` r:dm/r:lo/r:qs/
 /// r:cs, VML `o:relid`, arbitrary prefixes).
+/// How far to follow relationships out from a preserved anchor. A
+/// diagram reaches its images in two steps and a chart its style parts
+/// in one, so a small bound covers what exists while keeping a
+/// malformed package from walking forever.
+const RAW_REL_MAX_DEPTH: usize = 4;
+
 fn capture_raw_rels<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     drawing_path: &str,
     bytes: &[u8],
     drawing_rels: &HashMap<String, SheetRel>,
+) -> Vec<RawRel> {
+    let mut visited = Vec::new();
+    capture_raw_rels_within(
+        archive,
+        drawing_path,
+        bytes,
+        drawing_rels,
+        RAW_REL_MAX_DEPTH,
+        &mut visited,
+    )
+}
+
+fn capture_raw_rels_within<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    drawing_path: &str,
+    bytes: &[u8],
+    drawing_rels: &HashMap<String, SheetRel>,
+    depth: usize,
+    visited: &mut Vec<String>,
 ) -> Vec<RawRel> {
     let mut ids: Vec<String> = Vec::new();
     let mut reader = quick_xml::Reader::from_reader(bytes);
@@ -484,18 +509,37 @@ fn capture_raw_rels<R: Read + Seek>(
         let Some(rel) = drawing_rels.get(&id) else {
             continue;
         };
-        let part = if rel.external {
-            None
-        } else {
-            let path = super::resolve_rel_path(drawing_path, &rel.target);
-            read_zip_entry(archive, &path)
-        };
+        let part_path = (!rel.external)
+            .then(|| super::resolve_rel_path(drawing_path, &rel.target));
+        let part = part_path
+            .as_deref()
+            .and_then(|path| read_zip_entry(archive, path));
+
+        // Follow the part's own relationships, so what is replayed is
+        // the whole subtree rather than one part with dangling ids.
+        let mut part_rels = Vec::new();
+        if let (Some(part_bytes), Some(part_path)) = (part.as_deref(), part_path.as_deref()) {
+            if depth > 0 && !visited.iter().any(|seen| seen == part_path) {
+                visited.push(part_path.to_string());
+                if let Ok(child_rels) = super::read_sheet_rels(archive, part_path) {
+                    part_rels = capture_raw_rels_within(
+                        archive,
+                        part_path,
+                        part_bytes,
+                        &child_rels,
+                        depth - 1,
+                        visited,
+                    );
+                }
+            }
+        }
         rels.push(RawRel {
             id,
             rel_type: rel.rel_type.clone(),
             target: rel.target.clone(),
             external: rel.external,
             part,
+            part_rels,
         });
     }
     rels

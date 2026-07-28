@@ -117,6 +117,7 @@ fn raw_link(col: u16, cnv_id: u32, rel_id: &str, url: &str) -> DrawingObject {
             target: url.to_string(),
             external: true,
             part: None,
+            part_rels: Vec::new(),
         }],
     })
     .with_anchor(two_cell(col, 1, col + 1, 2))
@@ -923,6 +924,7 @@ fn xlsb_raw_preserved_chart_part_does_not_collide_with_a_model_chart() {
             target: "../charts/chart1.xml".into(),
             external: false,
             part: Some(preserved_chart.clone()),
+            part_rels: Vec::new(),
         }],
     };
 
@@ -956,4 +958,93 @@ fn xlsb_raw_preserved_chart_part_does_not_collide_with_a_model_chart() {
         model.contains("Sheet1!$A$1:$A$3"),
         "the model chart must be numbered clear of it: {model}"
     );
+}
+
+/// A preserved part is not always self-contained. A chartEx reaches its
+/// chart style and chart colour style parts through its own
+/// relationships, and Excel refuses a workbook where those are missing,
+/// so replaying the chartEx alone produced a file that would not open.
+/// Diagrams have the same shape: their data part references the images.
+#[test]
+fn xlsb_preserved_part_keeps_its_own_relationships() {
+    use std::io::Read;
+
+    use duke_sheets_core::{RawDrawing, RawRel};
+
+    let style = duke_sheets_chart::write::default_chart_style_bytes();
+    let colors = duke_sheets_chart::write::default_chart_color_style_bytes();
+    let chart_ex = b"<cx:chartSpace/>".to_vec();
+
+    let raw = RawDrawing {
+        bytes: br#"<xdr:twoCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>8</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:graphicFrame><a:graphic><a:graphicData><cx:chart r:id="rId1"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor>"#.to_vec(),
+        rels: vec![RawRel {
+            id: "rId1".into(),
+            rel_type: "http://schemas.microsoft.com/office/2014/relationships/chartEx".into(),
+            target: "../charts/chartEx1.xml".into(),
+            external: false,
+            part: Some(chart_ex.clone()),
+            part_rels: vec![
+                RawRel {
+                    id: "rId1".into(),
+                    rel_type: "http://schemas.microsoft.com/office/2011/relationships/chartStyle"
+                        .into(),
+                    target: "style1.xml".into(),
+                    external: false,
+                    part: Some(style.clone()),
+                    part_rels: Vec::new(),
+                },
+                RawRel {
+                    id: "rId2".into(),
+                    rel_type:
+                        "http://schemas.microsoft.com/office/2011/relationships/chartColorStyle"
+                            .into(),
+                    target: "colors1.xml".into(),
+                    external: false,
+                    part: Some(colors.clone()),
+                    part_rels: Vec::new(),
+                },
+            ],
+        }],
+    };
+
+    let mut workbook = Workbook::new();
+    workbook
+        .worksheet_mut(0)
+        .unwrap()
+        .add_drawing(DrawingObject::raw(raw))
+        .unwrap();
+
+    let mut output = Cursor::new(Vec::new());
+    XlsbWriter::write(&workbook, &mut output).expect("write");
+    let mut archive = zip::ZipArchive::new(Cursor::new(output.into_inner())).unwrap();
+
+    let mut read = |name: &str| -> Vec<u8> {
+        let mut v = Vec::new();
+        archive
+            .by_name(name)
+            .unwrap_or_else(|_| panic!("{name} missing"))
+            .read_to_end(&mut v)
+            .unwrap();
+        v
+    };
+
+    assert_eq!(read("xl/charts/chartEx1.xml"), chart_ex);
+    assert_eq!(read("xl/charts/style1.xml"), style, "style part replayed");
+    assert_eq!(read("xl/charts/colors1.xml"), colors, "colours part replayed");
+
+    let rels = String::from_utf8(read("xl/charts/_rels/chartEx1.xml.rels")).unwrap();
+    for target in ["style1.xml", "colors1.xml"] {
+        assert!(
+            rels.contains(target),
+            "the preserved part's own relationships must be emitted: {rels}"
+        );
+    }
+
+    let content_types = String::from_utf8(read("[Content_Types].xml")).unwrap();
+    for ct in [
+        "application/vnd.ms-office.chartstyle+xml",
+        "application/vnd.ms-office.chartcolorstyle+xml",
+    ] {
+        assert!(content_types.contains(ct), "content type {ct} missing");
+    }
 }
