@@ -536,8 +536,8 @@ fn write_chart_style_color_parts<W: Write + Seek>(
     chart_num: usize,
     overrides: &mut Vec<(String, String)>,
 ) -> XlsbResult<()> {
-    let has_style = chart.raw_chart_style.is_some();
-    let has_color = chart.raw_chart_color_style.is_some();
+    let has_style = chart.style.is_some();
+    let has_color = chart.color_style.is_some();
     if !has_style && !has_color {
         return Ok(());
     }
@@ -545,10 +545,10 @@ fn write_chart_style_color_parts<W: Write + Seek>(
     let mut rels_xml = String::from(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
     );
-    if let Some(ref bytes) = chart.raw_chart_style {
+    if let Some(ref part) = chart.style {
         let style_path = format!("xl/charts/style{}.xml", chart_num);
         zip.start_file(&style_path, *options)?;
-        zip.write_all(bytes)?;
+        zip.write_all(&duke_sheets_chart::write::chart_style_part_bytes(part))?;
         overrides.push((format!("/{}", style_path), CT_CHART_STYLE.to_string()));
         rels_xml.push_str(&format!(
             r#"<Relationship Id="rId{}" Type="{}" Target="style{}.xml"/>"#,
@@ -556,10 +556,10 @@ fn write_chart_style_color_parts<W: Write + Seek>(
         ));
         rel_id += 1;
     }
-    if let Some(ref bytes) = chart.raw_chart_color_style {
+    if let Some(ref part) = chart.color_style {
         let color_path = format!("xl/charts/colors{}.xml", chart_num);
         zip.start_file(&color_path, *options)?;
-        zip.write_all(bytes)?;
+        zip.write_all(&duke_sheets_chart::write::chart_color_style_part_bytes(part))?;
         overrides.push((format!("/{}", color_path), CT_CHART_COLOR_STYLE.to_string()));
         rels_xml.push_str(&format!(
             r#"<Relationship Id="rId{}" Type="{}" Target="colors{}.xml"/>"#,
@@ -586,29 +586,17 @@ fn write_chart_ex_style_color_parts<W: Write + Seek>(
     overrides: &mut Vec<(String, String)>,
     media_exts: &mut Vec<String>,
 ) -> XlsbResult<()> {
-    let style = match chart_ex.raw_chart_style {
-        Some(ref bytes) => {
-            duke_sheets_chart::write::validate_chart_style_part(bytes).map_err(|e| {
-                XlsbError::InvalidFormat(format!(
-                    "chartEx raw_chart_style is not a part Excel will accept: {e}. \
-                     Leave it unset to emit a generated default."
-                ))
-            })?;
-            bytes.clone()
-        }
-        None => duke_sheets_chart::write::default_chart_style_bytes(),
+    let style = match chart_ex.style {
+        Some(ref part) => duke_sheets_chart::write::chart_style_part_bytes(part),
+        None => duke_sheets_chart::write::chart_style_bytes(
+            &duke_sheets_chart::ChartStyle::default(),
+        ),
     };
-    let colors = match chart_ex.raw_chart_color_style {
-        Some(ref bytes) => {
-            duke_sheets_chart::write::validate_chart_color_style_part(bytes).map_err(|e| {
-                XlsbError::InvalidFormat(format!(
-                    "chartEx raw_chart_color_style is not a part Excel will accept: {e}. \
-                     Leave it unset to emit a generated default."
-                ))
-            })?;
-            bytes.clone()
-        }
-        None => duke_sheets_chart::write::default_chart_color_style_bytes(),
+    let colors = match chart_ex.color_style {
+        Some(ref part) => duke_sheets_chart::write::chart_color_style_part_bytes(part),
+        None => duke_sheets_chart::write::chart_color_style_bytes(
+            &duke_sheets_chart::ChartColorStyle::default(),
+        ),
     };
 
     let style_path = format!("xl/charts/style{}.xml", style_color_num);

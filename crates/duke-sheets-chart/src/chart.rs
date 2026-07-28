@@ -166,10 +166,10 @@ pub struct Chart {
     pub raw_extensions: HashMap<String, Vec<u8>>,
     /// Raw chart style XML (Office 2013+), preserved for roundtrip.
     #[doc(hidden)]
-    pub raw_chart_style: Option<Vec<u8>>,
+    pub style: Option<crate::chart_style::ChartStylePart>,
     /// Raw chart color style XML (Office 2013+), preserved for roundtrip.
     #[doc(hidden)]
-    pub raw_chart_color_style: Option<Vec<u8>>,
+    pub color_style: Option<crate::chart_style::ChartColorStylePart>,
     /// Chart type groups for combo charts (multiple chart types in one plotArea).
     /// When non-empty, the writer uses these instead of the legacy single-group fields.
     pub type_groups: Vec<ChartTypeGroup>,
@@ -223,8 +223,8 @@ impl Chart {
             back_wall: None,
             text_properties: None,
             raw_extensions: HashMap::new(),
-            raw_chart_style: None,
-            raw_chart_color_style: None,
+            style: None,
+            color_style: None,
             type_groups: Vec::new(),
             axes: Vec::new(),
         }

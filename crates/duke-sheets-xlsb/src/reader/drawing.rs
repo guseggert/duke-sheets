@@ -150,8 +150,8 @@ pub(crate) fn merge_sheet_drawings<R: Read + Seek>(
                         {
                             cx.raw_mc_fallback = chart_ref.raw_mc_fallback;
                             let found = read_chart_style_color(archive, &chart_path);
-                            cx.raw_chart_style = found.style;
-                            cx.raw_chart_color_style = found.color;
+                            cx.style = found.style.map(chart_style_part);
+                            cx.color_style = found.color.map(chart_color_style_part);
                             cx.preserved_rels = found.preserved;
                             let mut object =
                                 DrawingObject::chart_ex(cx).with_anchor(chart_ref.anchor);
@@ -168,8 +168,8 @@ pub(crate) fn merge_sheet_drawings<R: Read + Seek>(
                     {
                         let found = read_chart_style_color(archive, &chart_path);
                         let (style, color) = (found.style, found.color);
-                        c.raw_chart_style = style;
-                        c.raw_chart_color_style = color;
+                        c.style = style.map(chart_style_part);
+                        c.color_style = color.map(chart_color_style_part);
                         let mut object = DrawingObject::chart(c).with_anchor(chart_ref.anchor);
                         object.meta.name = chart_ref.name;
                         object.meta.alt_text = chart_ref.descr;
@@ -249,6 +249,30 @@ fn read_zip_entry<R: Read + Seek>(archive: &mut zip::ZipArchive<R>, path: &str) 
 
 /// Capture the chartStyle / chartColorStyle parts referenced by a
 /// chart part's rels, for round-trip.
+/// A chart style part as read: modelled when it conforms, kept as bytes
+/// when it does not, so a file this crate cannot fully describe still
+/// round-trips.
+fn chart_style_part(bytes: Vec<u8>) -> duke_sheets_chart::ChartStylePart {
+    match duke_sheets_chart::parse::parse_chart_style(&bytes[..]) {
+        Ok(style) => duke_sheets_chart::ChartStylePart::Typed(Box::new(style)),
+        Err(reason) => {
+            log::debug!("keeping chart style part as read: {reason}");
+            duke_sheets_chart::ChartStylePart::Raw(bytes)
+        }
+    }
+}
+
+/// As [`chart_style_part`], for the colour style.
+fn chart_color_style_part(bytes: Vec<u8>) -> duke_sheets_chart::ChartColorStylePart {
+    match duke_sheets_chart::parse::parse_chart_color_style(&bytes[..]) {
+        Ok(style) => duke_sheets_chart::ChartColorStylePart::Typed(style),
+        Err(reason) => {
+            log::debug!("keeping chart colour style part as read: {reason}");
+            duke_sheets_chart::ChartColorStylePart::Raw(bytes)
+        }
+    }
+}
+
 /// A chart part's style and colour style bytes, plus whatever else it
 /// declares a relationship to. The chartEx body names some of those by
 /// id - `cx:externalData`, `fallbackImg` - and writes the ids back as

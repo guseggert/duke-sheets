@@ -4992,16 +4992,20 @@ fn test_add_worksheet_after_read_appears_in_sheet_order() {
 
 #[test]
 fn test_roundtrip_chart_style_color_passthrough() {
-    use duke_sheets_chart::{Chart, ChartType};
+    use duke_sheets_chart::{
+        Chart, ChartColorStyle, ChartColorStylePart, ChartStyle, ChartStylePart, ChartType,
+    };
 
+    // A part that cannot be modelled - no entries at all - is kept as
+    // the bytes it was given and comes back as those bytes.
     let style_bytes = b"<cs:chartStyle xmlns:cs=\"http://schemas.microsoft.com/office/drawing/2012/chartStyle\" id=\"102\"/>".to_vec();
     let color_bytes = b"<cs:colorStyle xmlns:cs=\"http://schemas.microsoft.com/office/drawing/2012/chartStyle\" meth=\"cycle\" id=\"10\"/>".to_vec();
 
     let mut wb = Workbook::new();
     let sheet = wb.worksheet_mut(0).unwrap();
     let mut chart = Chart::new(ChartType::ColumnClustered);
-    chart.raw_chart_style = Some(style_bytes.clone());
-    chart.raw_chart_color_style = Some(color_bytes.clone());
+    chart.style = Some(ChartStylePart::Raw(style_bytes.clone()));
+    chart.color_style = Some(ChartColorStylePart::Raw(color_bytes.clone()));
     sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
@@ -5010,10 +5014,31 @@ fn test_roundtrip_chart_style_color_passthrough() {
     let sheet2 = wb2.worksheet(0).unwrap();
     assert_eq!(sheet2.chart_count(), 1);
     let c = sheet2.charts().next().unwrap().payload;
-    assert_eq!(c.raw_chart_style.as_deref(), Some(style_bytes.as_slice()));
+    assert_eq!(c.style, Some(ChartStylePart::Raw(style_bytes)));
+    assert_eq!(c.color_style, Some(ChartColorStylePart::Raw(color_bytes)));
+
+    // A part that can be modelled comes back modelled, not as bytes.
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    let mut style = ChartStyle::default();
+    style.id = 42;
+    chart.style = Some(ChartStylePart::Typed(Box::new(style.clone())));
+    chart.color_style = Some(ChartColorStylePart::Typed(ChartColorStyle::default()));
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
     assert_eq!(
-        c.raw_chart_color_style.as_deref(),
-        Some(color_bytes.as_slice())
+        c.style,
+        Some(ChartStylePart::Typed(Box::new(style))),
+        "a conforming style part round-trips through the model"
+    );
+    assert_eq!(
+        c.color_style,
+        Some(ChartColorStylePart::Typed(ChartColorStyle::default()))
     );
 }
 
