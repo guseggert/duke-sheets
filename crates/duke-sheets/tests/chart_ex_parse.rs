@@ -24,7 +24,7 @@ const KITCHEN_SINK: &str = r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.
 <cx:externalData r:id="rId9" autoUpdate="0"/>
 </cx:chartData>
 <cx:chart>
-<cx:title pos="t" align="ctr" overlay="0"><cx:tx><cx:txData><cx:v>My Title</cx:v></cx:txData></cx:tx><cx:spPr><a:solidFill><a:srgbClr val="112233"/></a:solidFill></cx:spPr></cx:title>
+<cx:title pos="t" align="ctr" overlay="0"><cx:tx><cx:txData><cx:v>My Title</cx:v></cx:txData></cx:tx><cx:spPr><a:solidFill><a:srgbClr val="112233"/></a:solidFill></cx:spPr><cx:offset t="0.11" l="0.22"/></cx:title>
 <cx:plotArea>
 <cx:plotAreaRegion>
 <cx:series layoutId="waterfall" uniqueId="{AAAA0000-1111-2222-3333-444455556666}" hidden="0" ownerIdx="1" formatIdx="2">
@@ -45,10 +45,10 @@ const KITCHEN_SINK: &str = r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.
 </cx:series>
 <cx:plotSurface><cx:spPr><a:noFill/></cx:spPr></cx:plotSurface>
 </cx:plotAreaRegion>
-<cx:axis id="0" hidden="0"><cx:catScaling gapWidth="0.5"/><cx:title><cx:tx><cx:txData><cx:v>Cat Axis</cx:v></cx:txData></cx:tx><cx:spPr><a:solidFill><a:srgbClr val="445566"/></a:solidFill></cx:spPr></cx:title><cx:majorTickMarks type="out"/><cx:minorTickMarks type="none"/><cx:tickLabels/><cx:numFmt formatCode="General" sourceLinked="1"/></cx:axis>
+<cx:axis id="0" hidden="0"><cx:catScaling gapWidth="0.5"/><cx:title><cx:tx><cx:txData><cx:v>Cat Axis</cx:v></cx:txData></cx:tx><cx:spPr><a:solidFill><a:srgbClr val="445566"/></a:solidFill></cx:spPr><cx:offset t="0.33" l="0.44"/></cx:title><cx:majorTickMarks type="out"/><cx:minorTickMarks type="none"/><cx:tickLabels/><cx:numFmt formatCode="General" sourceLinked="1"/></cx:axis>
 <cx:axis id="1"><cx:valScaling min="0" max="10" majorUnit="2" minorUnit="1"/><cx:units unit="hundreds"/><cx:majorGridlines/><cx:minorGridlines><cx:spPr><a:ln><a:solidFill><a:srgbClr val="AABBCC"/></a:solidFill></a:ln><a:extLst><a:ext uri="{GG00}"/></a:extLst></cx:spPr></cx:minorGridlines><cx:tickLabels/></cx:axis>
 </cx:plotArea>
-<cx:legend pos="b" align="ctr" overlay="1"><cx:spPr><a:noFill/></cx:spPr></cx:legend>
+<cx:legend pos="b" align="ctr" overlay="1"><cx:spPr><a:noFill/></cx:spPr><cx:offset t="0.55" l="0.66"/></cx:legend>
 </cx:chart>
 <cx:spPr><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></cx:spPr>
 <cx:txPr><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>t</a:t></a:r></a:p></cx:txPr>
@@ -215,8 +215,22 @@ fn kitchen_sink_parses_to_the_expected_model() {
         Some("112233"),
         "chart title spPr must land on the title"
     );
+    assert_eq!(
+        cx.title.as_ref().and_then(|t| t.offset.clone()),
+        Some(duke_sheets_chart::ChartExOffset {
+            top: Some(0.11),
+            left: Some(0.22)
+        })
+    );
     let legend = cx.legend.as_ref().expect("legend");
     assert_eq!(legend.position.as_deref(), Some("b"));
+    assert_eq!(
+        legend.offset,
+        Some(duke_sheets_chart::ChartExOffset {
+            top: Some(0.55),
+            left: Some(0.66)
+        })
+    );
     assert_eq!(legend.overlay, Some(true));
 
     // series
@@ -283,6 +297,13 @@ fn kitchen_sink_parses_to_the_expected_model() {
             .map(|c| c.hex.as_str()),
         Some("445566"),
         "axis title spPr must land on the title"
+    );
+    assert_eq!(
+        cat_axis.title.as_ref().and_then(|t| t.offset.clone()),
+        Some(duke_sheets_chart::ChartExOffset {
+            top: Some(0.33),
+            left: Some(0.44)
+        })
     );
     assert!(
         cat_axis.shape_properties.is_none(),
