@@ -400,11 +400,37 @@ fn build_group<R: Read + Seek>(
 /// any attribute whose value equals a rel id in the drawing's .rels
 /// counts (r:id/r:embed/r:link, SmartArt `dgm:relIds` r:dm/r:lo/r:qs/
 /// r:cs, VML `o:relid`, arbitrary prefixes).
+/// How far to follow relationships out from a preserved anchor.
+///
+/// A diagram reaches its images in two steps (anchor -> data part ->
+/// image) and a chart its style parts in one, so a small bound covers
+/// what exists while keeping a malformed package from walking forever.
+const RAW_REL_MAX_DEPTH: usize = 4;
+
 fn capture_raw_rels<R: Read + Seek>(
     package: &mut OpcPackage<R>,
     source_part: &str,
     bytes: &[u8],
     relationships: &RelationshipSet,
+) -> XlsxResult<Vec<duke_sheets_core::RawRel>> {
+    let mut visited = Vec::new();
+    capture_raw_rels_within(
+        package,
+        source_part,
+        bytes,
+        relationships,
+        RAW_REL_MAX_DEPTH,
+        &mut visited,
+    )
+}
+
+fn capture_raw_rels_within<R: Read + Seek>(
+    package: &mut OpcPackage<R>,
+    source_part: &str,
+    bytes: &[u8],
+    relationships: &RelationshipSet,
+    depth: usize,
+    visited: &mut Vec<String>,
 ) -> XlsxResult<Vec<duke_sheets_core::RawRel>> {
     let mut ids: Vec<String> = Vec::new();
     let mut reader = quick_xml::Reader::from_reader(bytes);
@@ -446,12 +472,31 @@ fn capture_raw_rels<R: Read + Seek>(
                 None => None,
             }
         };
+        // Follow the part's own relationships, so what is replayed is
+        // the whole subtree rather than one part with dangling ids.
+        let mut part_rels = Vec::new();
+        if let (Some(part_bytes), Some(part_path)) = (part.as_deref(), rel.internal_part()) {
+            let part_path = part_path.as_str().to_string();
+            if depth > 0 && !visited.iter().any(|seen| seen == &part_path) {
+                visited.push(part_path.clone());
+                let child_rels = read_part_rels(package, &part_path)?;
+                part_rels = capture_raw_rels_within(
+                    package,
+                    &part_path,
+                    part_bytes,
+                    &child_rels,
+                    depth - 1,
+                    visited,
+                )?;
+            }
+        }
         rels.push(duke_sheets_core::RawRel {
             id,
             rel_type: rel.rel_type.clone(),
             target: rel.raw_target.clone(),
             external: rel.is_external(),
             part,
+            part_rels,
         });
     }
     Ok(rels)
