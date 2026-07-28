@@ -48,6 +48,10 @@ fn write_chart_space(w: &mut XmlWriter, cx: &ChartEx) -> XlsxResult<()> {
         write_cx_shape_properties(w, sp)?;
     }
 
+    if let Some(ref txpr) = cx.text_properties {
+        w.get_mut().write_all(txpr)?;
+    }
+
     if let Some(ref cmo) = cx.color_map_override {
         w.get_mut().write_all(cmo)?;
     }
@@ -248,6 +252,10 @@ fn write_title(w: &mut XmlWriter, title: &ChartExTitle) -> XlsxResult<()> {
         write_cx_shape_properties(w, sp)?;
     }
 
+    if let Some(ref txpr) = title.text_properties {
+        w.get_mut().write_all(txpr)?;
+    }
+
     if let Some(ref offset) = title.offset {
         write_offset(w, offset)?;
     }
@@ -426,6 +434,10 @@ fn write_data_labels(w: &mut XmlWriter, dl: &ChartExDataLabels) -> XlsxResult<()
         write_cx_shape_properties(w, sp)?;
     }
 
+    if let Some(ref txpr) = dl.text_properties {
+        w.get_mut().write_all(txpr)?;
+    }
+
     if dl.visibility_series_name.is_some()
         || dl.visibility_category_name.is_some()
         || dl.visibility_value.is_some()
@@ -479,6 +491,10 @@ fn write_data_label_override(w: &mut XmlWriter, dl: &ChartExDataLabel) -> XlsxRe
 
     if let Some(ref sp) = dl.shape_properties {
         write_cx_shape_properties(w, sp)?;
+    }
+
+    if let Some(ref txpr) = dl.text_properties {
+        w.get_mut().write_all(txpr)?;
     }
 
     if dl.visibility_series_name.is_some()
@@ -799,6 +815,10 @@ fn write_axis(w: &mut XmlWriter, axis: &ChartExAxis) -> XlsxResult<()> {
         write_cx_shape_properties(w, sp)?;
     }
 
+    if let Some(ref txpr) = axis.text_properties {
+        w.get_mut().write_all(txpr)?;
+    }
+
     w.write_event(Event::End(BytesEnd::new("cx:axis")))?;
     Ok(())
 }
@@ -826,6 +846,10 @@ fn write_axis_title(w: &mut XmlWriter, title: &ChartExAxisTitle) -> XlsxResult<(
 
     if let Some(ref sp) = title.shape_properties {
         write_cx_shape_properties(w, sp)?;
+    }
+
+    if let Some(ref txpr) = title.text_properties {
+        w.get_mut().write_all(txpr)?;
     }
 
     if let Some(ref offset) = title.offset {
@@ -871,12 +895,17 @@ fn write_legend(w: &mut XmlWriter, legend: &ChartExLegend) -> XlsxResult<()> {
     }
     w.write_event(Event::Start(tag))?;
 
-    if let Some(ref offset) = legend.offset {
-        write_offset(w, offset)?;
-    }
-
+    // CT_Legend order: spPr, txPr, offset.
     if let Some(ref sp) = legend.shape_properties {
         write_cx_shape_properties(w, sp)?;
+    }
+
+    if let Some(ref txpr) = legend.text_properties {
+        w.get_mut().write_all(txpr)?;
+    }
+
+    if let Some(ref offset) = legend.offset {
+        write_offset(w, offset)?;
     }
 
     w.write_event(Event::End(BytesEnd::new("cx:legend")))?;

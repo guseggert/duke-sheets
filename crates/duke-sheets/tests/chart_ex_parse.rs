@@ -30,7 +30,7 @@ const KITCHEN_SINK: &str = r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.
 <cx:series layoutId="waterfall" uniqueId="{AAAA0000-1111-2222-3333-444455556666}" hidden="0" ownerIdx="1" formatIdx="2">
 <cx:tx><cx:txData><cx:f>Sheet1!$B$1</cx:f><cx:v>Series1</cx:v></cx:txData></cx:tx>
 <cx:dataId val="0"/>
-<cx:dataLabels pos="ctr"><cx:numFmt formatCode="0.00" sourceLinked="0"/><cx:spPr><a:solidFill><a:srgbClr val="0000FF"/></a:solidFill></cx:spPr><cx:visibility seriesName="0" categoryName="1" value="1"/><cx:separator>;</cx:separator><cx:dataLabel idx="1" pos="r"><cx:numFmt formatCode="0.000" sourceLinked="0"/><cx:spPr><a:solidFill><a:srgbClr val="FF00FF"/></a:solidFill></cx:spPr><cx:visibility seriesName="1" categoryName="0" value="1"/><cx:separator>|</cx:separator></cx:dataLabel><cx:dataLabelHidden idx="2"/></cx:dataLabels>
+<cx:dataLabels pos="ctr"><cx:numFmt formatCode="0.00" sourceLinked="0"/><cx:spPr><a:solidFill><a:srgbClr val="0000FF"/></a:solidFill></cx:spPr><cx:txPr><a:p><a:r><a:t>dl</a:t></a:r></a:p></cx:txPr><cx:visibility seriesName="0" categoryName="1" value="1"/><cx:separator>;</cx:separator><cx:dataLabel idx="1" pos="r"><cx:numFmt formatCode="0.000" sourceLinked="0"/><cx:spPr><a:solidFill><a:srgbClr val="FF00FF"/></a:solidFill></cx:spPr><cx:visibility seriesName="1" categoryName="0" value="1"/><cx:separator>|</cx:separator></cx:dataLabel><cx:dataLabelHidden idx="2"/></cx:dataLabels>
 <cx:dataPt idx="1"><cx:spPr><a:solidFill><a:srgbClr val="00FF00"/></a:solidFill></cx:spPr></cx:dataPt>
 <cx:layoutPr><cx:visibility connectorLines="1" meanLine="0" meanMarker="1" nonoutliers="0" outliers="1"/><cx:statistics quartileMethod="inclusive"/><cx:subtotals><cx:idx val="0"/><cx:idx val="2"/></cx:subtotals></cx:layoutPr>
 <cx:axisId>0</cx:axisId>
@@ -45,13 +45,13 @@ const KITCHEN_SINK: &str = r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.
 </cx:series>
 <cx:plotSurface><cx:spPr><a:noFill/></cx:spPr></cx:plotSurface>
 </cx:plotAreaRegion>
-<cx:axis id="0" hidden="0"><cx:catScaling gapWidth="0.5"/><cx:title><cx:tx><cx:txData><cx:v>Cat Axis</cx:v></cx:txData></cx:tx><cx:spPr><a:solidFill><a:srgbClr val="445566"/></a:solidFill></cx:spPr><cx:offset t="0.33" l="0.44"/></cx:title><cx:majorTickMarks type="out"/><cx:minorTickMarks type="none"/><cx:tickLabels/><cx:numFmt formatCode="General" sourceLinked="1"/></cx:axis>
+<cx:axis id="0" hidden="0"><cx:catScaling gapWidth="0.5"/><cx:title><cx:tx><cx:txData><cx:v>Cat Axis</cx:v></cx:txData></cx:tx><cx:spPr><a:solidFill><a:srgbClr val="445566"/></a:solidFill></cx:spPr><cx:offset t="0.33" l="0.44"/></cx:title><cx:majorTickMarks type="out"/><cx:minorTickMarks type="none"/><cx:tickLabels/><cx:numFmt formatCode="General" sourceLinked="1"/><cx:txPr><a:bodyPr rot="-2700000"></a:bodyPr><a:p><a:r><a:t>ax</a:t></a:r></a:p></cx:txPr></cx:axis>
 <cx:axis id="1"><cx:valScaling min="0" max="10" majorUnit="2" minorUnit="1"/><cx:units unit="hundreds"/><cx:majorGridlines/><cx:minorGridlines><cx:spPr><a:ln><a:solidFill><a:srgbClr val="AABBCC"/></a:solidFill></a:ln><a:extLst><a:ext uri="{GG00}"/></a:extLst></cx:spPr></cx:minorGridlines><cx:tickLabels/></cx:axis>
 </cx:plotArea>
 <cx:legend pos="b" align="ctr" overlay="1"><cx:spPr><a:noFill/></cx:spPr><cx:offset t="0.55" l="0.66"/></cx:legend>
 </cx:chart>
 <cx:spPr><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></cx:spPr>
-<cx:txPr><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>t</a:t></a:r></a:p></cx:txPr>
+<cx:txPr><a:bodyPr></a:bodyPr><a:lstStyle></a:lstStyle><a:p><a:r><a:t>t</a:t></a:r></a:p></cx:txPr>
 <cx:clrMapOvr bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>
 <cx:fmtOvrs><cx:fmtOvr idx="0"><cx:spPr><a:noFill/></cx:spPr></cx:fmtOvr></cx:fmtOvrs>
 <cx:printSettings>
@@ -325,6 +325,24 @@ fn kitchen_sink_parses_to_the_expected_model() {
     let minor = val_axis.minor_gridlines.as_ref().expect("minorGridlines");
     assert!(minor.shape_properties.is_some());
 
+    // txPr is kept verbatim wherever it appears
+    let chart_txpr = cx.text_properties.as_ref().expect("chartSpace txPr");
+    assert!(String::from_utf8_lossy(chart_txpr).starts_with("<cx:txPr>"));
+    assert!(
+        cat_axis
+            .text_properties
+            .as_ref()
+            .is_some_and(|t| String::from_utf8_lossy(t).contains(r#"rot="-2700000""#)),
+        "axis txPr must be kept"
+    );
+    assert!(
+        labels
+            .text_properties
+            .as_ref()
+            .is_some_and(|t| String::from_utf8_lossy(t).contains("dl")),
+        "dataLabels txPr must be kept"
+    );
+
     // format overrides
     assert_eq!(cx.format_overrides.len(), 1, "cx:fmtOvr must be modelled");
     assert_eq!(cx.format_overrides[0].idx, 0);
@@ -527,13 +545,32 @@ fn series_children_are_written_in_schema_order() {
         );
     }
 
-    // CT_ChartTitle sequence: tx then spPr.
+    // CT_ChartTitle sequence: tx, spPr, txPr, offset.
     let cx2 = parse(KITCHEN_SINK);
     let out2 = String::from_utf8(duke_sheets_chart::write::chart_ex_part_bytes(&cx2).unwrap()).unwrap();
     let title = &out2[out2.find("<cx:title").unwrap()..out2.find("</cx:title>").unwrap()];
+    let tpos = |needle: &str| title.find(needle).unwrap_or_else(|| panic!("{needle} missing: {title}"));
+    for pair in ["<cx:tx>", "<cx:spPr>", "<cx:offset"].windows(2) {
+        assert!(
+            tpos(pair[0]) < tpos(pair[1]),
+            "{} must precede {} in CT_ChartTitle: {title}",
+            pair[0],
+            pair[1]
+        );
+    }
+
+    // CT_Legend sequence: spPr, txPr, offset.
+    let legend = &out2[out2.find("<cx:legend").unwrap()..out2.find("</cx:legend>").unwrap()];
     assert!(
-        title.find("<cx:tx>").unwrap() < title.find("<cx:spPr>").unwrap(),
-        "tx must precede spPr in CT_ChartTitle: {title}"
+        legend.find("<cx:spPr>").unwrap() < legend.find("<cx:offset").unwrap(),
+        "spPr must precede offset in CT_Legend: {legend}"
+    );
+
+    // CT_Axis: numFmt, spPr, txPr.
+    let axis = &out2[out2.find(r#"<cx:axis id="0""#).unwrap()..out2.find("</cx:axis>").unwrap()];
+    assert!(
+        axis.find("<cx:numFmt").unwrap() < axis.find("<cx:txPr>").unwrap(),
+        "numFmt must precede txPr in CT_Axis: {axis}"
     );
 }
 
