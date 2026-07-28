@@ -26,7 +26,7 @@ pub fn parse_chart_ex_xml<R: Read>(reader: R) -> ChartParseResult<ChartEx> {
         plot_area: parsed.plot_area,
         legend: parsed.legend,
         shape_properties: parsed.shape_properties,
-        text_properties: None,
+        text_properties: parsed.text_properties,
         color_map_override: parsed.color_map_override,
         format_overrides: parsed.format_overrides,
         print_settings: parsed.print_settings,
@@ -49,6 +49,7 @@ struct ParsedChartEx {
     plot_area: ChartExPlotArea,
     legend: Option<ChartExLegend>,
     shape_properties: Option<ChartShapeProperties>,
+    text_properties: Option<Vec<u8>>,
     color_map_override: Option<Vec<u8>>,
     format_overrides: Vec<ChartExFormatOverride>,
     print_settings: Option<ChartExPrintSettings>,
@@ -70,6 +71,19 @@ enum CaptureDest {
     ColorMapOverride,
     /// A `cx:rich` text body, which belongs to whatever `cx:tx` holds it.
     Rich(RichOwner),
+    /// A `cx:txPr` text body, which belongs to the element holding it.
+    TextProperties(TxPrOwner),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TxPrOwner {
+    ChartSpace,
+    ChartTitle,
+    Axis,
+    AxisTitle,
+    Legend,
+    DataLabels,
+    DataLabel,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -208,6 +222,7 @@ struct TitleState {
     rich: Option<Vec<u8>>,
     sp: Option<ChartShapeProperties>,
     offset: Option<ChartExOffset>,
+    txpr: Option<Vec<u8>>,
 }
 
 /// The `cx:series` being read.
@@ -286,6 +301,7 @@ struct DataLabelsState {
     in_separator: bool,
     overrides: Vec<ChartExDataLabel>,
     hidden: Vec<u32>,
+    txpr: Option<Vec<u8>>,
 }
 
 /// A per-point `cx:dataLabel` override.
@@ -301,6 +317,7 @@ struct LabelOverrideState {
     separator: Option<String>,
     sp: Option<ChartShapeProperties>,
     in_separator: bool,
+    txpr: Option<Vec<u8>>,
 }
 
 /// A `cx:dataPt`.
@@ -359,6 +376,8 @@ struct AxisState {
     title_sp: Option<ChartShapeProperties>,
     title_offset: Option<ChartExOffset>,
     title_rich: Option<Vec<u8>>,
+    title_txpr: Option<Vec<u8>>,
+    txpr: Option<Vec<u8>>,
     in_units: bool,
     units_unit: Option<String>,
     in_major_gridlines: bool,
@@ -391,6 +410,8 @@ impl Default for AxisState {
             title_sp: None,
             title_offset: None,
             title_rich: None,
+            title_txpr: None,
+            txpr: None,
             in_units: false,
             units_unit: None,
             in_major_gridlines: false,
@@ -408,6 +429,7 @@ struct LegendState {
     overlay: Option<bool>,
     sp: Option<ChartShapeProperties>,
     offset: Option<ChartExOffset>,
+    txpr: Option<Vec<u8>>,
 }
 
 /// The `cx:spPr` subtree being read and what it belongs to.
@@ -554,6 +576,15 @@ impl ChartExParser {
                 }
             }
             CaptureDest::ColorMapOverride => self.result.color_map_override = Some(bytes),
+            CaptureDest::TextProperties(owner) => match owner {
+                TxPrOwner::ChartSpace => self.result.text_properties = Some(bytes),
+                TxPrOwner::ChartTitle => self.title.txpr = Some(bytes),
+                TxPrOwner::Axis => self.axis.txpr = Some(bytes),
+                TxPrOwner::AxisTitle => self.axis.title_txpr = Some(bytes),
+                TxPrOwner::Legend => self.legend.txpr = Some(bytes),
+                TxPrOwner::DataLabels => self.labels.txpr = Some(bytes),
+                TxPrOwner::DataLabel => self.label.txpr = Some(bytes),
+            },
             CaptureDest::Rich(owner) => match owner {
                 RichOwner::ChartTitle => self.title.rich = Some(bytes),
                 RichOwner::AxisTitle => self.axis.title_rich = Some(bytes),
@@ -1245,7 +1276,25 @@ impl ChartExParser {
                     .unwrap_or(0);
                 self.fmt_ovr.sp = None;
             }
-            b"txPr" | b"extLst" => self.begin_skip(),
+            b"txPr" => {
+                let owner = if self.label.open {
+                    TxPrOwner::DataLabel
+                } else if self.labels.open {
+                    TxPrOwner::DataLabels
+                } else if self.axis.in_title {
+                    TxPrOwner::AxisTitle
+                } else if self.axis.open {
+                    TxPrOwner::Axis
+                } else if self.legend.open {
+                    TxPrOwner::Legend
+                } else if self.title.open {
+                    TxPrOwner::ChartTitle
+                } else {
+                    TxPrOwner::ChartSpace
+                };
+                self.begin_capture(CaptureDest::TextProperties(owner), e);
+            }
+            b"extLst" => self.begin_skip(),
             // Handling merged from the former separate arm for
             // empty elements, which a self-closing element no
             // longer reaches.
@@ -1570,7 +1619,7 @@ impl ChartExParser {
                     },
                     offset: self.axis.title_offset.take(),
                     shape_properties: self.axis.title_sp.take(),
-                    text_properties: None,
+                    text_properties: self.axis.title_txpr.take(),
                     extensions: None,
                 };
                 self.axis.title = Some(title);
@@ -1588,7 +1637,7 @@ impl ChartExParser {
                     overlay: self.title.overlay.take(),
                     offset: self.title.offset.take(),
                     shape_properties: self.title.sp.take(),
-                    text_properties: None,
+                    text_properties: self.title.txpr.take(),
                     extensions: None,
                 });
                 self.title.open = false;
@@ -1655,7 +1704,7 @@ impl ChartExParser {
                     shape_properties: self.labels.sp.take(),
                     overrides: std::mem::take(&mut self.labels.overrides),
                     hidden_labels: std::mem::take(&mut self.labels.hidden),
-                    text_properties: None,
+                    text_properties: self.labels.txpr.take(),
                     extensions: None,
                 });
                 self.labels.open = false;
@@ -1670,7 +1719,7 @@ impl ChartExParser {
                     number_format: self.label.num_fmt.take(),
                     separator: self.label.separator.take(),
                     shape_properties: self.label.sp.take(),
-                    text_properties: None,
+                    text_properties: self.label.txpr.take(),
                     extensions: None,
                 });
                 self.label.open = false;
@@ -1720,7 +1769,7 @@ impl ChartExParser {
                     tick_labels: self.axis.tick_labels,
                     number_format: self.axis.num_fmt.take(),
                     shape_properties: self.axis.shape_properties.take(),
-                    text_properties: None,
+                    text_properties: self.axis.txpr.take(),
                     extensions: None,
                 });
                 self.axis.open = false;
@@ -1757,7 +1806,7 @@ impl ChartExParser {
                     overlay: self.legend.overlay.take(),
                     offset: self.legend.offset.take(),
                     shape_properties: self.legend.sp.take(),
-                    text_properties: None,
+                    text_properties: self.legend.txpr.take(),
                     extensions: None,
                 });
                 self.legend.open = false;

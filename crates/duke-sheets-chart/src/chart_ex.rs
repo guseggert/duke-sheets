@@ -9,7 +9,6 @@
 use std::collections::HashMap;
 
 use crate::formatting::{ChartShapeProperties, NumberFormat};
-use crate::text_properties::TextProperties;
 
 /// Series layout type (the `layoutId` attribute on `cx:series`).
 #[derive(Debug, Clone, PartialEq)]
@@ -59,8 +58,9 @@ pub struct ChartEx {
     pub legend: Option<ChartExLegend>,
     /// Chart-level shape properties (`cx:chartSpace > cx:spPr`)
     pub shape_properties: Option<ChartShapeProperties>,
-    /// Chart-level text properties (`cx:chartSpace > cx:txPr`, raw XML bytes)
-    pub text_properties: Option<TextProperties>,
+    /// Chart-level text properties: the complete `cx:txPr` element,
+    /// verbatim.
+    pub text_properties: Option<Vec<u8>>,
     /// Colour map override: the complete `cx:clrMapOvr` element,
     /// verbatim. Its content is entirely attributes, so the element
     /// itself is part of what is stored.
@@ -110,8 +110,8 @@ pub struct ChartExTitle {
     pub offset: Option<ChartExOffset>,
     /// Shape properties
     pub shape_properties: Option<ChartShapeProperties>,
-    /// Text properties (`cx:txPr`, raw XML bytes)
-    pub text_properties: Option<TextProperties>,
+    /// Text properties: the complete `cx:txPr` element, verbatim.
+    pub text_properties: Option<Vec<u8>>,
     /// Extension list (`cx:extLst`, raw XML bytes)
     pub extensions: Option<Vec<u8>>,
 }
@@ -427,8 +427,8 @@ pub struct ChartExAxis {
     pub number_format: Option<NumberFormat>,
     /// Axis shape properties (`cx:spPr`)
     pub shape_properties: Option<ChartShapeProperties>,
-    /// Axis text properties (`cx:txPr`, raw XML bytes)
-    pub text_properties: Option<TextProperties>,
+    /// Text properties: the complete `cx:txPr` element, verbatim.
+    pub text_properties: Option<Vec<u8>>,
     /// Extension list (`cx:extLst`, raw XML bytes)
     pub extensions: Option<Vec<u8>>,
 }
@@ -478,8 +478,8 @@ pub struct ChartExAxisTitle {
     pub offset: Option<ChartExOffset>,
     /// Shape properties
     pub shape_properties: Option<ChartShapeProperties>,
-    /// Text properties (`cx:txPr`, raw XML bytes)
-    pub text_properties: Option<TextProperties>,
+    /// Text properties: the complete `cx:txPr` element, verbatim.
+    pub text_properties: Option<Vec<u8>>,
     /// Extension list (`cx:extLst`, raw XML bytes)
     pub extensions: Option<Vec<u8>>,
 }
@@ -502,8 +502,8 @@ pub struct ChartExAxisUnitsLabel {
     pub text: Option<ChartExText>,
     /// Shape properties
     pub shape_properties: Option<ChartShapeProperties>,
-    /// Text properties (`cx:txPr`, raw XML bytes)
-    pub text_properties: Option<TextProperties>,
+    /// Text properties: the complete `cx:txPr` element, verbatim.
+    pub text_properties: Option<Vec<u8>>,
     /// Extension list (`cx:extLst`, raw XML bytes)
     pub extensions: Option<Vec<u8>>,
 }
@@ -530,8 +530,8 @@ pub struct ChartExLegend {
     pub offset: Option<ChartExOffset>,
     /// Shape properties
     pub shape_properties: Option<ChartShapeProperties>,
-    /// Text properties (`cx:txPr`, raw XML bytes)
-    pub text_properties: Option<TextProperties>,
+    /// Text properties: the complete `cx:txPr` element, verbatim.
+    pub text_properties: Option<Vec<u8>>,
     /// Extension list (`cx:extLst`, raw XML bytes)
     pub extensions: Option<Vec<u8>>,
 }
@@ -553,8 +553,8 @@ pub struct ChartExDataLabels {
     pub separator: Option<String>,
     /// Shape properties for labels
     pub shape_properties: Option<ChartShapeProperties>,
-    /// Text properties (`cx:txPr`, raw XML bytes)
-    pub text_properties: Option<TextProperties>,
+    /// Text properties: the complete `cx:txPr` element, verbatim.
+    pub text_properties: Option<Vec<u8>>,
     /// Per-point data label overrides
     pub overrides: Vec<ChartExDataLabel>,
     /// Indices of hidden labels (`cx:dataLabelHidden`)
@@ -582,8 +582,8 @@ pub struct ChartExDataLabel {
     pub separator: Option<String>,
     /// Shape properties override
     pub shape_properties: Option<ChartShapeProperties>,
-    /// Text properties override (`cx:txPr`, raw XML bytes)
-    pub text_properties: Option<TextProperties>,
+    /// Text properties: the complete `cx:txPr` element, verbatim.
+    pub text_properties: Option<Vec<u8>>,
     /// Extension list (`cx:extLst`, raw XML bytes)
     pub extensions: Option<Vec<u8>>,
 }
