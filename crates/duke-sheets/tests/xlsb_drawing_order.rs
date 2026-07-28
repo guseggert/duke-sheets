@@ -774,8 +774,8 @@ fn xlsb_model_built_chart_ex_gets_generated_style_and_color_parts() {
 
     let chart_ex =
         duke_sheets_chart::parse::parse_chart_ex_xml(WATERFALL_CHART_EX).expect("parse chartEx");
-    assert!(chart_ex.raw_chart_style.is_none());
-    assert!(chart_ex.raw_chart_color_style.is_none());
+    assert!(chart_ex.style.is_none());
+    assert!(chart_ex.color_style.is_none());
 
     let mut workbook = Workbook::new();
     workbook
@@ -820,12 +820,23 @@ fn xlsb_model_built_chart_ex_gets_generated_style_and_color_parts() {
 }
 
 /// Same contract as the XLSX writer: bytes Excel would reject fail the
-/// write with an error naming the field and the defect.
+/// A style part a caller hands over as bytes is replayed exactly, and
+/// it is the parser that decides whether bytes can be modelled. This
+/// pins both halves: what the parser rejects, and that rejecting it
+/// does not stop the bytes being written.
 #[test]
-fn xlsb_write_rejects_a_raw_chart_style_excel_would_refuse() {
+fn xlsb_raw_chart_style_is_replayed_and_not_modelled() {
+    use std::io::Read;
+
+    let garbage = b"<cs:chartStyle/>".to_vec();
+    assert!(
+        duke_sheets_chart::parse::parse_chart_style(&garbage[..]).is_err(),
+        "an unbound prefix and no entries cannot be modelled"
+    );
+
     let mut chart_ex =
         duke_sheets_chart::parse::parse_chart_ex_xml(WATERFALL_CHART_EX).expect("parse chartEx");
-    chart_ex.raw_chart_style = Some(b"<cs:chartStyle/>".to_vec());
+    chart_ex.style = Some(duke_sheets_chart::ChartStylePart::Raw(garbage.clone()));
 
     let mut workbook = Workbook::new();
     workbook
@@ -834,13 +845,16 @@ fn xlsb_write_rejects_a_raw_chart_style_excel_would_refuse() {
         .add_drawing(DrawingObject::chart_ex(chart_ex).with_anchor(two_cell(0, 0, 4, 4)))
         .unwrap();
 
-    let err = XlsbWriter::write(&workbook, Cursor::new(Vec::new()))
-        .expect_err("garbage raw_chart_style must fail the write");
-    let msg = err.to_string();
-    assert!(
-        msg.contains("raw_chart_style") && msg.contains("not bound"),
-        "error must name the field and the defect: {msg}"
-    );
+    let mut output = Cursor::new(Vec::new());
+    XlsbWriter::write(&workbook, &mut output).expect("bytes handed over are written as given");
+    let mut archive = zip::ZipArchive::new(Cursor::new(output.into_inner())).unwrap();
+    let mut written = Vec::new();
+    archive
+        .by_name("xl/charts/style1.xml")
+        .unwrap()
+        .read_to_end(&mut written)
+        .unwrap();
+    assert_eq!(written, garbage);
 }
 
 /// Standard charts and chartEx charts are numbered independently, but
@@ -853,8 +867,8 @@ fn xlsb_write_rejects_a_raw_chart_style_excel_would_refuse() {
 fn xlsb_standard_chart_and_chart_ex_style_parts_do_not_collide() {
     use std::io::Read;
 
-    let standard_style = duke_sheets_chart::write::default_chart_style_bytes();
-    let chart_ex_style = String::from_utf8(duke_sheets_chart::write::default_chart_style_bytes())
+    let standard_style = duke_sheets_chart::write::chart_style_bytes(&duke_sheets_chart::ChartStyle::default());
+    let chart_ex_style = String::from_utf8(duke_sheets_chart::write::chart_style_bytes(&duke_sheets_chart::ChartStyle::default()))
         .unwrap()
         .replace(r#" id="201""#, r#" id="999""#)
         .into_bytes();
@@ -863,12 +877,12 @@ fn xlsb_standard_chart_and_chart_ex_style_parts_do_not_collide() {
     let sheet = workbook.worksheet_mut(0).unwrap();
     let mut chart = Chart::new(ChartType::ColumnClustered);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$3")));
-    chart.raw_chart_style = Some(standard_style.clone());
+    chart.style = Some(duke_sheets_chart::ChartStylePart::Raw(standard_style.clone()));
     sheet.add_chart(chart, two_cell(2, 2, 8, 12)).unwrap();
 
     let mut chart_ex =
         duke_sheets_chart::parse::parse_chart_ex_xml(WATERFALL_CHART_EX).expect("parse chartEx");
-    chart_ex.raw_chart_style = Some(chart_ex_style.clone());
+    chart_ex.style = Some(duke_sheets_chart::ChartStylePart::Raw(chart_ex_style.clone()));
     sheet
         .add_drawing(DrawingObject::chart_ex(chart_ex).with_anchor(two_cell(10, 2, 16, 12)))
         .unwrap();
@@ -891,7 +905,7 @@ fn xlsb_standard_chart_and_chart_ex_style_parts_do_not_collide() {
     assert_eq!(read("xl/charts/style2.xml"), chart_ex_style, "chartEx style must be verbatim");
     assert_eq!(
         read("xl/charts/colors2.xml"),
-        duke_sheets_chart::write::default_chart_color_style_bytes(),
+        duke_sheets_chart::write::chart_color_style_bytes(&duke_sheets_chart::ChartColorStyle::default()),
         "chartEx colours must be the generated default"
     );
 
@@ -971,8 +985,8 @@ fn xlsb_preserved_part_keeps_its_own_relationships() {
 
     use duke_sheets_core::{RawDrawing, RawRel};
 
-    let style = duke_sheets_chart::write::default_chart_style_bytes();
-    let colors = duke_sheets_chart::write::default_chart_color_style_bytes();
+    let style = duke_sheets_chart::write::chart_style_bytes(&duke_sheets_chart::ChartStyle::default());
+    let colors = duke_sheets_chart::write::chart_color_style_bytes(&duke_sheets_chart::ChartColorStyle::default());
     let chart_ex = b"<cx:chartSpace/>".to_vec();
 
     let raw = RawDrawing {

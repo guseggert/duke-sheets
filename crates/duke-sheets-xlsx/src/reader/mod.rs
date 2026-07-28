@@ -128,17 +128,41 @@ fn read_chart_style_color<R: Read + Seek>(
             if let Some(mut f) = package.open_related_part(rel)? {
                 let mut bytes = Vec::new();
                 f.read_to_end(&mut bytes)?;
-                chart.raw_chart_style = Some(bytes);
+                chart.style = Some(chart_style_part(bytes));
             }
         } else if rel.kind() == Some(RelationshipKind::ChartColorStyle) {
             if let Some(mut f) = package.open_related_part(rel)? {
                 let mut bytes = Vec::new();
                 f.read_to_end(&mut bytes)?;
-                chart.raw_chart_color_style = Some(bytes);
+                chart.color_style = Some(chart_color_style_part(bytes));
             }
         }
     }
     Ok(())
+}
+
+/// A chart style part as read: modelled when it conforms, kept as bytes
+/// when it does not, so a file this crate cannot fully describe still
+/// round-trips.
+fn chart_style_part(bytes: Vec<u8>) -> duke_sheets_chart::ChartStylePart {
+    match duke_sheets_chart::parse::parse_chart_style(&bytes[..]) {
+        Ok(style) => duke_sheets_chart::ChartStylePart::Typed(Box::new(style)),
+        Err(reason) => {
+            log::debug!("keeping chart style part as read: {reason}");
+            duke_sheets_chart::ChartStylePart::Raw(bytes)
+        }
+    }
+}
+
+/// As [`chart_style_part`], for the colour style.
+fn chart_color_style_part(bytes: Vec<u8>) -> duke_sheets_chart::ChartColorStylePart {
+    match duke_sheets_chart::parse::parse_chart_color_style(&bytes[..]) {
+        Ok(style) => duke_sheets_chart::ChartColorStylePart::Typed(style),
+        Err(reason) => {
+            log::debug!("keeping chart colour style part as read: {reason}");
+            duke_sheets_chart::ChartColorStylePart::Raw(bytes)
+        }
+    }
 }
 
 fn read_chart_style_color_for_chart_ex<R: Read + Seek>(
@@ -152,13 +176,13 @@ fn read_chart_style_color_for_chart_ex<R: Read + Seek>(
             if let Some(mut f) = package.open_related_part(rel)? {
                 let mut bytes = Vec::new();
                 f.read_to_end(&mut bytes)?;
-                chart.raw_chart_style = Some(bytes);
+                chart.style = Some(chart_style_part(bytes));
             }
         } else if rel.kind() == Some(RelationshipKind::ChartColorStyle) {
             if let Some(mut f) = package.open_related_part(rel)? {
                 let mut bytes = Vec::new();
                 f.read_to_end(&mut bytes)?;
-                chart.raw_chart_color_style = Some(bytes);
+                chart.color_style = Some(chart_color_style_part(bytes));
             }
         } else {
             // cx:externalData and the fallbackImg attribute name a

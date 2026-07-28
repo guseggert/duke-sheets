@@ -733,14 +733,18 @@ fn diff_charts_ex(c1: &duke_sheets_chart::ChartEx, c2: &duke_sheets_chart::Chart
     // style parts, so the writer generates defaults when the source had
     // none; a None -> generated-default transition is expected on round
     // trip, not a loss.
-    let style_defaulted = c1.raw_chart_style.is_none()
-        && c2.raw_chart_style.as_deref()
-            == Some(&duke_sheets_chart::write::default_chart_style_bytes()[..]);
-    if !style_defaulted && c1.raw_chart_style != c2.raw_chart_style { diffs.push(format!("chartEx {idx} raw_chart_style differs")); }
-    let colors_defaulted = c1.raw_chart_color_style.is_none()
-        && c2.raw_chart_color_style.as_deref()
-            == Some(&duke_sheets_chart::write::default_chart_color_style_bytes()[..]);
-    if !colors_defaulted && c1.raw_chart_color_style != c2.raw_chart_color_style { diffs.push(format!("chartEx {idx} raw_chart_color_style differs")); }
+    let style_defaulted = c1.style.is_none()
+        && c2.style
+            == Some(duke_sheets_chart::ChartStylePart::Typed(Box::new(
+                duke_sheets_chart::ChartStyle::default(),
+            )));
+    if !style_defaulted && c1.style != c2.style { diffs.push(format!("chartEx {idx} style differs")); }
+    let colors_defaulted = c1.color_style.is_none()
+        && c2.color_style
+            == Some(duke_sheets_chart::ChartColorStylePart::Typed(
+                duke_sheets_chart::ChartColorStyle::default(),
+            ));
+    if !colors_defaulted && c1.color_style != c2.color_style { diffs.push(format!("chartEx {idx} color_style differs")); }
     if c1.plot_area.shape_properties != c2.plot_area.shape_properties { diffs.push(format!("chartEx {idx} plotArea spPr differs")); }
     if c1.plot_area.plot_surface != c2.plot_area.plot_surface { diffs.push(format!("chartEx {idx} plotSurface differs")); }
     diffs

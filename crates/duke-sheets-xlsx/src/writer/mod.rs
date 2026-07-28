@@ -1345,7 +1345,7 @@ impl XlsxWriter {
             {
                 let chart_source = format!("xl/charts/chart{global_num}.xml");
                 let mut relationship_id = 1usize;
-                if chart.raw_chart_style.is_some() {
+                if chart.style.is_some() {
                     manifest.register_part(
                         &format!("xl/charts/style{global_num}.xml"),
                         CT_CHART_STYLE,
@@ -1359,7 +1359,7 @@ impl XlsxWriter {
                     )?;
                     relationship_id += 1;
                 }
-                if chart.raw_chart_color_style.is_some() {
+                if chart.color_style.is_some() {
                     manifest.register_part(
                         &format!("xl/charts/colors{global_num}.xml"),
                         CT_CHART_COLOR_STYLE,
@@ -1383,7 +1383,7 @@ impl XlsxWriter {
             {
                 let chart_source = format!("xl/charts/chart{global_num}.xml");
                 let mut relationship_id = 1usize;
-                if chart.raw_chart_style.is_some() {
+                if chart.style.is_some() {
                     manifest.register_part(
                         &format!("xl/charts/style{global_num}.xml"),
                         CT_CHART_STYLE,
@@ -1397,7 +1397,7 @@ impl XlsxWriter {
                     )?;
                     relationship_id += 1;
                 }
-                if chart.raw_chart_color_style.is_some() {
+                if chart.color_style.is_some() {
                     manifest.register_part(
                         &format!("xl/charts/colors{global_num}.xml"),
                         CT_CHART_COLOR_STYLE,
@@ -1761,21 +1761,21 @@ impl XlsxWriter {
         chart: &duke_sheets_chart::Chart,
         chart_num: usize,
     ) -> XlsxResult<()> {
-        let has_style = chart.raw_chart_style.is_some();
-        let has_color = chart.raw_chart_color_style.is_some();
+        let has_style = chart.style.is_some();
+        let has_color = chart.color_style.is_some();
         if !has_style && !has_color {
             return Ok(());
         }
         let options = zip::write::SimpleFileOptions::default();
-        if let Some(ref bytes) = chart.raw_chart_style {
+        if let Some(ref part) = chart.style {
             let style_path = format!("xl/charts/style{}.xml", chart_num);
             zip.start_file(&style_path, options)?;
-            zip.write_all(bytes)?;
+            zip.write_all(&duke_sheets_chart::write::chart_style_part_bytes(part))?;
         }
-        if let Some(ref bytes) = chart.raw_chart_color_style {
+        if let Some(ref part) = chart.color_style {
             let color_path = format!("xl/charts/colors{}.xml", chart_num);
             zip.start_file(&color_path, options)?;
-            zip.write_all(bytes)?;
+            zip.write_all(&duke_sheets_chart::write::chart_color_style_part_bytes(part))?;
         }
         Ok(())
     }

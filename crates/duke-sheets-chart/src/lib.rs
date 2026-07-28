@@ -15,6 +15,7 @@ pub mod write;
 mod axis;
 mod chart;
 pub mod chart_ex;
+pub mod chart_style;
 pub mod raw_rel;
 mod config;
 mod data_labels;
@@ -46,6 +47,10 @@ pub use marker::{Marker, MarkerSymbol};
 pub use series::{DataReference, DataSeries};
 pub use text_properties::{TextAnchor, TextProperties, TextVertical, TextWrap};
 pub use trendline::{Trendline, TrendlineLabel, TrendlineType};
+pub use chart_style::{
+    ChartColorStyle, ChartColorStylePart, ChartStyle, ChartStylePart, ColorMethod,
+    FontCollection, FontReference, MarkerLayout, StyleEntry, StyleReference,
+};
 pub use raw_rel::RawRel;
 pub use chart_ex::{
     ChartEx, ChartExAxis, ChartExAxisTitle, ChartExAxisUnits, ChartExAxisUnitsLabel,
