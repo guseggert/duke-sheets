@@ -15,7 +15,11 @@ use crate::{ChartColor, ChartLine, ChartShapeProperties, NumberFormat};
 pub fn parse_chart_ex_xml<R: Read>(reader: R) -> ChartParseResult<ChartEx> {
     let buf_reader = BufReader::new(reader);
     let mut xml_reader = Reader::from_reader(buf_reader);
-    xml_reader.config_mut().trim_text(true);
+    // Whitespace inside a text-bearing element is part of the value: a
+    // category can be named " Q1 " and a separator can be " | ". The
+    // handlers below only take text while one of them is open, so the
+    // indentation between elements is ignored without trimming it away.
+    xml_reader.config_mut().trim_text(false);
 
     let mut buf = Vec::new();
     let parsed = parse_chart_ex_xml_inner(&mut xml_reader, &mut buf)?;
@@ -1663,9 +1667,9 @@ impl ChartExParser {
         if let Ok(text) = e.unescape() {
             let t = text.as_ref();
             if self.data.in_f {
-                self.data.formula = Some(t.to_string());
+                push_text(&mut self.data.formula, t);
             } else if self.data.in_nf {
-                self.data.nf = Some(t.to_string());
+                push_text(&mut self.data.nf, t);
             } else if self.data.in_lvl_pt_text && self.data.in_lvl_pt {
                 if self.data.in_str_dim {
                     self.data.lvl_str_points.push((self.data.lvl_pt_idx, t.to_string()));
@@ -1673,37 +1677,37 @@ impl ChartExParser {
                     self.data.lvl_num_points.push((self.data.lvl_pt_idx, t.to_string()));
                 }
             } else if self.title.in_tx_data_v {
-                self.title.text = Some(t.to_string());
+                push_text(&mut self.title.text, t);
             } else if self.title.in_tx_data_f {
-                self.title.text = Some(t.to_string());
+                push_text(&mut self.title.text, t);
             } else if self.series.in_tx_data_v {
-                self.series.tx_value = Some(t.to_string());
+                push_text(&mut self.series.tx_value, t);
             } else if self.series.in_tx_data_f {
-                self.series.tx_formula = Some(t.to_string());
+                push_text(&mut self.series.tx_formula, t);
             } else if self.series.in_axis_id {
                 if let Ok(id) = t.parse::<u32>() {
                     self.series.axis_ids.push(id);
                 }
             } else if self.axis.in_units_label_tx_data_v {
-                self.axis.units_label_text = Some(t.to_string());
+                push_text(&mut self.axis.units_label_text, t);
             } else if self.axis.in_title_tx_data_v {
-                self.axis.title_text = Some(t.to_string());
+                push_text(&mut self.axis.title_text, t);
             } else if self.label.in_separator {
-                self.label.separator = Some(t.to_string());
+                push_text(&mut self.label.separator, t);
             } else if self.labels.in_separator {
-                self.labels.separator = Some(t.to_string());
+                push_text(&mut self.labels.separator, t);
             } else if self.print.in_hf_odd_header {
-                self.print.hf.odd_header = Some(t.to_string());
+                push_text(&mut self.print.hf.odd_header, t);
             } else if self.print.in_hf_odd_footer {
-                self.print.hf.odd_footer = Some(t.to_string());
+                push_text(&mut self.print.hf.odd_footer, t);
             } else if self.print.in_hf_even_header {
-                self.print.hf.even_header = Some(t.to_string());
+                push_text(&mut self.print.hf.even_header, t);
             } else if self.print.in_hf_even_footer {
-                self.print.hf.even_footer = Some(t.to_string());
+                push_text(&mut self.print.hf.even_footer, t);
             } else if self.print.in_hf_first_header {
-                self.print.hf.first_header = Some(t.to_string());
+                push_text(&mut self.print.hf.first_header, t);
             } else if self.print.in_hf_first_footer {
-                self.print.hf.first_footer = Some(t.to_string());
+                push_text(&mut self.print.hf.first_footer, t);
             }
         }
     }
@@ -2199,6 +2203,15 @@ fn parse_bool_attr(attr: &quick_xml::events::attributes::Attribute) -> Option<bo
 /// Record one `cx:idx` of a `cx:subtotals` list. The index rides the `val`
 /// attribute ([MS-ODRAWXML] §5.22 `CT_SubtotalIndex`) of a normally
 /// self-closing element, not a text node.
+/// Append to a text target. A single element's content can arrive as
+/// more than one event, so assigning would keep only the last piece.
+fn push_text(slot: &mut Option<String>, t: &str) {
+    match slot {
+        Some(existing) => existing.push_str(t),
+        None => *slot = Some(t.to_string()),
+    }
+}
+
 fn push_subtotal_idx(layout_pr: &mut ChartExLayoutPr, e: &quick_xml::events::BytesStart) {
     if let Some(idx) = get_val_attr(e).and_then(|s| s.parse::<u32>().ok()) {
         layout_pr.subtotals.get_or_insert_with(Vec::new).push(idx);

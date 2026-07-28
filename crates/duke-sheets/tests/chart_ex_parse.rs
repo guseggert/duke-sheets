@@ -856,3 +856,90 @@ fn extension_lists_of_unmodelled_containers_are_not_donated_upward() {
         );
     }
 }
+
+/// Leading and trailing whitespace inside a text-bearing element is part
+/// of the value. A category really can be named " Q1 " and a label
+/// separator really can be " | ", so the parser must not trim them away.
+#[test]
+fn whitespace_inside_text_elements_is_part_of_the_value() {
+    let doc = r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><cx:chartData><cx:data id="0"><cx:strDim type="cat"><cx:f> S!$A$1 </cx:f><cx:lvl ptCount="2"><cx:pt idx="0"> Q1 </cx:pt><cx:pt idx="1">  </cx:pt></cx:lvl></cx:strDim></cx:data></cx:chartData><cx:chart><cx:title><cx:tx><cx:txData><cx:v> Spaced Title </cx:v></cx:txData></cx:tx></cx:title><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="waterfall"><cx:dataId val="0"/><cx:dataLabels pos="ctr"><cx:separator> | </cx:separator></cx:dataLabels></cx:series></cx:plotAreaRegion></cx:plotArea></cx:chart><cx:printSettings><cx:headerFooter><cx:oddHeader> H </cx:oddHeader></cx:headerFooter></cx:printSettings></cx:chartSpace>"#;
+
+    let cx = parse(doc);
+
+    let duke_sheets_chart::ChartExDimension::String { formula, levels, .. } = &cx.data[0].dimensions[0]
+    else {
+        panic!("expected a strDim")
+    };
+    assert_eq!(formula.as_deref(), Some(" S!$A$1 "), "cx:f whitespace");
+    assert_eq!(levels[0].points[0].1, " Q1 ", "cx:pt whitespace");
+    assert_eq!(levels[0].points[1].1, "  ", "an all-whitespace cx:pt is a value");
+
+    assert_eq!(
+        cx.title.as_ref().and_then(|t| t.text.as_deref()),
+        Some(" Spaced Title "),
+        "cx:v whitespace"
+    );
+    assert_eq!(
+        cx.plot_area.series[0]
+            .data_labels
+            .as_ref()
+            .and_then(|d| d.separator.as_deref()),
+        Some(" | "),
+        "cx:separator whitespace"
+    );
+    assert_eq!(
+        cx.print_settings
+            .as_ref()
+            .and_then(|p| p.header_footer.as_ref())
+            .and_then(|h| h.odd_header.as_deref()),
+        Some(" H "),
+        "cx:oddHeader whitespace"
+    );
+
+    let bytes = duke_sheets_chart::write::chart_ex_part_bytes(&cx).expect("write");
+    let again = duke_sheets_chart::parse::parse_chart_ex_xml(&bytes[..]).expect("reparse");
+    assert_eq!(cx, again, "whitespace lost on round trip");
+
+    // No xml:space="preserve": most of these elements are a bare
+    // xsd:string, which permits no attributes, and Excel refuses a
+    // workbook whose cx:separator carries one. The whitespace is
+    // emitted as-is instead.
+    let out = String::from_utf8(bytes).unwrap();
+    assert!(!out.contains("xml:space"), "chartEx text takes no xml:space");
+    assert!(out.contains("<cx:separator> | </cx:separator>"), "{out}");
+    assert!(out.contains(r#"<cx:pt idx="0"> Q1 </cx:pt>"#), "{out}");
+}
+
+/// Indentation between elements is not content. The kitchen sink is
+/// written across lines, so collapsing it must not change the model.
+#[test]
+fn indentation_between_elements_does_not_change_the_model() {
+    // Only whitespace runs that contain a newline are removed, and only
+    // between a `>` and a `<`; no text-bearing element in the fixture
+    // holds a newline, so nothing that is content is touched.
+    let mut minified = String::with_capacity(KITCHEN_SINK.len());
+    let b = KITCHEN_SINK.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'>' {
+            let mut j = i + 1;
+            while j < b.len() && (b[j] as char).is_whitespace() {
+                j += 1;
+            }
+            let run = &KITCHEN_SINK[i + 1..j];
+            if j < b.len() && b[j] == b'<' && run.contains('\n') {
+                minified.push('>');
+                i = j;
+                continue;
+            }
+        }
+        minified.push(b[i] as char);
+        i += 1;
+    }
+    assert!(!minified.contains(">\n"), "minifier left indentation behind");
+    assert_eq!(
+        parse(KITCHEN_SINK),
+        parse(&minified),
+        "indentation between elements changed the model"
+    );
+}
