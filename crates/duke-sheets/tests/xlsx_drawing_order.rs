@@ -1584,7 +1584,7 @@ fn xlsx_preserved_part_keeps_its_own_relationships() {
 fn xlsx_chart_ex_keeps_the_relationships_its_body_names() {
     use std::io::Read;
 
-    let chart_ex_xml = br#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" fallbackImg="rId9"><cx:chartData><cx:data id="0"><cx:numDim type="val"><cx:f>Sheet1!$B$1</cx:f></cx:numDim></cx:data><cx:externalData r:id="rId8" autoUpdate="0"/></cx:chartData><cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="waterfall"><cx:dataId val="0"/></cx:series></cx:plotAreaRegion></cx:plotArea></cx:chart></cx:chartSpace>"#;
+    let chart_ex_xml = br#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" fallbackImg="rId2"><cx:chartData><cx:data id="0"><cx:numDim type="val"><cx:f>Sheet1!$B$1</cx:f></cx:numDim></cx:data><cx:externalData r:id="rId1" autoUpdate="0"/></cx:chartData><cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="waterfall"><cx:dataId val="0"/></cx:series></cx:plotAreaRegion></cx:plotArea></cx:chart></cx:chartSpace>"#;
 
     // Build a package by hand: our writer cannot invent these
     // relationships, only replay them, so the fixture is what a foreign
@@ -1613,13 +1613,17 @@ fn xlsx_chart_ex_keeps_the_relationships_its_body_names() {
             let mut bytes = Vec::new();
             base.by_name(name).unwrap().read_to_end(&mut bytes).unwrap();
             if name == "xl/charts/_rels/chartEx1.xml.rels" {
-                let rels = String::from_utf8(bytes).unwrap().replace(
-                    "</Relationships>",
-                    concat!(
-                        r#"<Relationship Id="rId8" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/package" Target="../embeddings/book.xlsx"/>"#,
-                        r#"<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/fallback.png"/>"#,
-                        "</Relationships>"
-                    ),
+                // Written from scratch, not appended to, so the ids are
+                // exactly what a foreign producer would have used: the
+                // body's two first, the style pair after them.
+                let rels = concat!(
+                    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+                    r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
+                    r#"<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/package" Target="../embeddings/book.xlsx"/>"#,
+                    r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/fallback.png"/>"#,
+                    r#"<Relationship Id="rId3" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle" Target="style1.xml"/>"#,
+                    r#"<Relationship Id="rId4" Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle" Target="colors1.xml"/>"#,
+                    "</Relationships>"
                 );
                 out.start_file(name, opts).unwrap();
                 out.write_all(rels.as_bytes()).unwrap();
@@ -1657,17 +1661,105 @@ fn xlsx_chart_ex_keeps_the_relationships_its_body_names() {
     };
 
     let body = String::from_utf8(read("xl/charts/chartEx1.xml")).unwrap();
-    assert!(body.contains(r#"r:id="rId8""#), "externalData id kept: {body}");
-    assert!(body.contains(r#"fallbackImg="rId9""#), "fallbackImg kept: {body}");
+    assert!(body.contains(r#"r:id="rId1""#), "externalData id kept: {body}");
+    assert!(body.contains(r#"fallbackImg="rId2""#), "fallbackImg kept: {body}");
 
     let rels = String::from_utf8(read("xl/charts/_rels/chartEx1.xml.rels")).unwrap();
-    for id in ["rId8", "rId9"] {
-        assert!(rels.contains(id), "{id} must still resolve: {rels}");
+    // The body claims rId1 and rId2, the ids the style pair would
+    // otherwise have taken, so both must move clear of them.
+    for (id, target) in [("rId1", "book.xlsx"), ("rId2", "fallback.png")] {
+        assert!(
+            rels.contains(&format!(r#"Id="{id}""#)) && rels.contains(target),
+            "{id} must still resolve to {target}: {rels}"
+        );
     }
-    assert!(
-        !rels.contains(r#"Id="rId8" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle"#),
-        "the style pair must not reuse an id the body already names: {rels}"
-    );
+    for kind in ["chartStyle", "chartColorStyle"] {
+        let at = rels
+            .find(&format!("/relationships/{kind}\""))
+            .unwrap_or_else(|| panic!("{kind} missing: {rels}"));
+        let id_start = rels[..at].rfind(r#"Id=""#).unwrap() + 4;
+        let id = &rels[id_start..rels[id_start..].find('"').unwrap() + id_start];
+        assert!(
+            id != "rId1" && id != "rId2",
+            "the {kind} relationship reused {id}, which the body already names: {rels}"
+        );
+    }
     assert_eq!(read("xl/embeddings/book.xlsx"), b"embedded workbook bytes");
     assert_eq!(read("xl/media/fallback.png"), PNG_1PX.to_vec());
+}
+
+/// The write half of preserving a part's own relationships is only half
+/// the job: reading has to walk back out to them too, or a file opened
+/// and saved loses on the second pass what it kept on the first.
+#[test]
+fn xlsx_preserved_part_relationships_survive_a_read() {
+    use duke_sheets_core::{RawDrawing, RawRel};
+
+    let image = PNG_1PX.to_vec();
+    let data_part = br#"<dsp:dataModel xmlns:dsp="urn:diagram" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><dsp:pt r:embed="rId1"/></dsp:dataModel>"#.to_vec();
+
+    let raw = RawDrawing {
+        // A graphicFrame holding something the reader does not model, so
+        // the anchor comes back as a preserved one.
+        bytes: br#"<xdr:twoCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>8</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:graphicFrame><a:graphic><a:graphicData uri="urn:diagram"><dgm:relIds xmlns:dgm="urn:diagram" r:dm="rId1"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor>"#.to_vec(),
+        rels: vec![RawRel {
+            id: "rId1".into(),
+            rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramData".into(),
+            target: "../diagrams/data1.xml".into(),
+            external: false,
+            part: Some(data_part.clone()),
+            part_rels: vec![RawRel {
+                id: "rId1".into(),
+                rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image".into(),
+                target: "../media/image1.png".into(),
+                external: false,
+                part: Some(image.clone()),
+                part_rels: Vec::new(),
+            }],
+        }],
+    };
+
+    let mut workbook = Workbook::new();
+    workbook
+        .worksheet_mut(0)
+        .unwrap()
+        .add_drawing(DrawingObject::raw(raw))
+        .unwrap();
+
+    let mut written = Cursor::new(Vec::new());
+    XlsxWriter::write(&workbook, &mut written).expect("write");
+    let reread = XlsxReader::read(Cursor::new(written.into_inner())).expect("read back");
+
+    let sheet = reread.worksheet(0).unwrap();
+    let preserved: Vec<&RawRel> = sheet
+        .drawings()
+        .iter()
+        .filter_map(|object| match &object.kind {
+            duke_sheets_core::DrawingKind::Raw(raw) => Some(raw.rels.iter()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    let data_rel = preserved
+        .iter()
+        .find(|rel| rel.target.ends_with("data1.xml"))
+        .expect("the diagram data relationship must be read back");
+    assert_eq!(data_rel.part.as_deref(), Some(&data_part[..]));
+    assert_eq!(
+        data_rel.part_rels.len(),
+        1,
+        "the data part's own relationship must be read back, not just the part"
+    );
+    assert_eq!(data_rel.part_rels[0].part.as_deref(), Some(&image[..]));
+
+    // And a second save keeps it, which is what the round trip is for.
+    let mut again = Cursor::new(Vec::new());
+    XlsxWriter::write(&reread, &mut again).expect("rewrite");
+    let mut archive = zip::ZipArchive::new(Cursor::new(again.into_inner())).unwrap();
+    for part in ["xl/diagrams/data1.xml", "xl/media/image1.png"] {
+        assert!(
+            archive.by_name(part).is_ok(),
+            "{part} must survive the second save"
+        );
+    }
 }

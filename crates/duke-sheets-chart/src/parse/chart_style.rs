@@ -62,6 +62,12 @@ const SEQUENCE: &[&str] = &[
     "wall",
 ];
 
+/// The `CT_ChartStyle` sequence, for cross-checking the other places
+/// these names are spelt out.
+pub fn chart_style_sequence() -> &'static [&'static str] {
+    SEQUENCE
+}
+
 fn optional(name: &str) -> bool {
     matches!(name, "dataLabelCallout" | "dataPointMarkerLayout")
 }
@@ -456,6 +462,33 @@ mod tests {
         let error = parse_chart_style(doc.as_bytes()).unwrap_err();
         // Reported either as the entry that turned up early or as the one
         // it skipped past; both name the sequence being violated.
+        assert!(
+            error.contains("unexpected here") || error.contains("is missing"),
+            "{error}"
+        );
+    }
+
+    /// Each required entry appears exactly once. A duplicate is a
+    /// backwards step in the sequence, and taking the second silently
+    /// would drop whatever the first said.
+    #[test]
+    fn a_part_with_a_duplicated_entry_is_not_modelled() {
+        let mut names = required();
+        names.insert(3, "axisTitle");
+        let doc = style_doc(&entries(&names), Some("1"));
+        let error = parse_chart_style(doc.as_bytes()).unwrap_err();
+        assert!(error.contains("axisTitle"), "{error}");
+    }
+
+    /// An entry that turns up after one the sequence puts later is out of
+    /// order even though every name is present exactly once.
+    #[test]
+    fn a_part_with_two_entries_transposed_is_not_modelled() {
+        let mut names = required();
+        let last = names.len() - 1;
+        names.swap(last - 1, last);
+        let doc = style_doc(&entries(&names), Some("1"));
+        let error = parse_chart_style(doc.as_bytes()).unwrap_err();
         assert!(
             error.contains("unexpected here") || error.contains("is missing"),
             "{error}"

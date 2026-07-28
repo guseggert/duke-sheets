@@ -203,6 +203,35 @@ mod tests {
     use crate::chart_style::{ChartColorStyle, ChartStyle};
     use crate::parse::{parse_chart_color_style, parse_chart_style};
 
+    /// The element names live in three places - the parser's sequence,
+    /// the writer's, and the accessor the bindings surface entries by -
+    /// and a drift between them would silently emit an entry out of
+    /// order or label one as another.
+    #[test]
+    fn the_three_name_lists_agree() {
+        let parse_order = crate::parse::chart_style_sequence();
+        let required: Vec<&str> = parse_order
+            .iter()
+            .copied()
+            .filter(|n| !matches!(*n, "dataLabelCallout" | "dataPointMarkerLayout"))
+            .collect();
+
+        let written: Vec<&str> = SEQUENCE.iter().map(|(name, _)| *name).collect();
+        assert_eq!(written, required, "the writer's sequence");
+
+        let style = ChartStyle::default();
+        let accessed: Vec<&str> = crate::chart_style::entries_by_name(&style)
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        let expected: Vec<&str> = parse_order
+            .iter()
+            .copied()
+            .filter(|n| *n != "dataPointMarkerLayout")
+            .collect();
+        assert_eq!(accessed, expected, "the accessor the bindings use");
+    }
+
     #[test]
     fn default_style_round_trips_through_the_model() {
         let style = ChartStyle::default();
