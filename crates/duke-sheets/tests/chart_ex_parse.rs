@@ -504,3 +504,47 @@ fn series_children_are_written_in_schema_order() {
         "tx must precede spPr in CT_ChartTitle: {title}"
     );
 }
+
+/// A captured subtree is replayed verbatim on write, so every event kind
+/// inside it has to be kept - comments and CDATA included, which the
+/// capture path used to drop while the skip path never had to care.
+#[test]
+fn raw_captures_keep_comments_and_cdata() {
+    let doc = r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex"><cx:chartData><cx:data id="0"><cx:numDim type="val"><cx:f>Sheet1!$B$1</cx:f></cx:numDim></cx:data></cx:chartData><cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="regionMap"><cx:dataId val="0"/><cx:layoutPr><cx:geography cultureLanguage="en-US"><cx:geoCache provider="x"><!-- keep me --><![CDATA[raw&bytes]]><cx:leaf a="1"/></cx:geoCache></cx:geography></cx:layoutPr></cx:series></cx:plotAreaRegion></cx:plotArea></cx:chart></cx:chartSpace>"#;
+
+    let cx = parse(doc);
+    let cache = cx.plot_area.series[0]
+        .layout_properties
+        .as_ref()
+        .and_then(|l| l.geography.as_ref())
+        .and_then(|g| g.raw_geo_cache.as_ref())
+        .expect("geoCache captured");
+    let text = String::from_utf8_lossy(cache);
+    assert!(text.contains("<!-- keep me -->"), "comment dropped: {text}");
+    assert!(text.contains("<![CDATA[raw&bytes]]>"), "CDATA dropped: {text}");
+    assert!(text.contains(r#"<cx:leaf a="1"/>"#), "element dropped: {text}");
+
+    let bytes = duke_sheets_chart::write::chart_ex_part_bytes(&cx).expect("write");
+    let again = duke_sheets_chart::parse::parse_chart_ex_xml(&bytes[..]).expect("reparse");
+    assert_eq!(cx, again, "capture changed on round trip");
+}
+
+/// An opaque subtree must not leak nesting depth into the `cx:spPr` it
+/// sits inside. The skip half of that is reachable from schema-valid
+/// input (`a:extLst`); the capture half is not, but both share one
+/// mechanism now and the invariant is what keeps them honest.
+#[test]
+fn a_capture_inside_shape_properties_does_not_leak_depth() {
+    let doc = r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><cx:chartData><cx:data id="0"><cx:numDim type="val"><cx:f>Sheet1!$B$1</cx:f></cx:numDim></cx:data></cx:chartData><cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="regionMap"><cx:dataId val="0"/><cx:layoutPr><cx:geography cultureLanguage="en-US"><cx:spPr><cx:geoCache provider="x"><cx:leaf/></cx:geoCache><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></cx:spPr></cx:geography></cx:layoutPr></cx:series><cx:series layoutId="waterfall"><cx:dataId val="0"/><cx:spPr><a:solidFill><a:srgbClr val="00FF00"/></a:solidFill></cx:spPr></cx:series></cx:plotAreaRegion></cx:plotArea></cx:chart></cx:chartSpace>"#;
+
+    let cx = parse(doc);
+    assert_eq!(
+        cx.plot_area.series[1]
+            .shape_properties
+            .as_ref()
+            .and_then(|sp| sp.solid_fill.as_ref())
+            .map(|c| c.hex.as_str()),
+        Some("00FF00"),
+        "a later spPr was lost, so the capture leaked depth"
+    );
+}
