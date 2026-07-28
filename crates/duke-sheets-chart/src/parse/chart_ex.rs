@@ -28,7 +28,7 @@ pub fn parse_chart_ex_xml<R: Read>(reader: R) -> ChartParseResult<ChartEx> {
         shape_properties: parsed.shape_properties,
         text_properties: None,
         color_map_override: parsed.color_map_override,
-        format_overrides: Vec::new(),
+        format_overrides: parsed.format_overrides,
         print_settings: parsed.print_settings,
         raw_chart_style: None,
         raw_chart_color_style: None,
@@ -50,6 +50,7 @@ struct ParsedChartEx {
     legend: Option<ChartExLegend>,
     shape_properties: Option<ChartShapeProperties>,
     color_map_override: Option<Vec<u8>>,
+    format_overrides: Vec<ChartExFormatOverride>,
     print_settings: Option<ChartExPrintSettings>,
     raw_extensions: std::collections::HashMap<String, Vec<u8>>,
     external_data: Option<ChartExExternalData>,
@@ -121,6 +122,7 @@ enum SpCtx {
     DataLabels,
     DataLabel,
     PlotSurface,
+    FormatOverride,
 }
 
 /// Streaming state for one chartEx part.
@@ -424,6 +426,14 @@ struct SpPrState {
     ctx: SpCtx,
 }
 
+/// `cx:fmtOvrs` and the `cx:fmtOvr` being read.
+#[derive(Debug, Default)]
+struct FormatOverrideState {
+    open: bool,
+    idx: u32,
+    sp: Option<ChartShapeProperties>,
+}
+
 /// `cx:printSettings`.
 #[derive(Debug, Default)]
 struct PrintSettingsState {
@@ -459,6 +469,7 @@ struct ChartExParser {
     color_pos: ColorPositionsState,
     axis: AxisState,
     legend: LegendState,
+    fmt_ovr: FormatOverrideState,
     sp: SpPrState,
     print: PrintSettingsState,
     /// The open opaque subtree, if any.
@@ -1173,6 +1184,8 @@ impl ChartExParser {
                     self.sp.ctx = SpCtx::Axis;
                 } else if self.title.open {
                     self.sp.ctx = SpCtx::Title;
+                } else if self.fmt_ovr.open {
+                    self.sp.ctx = SpCtx::FormatOverride;
                 } else if self.legend.open {
                     self.sp.ctx = SpCtx::Legend;
                 } else if self.pos.plot_surface {
@@ -1225,7 +1238,14 @@ impl ChartExParser {
                 self.begin_capture(CaptureDest::Rich(owner), e);
             }
             b"clrMapOvr" => self.begin_capture(CaptureDest::ColorMapOverride, e),
-            b"txPr" | b"fmtOvrs" | b"extLst" => self.begin_skip(),
+            b"fmtOvr" if self.pos.chart_space => {
+                self.fmt_ovr.open = true;
+                self.fmt_ovr.idx = get_val_attr_named(e, b"idx")
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+                self.fmt_ovr.sp = None;
+            }
+            b"txPr" | b"extLst" => self.begin_skip(),
             // Handling merged from the former separate arm for
             // empty elements, which a self-closing element no
             // longer reaches.
@@ -1722,6 +1742,14 @@ impl ChartExParser {
             }
             b"majorGridlines" if self.axis.in_major_gridlines => self.axis.in_major_gridlines = false,
             b"minorGridlines" if self.axis.in_minor_gridlines => self.axis.in_minor_gridlines = false,
+            b"fmtOvr" if self.fmt_ovr.open => {
+                self.result.format_overrides.push(ChartExFormatOverride {
+                    idx: self.fmt_ovr.idx,
+                    shape_properties: self.fmt_ovr.sp.take(),
+                    extensions: None,
+                });
+                self.fmt_ovr.open = false;
+            }
             b"legend" if self.legend.open => {
                 self.result.legend = Some(ChartExLegend {
                     position: self.legend.pos.take(),
@@ -1801,6 +1829,11 @@ impl ChartExParser {
                         SpCtx::Title => {
                             if has {
                                 self.title.sp = Some(props);
+                            }
+                        }
+                        SpCtx::FormatOverride => {
+                            if has {
+                                self.fmt_ovr.sp = Some(props);
                             }
                         }
                         SpCtx::Legend => {

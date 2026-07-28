@@ -325,6 +325,17 @@ fn kitchen_sink_parses_to_the_expected_model() {
     let minor = val_axis.minor_gridlines.as_ref().expect("minorGridlines");
     assert!(minor.shape_properties.is_some());
 
+    // format overrides
+    assert_eq!(cx.format_overrides.len(), 1, "cx:fmtOvr must be modelled");
+    assert_eq!(cx.format_overrides[0].idx, 0);
+    assert!(
+        cx.format_overrides[0]
+            .shape_properties
+            .as_ref()
+            .is_some_and(|sp| sp.no_fill),
+        "fmtOvr spPr must be read"
+    );
+
     // print settings
     let ps = cx.print_settings.as_ref().expect("printSettings");
     let pm = ps.page_margins.as_ref().expect("pageMargins");
