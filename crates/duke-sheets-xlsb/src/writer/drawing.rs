@@ -464,6 +464,7 @@ pub(crate) fn write_drawing_parts<W: Write + Seek>(
             gn,
             numbering.total_standard_charts + gn,
             &mut overrides,
+            &mut media_exts,
         )?;
     }
 
@@ -583,6 +584,7 @@ fn write_chart_ex_style_color_parts<W: Write + Seek>(
     chart_ex_num: usize,
     style_color_num: usize,
     overrides: &mut Vec<(String, String)>,
+    media_exts: &mut Vec<String>,
 ) -> XlsbResult<()> {
     let style = match chart_ex.raw_chart_style {
         Some(ref bytes) => {
@@ -619,16 +621,59 @@ fn write_chart_ex_style_color_parts<W: Write + Seek>(
     zip.write_all(&colors)?;
     overrides.push((format!("/{}", color_path), CT_CHART_COLOR_STYLE.to_string()));
 
-    let rels_xml = format!(
-        concat!(
-            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
-            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
-            r#"<Relationship Id="rId1" Type="{}" Target="style{}.xml"/>"#,
-            r#"<Relationship Id="rId2" Type="{}" Target="colors{}.xml"/>"#,
-            "</Relationships>"
-        ),
-        RT_CHART_STYLE, style_color_num, RT_CHART_COLOR_STYLE, style_color_num
-    );
+    // The chartEx body names its own relationships by id, and writes
+    // those ids back as they were read, so they keep the ids they had
+    // and the style pair takes ids above them.
+    let mut next_id = 1usize;
+    let mut rels_xml = String::from(concat!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+        r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#
+    ));
+    for rel in &chart_ex.preserved_rels {
+        rels_xml.push_str(&format!(
+            r#"<Relationship Id="{}" Type="{}" Target="{}"{}/>"#,
+            rel.id,
+            rel.rel_type,
+            rel.target,
+            if rel.external {
+                r#" TargetMode="External""#
+            } else {
+                ""
+            }
+        ));
+        if let Some(num) = rel
+            .id
+            .strip_prefix("rId")
+            .and_then(|n| n.parse::<usize>().ok())
+        {
+            next_id = next_id.max(num + 1);
+        }
+        let Some(bytes) = rel.part.as_deref() else {
+            continue;
+        };
+        if rel.external {
+            continue;
+        }
+        let path = resolve_rel_target("xl/charts", &rel.target);
+        zip.start_file(&path, *options)?;
+        zip.write_all(bytes)?;
+        if let Some(ct) = content_type_for_path(&path) {
+            overrides.push((format!("/{}", path), ct.to_string()));
+        } else if path.starts_with("xl/media/") {
+            if let Some(ext) = path.rsplit('.').next() {
+                media_exts.push(ext.to_ascii_lowercase());
+            }
+        }
+    }
+    rels_xml.push_str(&format!(
+        r#"<Relationship Id="rId{}" Type="{}" Target="style{}.xml"/><Relationship Id="rId{}" Type="{}" Target="colors{}.xml"/></Relationships>"#,
+        next_id,
+        RT_CHART_STYLE,
+        style_color_num,
+        next_id + 1,
+        RT_CHART_COLOR_STYLE,
+        style_color_num
+    ));
     let rels_path = format!("xl/charts/_rels/chartEx{}.xml.rels", chart_ex_num);
     zip.start_file(&rels_path, *options)?;
     zip.write_all(rels_xml.as_bytes())?;

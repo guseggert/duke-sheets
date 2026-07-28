@@ -160,6 +160,26 @@ fn read_chart_style_color_for_chart_ex<R: Read + Seek>(
                 f.read_to_end(&mut bytes)?;
                 chart.raw_chart_color_style = Some(bytes);
             }
+        } else {
+            // cx:externalData and the fallbackImg attribute name a
+            // relationship by id, and those ids are written back as they
+            // were read, so the relationships have to come back too.
+            let part = match package.open_related_part(rel)? {
+                Some(mut f) => {
+                    let mut bytes = Vec::new();
+                    f.read_to_end(&mut bytes)?;
+                    Some(bytes)
+                }
+                None => None,
+            };
+            chart.preserved_rels.push(duke_sheets_chart::RawRel {
+                id: rel.id.clone(),
+                rel_type: rel.rel_type.clone(),
+                target: rel.raw_target.clone(),
+                external: rel.is_external(),
+                part,
+                part_rels: Vec::new(),
+            });
         }
     }
     Ok(())

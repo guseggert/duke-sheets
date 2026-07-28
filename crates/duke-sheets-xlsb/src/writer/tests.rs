@@ -3206,6 +3206,7 @@ mod tests {
             format_overrides: Vec::new(),
             print_settings: None,
             raw_chart_style: None,
+        preserved_rels: Vec::new(),
             raw_chart_color_style: None,
             extensions: None,
             raw_extensions: Default::default(),

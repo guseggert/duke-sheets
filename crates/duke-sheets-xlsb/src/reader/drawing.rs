@@ -149,9 +149,10 @@ pub(crate) fn merge_sheet_drawings<R: Read + Seek>(
                             duke_sheets_chart::parse::parse_chart_ex_xml(Cursor::new(&chart_bytes))
                         {
                             cx.raw_mc_fallback = chart_ref.raw_mc_fallback;
-                            let (style, color) = read_chart_style_color(archive, &chart_path);
-                            cx.raw_chart_style = style;
-                            cx.raw_chart_color_style = color;
+                            let found = read_chart_style_color(archive, &chart_path);
+                            cx.raw_chart_style = found.style;
+                            cx.raw_chart_color_style = found.color;
+                            cx.preserved_rels = found.preserved;
                             let mut object =
                                 DrawingObject::chart_ex(cx).with_anchor(chart_ref.anchor);
                             object.meta.name = chart_ref.name;
@@ -165,7 +166,8 @@ pub(crate) fn merge_sheet_drawings<R: Read + Seek>(
                     } else if let Ok(mut c) =
                         duke_sheets_chart::parse::parse_chart_xml(Cursor::new(&chart_bytes))
                     {
-                        let (style, color) = read_chart_style_color(archive, &chart_path);
+                        let found = read_chart_style_color(archive, &chart_path);
+                        let (style, color) = (found.style, found.color);
                         c.raw_chart_style = style;
                         c.raw_chart_color_style = color;
                         let mut object = DrawingObject::chart(c).with_anchor(chart_ref.anchor);
@@ -247,24 +249,49 @@ fn read_zip_entry<R: Read + Seek>(archive: &mut zip::ZipArchive<R>, path: &str) 
 
 /// Capture the chartStyle / chartColorStyle parts referenced by a
 /// chart part's rels, for round-trip.
+/// A chart part's style and colour style bytes, plus whatever else it
+/// declares a relationship to. The chartEx body names some of those by
+/// id - `cx:externalData`, `fallbackImg` - and writes the ids back as
+/// they were read, so those relationships have to come back too.
+struct ChartPartRels {
+    style: Option<Vec<u8>>,
+    color: Option<Vec<u8>>,
+    preserved: Vec<RawRel>,
+}
+
 fn read_chart_style_color<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     chart_path: &str,
-) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
-    let Ok(chart_rels) = super::read_sheet_rels(archive, chart_path) else {
-        return (None, None);
+) -> ChartPartRels {
+    let mut found = ChartPartRels {
+        style: None,
+        color: None,
+        preserved: Vec::new(),
     };
-    let mut style = None;
-    let mut color = None;
-    for rel in chart_rels.values() {
+    let Ok(chart_rels) = super::read_sheet_rels(archive, chart_path) else {
+        return found;
+    };
+    for (id, rel) in &chart_rels {
         let path = super::resolve_rel_path(chart_path, &rel.target);
         if rel.rel_type.ends_with("/chartStyle") {
-            style = read_zip_entry(archive, &path);
+            found.style = read_zip_entry(archive, &path);
         } else if rel.rel_type.ends_with("/chartColorStyle") {
-            color = read_zip_entry(archive, &path);
+            found.color = read_zip_entry(archive, &path);
+        } else {
+            let part = (!rel.external)
+                .then(|| read_zip_entry(archive, &path))
+                .flatten();
+            found.preserved.push(RawRel {
+                id: id.clone(),
+                rel_type: rel.rel_type.clone(),
+                target: rel.target.clone(),
+                external: rel.external,
+                part,
+                part_rels: Vec::new(),
+            });
         }
     }
-    (style, color)
+    found
 }
 
 /// Build an `EmbeddedImage` from a parsed pic, resolving the blip

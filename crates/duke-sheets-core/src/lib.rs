@@ -62,11 +62,12 @@ pub use conditional_format::{
     CfColorValue, CfOperator, CfRuleType, CfValue, CfValueType, ConditionalFormatRule,
     IconSetStyle, TimePeriod,
 };
+pub use duke_sheets_chart::RawRel;
 pub use drawing::{
     default_comment_anchor, validate_anchor, validate_group_child, ChildTransform, CommentRef,
     DrawingKind, DrawingMeta,
     DrawingNodeMut, DrawingNodeRef, DrawingObject, DrawingPath, DrawingText, Group,
-    GroupChild, GroupTransform, Placed, RawDrawing, RawRel, RectEmu, Shape, ShapeFill,
+    GroupChild, GroupTransform, Placed, RawDrawing, RectEmu, Shape, ShapeFill,
     ShapeGeometry,
     ShapeLine,
 };

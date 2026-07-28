@@ -1048,3 +1048,99 @@ fn xlsb_preserved_part_keeps_its_own_relationships() {
         assert!(content_types.contains(ct), "content type {ct} missing");
     }
 }
+
+/// A chartEx body names relationships by id - `cx:externalData` and the
+/// `fallbackImg` attribute - and those ids are written back as they were
+/// read. The relationships they name must come back too, or the ids
+/// resolve to nothing.
+#[test]
+fn xlsb_chart_ex_keeps_the_relationships_its_body_names() {
+    use std::io::{Read, Write as _};
+
+    let chart_ex_xml = br#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" fallbackImg="rId9"><cx:chartData><cx:data id="0"><cx:numDim type="val"><cx:f>Sheet1!$B$1</cx:f></cx:numDim></cx:data><cx:externalData r:id="rId8" autoUpdate="0"/></cx:chartData><cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="waterfall"><cx:dataId val="0"/></cx:series></cx:plotAreaRegion></cx:plotArea></cx:chart></cx:chartSpace>"#;
+
+    // Build a package by hand: our writer cannot invent these
+    // relationships, only replay them, so the fixture is what a foreign
+    // producer would have written.
+    let mut built = Cursor::new(Vec::new());
+    {
+        let mut workbook = Workbook::new();
+        let chart_ex =
+            duke_sheets_chart::parse::parse_chart_ex_xml(&chart_ex_xml[..]).expect("parse");
+        workbook
+            .worksheet_mut(0)
+            .unwrap()
+            .add_drawing(DrawingObject::chart_ex(chart_ex).with_anchor(two_cell(0, 0, 4, 4)))
+            .unwrap();
+        XlsbWriter::write(&workbook, &mut built).expect("write base");
+    }
+    let mut base = zip::ZipArchive::new(Cursor::new(built.into_inner())).unwrap();
+
+    // Re-pack it with the two parts the body names, plus the rels entry.
+    let mut repacked = Cursor::new(Vec::new());
+    {
+        let mut out = zip::ZipWriter::new(&mut repacked);
+        let opts = zip::write::SimpleFileOptions::default();
+        let names: Vec<String> = base.file_names().map(str::to_string).collect();
+        for name in &names {
+            let mut bytes = Vec::new();
+            base.by_name(name).unwrap().read_to_end(&mut bytes).unwrap();
+            if name == "xl/charts/_rels/chartEx1.xml.rels" {
+                let rels = String::from_utf8(bytes).unwrap().replace(
+                    "</Relationships>",
+                    concat!(
+                        r#"<Relationship Id="rId8" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/package" Target="../embeddings/book.xlsx"/>"#,
+                        r#"<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/fallback.png"/>"#,
+                        "</Relationships>"
+                    ),
+                );
+                out.start_file(name, opts).unwrap();
+                out.write_all(rels.as_bytes()).unwrap();
+                continue;
+            }
+            if name == "xl/charts/chartEx1.xml" {
+                out.start_file(name, opts).unwrap();
+                out.write_all(&chart_ex_xml[..]).unwrap();
+                continue;
+            }
+            out.start_file(name, opts).unwrap();
+            out.write_all(&bytes).unwrap();
+        }
+        out.start_file("xl/embeddings/book.xlsx", opts).unwrap();
+        out.write_all(b"embedded workbook bytes").unwrap();
+        out.start_file("xl/media/fallback.png", opts).unwrap();
+        out.write_all(&PNG_1PX).unwrap();
+        out.finish().unwrap();
+    }
+
+    // Read it, write it back, and the ids the body names must still resolve.
+    let workbook = XlsbReader::read(Cursor::new(repacked.into_inner())).expect("read");
+    let mut output = Cursor::new(Vec::new());
+    XlsbWriter::write(&workbook, &mut output).expect("rewrite");
+    let mut archive = zip::ZipArchive::new(Cursor::new(output.into_inner())).unwrap();
+
+    let mut read = |name: &str| -> Vec<u8> {
+        let mut v = Vec::new();
+        archive
+            .by_name(name)
+            .unwrap_or_else(|_| panic!("{name} missing"))
+            .read_to_end(&mut v)
+            .unwrap();
+        v
+    };
+
+    let body = String::from_utf8(read("xl/charts/chartEx1.xml")).unwrap();
+    assert!(body.contains(r#"r:id="rId8""#), "externalData id kept: {body}");
+    assert!(body.contains(r#"fallbackImg="rId9""#), "fallbackImg kept: {body}");
+
+    let rels = String::from_utf8(read("xl/charts/_rels/chartEx1.xml.rels")).unwrap();
+    for id in ["rId8", "rId9"] {
+        assert!(rels.contains(id), "{id} must still resolve: {rels}");
+    }
+    assert!(
+        !rels.contains(r#"Id="rId8" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle"#),
+        "the style pair must not reuse an id the body already names: {rels}"
+    );
+    assert_eq!(read("xl/embeddings/book.xlsx"), b"embedded workbook bytes");
+    assert_eq!(read("xl/media/fallback.png"), PNG_1PX.to_vec());
+}

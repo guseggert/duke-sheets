@@ -904,6 +904,22 @@ impl XlsxWriter {
             }
         }
 
+        // A chartEx's own relationships beyond its style pair are
+        // replayed with the ids they had, so their parts are planned
+        // like any other preserved part.
+        for sheet in workbook.worksheets() {
+            for placed in sheet.charts_ex() {
+                let base = "xl/charts/chartEx1.xml";
+                let mut nested = Vec::new();
+                preserved_parts(base, &placed.payload.preserved_rels, &mut nested)?;
+                for part in &nested {
+                    claimed.note(&part.path);
+                    let content_type = raw_part_content_type(part.rel_type, &part.path);
+                    plan_raw_part(&mut raw_media_parts, part.path.clone(), content_type)?;
+                }
+            }
+        }
+
         // Build chart/drawing numbering:
         // chart_numbering: (sheet_idx, chart_in_sheet_idx, global_chart_num)
         // chart_ex_numbering: (sheet_idx, chartex_in_sheet_idx, global_chartex_num)
@@ -1161,12 +1177,25 @@ impl XlsxWriter {
                     Self::write_chart_style_color_parts(&mut zip, sheet_charts[ji].payload, gn)?;
                 }
                 for &(ji, gn) in &sheet_chartex_globals {
-                    chart_ex::write_chart_ex_part(&mut zip, sheet_charts_ex[ji].payload, gn)?;
+                    let chart_ex = sheet_charts_ex[ji].payload;
+                    chart_ex::write_chart_ex_part(&mut zip, chart_ex, gn)?;
                     chart_ex::write_chart_ex_style_color_parts(
                         &mut zip,
-                        sheet_charts_ex[ji].payload,
+                        chart_ex,
                         chart_ex_style_num(global_chart_num - 1, gn),
                     )?;
+                    // Whatever the chartEx body's own relationship ids
+                    // point at, so those ids still resolve.
+                    let base = format!("xl/charts/chartEx{gn}.xml");
+                    let mut preserved = Vec::new();
+                    preserved_parts(&base, &chart_ex.preserved_rels, &mut preserved)?;
+                    for part in &preserved {
+                        if !written_parts.insert(part.path.to_ascii_lowercase()) {
+                            continue;
+                        }
+                        zip.start_file(&part.path, zip::write::SimpleFileOptions::default())?;
+                        zip.write_all(part.bytes)?;
+                    }
                 }
             }
         }
@@ -1387,37 +1416,6 @@ impl XlsxWriter {
         // missing, so both are always registered; the writer falls back to
         // generated defaults when the model carries no raw bytes.
         //
-        // rId1/rId2 are safe to hardcode: style and colour style are the
-        // only chartEx-part relationships this writer emits. A preserved
-        // cx:externalData r:id or fallbackImg value is written back
-        // verbatim without its relationship (a pre-existing gap), so
-        // those dangled before this and dangle now.
-        for &(_, _, global_num) in chart_ex_numbering {
-            manifest.register_part(&format!("xl/charts/chartEx{global_num}.xml"), CT_CHART_EX)?;
-            let style_num = chart_ex_style_num(total_standard_charts, global_num);
-            let chart_source = format!("xl/charts/chartEx{global_num}.xml");
-
-            manifest.register_part(&format!("xl/charts/style{style_num}.xml"), CT_CHART_STYLE)?;
-            manifest.register_relationship(
-                Some(&chart_source),
-                "rId1",
-                RelationshipKind::ChartStyle.uri(),
-                &format!("style{style_num}.xml"),
-                false,
-            )?;
-
-            manifest.register_part(
-                &format!("xl/charts/colors{style_num}.xml"),
-                CT_CHART_COLOR_STYLE,
-            )?;
-            manifest.register_relationship(
-                Some(&chart_source),
-                "rId2",
-                RelationshipKind::ChartColorStyle.uri(),
-                &format!("colors{style_num}.xml"),
-                false,
-            )?;
-        }
         for &(sheet_index, image_index, global_num) in image_numbering {
             let Some(image) = workbook
                 .worksheet(sheet_index)
@@ -1436,6 +1434,60 @@ impl XlsxWriter {
         for raw_part in raw_media_parts {
             let content_type = raw_part.content_type;
             manifest.register_raw_part(&raw_part.path, content_type)?;
+        }
+
+        // The chartEx body names its own relationships by id -
+        // cx:externalData and fallbackImg - and those ids are written
+        // back as they were read, so they are registered with the ids
+        // they had and the style pair takes ids above them.
+        for &(sheet_index, chart_index, global_num) in chart_ex_numbering {
+            manifest.register_part(&format!("xl/charts/chartEx{global_num}.xml"), CT_CHART_EX)?;
+            let style_num = chart_ex_style_num(total_standard_charts, global_num);
+            let chart_source = format!("xl/charts/chartEx{global_num}.xml");
+
+            let preserved = workbook
+                .worksheet(sheet_index)
+                .and_then(|sheet| sheet.charts_ex().nth(chart_index))
+                .map(|placed| placed.payload.preserved_rels.as_slice())
+                .unwrap_or_default();
+            let mut next_id = 1usize;
+            for rel in preserved {
+                manifest.register_preserved_relationship(
+                    Some(&chart_source),
+                    &rel.id,
+                    &rel.rel_type,
+                    &rel.target,
+                    rel.external,
+                )?;
+                if let Some(num) = rel
+                    .id
+                    .strip_prefix("rId")
+                    .and_then(|n| n.parse::<usize>().ok())
+                {
+                    next_id = next_id.max(num + 1);
+                }
+            }
+
+            manifest.register_part(&format!("xl/charts/style{style_num}.xml"), CT_CHART_STYLE)?;
+            manifest.register_relationship(
+                Some(&chart_source),
+                &format!("rId{next_id}"),
+                RelationshipKind::ChartStyle.uri(),
+                &format!("style{style_num}.xml"),
+                false,
+            )?;
+
+            manifest.register_part(
+                &format!("xl/charts/colors{style_num}.xml"),
+                CT_CHART_COLOR_STYLE,
+            )?;
+            manifest.register_relationship(
+                Some(&chart_source),
+                &format!("rId{}", next_id + 1),
+                RelationshipKind::ChartColorStyle.uri(),
+                &format!("colors{style_num}.xml"),
+                false,
+            )?;
         }
         if has_metadata {
             manifest.register_part("xl/metadata.xml", CT_SHEET_METADATA)?;
