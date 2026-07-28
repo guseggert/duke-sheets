@@ -562,9 +562,19 @@ impl ChartParser {
     }
 
     fn on_start(&mut self, e: &BytesStart) {
-    let local = e.name().local_name();
-    let tag = local.as_ref();
-    match tag {
+        let local = e.name().local_name();
+        let tag = local.as_ref();
+
+        // Inside a chart title or a spPr, every element start deepens the
+        // nesting and its end unwinds it, including the end synthesized
+        // for a self-closing element. Applied after the match, not
+        // before, so a guard still sees the depth its own element sits
+        // at, and tracked here rather than in individual arms so that
+        // adding an arm cannot unbalance it.
+        let deepen_title = self.in_chart_title;
+        let deepen_sp_pr = self.in_sp_pr;
+
+        match tag {
         b"chartSpace" => self.in_chart_space = true,
         b"chart" if !self.in_chart => self.in_chart = true,
         b"plotArea" if self.in_chart => self.in_plot_area = true,
@@ -893,7 +903,6 @@ impl ChartParser {
             }
         }
         b"ln" if self.in_sp_pr => {
-            self.sp_pr_depth += 1;
             self.in_sp_ln = true;
             self.sp_ln_width = None;
             self.sp_ln_solid_fill = None;
@@ -908,8 +917,6 @@ impl ChartParser {
                 }
             }
         }
-        b"solidFill" if self.in_sp_pr && !self.in_sp_ln => self.sp_pr_depth += 1,
-        b"solidFill" if self.in_sp_ln => self.sp_pr_depth += 1,
         b"extLst" => {
             self.ext_dest = if self.in_ser {
                 ExtLstDest::Series
@@ -929,21 +936,8 @@ impl ChartParser {
             self.ext_depth = 1;
             self.ext_writer = Some(w);
         }
-        _ => {
-            if self.in_chart_title {
-                self.title_depth += 1;
-            }
-            if self.in_sp_pr {
-                self.sp_pr_depth += 1;
-            }
-        }
-    }
-    }
-
-    fn on_empty(&mut self, e: &BytesStart) {
-    let local = e.name().local_name();
-    let tag = local.as_ref();
-    match tag {
+        // Handling merged from the former separate arm for empty
+        // elements, which a self-closing element no longer reaches.
         b"barDir" if self.in_chart_type_element && !self.in_ser => {
             for attr in e.attributes().flatten() {
                 if attr.key.local_name().as_ref() == b"val" {
@@ -1038,9 +1032,6 @@ impl ChartParser {
             self.dlbls.position =
                 get_val_attr(e).and_then(|s| parse_data_label_position(&s));
         }
-        b"numFmt" if self.in_dlbls => {
-            self.dlbls.number_format = Some(parse_num_fmt(e));
-        }
         b"showLeaderLines" if self.in_dlbls => {
             self.dlbls.show_leader_lines = get_val_bool(e);
         }
@@ -1092,7 +1083,6 @@ impl ChartParser {
                 _ => None,
             });
         }
-        b"val" if self.in_err_bars => self.err_val = get_val_f64(e),
         b"noEndCap" if self.in_err_bars => self.err_no_end_cap = get_val_bool(e),
         // Series smooth
         b"smooth" if self.in_ser => self.ser_smooth = get_val_bool(e),
@@ -1100,17 +1090,6 @@ impl ChartParser {
             self.ser_invert_if_negative = get_val_bool(e);
         }
         // Axis enhancements
-        b"numFmt"
-            if (self.in_cat_ax || self.in_val_ax || self.in_ser_ax) && !self.in_ax_title && !self.in_dlbls =>
-        {
-            self.ax_number_format = Some(parse_num_fmt(e));
-        }
-        b"majorGridlines" if (self.in_cat_ax || self.in_val_ax || self.in_ser_ax) && !self.in_ax_title => {
-            self.ax_major_gridlines = true;
-        }
-        b"minorGridlines" if (self.in_cat_ax || self.in_val_ax || self.in_ser_ax) && !self.in_ax_title => {
-            self.ax_minor_gridlines = true;
-        }
         b"majorTickMark" if (self.in_cat_ax || self.in_val_ax || self.in_ser_ax) && !self.in_ax_title => {
             self.ax_major_tick_mark = get_val_attr(e).and_then(|s| parse_tick_mark(&s));
         }
@@ -1240,22 +1219,15 @@ impl ChartParser {
         b"crossAx" if (self.in_cat_ax || self.in_val_ax || self.in_ser_ax) && !self.in_ax_title => {
             self.ax_cross_id = get_val_u32(e);
         }
-        b"dropLines" if self.in_chart_type_element && !self.in_ser => {
-            self.group_drop_lines = Some(ChartLines::default());
-        }
-        b"hiLowLines" if self.in_chart_type_element && !self.in_ser => {
-            self.group_high_low_lines = Some(ChartLines::default());
-        }
-        b"serLines" if self.in_chart_type_element && !self.in_ser => {
-            self.group_series_lines = Some(ChartLines::default());
-        }
-        b"leaderLines" if self.in_dlbls => {
-            self.dlbls.leader_lines = Some(ChartLines::default());
-        }
-        b"upBars" if self.in_up_down_bars => self.had_up_bars = true,
-        b"downBars" if self.in_up_down_bars => self.had_down_bars = true,
         _ => {}
-    }
+        }
+
+        if deepen_title {
+            self.title_depth += 1;
+        }
+        if deepen_sp_pr {
+            self.sp_pr_depth += 1;
+        }
     }
 
     fn on_text(&mut self, e: &BytesText) {
@@ -1287,10 +1259,103 @@ impl ChartParser {
     }
     }
 
+    /// Close the chart title, keeping whatever text it accumulated.
+    fn finish_title(&mut self) {
+        if !self.title_text.is_empty() {
+            self.result.title = Some(self.title_text.clone());
+        }
+        self.in_chart_title = false;
+    }
+
+    /// Close a cx:spPr, attaching what it described to whatever it
+    /// belongs to.
+    fn finish_shape_properties(&mut self) {
+            let props = ChartShapeProperties {
+                solid_fill: self.sp_solid_fill.take(),
+                no_fill: self.sp_no_fill,
+                line: self.sp_line.take(),
+            };
+            let has_content =
+                props.solid_fill.is_some() || props.no_fill || props.line.is_some();
+            if has_content {
+                match self.sp_pr_context {
+                    SpPrContext::Series => {
+                        self.ser_shape_properties = Some(props);
+                    }
+                    SpPrContext::DataPoint => {
+                        self.dpt_shape_properties = Some(props);
+                    }
+                    SpPrContext::CatAxis => {
+                        self.ax_shape_properties = Some(props);
+                    }
+                    SpPrContext::ValAxis => {
+                        self.ax_shape_properties = Some(props);
+                    }
+                    SpPrContext::MajorGridlines => {
+                        self.ax_major_gridlines = true;
+                        self.ax_major_gridlines_shape_properties = Some(props);
+                    }
+                    SpPrContext::MinorGridlines => {
+                        self.ax_minor_gridlines = true;
+                        self.ax_minor_gridlines_shape_properties = Some(props);
+                    }
+                    SpPrContext::ChartSpace => {
+                        self.result.shape_properties = Some(props);
+                    }
+                    SpPrContext::Legend => {
+                        self.legend_shape_properties = Some(props);
+                    }
+                    SpPrContext::None => {}
+                    SpPrContext::DropLines => {
+                        self.group_drop_lines = Some(ChartLines {
+                            shape_properties: Some(props),
+                        });
+                    }
+                    SpPrContext::HiLowLines => {
+                        self.group_high_low_lines = Some(ChartLines {
+                            shape_properties: Some(props),
+                        });
+                    }
+                    SpPrContext::SerLines => {
+                        self.group_series_lines = Some(ChartLines {
+                            shape_properties: Some(props),
+                        });
+                    }
+                    SpPrContext::UpBars => self.up_bars_sp = Some(props),
+                    SpPrContext::DownBars => self.down_bars_sp = Some(props),
+                    SpPrContext::LeaderLines => {
+                        self.dlbls.leader_lines = Some(ChartLines {
+                            shape_properties: Some(props),
+                        });
+                    }
+                }
+            }
+            self.in_sp_pr = false;
+            self.sp_no_fill = false;
+            self.sp_pr_context = SpPrContext::None;
+    }
+
     fn on_end(&mut self, e: &BytesEnd) {
-    let local = e.name().local_name();
-    let tag = local.as_ref();
-    match tag {
+        let local = e.name().local_name();
+        let tag = local.as_ref();
+
+        // The mirror of on_start's bookkeeping: one unwind per element
+        // end, wherever the element is handled, so that an arm existing
+        // for a tag cannot leave a region open.
+        if self.in_chart_title {
+            self.title_depth = self.title_depth.saturating_sub(1);
+            if self.title_depth == 0 {
+                self.finish_title();
+            }
+        }
+        if self.in_sp_pr {
+            self.sp_pr_depth = self.sp_pr_depth.saturating_sub(1);
+            if self.sp_pr_depth == 0 {
+                self.finish_shape_properties();
+            }
+        }
+
+        match tag {
         b"chart" => self.in_chart = false,
         b"plotArea" => self.in_plot_area = false,
         b"view3D" if self.in_view_3d => {
@@ -1313,15 +1378,6 @@ impl ChartParser {
             self.in_d_table = false;
         }
         b"title" if self.in_ax_title => self.in_ax_title = false,
-        b"title" if self.in_chart_title => {
-            self.title_depth = self.title_depth.saturating_sub(1);
-            if self.title_depth == 0 {
-                if !self.title_text.is_empty() {
-                    self.result.title = Some(self.title_text.clone());
-                }
-                self.in_chart_title = false;
-            }
-        }
         b"tx" if self.in_title_tx => self.in_title_tx = false,
         b"rich" if self.in_title_rich => self.in_title_rich = false,
         b"p" if self.in_title_p && self.in_title_rich => self.in_title_p = false,
@@ -1715,96 +1771,9 @@ impl ChartParser {
             });
             self.in_sp_ln = false;
             self.sp_ln_no_fill = false;
-            self.sp_pr_depth = self.sp_pr_depth.saturating_sub(1);
         }
-        b"spPr" if self.in_sp_pr => {
-            self.sp_pr_depth = self.sp_pr_depth.saturating_sub(1);
-            if self.sp_pr_depth == 0 {
-                let props = ChartShapeProperties {
-                    solid_fill: self.sp_solid_fill.take(),
-                    no_fill: self.sp_no_fill,
-                    line: self.sp_line.take(),
-                };
-                let has_content =
-                    props.solid_fill.is_some() || props.no_fill || props.line.is_some();
-                if has_content {
-                    match self.sp_pr_context {
-                        SpPrContext::Series => {
-                            self.ser_shape_properties = Some(props);
-                        }
-                        SpPrContext::DataPoint => {
-                            self.dpt_shape_properties = Some(props);
-                        }
-                        SpPrContext::CatAxis => {
-                            self.ax_shape_properties = Some(props);
-                        }
-                        SpPrContext::ValAxis => {
-                            self.ax_shape_properties = Some(props);
-                        }
-                        SpPrContext::MajorGridlines => {
-                            self.ax_major_gridlines = true;
-                            self.ax_major_gridlines_shape_properties = Some(props);
-                        }
-                        SpPrContext::MinorGridlines => {
-                            self.ax_minor_gridlines = true;
-                            self.ax_minor_gridlines_shape_properties = Some(props);
-                        }
-                        SpPrContext::ChartSpace => {
-                            self.result.shape_properties = Some(props);
-                        }
-                        SpPrContext::Legend => {
-                            self.legend_shape_properties = Some(props);
-                        }
-                        SpPrContext::None => {}
-                        SpPrContext::DropLines => {
-                            self.group_drop_lines = Some(ChartLines {
-                                shape_properties: Some(props),
-                            });
-                        }
-                        SpPrContext::HiLowLines => {
-                            self.group_high_low_lines = Some(ChartLines {
-                                shape_properties: Some(props),
-                            });
-                        }
-                        SpPrContext::SerLines => {
-                            self.group_series_lines = Some(ChartLines {
-                                shape_properties: Some(props),
-                            });
-                        }
-                        SpPrContext::UpBars => self.up_bars_sp = Some(props),
-                        SpPrContext::DownBars => self.down_bars_sp = Some(props),
-                        SpPrContext::LeaderLines => {
-                            self.dlbls.leader_lines = Some(ChartLines {
-                                shape_properties: Some(props),
-                            });
-                        }
-                    }
-                }
-                self.in_sp_pr = false;
-                self.sp_no_fill = false;
-                self.sp_pr_context = SpPrContext::None;
-            }
+        _ => {}
         }
-        _ => {
-            if self.in_chart_title {
-                self.title_depth = self.title_depth.saturating_sub(1);
-                if self.title_depth == 0 {
-                    if !self.title_text.is_empty() {
-                        self.result.title = Some(self.title_text.clone());
-                    }
-                    self.in_chart_title = false;
-                }
-            }
-            if self.in_sp_pr {
-                self.sp_pr_depth = self.sp_pr_depth.saturating_sub(1);
-                if self.sp_pr_depth == 0 {
-                    self.in_sp_pr = false;
-                    self.sp_no_fill = false;
-                    self.sp_pr_context = SpPrContext::None;
-                }
-            }
-        }
-    }
     }
 
 }
@@ -1815,19 +1784,40 @@ fn parse_chart_xml_inner<R: Read>(
 ) -> ChartParseResult<ParsedChart> {
     let mut parser = ChartParser::new();
 
+    // `<x/>` and `<x></x>` are the same document, so a self-closing
+    // element is split into the start and end its expanded form would
+    // produce and handled by one code path; keeping two let them drift.
+    // An extLst being kept as bytes is exempt, so that what it replays
+    // matches its source.
+    let mut pending_end: Option<Event<'static>> = None;
+
     loop {
-        let event = match xml_reader.read_event_into(buf) {
-            Ok(ev) => ev.into_owned(),
-            Err(e) => return Err(ChartParseError::Xml(e)),
+        let event = match pending_end.take() {
+            Some(ev) => ev,
+            None => {
+                let ev = match xml_reader.read_event_into(buf) {
+                    Ok(ev) => ev.into_owned(),
+                    Err(e) => return Err(ChartParseError::Xml(e)),
+                };
+                buf.clear();
+                ev
+            }
         };
-        buf.clear();
         if parser.capturing() {
             parser.capture(&event);
             continue;
         }
+        let event = match event {
+            Event::Empty(e) => {
+                pending_end = Some(Event::End(BytesEnd::new(
+                    String::from_utf8_lossy(e.name().as_ref()).into_owned(),
+                )));
+                Event::Start(e)
+            }
+            other => other,
+        };
         match event {
             Event::Start(ref e) => parser.on_start(e),
-            Event::Empty(ref e) => parser.on_empty(e),
             Event::Text(ref e) => parser.on_text(e),
             Event::End(ref e) => parser.on_end(e),
             Event::Eof => break,
