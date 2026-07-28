@@ -46,7 +46,7 @@ const KITCHEN_SINK: &str = r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.
 <cx:plotSurface><cx:spPr><a:noFill/></cx:spPr></cx:plotSurface>
 </cx:plotAreaRegion>
 <cx:axis id="0" hidden="0"><cx:catScaling gapWidth="0.5"/><cx:title><cx:tx><cx:txData><cx:v>Cat Axis</cx:v></cx:txData></cx:tx><cx:spPr><a:solidFill><a:srgbClr val="445566"/></a:solidFill></cx:spPr><cx:offset t="0.33" l="0.44"/></cx:title><cx:majorTickMarks type="out"/><cx:minorTickMarks type="none"/><cx:tickLabels/><cx:numFmt formatCode="General" sourceLinked="1"/><cx:txPr><a:bodyPr rot="-2700000"></a:bodyPr><a:p><a:r><a:t>ax</a:t></a:r></a:p></cx:txPr></cx:axis>
-<cx:axis id="1"><cx:valScaling min="0" max="10" majorUnit="2" minorUnit="1"/><cx:units unit="hundreds"/><cx:majorGridlines/><cx:minorGridlines><cx:spPr><a:ln><a:solidFill><a:srgbClr val="AABBCC"/></a:solidFill></a:ln><a:extLst><a:ext uri="{GG00}"/></a:extLst></cx:spPr></cx:minorGridlines><cx:tickLabels/></cx:axis>
+<cx:axis id="1"><cx:valScaling min="0" max="10" majorUnit="2" minorUnit="1"/><cx:units unit="hundreds"><cx:unitsLabel><cx:tx><cx:txData><cx:v>Hundreds</cx:v></cx:txData></cx:tx><cx:spPr><a:solidFill><a:srgbClr val="778899"/></a:solidFill></cx:spPr><cx:txPr><a:p><a:r><a:t>ul</a:t></a:r></a:p></cx:txPr><cx:extLst><cx:ext uri="{UL}"></cx:ext></cx:extLst></cx:unitsLabel></cx:units><cx:majorGridlines/><cx:minorGridlines><cx:spPr><a:ln><a:solidFill><a:srgbClr val="AABBCC"/></a:solidFill></a:ln><a:extLst><a:ext uri="{GG00}"/></a:extLst></cx:spPr></cx:minorGridlines><cx:tickLabels/></cx:axis>
 </cx:plotArea>
 <cx:legend pos="b" align="ctr" overlay="1"><cx:spPr><a:noFill/></cx:spPr><cx:offset t="0.55" l="0.66"/></cx:legend>
 </cx:chart>
@@ -318,6 +318,33 @@ fn kitchen_sink_parses_to_the_expected_model() {
     assert_eq!(cat_axis.major_tick_marks.as_deref(), Some("out"));
     assert!(cat_axis.tick_labels);
     let val_axis = &cx.plot_area.axes[1];
+    let units = val_axis.units.as_ref().expect("units");
+    assert_eq!(units.unit.as_deref(), Some("hundreds"));
+    let label = units.label.as_ref().expect("cx:unitsLabel must be modelled");
+    assert_eq!(
+        label
+            .text
+            .as_ref()
+            .and_then(|t| t.data.as_ref())
+            .and_then(|d| d.value.as_deref()),
+        Some("Hundreds")
+    );
+    assert_eq!(
+        label
+            .shape_properties
+            .as_ref()
+            .and_then(|sp| sp.solid_fill.as_ref())
+            .map(|c| c.hex.as_str()),
+        Some("778899")
+    );
+    assert!(label.text_properties.is_some(), "unitsLabel txPr");
+    assert!(
+        label
+            .extensions
+            .as_ref()
+            .is_some_and(|e| String::from_utf8_lossy(e).contains("{UL}")),
+        "unitsLabel extLst"
+    );
     assert!(matches!(val_axis.scaling, ChartExScaling::Value { .. }));
     // A bare cx:majorGridlines carries no override; the minor one does.
     let major = val_axis.major_gridlines.as_ref().expect("majorGridlines");

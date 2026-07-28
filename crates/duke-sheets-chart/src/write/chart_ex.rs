@@ -896,6 +896,10 @@ fn write_axis_units(w: &mut XmlWriter, units: &ChartExAxisUnits) -> XlsxResult<(
         if let Some(ref sp) = label.shape_properties {
             write_cx_shape_properties(w, sp)?;
         }
+        if let Some(ref txpr) = label.text_properties {
+            w.get_mut().write_all(txpr)?;
+        }
+        write_extensions(w, &label.extensions)?;
         w.write_event(Event::End(BytesEnd::new("cx:unitsLabel")))?;
     }
 
