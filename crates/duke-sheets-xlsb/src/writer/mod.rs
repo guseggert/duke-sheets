@@ -191,33 +191,29 @@ impl XlsbWriter {
         let mut media_default_exts: BTreeSet<String> = BTreeSet::new();
         let mut written_media: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-        // Media numbering starts above any raw-preserved image number
-        // so generated filenames never collide.
-        let mut max_claimed_image_num = 0usize;
+        // A preserved part keeps the path its own relationship names, so
+        // everything the writer numbers itself starts above whatever
+        // those have already claimed, or the two collide on one path.
+        let mut claimed = drawing::ClaimedPartNumbers::default();
         for i in 0..workbook.sheet_count() {
             let ws = workbook.worksheet(i).unwrap();
             for rel in drawing::sheet_raw_rels(ws) {
                 if rel.external || rel.part.is_none() {
                     continue;
                 }
-                let path = drawing::resolve_rel_target("xl/drawings", &rel.target);
-                if let Some(rest) = path.strip_prefix("xl/media/image") {
-                    if let Some((num, _ext)) = rest.split_once('.') {
-                        if let Ok(num) = num.parse::<usize>() {
-                            max_claimed_image_num = max_claimed_image_num.max(num);
-                        }
-                    }
-                }
+                claimed.note(&drawing::resolve_rel_target("xl/drawings", &rel.target));
             }
         }
-        let mut next_drawing_num = 1usize;
-        let mut next_chart_num = 1usize;
-        let mut next_chartex_num = 1usize;
-        let mut next_image_num = max_claimed_image_num + 1;
-        let total_standard_charts: usize = (0..workbook.sheet_count())
-            .filter_map(|i| workbook.worksheet(i))
-            .map(|ws| drawing::sheet_charts(ws).len())
-            .sum();
+        let mut next_drawing_num = claimed.drawing + 1;
+        let mut next_chart_num = claimed.chart + 1;
+        let mut next_chartex_num = claimed.chart_ex + 1;
+        let mut next_image_num = claimed.image + 1;
+        let total_standard_charts: usize = claimed.style.max(
+            (0..workbook.sheet_count())
+                .filter_map(|i| workbook.worksheet(i))
+                .map(|ws| drawing::sheet_charts(ws).len())
+                .sum(),
+        );
 
         let mut global_table_num = 1usize;
         let mut table_global_nums: Vec<Vec<usize>> = Vec::new();
@@ -387,7 +383,13 @@ impl XlsbWriter {
                 ));
             }
         }
+        // One Override per part, compared without case as OPC does; a
+        // part reached from two sheets is still one part.
+        let mut seen_overrides = std::collections::HashSet::new();
         for (part_name, ct) in drawing_overrides {
+            if !seen_overrides.insert(part_name.to_ascii_lowercase()) {
+                continue;
+            }
             xml.push_str(&format!(
                 "<Override PartName=\"{}\" ContentType=\"{}\"/>",
                 part_name, ct

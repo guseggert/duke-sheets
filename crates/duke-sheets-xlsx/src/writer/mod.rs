@@ -606,6 +606,63 @@ impl Default for EncryptionProfile {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum Family {
+    Drawing,
+    Chart,
+    ChartEx,
+    Style,
+    Image,
+}
+
+/// The highest part number each family already has claimed by a
+/// preserved part, so freshly numbered parts can start above them.
+#[derive(Debug, Default)]
+struct ClaimedPartNumbers {
+    drawing: usize,
+    chart: usize,
+    chart_ex: usize,
+    style: usize,
+    image: usize,
+}
+
+impl ClaimedPartNumbers {
+    /// Record the number in a package path, if it names one this writer
+    /// would otherwise allocate. Style and colour parts share a series,
+    /// as the writer emits them as a pair.
+    fn note(&mut self, path: &str) {
+        // chartEx before chart, and both before style, so the longer
+        // prefix wins.
+        const FAMILIES: &[(&str, Family)] = &[
+            ("xl/drawings/drawing", Family::Drawing),
+            ("xl/charts/chartex", Family::ChartEx),
+            ("xl/charts/chart", Family::Chart),
+            ("xl/charts/style", Family::Style),
+            ("xl/charts/colors", Family::Style),
+            ("xl/media/image", Family::Image),
+        ];
+
+        let lower = path.to_ascii_lowercase();
+        for (prefix, family) in FAMILIES {
+            let Some(rest) = lower.strip_prefix(prefix) else {
+                continue;
+            };
+            let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+            if let Ok(num) = digits.parse::<usize>() {
+                let slot = match family {
+                    Family::Drawing => &mut self.drawing,
+                    Family::Chart => &mut self.chart,
+                    Family::ChartEx => &mut self.chart_ex,
+                    Family::Style => &mut self.style,
+                    Family::Image => &mut self.image,
+                };
+                *slot = (*slot).max(num);
+            }
+            break;
+        }
+    }
+}
+
 /// Number of a chartEx chart's `styleN.xml` / `colorsN.xml` parts.
 ///
 /// Standard charts number their own style and colour parts by chart
@@ -733,7 +790,11 @@ impl XlsxWriter {
         // media filenames never collide, and collect their content
         // types and part bytes.
         let mut raw_media_parts: Vec<RawPartPlan> = Vec::new();
-        let mut max_claimed_image_num = 0usize;
+        // Highest number a preserved part has already claimed, per part
+        // family. A preserved part keeps the path its own relationship
+        // names, so everything the writer numbers itself has to start
+        // above these or the two collide on one path.
+        let mut claimed = ClaimedPartNumbers::default();
         for sheet in workbook.worksheets() {
             for rel in sheet_raw_rels(sheet) {
                 if rel.external || rel.part.is_none() {
@@ -743,14 +804,7 @@ impl XlsxWriter {
                 if is_generated_drawing_part(&path) {
                     continue;
                 }
-                let identity = path.to_ascii_lowercase();
-                if let Some(rest) = identity.strip_prefix("xl/media/image") {
-                    if let Some((num, _ext)) = rest.split_once('.') {
-                        if let Ok(num) = num.parse::<usize>() {
-                            max_claimed_image_num = max_claimed_image_num.max(num);
-                        }
-                    }
-                }
+                claimed.note(&path);
                 let content_type = raw_part_content_type(&rel.rel_type, &path);
                 if let Some(existing) = raw_media_parts
                     .iter()
@@ -777,14 +831,7 @@ impl XlsxWriter {
                 if is_generated_drawing_part(&path) {
                     continue;
                 }
-                let identity = path.to_ascii_lowercase();
-                if let Some(rest) = identity.strip_prefix("xl/media/image") {
-                    if let Some((num, _ext)) = rest.split_once('.') {
-                        if let Ok(num) = num.parse::<usize>() {
-                            max_claimed_image_num = max_claimed_image_num.max(num);
-                        }
-                    }
-                }
+                claimed.note(&path);
                 let content_type = raw_part_content_type(&rel.rel_type, &path);
                 if let Some(existing) = raw_media_parts
                     .iter()
@@ -806,17 +853,17 @@ impl XlsxWriter {
         // chart_ex_numbering: (sheet_idx, chartex_in_sheet_idx, global_chartex_num)
         // drawing_numbering: (sheet_idx, drawing_num)
         let mut chart_numbering: Vec<(usize, usize, usize)> = Vec::new();
-        let mut global_chart_num = 1usize;
+        let mut global_chart_num = claimed.chart + 1;
         let mut chart_ex_numbering: Vec<(usize, usize, usize)> = Vec::new();
-        let mut global_chart_ex_num = 1usize;
+        let mut global_chart_ex_num = claimed.chart_ex + 1;
         // (sheet_idx, image_idx_in_sheet, global_image_num). Image
         // indices cover group children too, depth-first in list
         // order. The global counter feeds `xl/media/image{N}.<ext>`
         // filenames, starting above any raw-preserved image number.
         let mut image_numbering: Vec<(usize, usize, usize)> = Vec::new();
-        let mut global_image_num = max_claimed_image_num + 1;
+        let mut global_image_num = claimed.image + 1;
         let mut drawing_numbering: Vec<(usize, usize)> = Vec::new();
-        let mut global_drawing_num = 1usize;
+        let mut global_drawing_num = claimed.drawing + 1;
         for (i, sheet) in workbook.worksheets().enumerate() {
             if sheet_has_drawing_content(sheet) {
                 drawing_numbering.push((i, global_drawing_num));
