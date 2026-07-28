@@ -57,6 +57,40 @@ struct ParsedChartEx {
     fallback_img: Option<String>,
 }
 
+/// Where a captured subtree's bytes belong.
+#[derive(Debug, Clone, Copy)]
+enum CaptureDest {
+    /// `cx:geoCache` of the series' `cx:geography`.
+    GeoCache,
+    /// One colour slot of the series' `cx:valueColors`.
+    ValueColor(ValueColorSlot),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ValueColorSlot {
+    Min,
+    Mid,
+    Max,
+}
+
+/// A subtree the parser does not read element by element.
+///
+/// Both kinds behave identically as far as the event loop is concerned -
+/// swallow everything until the matching end - so they share one
+/// mechanism. Keeping them separate is what let a captured subtree drop
+/// comments and CDATA that a skipped one never had to care about, and
+/// let a capture forget the depth bookkeeping a skip did.
+enum Opaque {
+    /// Dropped: an element we do not model.
+    Skip { depth: u32 },
+    /// Kept verbatim, opener included, for replay on write.
+    Capture {
+        dest: CaptureDest,
+        depth: u32,
+        writer: Writer<Cursor<Vec<u8>>>,
+    },
+}
+
 /// What a `cx:spPr` subtree currently belongs to. The element itself is
 /// identical wherever it appears, so its owner has to be tracked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -406,42 +440,121 @@ struct ChartExParser {
     legend: LegendState,
     sp: SpPrState,
     print: PrintSettingsState,
-    // Opaque subtrees: raw byte capture, and skipping.
-    geo_cache_writer: Option<Writer<Cursor<Vec<u8>>>>,
-    geo_cache_depth: u32,
-    vc_capturing_tag: Option<String>,
-    vc_writer: Option<Writer<Cursor<Vec<u8>>>>,
-    vc_depth: u32,
-    skip_depth: u32,
-    skipping: bool,
+    /// The open opaque subtree, if any.
+    opaque: Option<Opaque>,
 }
 
 impl ChartExParser {
-    /// A raw-capture region reproduces source bytes, so while one is
-    /// open the driver must not split a self-closing element.
-    fn in_raw_capture(&self) -> bool {
-        self.geo_cache_writer.is_some() || self.vc_writer.is_some()
+    /// Begin dropping a subtree we do not model.
+    fn begin_skip(&mut self) {
+        self.opaque = Some(Opaque::Skip { depth: 1 });
+    }
+
+    /// Begin keeping a subtree verbatim, opener included.
+    fn begin_capture(&mut self, dest: CaptureDest, opener: &BytesStart) {
+        let mut writer = Writer::new(Cursor::new(Vec::new()));
+        let _ = writer.write_event(Event::Start(opener.borrow()));
+        self.opaque = Some(Opaque::Capture {
+            dest,
+            depth: 1,
+            writer,
+        });
+    }
+
+    /// Offer an event to the open opaque subtree. Returns whether it was
+    /// swallowed, in which case no handler sees it.
+    fn consume_opaque(&mut self, event: &Event) -> bool {
+        let Some(region) = self.opaque.as_mut() else {
+            return false;
+        };
+        let depth = match region {
+            Opaque::Skip { depth } => depth,
+            Opaque::Capture { depth, writer, .. } => {
+                // Every event kind, so a capture replays its source
+                // exactly - comments and CDATA included.
+                let _ = writer.write_event(event.clone());
+                depth
+            }
+        };
+        let closed = match event {
+            Event::Start(_) => {
+                *depth += 1;
+                false
+            }
+            Event::End(_) => {
+                *depth -= 1;
+                *depth == 0
+            }
+            _ => false,
+        };
+        if closed {
+            self.end_opaque();
+        }
+        true
+    }
+
+    /// Close the opaque subtree and store what it captured.
+    fn end_opaque(&mut self) {
+        // The element that opened the subtree was counted by the spPr
+        // depth bookkeeping; its subtree ends here. It cannot close the
+        // spPr itself, since the spPr's own start put the depth at 1
+        // before the opener raised it.
+        if self.sp.open {
+            self.sp.depth = self.sp.depth.saturating_sub(1);
+        }
+        let Some(Opaque::Capture { dest, writer, .. }) = self.opaque.take() else {
+            return;
+        };
+        let bytes = writer.into_inner().into_inner();
+        match dest {
+            CaptureDest::GeoCache => {
+                if let Some(geo) = self.layout.pr.geography.as_mut() {
+                    geo.raw_geo_cache = Some(bytes);
+                }
+            }
+            CaptureDest::ValueColor(slot) => {
+                if let Some(vc) = self.series.value_colors.as_mut() {
+                    match slot {
+                        ValueColorSlot::Min => vc.min_color = Some(bytes),
+                        ValueColorSlot::Mid => vc.mid_color = Some(bytes),
+                        ValueColorSlot::Max => vc.max_color = Some(bytes),
+                    }
+                }
+            }
+        }
+    }
+
+    /// Handle one event from the reader.
+    fn handle(&mut self, event: &Event) {
+        if let Some(end) = self.dispatch(event) {
+            // `<x/>` is `<x></x>`, so a self-closing element is a start
+            // followed by an end; the synthesized end cannot itself be
+            // self-closing, so this cannot recur.
+            self.dispatch(&Event::End(end));
+        }
+    }
+
+    /// Route one event, returning the end to synthesize when the event
+    /// was a self-closing element.
+    fn dispatch(&mut self, event: &Event) -> Option<BytesEnd<'static>> {
+        if self.consume_opaque(event) {
+            return None;
+        }
+        match event {
+            Event::Start(e) => self.on_start(e),
+            Event::Empty(e) => {
+                let end = BytesEnd::new(String::from_utf8_lossy(e.name().as_ref()).into_owned());
+                self.on_start(e);
+                return Some(end);
+            }
+            Event::Text(e) => self.on_text(e),
+            Event::End(e) => self.on_end(e),
+            _ => {}
+        }
+        None
     }
 
     fn on_start(&mut self, e: &BytesStart) {
-        // geoCache raw capture
-        if let Some(ref mut w) = self.geo_cache_writer {
-            let _ = w.write_event(Event::Start(e.clone().into_owned()));
-            self.geo_cache_depth += 1;
-            return;
-        }
-        // valueColors raw capture
-        if let Some(ref mut w) = self.vc_writer {
-            let _ = w.write_event(Event::Start(e.clone().into_owned()));
-            self.vc_depth += 1;
-            return;
-        }
-        // skip unmodeled
-        if self.skipping {
-            self.skip_depth += 1;
-            return;
-        }
-
         let local = e.name().local_name();
         let tag = local.as_ref();
 
@@ -803,10 +916,7 @@ impl ChartExParser {
                 self.layout.pr.geography = Some(geo);
             }
             b"geoCache" if self.layout.in_geography => {
-                let mut w = Writer::new(Cursor::new(Vec::new()));
-                let _ = w.write_event(Event::Start(e.clone().into_owned()));
-                self.geo_cache_depth = 1;
-                self.geo_cache_writer = Some(w);
+                self.begin_capture(CaptureDest::GeoCache, e);
             }
             b"statistics" if self.layout.open => {
                 self.layout.in_statistics = true;
@@ -839,15 +949,13 @@ impl ChartExParser {
                 self.series.in_value_colors = true;
                 self.series.value_colors = Some(ChartExValueColors::default());
             }
-            b"minColor" | b"midColor" | b"maxColor"
-                if self.series.in_value_colors && self.vc_writer.is_none() =>
-            {
-                let tag_name = std::str::from_utf8(tag).unwrap_or("").to_string();
-                self.vc_capturing_tag = Some(tag_name);
-                let mut w = Writer::new(Cursor::new(Vec::new()));
-                let _ = w.write_event(Event::Start(e.clone().into_owned()));
-                self.vc_depth = 1;
-                self.vc_writer = Some(w);
+            b"minColor" | b"midColor" | b"maxColor" if self.series.in_value_colors => {
+                let slot = match tag {
+                    b"minColor" => ValueColorSlot::Min,
+                    b"midColor" => ValueColorSlot::Mid,
+                    _ => ValueColorSlot::Max,
+                };
+                self.begin_capture(CaptureDest::ValueColor(slot), e);
             }
             b"valueColorPositions" if self.series.open => {
                 self.color_pos.open = true;
@@ -1061,26 +1169,7 @@ impl ChartExParser {
                     }
                 }
             }
-            b"txPr" => {
-                self.skipping = true;
-                self.skip_depth = 1;
-            }
-            b"rich" => {
-                self.skipping = true;
-                self.skip_depth = 1;
-            }
-            b"clrMapOvr" => {
-                self.skipping = true;
-                self.skip_depth = 1;
-            }
-            b"fmtOvrs" => {
-                self.skipping = true;
-                self.skip_depth = 1;
-            }
-            b"extLst" => {
-                self.skipping = true;
-                self.skip_depth = 1;
-            }
+            b"txPr" | b"rich" | b"clrMapOvr" | b"fmtOvrs" | b"extLst" => self.begin_skip(),
             // Handling merged from the former separate arm for
             // empty elements, which a self-closing element no
             // longer reaches.
@@ -1284,28 +1373,7 @@ impl ChartExParser {
         }
     }
 
-    fn on_empty(&mut self, e: &BytesStart) {
-        // Only reached inside a raw-capture region; everywhere
-        // else the read site split the element into start + end.
-        if let Some(ref mut w) = self.geo_cache_writer {
-            let _ = w.write_event(Event::Empty(e.clone().into_owned()));
-        } else if let Some(ref mut w) = self.vc_writer {
-            let _ = w.write_event(Event::Empty(e.clone().into_owned()));
-        }
-    }
-
     fn on_text(&mut self, e: &BytesText) {
-        if let Some(ref mut w) = self.geo_cache_writer {
-            let _ = w.write_event(Event::Text(e.clone().into_owned()));
-            return;
-        }
-        if let Some(ref mut w) = self.vc_writer {
-            let _ = w.write_event(Event::Text(e.clone().into_owned()));
-            return;
-        }
-        if self.skipping {
-            return;
-        }
         if let Ok(text) = e.unescape() {
             let t = text.as_ref();
             if self.data.in_f {
@@ -1353,55 +1421,6 @@ impl ChartExParser {
     }
 
     fn on_end(&mut self, e: &BytesEnd) {
-        // geoCache raw capture
-        if let Some(ref mut w) = self.geo_cache_writer {
-            self.geo_cache_depth -= 1;
-            let _ = w.write_event(Event::End(e.clone().into_owned()));
-            if self.geo_cache_depth == 0 {
-                if let Some(w) = self.geo_cache_writer.take() {
-                    if let Some(ref mut geo) = self.layout.pr.geography {
-                        geo.raw_geo_cache = Some(w.into_inner().into_inner());
-                    }
-                }
-            }
-            return;
-        }
-        // valueColor capture
-        if let Some(ref mut w) = self.vc_writer {
-            self.vc_depth -= 1;
-            let _ = w.write_event(Event::End(e.clone().into_owned()));
-            if self.vc_depth == 0 {
-                if let Some(w) = self.vc_writer.take() {
-                    let bytes = w.into_inner().into_inner();
-                    if let Some(ref mut vc) = self.series.value_colors {
-                        match self.vc_capturing_tag.as_deref() {
-                            Some("minColor") => vc.min_color = Some(bytes),
-                            Some("midColor") => vc.mid_color = Some(bytes),
-                            Some("maxColor") => vc.max_color = Some(bytes),
-                            _ => {}
-                        }
-                    }
-                    self.vc_capturing_tag = None;
-                }
-            }
-            return;
-        }
-        if self.skipping {
-            self.skip_depth -= 1;
-            if self.skip_depth == 0 {
-                self.skipping = false;
-                // The element that opened this skip region was
-                // counted by the spPr depth bookkeeping; its
-                // subtree ends here. It cannot close the spPr
-                // itself, since the spPr's own start put the
-                // depth at 1 before the opener raised it.
-                if self.sp.open {
-                    self.sp.depth = self.sp.depth.saturating_sub(1);
-                }
-            }
-            return;
-        }
-
         let local = e.name().local_name();
         let tag = local.as_ref();
         match tag {
@@ -1770,44 +1789,17 @@ fn parse_chart_ex_xml_inner<R: Read>(
     buf: &mut Vec<u8>,
 ) -> ChartParseResult<ParsedChartEx> {
     let mut parser = ChartExParser::default();
-    // `<x/>` and `<x></x>` are the same document, so a self-closing
-    // element is split into the start and end its expanded form would
-    // produce and handled by one code path; keeping two let them drift.
-    // Elements inside a raw-capture region are exempt so the captured
-    // bytes match the source (a self-closing capture *opener* is still
-    // split, since the capture starts after it).
-    let mut pending_end: Option<Event<'static>> = None;
-
 
     loop {
-        let event: Event<'static> = match pending_end.take() {
-            Some(end) => end,
-            None => {
-                let read = match xml_reader.read_event_into(buf) {
-                    Ok(ev) => ev.into_owned(),
-                    Err(e) => return Err(ChartParseError::Xml(e)),
-                };
-                buf.clear();
-                match read {
-                    Event::Empty(e) if !parser.in_raw_capture() => {
-                        pending_end = Some(Event::End(BytesEnd::new(
-                            String::from_utf8_lossy(e.name().as_ref()).into_owned(),
-                        )));
-                        Event::Start(e)
-                    }
-                    other => other,
-                }
-            }
+        buf.clear();
+        let event = match xml_reader.read_event_into(buf) {
+            Ok(ev) => ev,
+            Err(e) => return Err(ChartParseError::Xml(e)),
         };
-
-        match event {
-            Event::Start(ref e) => parser.on_start(e),
-            Event::Empty(ref e) => parser.on_empty(e),
-            Event::Text(ref e) => parser.on_text(e),
-            Event::End(ref e) => parser.on_end(e),
-            Event::Eof => break,
-            _ => {}
+        if matches!(event, Event::Eof) {
+            break;
         }
+        parser.handle(&event);
     }
 
     Ok(parser.finish())
