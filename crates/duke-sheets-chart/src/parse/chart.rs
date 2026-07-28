@@ -354,6 +354,14 @@ fn parse_chart_xml_inner<R: Read>(
     let mut had_manual_layout = false;
     let mut manual_layout = ManualLayout::default();
 
+    // An extLst is kept as bytes rather than read. Swallowing it through
+    // the main loop, rather than a nested one that takes the reader,
+    // keeps every event on a single path - which is what lets a
+    // self-closing element be split into a start and an end safely.
+    let mut ext_writer: Option<Writer<Cursor<Vec<u8>>>> = None;
+    let mut ext_depth = 0u32;
+    let mut ext_dest = ExtLstDest::ChartSpace;
+
     // Shape properties state
     let mut in_sp_pr = false;
     let mut sp_pr_depth = 0u32;
@@ -373,6 +381,46 @@ fn parse_chart_xml_inner<R: Read>(
 
     loop {
         match xml_reader.read_event_into(buf) {
+            Ok(ref ev) if ext_writer.is_some() => {
+                let done = match ev {
+                    Event::Start(_) => {
+                        ext_depth += 1;
+                        false
+                    }
+                    Event::End(_) => {
+                        ext_depth -= 1;
+                        ext_depth == 0
+                    }
+                    Event::Eof => true,
+                    _ => false,
+                };
+                if let Some(w) = ext_writer.as_mut() {
+                    if !matches!(ev, Event::Eof) {
+                        w.write_event(ev.clone())?;
+                    }
+                }
+                if done {
+                    if let Some(w) = ext_writer.take() {
+                        let raw = w.into_inner().into_inner();
+                        match ext_dest {
+                            ExtLstDest::Series => ser_raw_ext = Some(raw),
+                            ExtLstDest::Axis => ax_raw_ext = Some(raw),
+                            ExtLstDest::TypeGroup => group_raw_ext = Some(raw),
+                            ExtLstDest::Chart => {
+                                result.raw_extensions.insert("chart".into(), raw);
+                            }
+                            ExtLstDest::PlotArea => {
+                                result.raw_extensions.insert("plotArea".into(), raw);
+                            }
+                            ExtLstDest::ChartSpace => {
+                                result.raw_extensions.insert("chartSpace".into(), raw);
+                            }
+                        }
+                    }
+                }
+                buf.clear();
+                continue;
+            }
             Ok(Event::Start(e)) => {
                 let local = e.name().local_name();
                 let tag = local.as_ref();
@@ -723,21 +771,23 @@ fn parse_chart_xml_inner<R: Read>(
                     b"solidFill" if in_sp_pr && !in_sp_ln => sp_pr_depth += 1,
                     b"solidFill" if in_sp_ln => sp_pr_depth += 1,
                     b"extLst" => {
-                        if let Some(raw) = capture_extlst(xml_reader, &e)? {
-                            if in_ser {
-                                ser_raw_ext = Some(raw);
-                            } else if in_cat_ax || in_val_ax || in_ser_ax {
-                                ax_raw_ext = Some(raw);
-                            } else if in_chart_type_element {
-                                group_raw_ext = Some(raw);
-                            } else if in_chart && !in_plot_area {
-                                result.raw_extensions.insert("chart".into(), raw);
-                            } else if in_plot_area {
-                                result.raw_extensions.insert("plotArea".into(), raw);
-                            } else {
-                                result.raw_extensions.insert("chartSpace".into(), raw);
-                            }
-                        }
+                        ext_dest = if in_ser {
+                            ExtLstDest::Series
+                        } else if in_cat_ax || in_val_ax || in_ser_ax {
+                            ExtLstDest::Axis
+                        } else if in_chart_type_element {
+                            ExtLstDest::TypeGroup
+                        } else if in_chart && !in_plot_area {
+                            ExtLstDest::Chart
+                        } else if in_plot_area {
+                            ExtLstDest::PlotArea
+                        } else {
+                            ExtLstDest::ChartSpace
+                        };
+                        let mut w = Writer::new(Cursor::new(Vec::new()));
+                        w.write_event(Event::Start(e.to_owned()))?;
+                        ext_depth = 1;
+                        ext_writer = Some(w);
                     }
                     _ => {
                         if in_chart_title {
@@ -1696,37 +1746,15 @@ fn parse_chart_xml_inner<R: Read>(
     Ok(result)
 }
 
-/// Capture an entire `<c:extLst>...</c:extLst>` element as raw XML bytes.
-/// The Start event for `extLst` has already been read; we write it plus all
-/// inner events until the matching End into a buffer.
-fn capture_extlst<R: Read>(
-    xml_reader: &mut Reader<BufReader<R>>,
-    start_event: &quick_xml::events::BytesStart,
-) -> ChartParseResult<Option<Vec<u8>>> {
-    let mut writer = Writer::new(Cursor::new(Vec::new()));
-    writer.write_event(Event::Start(start_event.to_owned()))?;
-
-    let mut depth: u32 = 1;
-    let mut read_buf = Vec::new();
-    loop {
-        read_buf.clear();
-        match xml_reader.read_event_into(&mut read_buf) {
-            Ok(ref ev @ Event::Start(_)) => {
-                depth += 1;
-                writer.write_event(ev.clone())?;
-            }
-            Ok(ref ev @ Event::End(_)) => {
-                depth -= 1;
-                writer.write_event(ev.clone())?;
-                if depth == 0 {
-                    return Ok(Some(writer.into_inner().into_inner()));
-                }
-            }
-            Ok(Event::Eof) => return Ok(None),
-            Ok(ref ev) => writer.write_event(ev.clone())?,
-            Err(e) => return Err(ChartParseError::Xml(e)),
-        }
-    }
+/// Where a captured `c:extLst` belongs, decided when it opens.
+#[derive(Debug, Clone, Copy)]
+enum ExtLstDest {
+    Series,
+    Axis,
+    TypeGroup,
+    Chart,
+    PlotArea,
+    ChartSpace,
 }
 
 fn resolve_chart_type(
