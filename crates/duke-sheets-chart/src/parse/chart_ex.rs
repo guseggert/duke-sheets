@@ -38,7 +38,7 @@ pub fn parse_chart_ex_xml<R: Read>(reader: R) -> ChartParseResult<ChartEx> {
         feature_list: parsed.feature_list,
         fallback_img: parsed.fallback_img,
         external_data: parsed.external_data,
-        extensions: None,
+        extensions: parsed.extensions,
     })
 }
 
@@ -50,6 +50,7 @@ struct ParsedChartEx {
     legend: Option<ChartExLegend>,
     shape_properties: Option<ChartShapeProperties>,
     text_properties: Option<Vec<u8>>,
+    extensions: Option<Vec<u8>>,
     color_map_override: Option<Vec<u8>>,
     format_overrides: Vec<ChartExFormatOverride>,
     print_settings: Option<ChartExPrintSettings>,
@@ -73,6 +74,31 @@ enum CaptureDest {
     Rich(RichOwner),
     /// A `cx:txPr` text body, which belongs to the element holding it.
     TextProperties(TxPrOwner),
+    /// A `cx:extLst`, which belongs to the element holding it.
+    Extensions(ExtLstOwner),
+}
+
+/// Every element the model can carry a `cx:extLst` for. Elements the
+/// model does not represent as their own type - `cx:chart`,
+/// `cx:chartData`, `cx:plotAreaRegion`, gridlines, tick marks and
+/// labels, the plot surface - have nowhere to keep one, so theirs is
+/// still dropped.
+#[derive(Debug, Clone, Copy)]
+enum ExtLstOwner {
+    ChartSpace,
+    ChartTitle,
+    PlotArea,
+    Data,
+    Series,
+    LayoutPr,
+    Axis,
+    AxisTitle,
+    AxisUnits,
+    Legend,
+    DataLabels,
+    DataLabel,
+    DataPoint,
+    FormatOverride,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -176,6 +202,7 @@ struct DataState {
     in_lvl_pt: bool,
     lvl_pt_idx: u32,
     in_lvl_pt_text: bool,
+    ext: Option<Vec<u8>>,
 }
 
 impl Default for DataState {
@@ -203,6 +230,7 @@ impl Default for DataState {
             in_lvl_pt: false,
             lvl_pt_idx: 0,
             in_lvl_pt_text: false,
+            ext: None,
         }
     }
 }
@@ -223,6 +251,7 @@ struct TitleState {
     sp: Option<ChartShapeProperties>,
     offset: Option<ChartExOffset>,
     txpr: Option<Vec<u8>>,
+    ext: Option<Vec<u8>>,
 }
 
 /// The `cx:series` being read.
@@ -250,6 +279,7 @@ struct SeriesState {
     tx_value: Option<String>,
     tx_formula: Option<String>,
     tx_rich: Option<Vec<u8>>,
+    ext: Option<Vec<u8>>,
     in_data_id: bool,
     in_axis_id: bool,
     in_value_colors: bool,
@@ -280,6 +310,7 @@ impl Default for SeriesState {
             tx_value: None,
             tx_formula: None,
             tx_rich: None,
+            ext: None,
             in_data_id: false,
             in_axis_id: false,
             in_value_colors: false,
@@ -302,6 +333,7 @@ struct DataLabelsState {
     overrides: Vec<ChartExDataLabel>,
     hidden: Vec<u32>,
     txpr: Option<Vec<u8>>,
+    ext: Option<Vec<u8>>,
 }
 
 /// A per-point `cx:dataLabel` override.
@@ -318,6 +350,7 @@ struct LabelOverrideState {
     sp: Option<ChartShapeProperties>,
     in_separator: bool,
     txpr: Option<Vec<u8>>,
+    ext: Option<Vec<u8>>,
 }
 
 /// A `cx:dataPt`.
@@ -326,6 +359,7 @@ struct DataPointState {
     open: bool,
     idx: u32,
     sp: Option<ChartShapeProperties>,
+    ext: Option<Vec<u8>>,
 }
 
 /// `cx:layoutPr` and the layout-specific child being read.
@@ -378,6 +412,9 @@ struct AxisState {
     title_rich: Option<Vec<u8>>,
     title_txpr: Option<Vec<u8>>,
     txpr: Option<Vec<u8>>,
+    title_ext: Option<Vec<u8>>,
+    units_ext: Option<Vec<u8>>,
+    ext: Option<Vec<u8>>,
     in_units: bool,
     units_unit: Option<String>,
     in_major_gridlines: bool,
@@ -412,6 +449,9 @@ impl Default for AxisState {
             title_rich: None,
             title_txpr: None,
             txpr: None,
+            title_ext: None,
+            units_ext: None,
+            ext: None,
             in_units: false,
             units_unit: None,
             in_major_gridlines: false,
@@ -430,6 +470,7 @@ struct LegendState {
     sp: Option<ChartShapeProperties>,
     offset: Option<ChartExOffset>,
     txpr: Option<Vec<u8>>,
+    ext: Option<Vec<u8>>,
 }
 
 /// The `cx:spPr` subtree being read and what it belongs to.
@@ -454,6 +495,7 @@ struct FormatOverrideState {
     open: bool,
     idx: u32,
     sp: Option<ChartShapeProperties>,
+    ext: Option<Vec<u8>>,
 }
 
 /// `cx:printSettings`.
@@ -584,6 +626,22 @@ impl ChartExParser {
                 TxPrOwner::Legend => self.legend.txpr = Some(bytes),
                 TxPrOwner::DataLabels => self.labels.txpr = Some(bytes),
                 TxPrOwner::DataLabel => self.label.txpr = Some(bytes),
+            },
+            CaptureDest::Extensions(owner) => match owner {
+                ExtLstOwner::ChartSpace => self.result.extensions = Some(bytes),
+                ExtLstOwner::ChartTitle => self.title.ext = Some(bytes),
+                ExtLstOwner::PlotArea => self.result.plot_area.extensions = Some(bytes),
+                ExtLstOwner::Data => self.data.ext = Some(bytes),
+                ExtLstOwner::Series => self.series.ext = Some(bytes),
+                ExtLstOwner::LayoutPr => self.layout.pr.extensions = Some(bytes),
+                ExtLstOwner::Axis => self.axis.ext = Some(bytes),
+                ExtLstOwner::AxisTitle => self.axis.title_ext = Some(bytes),
+                ExtLstOwner::AxisUnits => self.axis.units_ext = Some(bytes),
+                ExtLstOwner::Legend => self.legend.ext = Some(bytes),
+                ExtLstOwner::DataLabels => self.labels.ext = Some(bytes),
+                ExtLstOwner::DataLabel => self.label.ext = Some(bytes),
+                ExtLstOwner::DataPoint => self.data_pt.ext = Some(bytes),
+                ExtLstOwner::FormatOverride => self.fmt_ovr.ext = Some(bytes),
             },
             CaptureDest::Rich(owner) => match owner {
                 RichOwner::ChartTitle => self.title.rich = Some(bytes),
@@ -1294,7 +1352,43 @@ impl ChartExParser {
                 };
                 self.begin_capture(CaptureDest::TextProperties(owner), e);
             }
-            b"extLst" => self.begin_skip(),
+            // A cx:extLst belongs to the chartEx element holding it. An
+            // a:extLst inside a cx:spPr is DrawingML's own extension
+            // list and is not one of these; the parser matches on local
+            // names, so the containing spPr is what tells them apart.
+            b"extLst" if self.sp.open => self.begin_skip(),
+            b"extLst" => {
+                let owner = if self.label.open {
+                    ExtLstOwner::DataLabel
+                } else if self.labels.open {
+                    ExtLstOwner::DataLabels
+                } else if self.data_pt.open {
+                    ExtLstOwner::DataPoint
+                } else if self.layout.open {
+                    ExtLstOwner::LayoutPr
+                } else if self.series.open {
+                    ExtLstOwner::Series
+                } else if self.axis.in_title {
+                    ExtLstOwner::AxisTitle
+                } else if self.axis.in_units {
+                    ExtLstOwner::AxisUnits
+                } else if self.axis.open {
+                    ExtLstOwner::Axis
+                } else if self.pos.plot_area {
+                    ExtLstOwner::PlotArea
+                } else if self.legend.open {
+                    ExtLstOwner::Legend
+                } else if self.title.open {
+                    ExtLstOwner::ChartTitle
+                } else if self.fmt_ovr.open {
+                    ExtLstOwner::FormatOverride
+                } else if self.data.open {
+                    ExtLstOwner::Data
+                } else {
+                    ExtLstOwner::ChartSpace
+                };
+                self.begin_capture(CaptureDest::Extensions(owner), e);
+            }
             // Handling merged from the former separate arm for
             // empty elements, which a self-closing element no
             // longer reaches.
@@ -1555,7 +1649,7 @@ impl ChartExParser {
                 self.result.data.push(ChartExData {
                     id: self.data.id,
                     dimensions: std::mem::take(&mut self.data.dims),
-                    extensions: None,
+                    extensions: self.data.ext.take(),
                 });
                 self.data.open = false;
             }
@@ -1620,7 +1714,7 @@ impl ChartExParser {
                     offset: self.axis.title_offset.take(),
                     shape_properties: self.axis.title_sp.take(),
                     text_properties: self.axis.title_txpr.take(),
-                    extensions: None,
+                    extensions: self.axis.title_ext.take(),
                 };
                 self.axis.title = Some(title);
                 self.axis.in_title = false;
@@ -1638,7 +1732,7 @@ impl ChartExParser {
                     offset: self.title.offset.take(),
                     shape_properties: self.title.sp.take(),
                     text_properties: self.title.txpr.take(),
-                    extensions: None,
+                    extensions: self.title.ext.take(),
                 });
                 self.title.open = false;
                 self.title.in_tx = false;
@@ -1667,7 +1761,7 @@ impl ChartExParser {
                     value_colors: self.series.value_colors.take(),
                     value_color_positions: self.series.value_color_positions.take(),
                     shape_properties: self.series.shape_properties.take(),
-                    extensions: None,
+                    extensions: self.series.ext.take(),
                 };
                 self.result.plot_area.series.push(series);
                 self.series.open = false;
@@ -1705,7 +1799,7 @@ impl ChartExParser {
                     overrides: std::mem::take(&mut self.labels.overrides),
                     hidden_labels: std::mem::take(&mut self.labels.hidden),
                     text_properties: self.labels.txpr.take(),
-                    extensions: None,
+                    extensions: self.labels.ext.take(),
                 });
                 self.labels.open = false;
             }
@@ -1720,7 +1814,7 @@ impl ChartExParser {
                     separator: self.label.separator.take(),
                     shape_properties: self.label.sp.take(),
                     text_properties: self.label.txpr.take(),
-                    extensions: None,
+                    extensions: self.label.ext.take(),
                 });
                 self.label.open = false;
             }
@@ -1730,7 +1824,7 @@ impl ChartExParser {
                 self.series.data_points.push(ChartExDataPoint {
                     idx: self.data_pt.idx,
                     shape_properties: self.data_pt.sp.take(),
-                    extensions: None,
+                    extensions: self.data_pt.ext.take(),
                 });
                 self.data_pt.open = false;
             }
@@ -1770,7 +1864,7 @@ impl ChartExParser {
                     number_format: self.axis.num_fmt.take(),
                     shape_properties: self.axis.shape_properties.take(),
                     text_properties: self.axis.txpr.take(),
-                    extensions: None,
+                    extensions: self.axis.ext.take(),
                 });
                 self.axis.open = false;
                 self.axis.in_cat_scaling = false;
@@ -1785,7 +1879,7 @@ impl ChartExParser {
                 self.axis.units = Some(ChartExAxisUnits {
                     unit: self.axis.units_unit.take(),
                     label: None,
-                    extensions: None,
+                    extensions: self.axis.units_ext.take(),
                 });
                 self.axis.in_units = false;
             }
@@ -1795,7 +1889,7 @@ impl ChartExParser {
                 self.result.format_overrides.push(ChartExFormatOverride {
                     idx: self.fmt_ovr.idx,
                     shape_properties: self.fmt_ovr.sp.take(),
-                    extensions: None,
+                    extensions: self.fmt_ovr.ext.take(),
                 });
                 self.fmt_ovr.open = false;
             }
@@ -1807,7 +1901,7 @@ impl ChartExParser {
                     offset: self.legend.offset.take(),
                     shape_properties: self.legend.sp.take(),
                     text_properties: self.legend.txpr.take(),
-                    extensions: None,
+                    extensions: self.legend.ext.take(),
                 });
                 self.legend.open = false;
             }
