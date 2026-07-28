@@ -57,7 +57,12 @@ struct ParsedChart {
 pub fn parse_chart_xml<R: Read>(reader: R) -> ChartParseResult<Chart> {
     let buf_reader = BufReader::new(reader);
     let mut xml_reader = Reader::from_reader(buf_reader);
-    xml_reader.config_mut().trim_text(true);
+    // Whitespace inside a text-bearing element is part of the value: a
+    // category can be named " Q1 " and a label separator can be " | ".
+    // The handlers below only take text while one of them is open, so
+    // the indentation between elements is ignored without trimming it
+    // away.
+    xml_reader.config_mut().trim_text(false);
 
     let mut buf = Vec::new();
     let parsed = parse_chart_xml_inner(&mut xml_reader, &mut buf)?;
@@ -117,6 +122,15 @@ enum SpPrContext {
     UpBars,
     DownBars,
     LeaderLines,
+}
+
+/// Append to a text target. A single element's content can arrive as
+/// more than one event, so assigning would keep only the last piece.
+fn push_text(slot: &mut Option<String>, t: &str) {
+    match slot {
+        Some(existing) => existing.push_str(t),
+        None => *slot = Some(t.to_string()),
+    }
 }
 
 fn parse_chart_xml_inner<R: Read>(
@@ -1060,23 +1074,23 @@ fn parse_chart_xml_inner<R: Read>(
                     } else if in_title_str_ref_f {
                         title_text.push_str(text_str);
                     } else if in_ser_tx_str_ref_f {
-                        ser_name = Some(text_str.to_string());
+                        push_text(&mut ser_name, text_str);
                     } else if in_ser_tx_v {
-                        ser_name = Some(text_str.to_string());
+                        push_text(&mut ser_name, text_str);
                     } else if in_ser_val_num_ref_f {
-                        ser_val_formula = Some(text_str.to_string());
+                        push_text(&mut ser_val_formula, text_str);
                     } else if in_ser_val_pt_v {
                         if let Ok(v) = text_str.parse::<f64>() {
                             ser_val_cache.push(v);
                         }
                     } else if in_ser_cat_ref_f {
-                        ser_cat_formula = Some(text_str.to_string());
+                        push_text(&mut ser_cat_formula, text_str);
                     } else if in_ax_title_t {
                         ax_title_text.push_str(text_str);
                     } else if in_trendline_name {
-                        trendline_name = Some(text_str.to_string());
+                        push_text(&mut trendline_name, text_str);
                     } else if in_dlbls_separator {
-                        dlbls.separator = Some(text_str.to_string());
+                        push_text(&mut dlbls.separator, text_str);
                     }
                 }
             }
