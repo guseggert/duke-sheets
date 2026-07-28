@@ -93,6 +93,7 @@ enum ExtLstOwner {
     LayoutPr,
     Axis,
     AxisTitle,
+    AxisUnitsLabel,
     AxisUnits,
     Legend,
     DataLabels,
@@ -107,6 +108,7 @@ enum TxPrOwner {
     ChartTitle,
     Axis,
     AxisTitle,
+    AxisUnitsLabel,
     Legend,
     DataLabels,
     DataLabel,
@@ -116,6 +118,7 @@ enum TxPrOwner {
 enum RichOwner {
     ChartTitle,
     AxisTitle,
+    AxisUnitsLabel,
     SeriesText,
 }
 
@@ -156,6 +159,7 @@ enum SpCtx {
     Legend,
     Axis,
     AxisTitle,
+    AxisUnitsLabel,
     Title,
     MajorGrid,
     MinorGrid,
@@ -414,6 +418,16 @@ struct AxisState {
     txpr: Option<Vec<u8>>,
     title_ext: Option<Vec<u8>>,
     units_ext: Option<Vec<u8>>,
+    in_units_label: bool,
+    units_label_text: Option<String>,
+    units_label_rich: Option<Vec<u8>>,
+    units_label_sp: Option<ChartShapeProperties>,
+    units_label_txpr: Option<Vec<u8>>,
+    units_label_ext: Option<Vec<u8>>,
+    units_label: Option<ChartExAxisUnitsLabel>,
+    in_units_label_tx: bool,
+    in_units_label_tx_data: bool,
+    in_units_label_tx_data_v: bool,
     ext: Option<Vec<u8>>,
     in_units: bool,
     units_unit: Option<String>,
@@ -451,6 +465,16 @@ impl Default for AxisState {
             txpr: None,
             title_ext: None,
             units_ext: None,
+            in_units_label: false,
+            units_label_text: None,
+            units_label_rich: None,
+            units_label_sp: None,
+            units_label_txpr: None,
+            units_label_ext: None,
+            units_label: None,
+            in_units_label_tx: false,
+            in_units_label_tx_data: false,
+            in_units_label_tx_data_v: false,
             ext: None,
             in_units: false,
             units_unit: None,
@@ -623,6 +647,7 @@ impl ChartExParser {
                 TxPrOwner::ChartTitle => self.title.txpr = Some(bytes),
                 TxPrOwner::Axis => self.axis.txpr = Some(bytes),
                 TxPrOwner::AxisTitle => self.axis.title_txpr = Some(bytes),
+                TxPrOwner::AxisUnitsLabel => self.axis.units_label_txpr = Some(bytes),
                 TxPrOwner::Legend => self.legend.txpr = Some(bytes),
                 TxPrOwner::DataLabels => self.labels.txpr = Some(bytes),
                 TxPrOwner::DataLabel => self.label.txpr = Some(bytes),
@@ -636,6 +661,7 @@ impl ChartExParser {
                 ExtLstOwner::LayoutPr => self.layout.pr.extensions = Some(bytes),
                 ExtLstOwner::Axis => self.axis.ext = Some(bytes),
                 ExtLstOwner::AxisTitle => self.axis.title_ext = Some(bytes),
+                ExtLstOwner::AxisUnitsLabel => self.axis.units_label_ext = Some(bytes),
                 ExtLstOwner::AxisUnits => self.axis.units_ext = Some(bytes),
                 ExtLstOwner::Legend => self.legend.ext = Some(bytes),
                 ExtLstOwner::DataLabels => self.labels.ext = Some(bytes),
@@ -646,6 +672,7 @@ impl ChartExParser {
             CaptureDest::Rich(owner) => match owner {
                 RichOwner::ChartTitle => self.title.rich = Some(bytes),
                 RichOwner::AxisTitle => self.axis.title_rich = Some(bytes),
+                RichOwner::AxisUnitsLabel => self.axis.units_label_rich = Some(bytes),
                 RichOwner::SeriesText => self.series.tx_rich = Some(bytes),
             },
         }
@@ -1186,6 +1213,17 @@ impl ChartExParser {
                     }
                 }
             }
+            b"unitsLabel" if self.axis.in_units => {
+                self.axis.in_units_label = true;
+                self.axis.units_label_text = None;
+                self.axis.units_label_rich = None;
+                self.axis.units_label_sp = None;
+                self.axis.units_label_txpr = None;
+                self.axis.units_label_ext = None;
+            }
+            b"tx" if self.axis.in_units_label => self.axis.in_units_label_tx = true,
+            b"txData" if self.axis.in_units_label_tx => self.axis.in_units_label_tx_data = true,
+            b"v" if self.axis.in_units_label_tx_data => self.axis.in_units_label_tx_data_v = true,
             b"majorGridlines" if self.axis.open => {
                 self.axis.in_major_gridlines = true;
                 self.axis.major_gridlines = Some(ChartExGridlines::default());
@@ -1267,6 +1305,8 @@ impl ChartExParser {
                     self.sp.ctx = SpCtx::MajorGrid;
                 } else if self.axis.in_minor_gridlines {
                     self.sp.ctx = SpCtx::MinorGrid;
+                } else if self.axis.in_units_label {
+                    self.sp.ctx = SpCtx::AxisUnitsLabel;
                 } else if self.axis.in_title {
                     self.sp.ctx = SpCtx::AxisTitle;
                 } else if self.axis.open {
@@ -1317,7 +1357,9 @@ impl ChartExParser {
                 }
             }
             b"rich" => {
-                let owner = if self.axis.in_title {
+                let owner = if self.axis.in_units_label {
+                    RichOwner::AxisUnitsLabel
+                } else if self.axis.in_title {
                     RichOwner::AxisTitle
                 } else if self.series.in_tx {
                     RichOwner::SeriesText
@@ -1335,7 +1377,9 @@ impl ChartExParser {
                 self.fmt_ovr.sp = None;
             }
             b"txPr" => {
-                let owner = if self.label.open {
+                let owner = if self.axis.in_units_label {
+                    TxPrOwner::AxisUnitsLabel
+                } else if self.label.open {
                     TxPrOwner::DataLabel
                 } else if self.labels.open {
                     TxPrOwner::DataLabels
@@ -1358,7 +1402,9 @@ impl ChartExParser {
             // names, so the containing spPr is what tells them apart.
             b"extLst" if self.sp.open => self.begin_skip(),
             b"extLst" => {
-                let owner = if self.label.open {
+                let owner = if self.axis.in_units_label {
+                    ExtLstOwner::AxisUnitsLabel
+                } else if self.label.open {
                     ExtLstOwner::DataLabel
                 } else if self.labels.open {
                     ExtLstOwner::DataLabels
@@ -1617,6 +1663,8 @@ impl ChartExParser {
                 if let Ok(id) = t.parse::<u32>() {
                     self.series.axis_ids.push(id);
                 }
+            } else if self.axis.in_units_label_tx_data_v {
+                self.axis.units_label_text = Some(t.to_string());
             } else if self.axis.in_title_tx_data_v {
                 self.axis.title_text = Some(t.to_string());
             } else if self.label.in_separator {
@@ -1766,6 +1814,13 @@ impl ChartExParser {
                 self.result.plot_area.series.push(series);
                 self.series.open = false;
             }
+            b"v" if self.axis.in_units_label_tx_data_v => {
+                self.axis.in_units_label_tx_data_v = false
+            }
+            b"txData" if self.axis.in_units_label_tx_data => {
+                self.axis.in_units_label_tx_data = false
+            }
+            b"tx" if self.axis.in_units_label_tx => self.axis.in_units_label_tx = false,
             b"tx" if self.series.in_tx => {
                 self.series.text = Some(match self.series.tx_rich.take() {
                     Some(rich) => ChartExText {
@@ -1875,10 +1930,37 @@ impl ChartExParser {
             b"tx" if self.axis.in_title_tx => self.axis.in_title_tx = false,
             b"txData" if self.axis.in_title_tx_data => self.axis.in_title_tx_data = false,
             b"v" if self.axis.in_title_tx_data_v => self.axis.in_title_tx_data_v = false,
+            b"unitsLabel" if self.axis.in_units_label => {
+                self.axis.units_label = Some(ChartExAxisUnitsLabel {
+                    text: match (
+                        self.axis.units_label_text.take(),
+                        self.axis.units_label_rich.take(),
+                    ) {
+                        (_, Some(rich)) => Some(ChartExText {
+                            data: None,
+                            rich: Some(rich),
+                        }),
+                        (Some(t), None) => Some(ChartExText {
+                            data: Some(ChartExTextData {
+                                formula: None,
+                                value: Some(t),
+                            }),
+                            rich: None,
+                        }),
+                        (None, None) => None,
+                    },
+                    shape_properties: self.axis.units_label_sp.take(),
+                    text_properties: self.axis.units_label_txpr.take(),
+                    extensions: self.axis.units_label_ext.take(),
+                });
+                self.axis.in_units_label = false;
+                self.axis.in_units_label_tx = false;
+                self.axis.in_units_label_tx_data = false;
+            }
             b"units" if self.axis.in_units => {
                 self.axis.units = Some(ChartExAxisUnits {
                     unit: self.axis.units_unit.take(),
-                    label: None,
+                    label: self.axis.units_label.take(),
                     extensions: self.axis.units_ext.take(),
                 });
                 self.axis.in_units = false;
@@ -1972,6 +2054,11 @@ impl ChartExParser {
                         SpCtx::Title => {
                             if has {
                                 self.title.sp = Some(props);
+                            }
+                        }
+                        SpCtx::AxisUnitsLabel => {
+                            if has {
+                                self.axis.units_label_sp = Some(props);
                             }
                         }
                         SpCtx::FormatOverride => {
