@@ -1630,6 +1630,32 @@ fn chart_ex_waterfall_authored_by_excel_reads_back() {
         "Excel emits a present but empty cx:subtotals"
     );
 
+    // Excel's own chartEx carries subtrees we keep as bytes rather than
+    // interpret - txPr, extLst, rich text. Writing the model back and
+    // having Excel reopen it is the only check that our replay of those
+    // is something Excel still accepts, so the round trip runs here
+    // rather than asserting on our own reader alone.
+    let mut out = Vec::new();
+    duke_sheets_xlsx::XlsxWriter::write(&wb, std::io::Cursor::new(&mut out))
+        .expect("write the chart Excel authored back out");
+
+    let reopened = temp_fixture();
+    std::fs::write(&reopened.host_path, &out).unwrap();
+    push_file_to_vm(&reopened);
+    {
+        let excel = bridge.lock().unwrap();
+        let opened = excel
+            .open_workbook(&reopened.vm_path)
+            .expect("Excel must reopen the chart it authored after a round trip");
+        let name = opened.name().unwrap_or_default();
+        assert!(
+            !name.contains("Repaired"),
+            "Excel repaired our replay of its own chartEx: {name}"
+        );
+        opened.close().expect("close");
+    }
+    cleanup_fixture(&reopened);
+
     cleanup_fixture(&fixture);
 }
 
