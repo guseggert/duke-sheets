@@ -192,6 +192,7 @@ struct TitleState {
     in_tx_data_f: bool,
     text: Option<String>,
     sp: Option<ChartShapeProperties>,
+    offset: Option<ChartExOffset>,
 }
 
 /// The `cx:series` being read.
@@ -339,6 +340,7 @@ struct AxisState {
     in_title_tx_data_v: bool,
     title_text: Option<String>,
     title_sp: Option<ChartShapeProperties>,
+    title_offset: Option<ChartExOffset>,
     in_units: bool,
     units_unit: Option<String>,
     in_major_gridlines: bool,
@@ -369,6 +371,7 @@ impl Default for AxisState {
             in_title_tx_data_v: false,
             title_text: None,
             title_sp: None,
+            title_offset: None,
             in_units: false,
             units_unit: None,
             in_major_gridlines: false,
@@ -385,6 +388,7 @@ struct LegendState {
     align: Option<String>,
     overlay: Option<bool>,
     sp: Option<ChartShapeProperties>,
+    offset: Option<ChartExOffset>,
 }
 
 /// The `cx:spPr` subtree being read and what it belongs to.
@@ -1169,6 +1173,24 @@ impl ChartExParser {
                     }
                 }
             }
+            b"offset" => {
+                let mut offset = ChartExOffset::default();
+                for attr in e.attributes().flatten() {
+                    let v = attr.unescape_value().ok().and_then(|s| s.parse::<f64>().ok());
+                    match attr.key.local_name().as_ref() {
+                        b"t" => offset.top = v,
+                        b"l" => offset.left = v,
+                        _ => {}
+                    }
+                }
+                if self.axis.in_title {
+                    self.axis.title_offset = Some(offset);
+                } else if self.title.open {
+                    self.title.offset = Some(offset);
+                } else if self.legend.open {
+                    self.legend.offset = Some(offset);
+                }
+            }
             b"txPr" | b"rich" | b"clrMapOvr" | b"fmtOvrs" | b"extLst" => self.begin_skip(),
             // Handling merged from the former separate arm for
             // empty elements, which a self-closing element no
@@ -1485,7 +1507,7 @@ impl ChartExParser {
                         }),
                         rich: None,
                     }),
-                    offset: None,
+                    offset: self.axis.title_offset.take(),
                     shape_properties: self.axis.title_sp.take(),
                     text_properties: None,
                     extensions: None,
@@ -1503,7 +1525,7 @@ impl ChartExParser {
                     position: self.title.pos.take(),
                     align: self.title.align.take(),
                     overlay: self.title.overlay.take(),
-                    offset: None,
+                    offset: self.title.offset.take(),
                     shape_properties: self.title.sp.take(),
                     text_properties: None,
                     extensions: None,
@@ -1658,7 +1680,7 @@ impl ChartExParser {
                     position: self.legend.pos.take(),
                     align: self.legend.align.take(),
                     overlay: self.legend.overlay.take(),
-                    offset: None,
+                    offset: self.legend.offset.take(),
                     shape_properties: self.legend.sp.take(),
                     text_properties: None,
                     extensions: None,
