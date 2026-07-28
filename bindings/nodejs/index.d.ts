@@ -238,6 +238,49 @@ export interface JsChartExSeries {
   shapeProperties?: import('./generated').JsChartShapeProperties
 }
 
+export interface JsChartStyleReference {
+  idx: number
+  /** The colour override, as the XML it was read as. */
+  color?: string
+}
+
+export interface JsChartStyleEntry {
+  lineReference: JsChartStyleReference
+  lineWidthScale?: number
+  fillReference: JsChartStyleReference
+  effectReference: JsChartStyleReference
+  /** `major`, `minor` or `none`. */
+  fontCollection: string
+  fontColor?: string
+  /** DrawingML kept as the XML it was read as. */
+  shapeProperties?: string
+  defaultRunProperties?: string
+  bodyProperties?: string
+  mods?: string
+}
+
+/**
+ * A chart style part. `entries` is keyed by the element name the entry
+ * belongs to (`chartArea`, `dataPoint`, ...); `raw` is set instead when
+ * the part could not be modelled and is replayed as read.
+ */
+export interface JsChartStyle {
+  id?: number
+  entries: Record<string, JsChartStyleEntry>
+  markerSymbol?: string
+  markerSize?: number
+  raw?: string
+}
+
+/** A chart colour style part. `raw` is set when it could not be modelled. */
+export interface JsChartColorStyle {
+  method?: string
+  id?: number
+  colors: string[]
+  variations: string[]
+  raw?: string
+}
+
 export interface JsChartEx {
   layout: string
   version?: string
@@ -252,6 +295,8 @@ export interface JsChartEx {
   printSettings?: JsChartExPrintSettings
   externalDataRelId?: string
   externalDataAutoUpdate?: boolean
+  style?: JsChartStyle
+  colorStyle?: JsChartColorStyle
 }
 
 export type JsChart = Omit<Generated.JsChart, 'anchor'>

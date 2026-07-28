@@ -3497,6 +3497,143 @@ impl From<&duke_sheets_chart::ChartExSeries> for JsChartExSeries {
     }
 }
 
+
+#[napi(object)]
+pub struct JsChartStyleReference {
+    pub idx: u32,
+    /// The colour override, as the XML it was read as.
+    pub color: Option<String>,
+}
+
+impl From<&duke_sheets_chart::StyleReference> for JsChartStyleReference {
+    fn from(r: &duke_sheets_chart::StyleReference) -> Self {
+        Self {
+            idx: r.idx,
+            color: r.color.as_ref().map(|b| String::from_utf8_lossy(b).into_owned()),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsChartStyleEntry {
+    pub line_reference: JsChartStyleReference,
+    pub line_width_scale: Option<f64>,
+    pub fill_reference: JsChartStyleReference,
+    pub effect_reference: JsChartStyleReference,
+    /// `major`, `minor` or `none`.
+    pub font_collection: String,
+    pub font_color: Option<String>,
+    /// DrawingML kept as the XML it was read as.
+    pub shape_properties: Option<String>,
+    pub default_run_properties: Option<String>,
+    pub body_properties: Option<String>,
+    pub mods: Option<String>,
+}
+
+impl From<&duke_sheets_chart::StyleEntry> for JsChartStyleEntry {
+    fn from(e: &duke_sheets_chart::StyleEntry) -> Self {
+        let text = |b: &Option<Vec<u8>>| {
+            b.as_ref().map(|b| String::from_utf8_lossy(b).into_owned())
+        };
+        Self {
+            line_reference: (&e.line_reference).into(),
+            line_width_scale: e.line_width_scale,
+            fill_reference: (&e.fill_reference).into(),
+            effect_reference: (&e.effect_reference).into(),
+            font_collection: e.font_reference.collection.as_str().to_string(),
+            font_color: text(&e.font_reference.color),
+            shape_properties: text(&e.shape_properties),
+            default_run_properties: text(&e.default_run_properties),
+            body_properties: text(&e.body_properties),
+            mods: e.mods.clone(),
+        }
+    }
+}
+
+/// A chart style part. `entries` is keyed by the element name the entry
+/// belongs to (`chartArea`, `dataPoint`, ...); `raw` is set instead when
+/// the part could not be modelled and is being replayed as read.
+#[napi(object)]
+pub struct JsChartStyle {
+    pub id: Option<u32>,
+    pub entries: std::collections::HashMap<String, JsChartStyleEntry>,
+    pub marker_symbol: Option<String>,
+    pub marker_size: Option<u32>,
+    pub raw: Option<String>,
+}
+
+impl From<&duke_sheets_chart::ChartStylePart> for JsChartStyle {
+    fn from(part: &duke_sheets_chart::ChartStylePart) -> Self {
+        match part {
+            duke_sheets_chart::ChartStylePart::Raw(bytes) => Self {
+                id: None,
+                entries: std::collections::HashMap::new(),
+                marker_symbol: None,
+                marker_size: None,
+                raw: Some(String::from_utf8_lossy(bytes).into_owned()),
+            },
+            duke_sheets_chart::ChartStylePart::Typed(style) => {
+                let mut entries = std::collections::HashMap::new();
+                for (name, entry) in duke_sheets_chart::chart_style::entries_by_name(style) {
+                    entries.insert(name.to_string(), entry.into());
+                }
+                Self {
+                    id: Some(style.id),
+                    entries,
+                    marker_symbol: style
+                        .data_point_marker_layout
+                        .as_ref()
+                        .and_then(|m| m.symbol.clone()),
+                    marker_size: style.data_point_marker_layout.as_ref().and_then(|m| m.size),
+                    raw: None,
+                }
+            }
+        }
+    }
+}
+
+/// A chart colour style part. `raw` is set instead when the part could
+/// not be modelled.
+#[napi(object)]
+pub struct JsChartColorStyle {
+    /// `cycle`, `withinLinear`, ...
+    pub method: Option<String>,
+    pub id: Option<u32>,
+    /// Each colour as the XML it was read as.
+    pub colors: Vec<String>,
+    pub variations: Vec<String>,
+    pub raw: Option<String>,
+}
+
+impl From<&duke_sheets_chart::ChartColorStylePart> for JsChartColorStyle {
+    fn from(part: &duke_sheets_chart::ChartColorStylePart) -> Self {
+        match part {
+            duke_sheets_chart::ChartColorStylePart::Raw(bytes) => Self {
+                method: None,
+                id: None,
+                colors: Vec::new(),
+                variations: Vec::new(),
+                raw: Some(String::from_utf8_lossy(bytes).into_owned()),
+            },
+            duke_sheets_chart::ChartColorStylePart::Typed(style) => Self {
+                method: Some(style.method.as_str().to_string()),
+                id: style.id,
+                colors: style
+                    .colors
+                    .iter()
+                    .map(|b| String::from_utf8_lossy(b).into_owned())
+                    .collect(),
+                variations: style
+                    .variations
+                    .iter()
+                    .map(|b| String::from_utf8_lossy(b).into_owned())
+                    .collect(),
+                raw: None,
+            },
+        }
+    }
+}
+
 #[napi(object)]
 pub struct JsChartEx {
     pub layout: String,
@@ -3512,6 +3649,8 @@ pub struct JsChartEx {
     pub print_settings: Option<JsChartExPrintSettings>,
     pub external_data_rel_id: Option<String>,
     pub external_data_auto_update: Option<bool>,
+    pub style: Option<JsChartStyle>,
+    pub color_style: Option<JsChartColorStyle>,
 }
 
 impl From<&duke_sheets_chart::ChartEx> for JsChartEx {
@@ -3543,6 +3682,8 @@ impl From<&duke_sheets_chart::ChartEx> for JsChartEx {
             print_settings: c.print_settings.as_ref().map(JsChartExPrintSettings::from),
             external_data_rel_id: c.external_data.as_ref().map(|e| e.rel_id.clone()),
             external_data_auto_update: c.external_data.as_ref().and_then(|e| e.auto_update),
+            style: c.style.as_ref().map(JsChartStyle::from),
+            color_style: c.color_style.as_ref().map(JsChartColorStyle::from),
         }
     }
 }
