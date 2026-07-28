@@ -61,7 +61,9 @@ pub struct ChartEx {
     pub shape_properties: Option<ChartShapeProperties>,
     /// Chart-level text properties (`cx:chartSpace > cx:txPr`, raw XML bytes)
     pub text_properties: Option<TextProperties>,
-    /// Color map override (`cx:chartSpace > cx:clrMapOvr`, raw XML bytes)
+    /// Colour map override: the complete `cx:clrMapOvr` element,
+    /// verbatim. Its content is entirely attributes, so the element
+    /// itself is part of what is stored.
     pub color_map_override: Option<Vec<u8>>,
     /// Format overrides (`cx:chartSpace > cx:fmtOvrs > cx:fmtOvr`)
     pub format_overrides: Vec<ChartExFormatOverride>,
@@ -96,7 +98,7 @@ pub struct ChartEx {
 pub struct ChartExTitle {
     /// Literal text from `cx:txData > cx:v`, or formula from `cx:f`
     pub text: Option<String>,
-    /// Rich text (`cx:rich`, raw DrawingML XML bytes)
+    /// Rich text: the complete `cx:rich` element, verbatim.
     pub rich_text: Option<Vec<u8>>,
     /// Position attribute (`t`, `b`, `l`, `r`)
     pub position: Option<String>,
@@ -266,7 +268,7 @@ pub struct ChartExSeries {
 pub struct ChartExText {
     /// Text data with formula/literal (`cx:txData`)
     pub data: Option<ChartExTextData>,
-    /// Rich text (`cx:rich`, raw DrawingML XML bytes)
+    /// Rich text: the complete `cx:rich` element, verbatim.
     pub rich: Option<Vec<u8>>,
 }
 

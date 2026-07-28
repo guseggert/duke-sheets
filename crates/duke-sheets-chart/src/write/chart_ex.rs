@@ -49,9 +49,7 @@ fn write_chart_space(w: &mut XmlWriter, cx: &ChartEx) -> XlsxResult<()> {
     }
 
     if let Some(ref cmo) = cx.color_map_override {
-        w.write_event(Event::Start(BytesStart::new("cx:clrMapOvr")))?;
         w.get_mut().write_all(cmo)?;
-        w.write_event(Event::End(BytesEnd::new("cx:clrMapOvr")))?;
     }
 
     if !cx.format_overrides.is_empty() {
@@ -236,9 +234,7 @@ fn write_title(w: &mut XmlWriter, title: &ChartExTitle) -> XlsxResult<()> {
     if title.text.is_some() || title.rich_text.is_some() {
         w.write_event(Event::Start(BytesStart::new("cx:tx")))?;
         if let Some(ref rich) = title.rich_text {
-            w.write_event(Event::Start(BytesStart::new("cx:rich")))?;
             w.get_mut().write_all(rich)?;
-            w.write_event(Event::End(BytesEnd::new("cx:rich")))?;
         } else if let Some(ref text) = title.text {
             w.write_event(Event::Start(BytesStart::new("cx:txData")))?;
             w.create_element("cx:v")
@@ -385,9 +381,7 @@ fn layout_id_str(layout: &ChartExLayout) -> &str {
 fn write_cx_text(w: &mut XmlWriter, text: &ChartExText) -> XlsxResult<()> {
     w.write_event(Event::Start(BytesStart::new("cx:tx")))?;
     if let Some(ref rich) = text.rich {
-        w.write_event(Event::Start(BytesStart::new("cx:rich")))?;
         w.get_mut().write_all(rich)?;
-        w.write_event(Event::End(BytesEnd::new("cx:rich")))?;
     } else if let Some(ref data) = text.data {
         w.write_event(Event::Start(BytesStart::new("cx:txData")))?;
         if let Some(ref f) = data.formula {
