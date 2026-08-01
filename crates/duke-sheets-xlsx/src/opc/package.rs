@@ -188,6 +188,23 @@ impl<R: Read + Seek> OpcPackage<R> {
     /// ECMA-376 Part 1 §§12.2 and 12.3.23 require the Workbook part to be
     /// the internal target of the package's officeDocument relationship.
     pub(crate) fn discover_workbook_part(&mut self) -> XlsxResult<PartName> {
+        let workbook = self.discover_workbook_part_inner()?;
+        // Files with an .xlsx extension whose workbook part is binary are
+        // XLSB packages. Reading one as SpreadsheetML yields either a
+        // stray XML syntax error or, when the binary happens to hold no
+        // '<', a silently empty workbook, so name the format instead.
+        if workbook.as_str().ends_with(".bin") {
+            return Err(XlsxError::InvalidFormat(format!(
+                "package is XLSB, not XLSX: the workbook part is {}. \
+                 Read it with the XLSB reader, or open it through the \
+                 format-detecting entry point",
+                workbook.as_str()
+            )));
+        }
+        Ok(workbook)
+    }
+
+    fn discover_workbook_part_inner(&mut self) -> XlsxResult<PartName> {
         let source = RelationshipSource::Package;
         let relationships_part = source.relationships_part()?;
         let has_package_relationships = self.part_exists(&relationships_part);
