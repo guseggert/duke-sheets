@@ -3690,6 +3690,10 @@ pub struct PyChart {
     pub series_lines: Option<PyChartLines>,
     #[pyo3(get)]
     pub up_down_bars: Option<PyUpDownBars>,
+    #[pyo3(get)]
+    pub style: Option<PyChartStyle>,
+    #[pyo3(get)]
+    pub color_style: Option<PyChartColorStyle>,
 }
 
 impl From<&duke_sheets::Chart> for PyChart {
@@ -3742,6 +3746,8 @@ impl From<&duke_sheets::Chart> for PyChart {
             high_low_lines: c.high_low_lines.as_ref().map(PyChartLines::from),
             series_lines: c.series_lines.as_ref().map(PyChartLines::from),
             up_down_bars: c.up_down_bars.as_ref().map(PyUpDownBars::from),
+            style: c.style.as_ref().map(PyChartStyle::from),
+            color_style: c.color_style.as_ref().map(PyChartColorStyle::from),
         }
     }
 }

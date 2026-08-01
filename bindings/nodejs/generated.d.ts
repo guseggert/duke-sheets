@@ -699,6 +699,8 @@ export interface JsChart {
   highLowLines?: JsChartLines
   seriesLines?: JsChartLines
   upDownBars?: JsUpDownBars
+  style?: JsChartStyle
+  colorStyle?: JsChartColorStyle
 }
 
 export interface JsChartAxis {
@@ -707,55 +709,26 @@ export interface JsChartAxis {
   axis: JsAxis
 }
 
+/**
+ * A chart colour style part. `raw` is set instead when the part could
+ * not be modelled.
+ */
+export interface JsChartColorStyle {
+  /** `cycle`, `withinLinear`, ... */
+  method?: string
+  id?: number
+  /** Each colour as the XML it was read as. */
+  colors: Array<string>
+  variations: Array<string>
+  raw?: string
+}
+
 /** Data table displayed beneath the chart. */
 export interface JsChartDataTable {
   showHorizontalBorder?: boolean
   showVerticalBorder?: boolean
   showOutline?: boolean
   showKeys?: boolean
-}
-
-export interface JsChartStyleReference {
-  idx: number
-  /** The colour override, as the XML it was read as. */
-  color?: string
-}
-
-export interface JsChartStyleEntry {
-  lineReference: JsChartStyleReference
-  lineWidthScale?: number
-  fillReference: JsChartStyleReference
-  effectReference: JsChartStyleReference
-  /** `major`, `minor` or `none`. */
-  fontCollection: string
-  fontColor?: string
-  /** DrawingML kept as the XML it was read as. */
-  shapeProperties?: string
-  defaultRunProperties?: string
-  bodyProperties?: string
-  mods?: string
-}
-
-/**
- * A chart style part. `entries` is keyed by the element name the entry
- * belongs to (`chartArea`, `dataPoint`, ...); `raw` is set instead when
- * the part could not be modelled and is replayed as read.
- */
-export interface JsChartStyle {
-  id?: number
-  entries: Record<string, JsChartStyleEntry>
-  markerSymbol?: string
-  markerSize?: number
-  raw?: string
-}
-
-/** A chart colour style part. `raw` is set when it could not be modelled. */
-export interface JsChartColorStyle {
-  method?: string
-  id?: number
-  colors: string[]
-  variations: string[]
-  raw?: string
 }
 
 export interface JsChartEx {
@@ -774,10 +747,6 @@ export interface JsChartEx {
   externalDataAutoUpdate?: boolean
   style?: JsChartStyle
   colorStyle?: JsChartColorStyle
-}
-
-export interface JsChartExGridlines {
-  shapeProperties?: JsChartShapeProperties
 }
 
 export interface JsChartExAxis {
@@ -867,6 +836,10 @@ export interface JsChartExGeography {
   cultureLanguage?: string
   cultureRegion?: string
   attribution?: string
+}
+
+export interface JsChartExGridlines {
+  shapeProperties?: JsChartShapeProperties
 }
 
 export interface JsChartExHeaderFooter {
@@ -1024,6 +997,40 @@ export interface JsChartSheet {
   name: string
   chart: JsChart
   visibility: string
+}
+
+/**
+ * A chart style part. `entries` is keyed by the element name the entry
+ * belongs to (`chartArea`, `dataPoint`, ...); `raw` is set instead when
+ * the part could not be modelled and is being replayed as read.
+ */
+export interface JsChartStyle {
+  id?: number
+  entries: Record<string, JsChartStyleEntry>
+  markerSymbol?: string
+  markerSize?: number
+  raw?: string
+}
+
+export interface JsChartStyleEntry {
+  lineReference: JsChartStyleReference
+  lineWidthScale?: number
+  fillReference: JsChartStyleReference
+  effectReference: JsChartStyleReference
+  /** `major`, `minor` or `none`. */
+  fontCollection: string
+  fontColor?: string
+  /** DrawingML kept as the XML it was read as. */
+  shapeProperties?: string
+  defaultRunProperties?: string
+  bodyProperties?: string
+  mods?: string
+}
+
+export interface JsChartStyleReference {
+  idx: number
+  /** The colour override, as the XML it was read as. */
+  color?: string
 }
 
 export interface JsChartTypeGroup {

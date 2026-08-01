@@ -2671,6 +2671,8 @@ pub struct WasmChart {
     pub high_low_lines: Option<WasmChartLines>,
     pub series_lines: Option<WasmChartLines>,
     pub up_down_bars: Option<WasmUpDownBars>,
+    pub style: Option<WasmChartStyle>,
+    pub color_style: Option<WasmChartColorStyle>,
 }
 
 impl From<&duke_sheets_chart::Chart> for WasmChart {
@@ -2723,6 +2725,8 @@ impl From<&duke_sheets_chart::Chart> for WasmChart {
             high_low_lines: c.high_low_lines.as_ref().map(WasmChartLines::from),
             series_lines: c.series_lines.as_ref().map(WasmChartLines::from),
             up_down_bars: c.up_down_bars.as_ref().map(WasmUpDownBars::from),
+            style: c.style.as_ref().map(WasmChartStyle::from),
+            color_style: c.color_style.as_ref().map(WasmChartColorStyle::from),
         }
     }
 }
