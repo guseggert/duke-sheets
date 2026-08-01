@@ -4404,6 +4404,38 @@ mod tests {
         );
     }
 
+    /// A real corpus turns up XLSB packages carrying an .xlsx extension.
+    /// Parsing their binary workbook part as XML used to surface as
+    /// "syntax error: tag not closed", which says nothing about the
+    /// cause, so the reader names the format it actually found.
+    #[test]
+    fn xlsb_package_is_reported_as_xlsb_not_as_broken_xml() {
+        let mut buf = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(Cursor::new(&mut buf));
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("[Content_Types].xml", options).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="bin" ContentType="application/vnd.ms-excel.sheet.binary.macroEnabled.main"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/></Types>"#).unwrap();
+            zip.start_file("_rels/.rels", options).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.bin"/></Relationships>"#).unwrap();
+            // A BIFF12 BrtBeginBook record, not XML.
+            zip.start_file("xl/workbook.bin", options).unwrap();
+            zip.write_all(&[0x83, 0x00, 0x8F, 0x00, 0x00, 0x00]).unwrap();
+            zip.finish().unwrap();
+        }
+
+        let error = XlsxReader::read(Cursor::new(buf)).expect_err("must not be read as XLSX");
+        let message = error.to_string();
+        assert!(
+            message.contains("XLSB"),
+            "the error must name the format found, got: {message}"
+        );
+        assert!(
+            !message.contains("tag not closed"),
+            "the error must not blame XML syntax, got: {message}"
+        );
+    }
+
     #[test]
     fn test_read_empty_xlsx() {
         // Minimal valid XLSX structure
