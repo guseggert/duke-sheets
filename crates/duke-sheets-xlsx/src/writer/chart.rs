@@ -22,8 +22,8 @@ mod tests {
     use std::io::{Cursor, Read, Write};
 
     use duke_sheets_chart::{
-        Axis, AxisType, Chart, ChartColor, ChartLine, ChartLines, ChartShapeProperties, ChartType,
-        DataLabels, DataReference, DataSeries, UpDownBars,
+        Axis, AxisPosition, AxisType, Chart, ChartColor, ChartLine, ChartLines,
+        ChartShapeProperties, ChartType, DataLabels, DataReference, DataSeries, UpDownBars,
     };
 
     use super::write_chart_part;
@@ -525,5 +525,84 @@ mod tests {
         let ln = sp.line.expect("leader_lines line lost");
         assert_eq!(ln.width, Some(9525));
         assert_eq!(ln.solid_fill.as_ref().unwrap().hex, "808080");
+    }
+
+    /// A bar chart's value axis sits at the bottom. The writer used to
+    /// treat that as "unset" because Bottom is the enum's default, and
+    /// moved the axis to the left.
+    #[test]
+    fn an_explicit_bottom_value_axis_stays_at_the_bottom() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:layout/><c:barChart><c:barDir val="bar"/><c:ser><c:idx val="0"/><c:order val="0"/></c:ser><c:axId val="111"/><c:axId val="222"/></c:barChart><c:catAx><c:axId val="111"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:axPos val="l"/><c:crossAx val="222"/></c:catAx><c:valAx><c:axId val="222"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:axPos val="b"/><c:crossAx val="111"/></c:valAx></c:plotArea></c:chart></c:chartSpace>"#;
+        let chart = read_chart_from_xml(xml);
+        let value_axis = chart.value_axis.as_ref().expect("value axis");
+        assert_eq!(value_axis.position, Some(AxisPosition::Bottom));
+        assert_eq!(
+            chart.category_axis.as_ref().expect("category axis").position,
+            Some(AxisPosition::Left),
+            "the category axis keeps its own explicit position too"
+        );
+
+        let written = chart_xml_after_write(&chart);
+        let val_ax = &written[written.find("<c:valAx>").expect("valAx")..];
+        assert!(
+            val_ax.contains(r#"<c:axPos val="b"/>"#),
+            "the value axis must stay at the bottom: {val_ax}"
+        );
+    }
+
+    /// Excel treats an axis with no c:delete as deleted: it adds
+    /// <c:delete val="1"/> and discards the axis formatting when it opens
+    /// such a chart. Reading the omission as "unspecified" and writing
+    /// val="0" therefore made a hidden axis visible on rewrite.
+    #[test]
+    fn an_axis_without_delete_is_read_as_deleted() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:layout/><c:barChart><c:barDir val="col"/><c:ser><c:idx val="0"/><c:order val="0"/></c:ser><c:axId val="111"/><c:axId val="222"/></c:barChart><c:catAx><c:axId val="111"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:axPos val="b"/><c:crossAx val="222"/></c:catAx><c:valAx><c:axId val="222"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:axPos val="l"/><c:crossAx val="111"/></c:valAx></c:plotArea></c:chart></c:chartSpace>"#;
+        let chart = read_chart_from_xml(xml);
+        assert_eq!(
+            chart.category_axis.as_ref().expect("category axis").delete,
+            Some(true),
+            "an omitted c:delete means the axis is deleted"
+        );
+
+        // Written back explicitly, so Excel keeps reading it as deleted
+        // instead of depending on the omission.
+        let written = chart_xml_after_write(&chart);
+        assert!(
+            written.contains(r#"<c:delete val="1"/>"#),
+            "the deleted state must be written explicitly: {written}"
+        );
+        assert!(
+            !written.contains(r#"<c:delete val="0"/>"#),
+            "no axis may be revived as visible: {written}"
+        );
+
+        let reread = read_chart_from_xml(&written);
+        assert_eq!(
+            reread.category_axis.as_ref().expect("category axis").delete,
+            Some(true),
+            "the deleted state must survive the round trip"
+        );
+    }
+
+    /// An axis the caller builds has no delete state, and must come out
+    /// visible rather than inheriting the omission's meaning.
+    #[test]
+    fn a_model_built_axis_is_written_as_not_deleted() {
+        let mut chart = Chart::new(ChartType::ColumnClustered);
+        chart
+            .series
+            .push(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$3")));
+        chart.category_axis = Some(Axis::new());
+        chart.value_axis = Some(Axis::new());
+        assert_eq!(chart.category_axis.as_ref().unwrap().delete, None);
+
+        let written = chart_xml_after_write(&chart);
+        assert!(
+            written.contains(r#"<c:delete val="0"/>"#),
+            "a built axis must be written visible: {written}"
+        );
+        assert!(!written.contains(r#"<c:delete val="1"/>"#));
     }
 }

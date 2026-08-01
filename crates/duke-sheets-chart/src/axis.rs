@@ -28,8 +28,11 @@ pub struct Axis {
     pub major_unit: Option<f64>,
     /// Minor unit
     pub minor_unit: Option<f64>,
-    /// Position
-    pub position: AxisPosition,
+    /// Where the axis sits (`c:axPos`). `None` when the source omitted
+    /// it, which the writer fills with the position conventional for the
+    /// axis's role. Distinguishing that from an explicit `Bottom` is what
+    /// keeps a bar chart's value axis from migrating to the left.
+    pub position: Option<AxisPosition>,
     pub number_format: Option<NumberFormat>,
     pub major_gridlines: bool,
     pub minor_gridlines: bool,
@@ -62,7 +65,7 @@ impl Axis {
             maximum: None,
             major_unit: None,
             minor_unit: None,
-            position: AxisPosition::default(),
+            position: None,
             number_format: None,
             major_gridlines: false,
             minor_gridlines: false,

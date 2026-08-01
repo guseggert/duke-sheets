@@ -3404,7 +3404,9 @@ pub struct PyAxis {
     #[pyo3(get)]
     pub minor_unit: Option<f64>,
     #[pyo3(get)]
-    pub position: String,
+    /// `bottom`, `top`, `left` or `right`; unset when the source
+    /// omitted it and the writer will supply the conventional one.
+    pub position: Option<String>,
     #[pyo3(get)]
     pub number_format: Option<PyChartNumberFormat>,
     #[pyo3(get)]
@@ -3439,13 +3441,15 @@ impl From<&duke_sheets::Axis> for PyAxis {
             maximum: a.maximum,
             major_unit: a.major_unit,
             minor_unit: a.minor_unit,
-            position: match a.position {
-                duke_sheets::AxisPosition::Bottom => "bottom",
-                duke_sheets::AxisPosition::Top => "top",
-                duke_sheets::AxisPosition::Left => "left",
-                duke_sheets::AxisPosition::Right => "right",
-            }
-            .into(),
+            position: a.position.map(|position| {
+                match position {
+                    duke_sheets::AxisPosition::Bottom => "bottom",
+                    duke_sheets::AxisPosition::Top => "top",
+                    duke_sheets::AxisPosition::Left => "left",
+                    duke_sheets::AxisPosition::Right => "right",
+                }
+                .to_string()
+            }),
             number_format: a.number_format.as_ref().map(PyChartNumberFormat::from),
             major_gridlines: a.major_gridlines,
             minor_gridlines: a.minor_gridlines,

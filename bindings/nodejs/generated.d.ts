@@ -568,8 +568,12 @@ export interface JsAxis {
   maximum?: number
   majorUnit?: number
   minorUnit?: number
-  /** One of: `"Bottom"`, `"Top"`, `"Left"`, `"Right"`. */
-  position: string
+  /**
+   * One of: `"Bottom"`, `"Top"`, `"Left"`, `"Right"`.
+   * `bottom`, `top`, `left` or `right`; unset when the source omitted
+   * it and the writer will supply the conventional one.
+   */
+  position?: string
   numberFormat?: JsChartNumberFormat
   majorGridlines: boolean
   minorGridlines: boolean

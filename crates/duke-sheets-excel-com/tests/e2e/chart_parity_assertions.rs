@@ -81,7 +81,7 @@ fn chart_parity_matches_excel() {
                 ax.axis_type
             );
             check!(
-                ax.position == AxisPosition::Bottom,
+                ax.position == Some(AxisPosition::Bottom),
                 "chart 0 catAx pos: {:?}",
                 ax.position
             );
@@ -96,7 +96,7 @@ fn chart_parity_matches_excel() {
                 ax.axis_type
             );
             check!(
-                ax.position == AxisPosition::Left,
+                ax.position == Some(AxisPosition::Left),
                 "chart 0 valAx pos: {:?}",
                 ax.position
             );
@@ -185,7 +185,7 @@ fn chart_parity_matches_excel() {
                 ax.axis_type
             );
             check!(
-                ax.position == AxisPosition::Left,
+                ax.position == Some(AxisPosition::Left),
                 "chart 1 catAx pos: {:?}",
                 ax.position
             );
@@ -198,7 +198,7 @@ fn chart_parity_matches_excel() {
                 ax.axis_type
             );
             check!(
-                ax.position == AxisPosition::Bottom,
+                ax.position == Some(AxisPosition::Bottom),
                 "chart 1 valAx pos: {:?}",
                 ax.position
             );
@@ -278,7 +278,7 @@ fn chart_parity_matches_excel() {
                 ax.axis_type
             );
             check!(
-                ax.position == AxisPosition::Bottom,
+                ax.position == Some(AxisPosition::Bottom),
                 "chart 2 catAx pos: {:?}",
                 ax.position
             );
@@ -291,7 +291,7 @@ fn chart_parity_matches_excel() {
                 ax.axis_type
             );
             check!(
-                ax.position == AxisPosition::Left,
+                ax.position == Some(AxisPosition::Left),
                 "chart 2 valAx pos: {:?}",
                 ax.position
             );
@@ -503,7 +503,7 @@ fn chart_parity_matches_excel() {
                 ax.axis_type
             );
             check!(
-                ax.position == AxisPosition::Left,
+                ax.position == Some(AxisPosition::Left),
                 "chart 5 valAx pos: {:?}",
                 ax.position
             );
@@ -553,7 +553,7 @@ fn chart_parity_matches_excel() {
                 ax.axis_type
             );
             check!(
-                ax.position == AxisPosition::Bottom,
+                ax.position == Some(AxisPosition::Bottom),
                 "chart 6 catAx pos: {:?}",
                 ax.position
             );
@@ -566,7 +566,7 @@ fn chart_parity_matches_excel() {
                 ax.axis_type
             );
             check!(
-                ax.position == AxisPosition::Left,
+                ax.position == Some(AxisPosition::Left),
                 "chart 6 valAx pos: {:?}",
                 ax.position
             );
@@ -648,7 +648,7 @@ fn chart_parity_matches_excel() {
                 ax.axis_type
             );
             check!(
-                ax.position == AxisPosition::Bottom,
+                ax.position == Some(AxisPosition::Bottom),
                 "chart 7 catAx pos: {:?}",
                 ax.position
             );
@@ -661,7 +661,7 @@ fn chart_parity_matches_excel() {
                 ax.axis_type
             );
             check!(
-                ax.position == AxisPosition::Left,
+                ax.position == Some(AxisPosition::Left),
                 "chart 7 valAx pos: {:?}",
                 ax.position
             );
