@@ -366,3 +366,114 @@ def test_chart_getters_return_drawing_wrappers():
     assert sheet.charts_ex[0].kind == "chart_ex"
     assert sheet.charts_ex[0].drawing_path == [1]
     assert sheet.charts_ex[0].chart_ex.layout == "waterfall"
+
+
+def _reload(workbook, path):
+    workbook.save(str(path))
+    return duke_sheets.Workbook.open(str(path))
+
+
+def test_chart_ex_style_part_is_modelled_not_replayed(tmp_path):
+    """A written chartEx always carries the style pair Excel demands."""
+    workbook = duke_sheets.Workbook()
+    workbook.get_sheet(0).add_drawing(top(duke_sheets.ChartEx("waterfall")))
+
+    chart_ex = _reload(workbook, tmp_path / "cx.xlsx").get_sheet(0).charts_ex[0].chart_ex
+    style = chart_ex.style
+    assert style is not None, "a written chartEx must carry a style part"
+    assert style.raw is None
+    assert isinstance(style.id, int)
+    # The 29 required CT_StyleEntry of MS-ODRAWXML 5.15 plus the
+    # optional dataLabelCallout, which Excel's own part also carries.
+    assert len(style.entries) == 30
+    assert "dataLabelCallout" in style.entries
+    assert chart_ex.color_style is not None
+    assert chart_ex.color_style.raw is None
+
+    entry = style.entries["dataPoint"]
+    assert isinstance(entry.line_reference.idx, int)
+    assert isinstance(entry.fill_reference.idx, int)
+    assert isinstance(entry.effect_reference.idx, int)
+    assert entry.font_collection in ("major", "minor", "none")
+
+
+def test_plain_chart_style_is_unset_when_authored(tmp_path):
+    """Excel needs no style sibling for a plain chart, so none is emitted."""
+    workbook = duke_sheets.Workbook()
+    workbook.get_sheet(0).add_drawing(top(duke_sheets.Chart("line", title="Trend")))
+
+    chart = _reload(workbook, tmp_path / "plain.xlsx").get_sheet(0).charts[0].chart
+    assert chart.style is None
+    assert chart.color_style is None
+
+
+def test_plain_chart_style_part_is_read_when_the_file_has_one(tmp_path):
+    """A plain chart's style is surfaced too, not just a chartEx's.
+
+    The authoring surface cannot set a style, so the fixture is built by
+    giving a written package the style sibling Excel would have written
+    for a plain chart.
+    """
+    import re
+    import shutil
+    import zipfile
+
+    workbook = duke_sheets.Workbook()
+    workbook.get_sheet(0).add_drawing(top(duke_sheets.ChartEx("waterfall")))
+    workbook.get_sheet(0).add_drawing(top(duke_sheets.Chart("line", title="Trend")))
+    source = tmp_path / "source.xlsx"
+    workbook.save(str(source))
+
+    # Borrow the style the writer emitted for the chartEx, and hand it to
+    # the plain chart under the name and relationship a plain chart uses.
+    with zipfile.ZipFile(source) as zf:
+        names = zf.namelist()
+        style_name = next(n for n in names if re.fullmatch(r"xl/charts/style\d+\.xml", n))
+        style_xml = zf.read(style_name)
+        chart_name = next(n for n in names if re.fullmatch(r"xl/charts/chart\d+\.xml", n))
+        entries = {n: zf.read(n) for n in names}
+
+    chart_num = re.fullmatch(r"xl/charts/chart(\d+)\.xml", chart_name).group(1)
+    new_style = f"xl/charts/style{chart_num}.xml"
+    assert new_style not in entries, "the plain chart's style slot must be free"
+    entries[new_style] = style_xml
+    rels_name = f"xl/charts/_rels/chart{chart_num}.xml.rels"
+    rel = (
+        f'<Relationship Id="rId9000" Type="http://schemas.microsoft.com/'
+        f'office/2011/relationships/chartStyle" Target="style{chart_num}.xml"/>'
+    )
+    existing = entries.get(rels_name)
+    if existing is None:
+        entries[rels_name] = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/'
+            f'2006/relationships">{rel}</Relationships>'
+        ).encode()
+    else:
+        entries[rels_name] = existing.replace(b"</Relationships>", rel.encode() + b"</Relationships>")
+    ct = entries["[Content_Types].xml"].replace(
+        b"</Types>",
+        f'<Override PartName="/{new_style}" ContentType="application/vnd.ms-office.chartstyle+xml"/>'.encode()
+        + b"</Types>",
+    )
+    entries["[Content_Types].xml"] = ct
+
+    patched = tmp_path / "patched.xlsx"
+    with zipfile.ZipFile(patched, "w", zipfile.ZIP_DEFLATED) as out:
+        for name, data in entries.items():
+            out.writestr(name, data)
+
+    chart = duke_sheets.Workbook.open(str(patched)).get_sheet(0).charts[0].chart
+    assert chart.style is not None, "the plain chart's style part must be read"
+    assert chart.style.raw is None, "it must be modelled, not replayed raw"
+    assert len(chart.style.entries) == 30
+    assert chart.style.entries["chartArea"].font_collection in ("major", "minor", "none")
+
+    # And it survives being written back out.
+    final = tmp_path / "final.xlsx"
+    reread = duke_sheets.Workbook.open(str(patched))
+    reread.save(str(final))
+    again = duke_sheets.Workbook.open(str(final)).get_sheet(0).charts[0].chart
+    assert again.style is not None, "the style must survive a rewrite"
+    assert len(again.style.entries) == 30
+    shutil.rmtree(tmp_path, ignore_errors=True)

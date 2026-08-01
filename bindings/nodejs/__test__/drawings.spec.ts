@@ -459,3 +459,74 @@ describe("unified drawings", () => {
     ]);
   });
 });
+
+describe("chart styles", () => {
+  // The style part is the sibling Excel refuses to open a chartEx
+  // without, so the writer emits one for every chartEx whether or not
+  // the caller asked for it. These read it back through the binding.
+  const saveAndReload = (wb: Workbook, name: string): Workbook => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "duke-chart-style-"));
+    try {
+      const filePath = path.join(tmpDir, name);
+      wb.save(filePath);
+      return Workbook.fromBytes(fs.readFileSync(filePath));
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  };
+
+  const waterfall = (): TopLevelDrawingInput =>
+    ({
+      anchor: anchor(0, 0, 8, 15),
+      kind: "chartEx",
+      chartEx: { layout: "waterfall", title: { text: "Bridge" } },
+    }) as unknown as TopLevelDrawingInput;
+
+  it("models the style part of a written chartEx rather than replaying it raw", () => {
+    const wb = new Workbook();
+    wb.getSheet(0).addDrawing(waterfall());
+
+    const cx = saveAndReload(wb, "cx.xlsx").getSheet(0).chartsEx[0].chartEx;
+    const style = cx.style;
+    if (!style) throw new Error("a written chartEx must carry a style part");
+    expect(style.raw).toBeUndefined();
+    expect(style.id).toBeTypeOf("number");
+    // The 29 required CT_StyleEntry of MS-ODRAWXML 5.15 plus the
+    // optional dataLabelCallout, which Excel's own part also carries.
+    // Keyed by the element each entry belongs to.
+    expect(Object.keys(style.entries)).toHaveLength(30);
+    expect(Object.keys(style.entries)).toContain("dataLabelCallout");
+    expect(Object.keys(style.entries)).toContain("chartArea");
+    expect(cx.colorStyle?.raw).toBeUndefined();
+    expect(cx.colorStyle?.method).toBeTypeOf("string");
+  });
+
+  it("surfaces each entry's references and font collection", () => {
+    const wb = new Workbook();
+    wb.getSheet(0).addDrawing(waterfall());
+
+    const cx = saveAndReload(wb, "cx.xlsx").getSheet(0).chartsEx[0].chartEx;
+    const entry = cx.style?.entries["dataPoint"];
+    if (!entry) throw new Error("dataPoint entry missing");
+    expect(entry.lineReference.idx).toBeTypeOf("number");
+    expect(entry.fillReference.idx).toBeTypeOf("number");
+    expect(entry.effectReference.idx).toBeTypeOf("number");
+    expect(["major", "minor", "none"]).toContain(entry.fontCollection);
+  });
+
+  it("leaves a plain chart's style unset, since only chartEx requires one", () => {
+    // Excel opens a plain chart with no style sibling, so the writer
+    // emits the pair only for a chart that already carries one. The
+    // authoring surface cannot set one, so this stays unset.
+    const wb = new Workbook();
+    wb.getSheet(0).addDrawing({
+      anchor: anchor(0, 0, 8, 15),
+      kind: "chart",
+      chart: { chartType: "Line", title: "Trend" },
+    } as unknown as TopLevelDrawingInput);
+
+    const chart = saveAndReload(wb, "plain.xlsx").getSheet(0).charts[0].chart;
+    expect(chart.style).toBeUndefined();
+    expect(chart.colorStyle).toBeUndefined();
+  });
+});
