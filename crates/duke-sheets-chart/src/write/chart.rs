@@ -518,13 +518,15 @@ fn write_combo_axes(w: &mut XmlWriter, axes: &[ChartAxis]) -> XlsxResult<()> {
             _ => "b",
         };
         let mut axis = chart_axis.axis.clone();
-        if axis.position == AxisPosition::default() {
-            axis.position = match default_pos {
+        // Only supply a position the source never gave; an explicit one
+        // is kept, including a value axis explicitly at the bottom.
+        if axis.position.is_none() {
+            axis.position = Some(match default_pos {
                 "l" => AxisPosition::Left,
                 "r" => AxisPosition::Right,
                 "t" => AxisPosition::Top,
                 _ => AxisPosition::Bottom,
-            };
+            });
         }
         let axis_opt = Some(axis);
         if matches!(chart_axis.axis.axis_type, AxisType::Value) {
@@ -1241,6 +1243,11 @@ fn write_cat_ax(
 
     write_scaling(w, axis)?;
 
+    // Always explicit. An absent c:delete means *deleted* to Excel
+    // (ECMA-376 CT_Boolean defaults val to true, and Excel adds
+    // <c:delete val="1"/> plus discards the axis formatting when it
+    // opens a chart whose axis omits it), so a None here - an axis the
+    // caller built rather than read - must say val="0" to stay visible.
     let delete_val = axis.as_ref().and_then(|a| a.delete).unwrap_or(false);
     w.create_element("c:delete")
         .with_attribute(("val", if delete_val { "1" } else { "0" }))
@@ -1248,7 +1255,8 @@ fn write_cat_ax(
 
     let pos = axis
         .as_ref()
-        .map(|a| axis_position_val(&a.position))
+        .and_then(|a| a.position.as_ref())
+        .map(axis_position_val)
         .unwrap_or("b");
     w.create_element("c:axPos")
         .with_attribute(("val", pos))
@@ -1359,6 +1367,11 @@ fn write_val_ax(
 
     write_scaling(w, axis)?;
 
+    // Always explicit. An absent c:delete means *deleted* to Excel
+    // (ECMA-376 CT_Boolean defaults val to true, and Excel adds
+    // <c:delete val="1"/> plus discards the axis formatting when it
+    // opens a chart whose axis omits it), so a None here - an axis the
+    // caller built rather than read - must say val="0" to stay visible.
     let delete_val = axis.as_ref().and_then(|a| a.delete).unwrap_or(false);
     w.create_element("c:delete")
         .with_attribute(("val", if delete_val { "1" } else { "0" }))
@@ -1366,7 +1379,8 @@ fn write_val_ax(
 
     let pos = axis
         .as_ref()
-        .map(|a| axis_position_val(&a.position))
+        .and_then(|a| a.position.as_ref())
+        .map(axis_position_val)
         .unwrap_or(default_pos);
     w.create_element("c:axPos")
         .with_attribute(("val", pos))

@@ -1635,12 +1635,13 @@ impl ChartParser {
             axis.major_tick_mark = self.ax_major_tick_mark.take();
             axis.minor_tick_mark = self.ax_minor_tick_mark.take();
             axis.label_position = self.ax_label_position.take();
-            axis.delete = self.ax_delete.take();
+            // An omitted c:delete is not "unspecified": Excel treats the
+            // axis as deleted. Recording that keeps a rewrite from
+            // silently making a hidden axis visible again.
+            axis.delete = Some(self.ax_delete.take().unwrap_or(true));
             axis.crosses = self.ax_crosses.take();
             axis.cross_between = self.ax_cross_between.take();
-            if let Some(pos) = self.ax_position.take() {
-                axis.position = pos;
-            }
+            axis.position = self.ax_position.take();
             axis.major_unit = self.ax_major_unit.take();
             axis.minor_unit = self.ax_minor_unit.take();
             axis.shape_properties = self.ax_shape_properties.take();
@@ -1680,12 +1681,13 @@ impl ChartParser {
             axis.major_tick_mark = self.ax_major_tick_mark.take();
             axis.minor_tick_mark = self.ax_minor_tick_mark.take();
             axis.label_position = self.ax_label_position.take();
-            axis.delete = self.ax_delete.take();
+            // An omitted c:delete is not "unspecified": Excel treats the
+            // axis as deleted. Recording that keeps a rewrite from
+            // silently making a hidden axis visible again.
+            axis.delete = Some(self.ax_delete.take().unwrap_or(true));
             axis.crosses = self.ax_crosses.take();
             axis.cross_between = self.ax_cross_between.take();
-            if let Some(pos) = self.ax_position.take() {
-                axis.position = pos;
-            }
+            axis.position = self.ax_position.take();
             axis.major_unit = self.ax_major_unit.take();
             axis.minor_unit = self.ax_minor_unit.take();
             axis.shape_properties = self.ax_shape_properties.take();
@@ -1724,12 +1726,13 @@ impl ChartParser {
             axis.major_tick_mark = self.ax_major_tick_mark.take();
             axis.minor_tick_mark = self.ax_minor_tick_mark.take();
             axis.label_position = self.ax_label_position.take();
-            axis.delete = self.ax_delete.take();
+            // An omitted c:delete is not "unspecified": Excel treats the
+            // axis as deleted. Recording that keeps a rewrite from
+            // silently making a hidden axis visible again.
+            axis.delete = Some(self.ax_delete.take().unwrap_or(true));
             axis.crosses = self.ax_crosses.take();
             axis.cross_between = self.ax_cross_between.take();
-            if let Some(pos) = self.ax_position.take() {
-                axis.position = pos;
-            }
+            axis.position = self.ax_position.take();
             axis.major_unit = self.ax_major_unit.take();
             axis.minor_unit = self.ax_minor_unit.take();
             axis.shape_properties = self.ax_shape_properties.take();
@@ -3051,9 +3054,9 @@ mod tests {
 
         let parsed = parse_chart_xml_str(xml);
         let cat = parsed.category_axis.as_ref().unwrap();
-        assert_eq!(cat.position, AxisPosition::Bottom);
+        assert_eq!(cat.position, Some(AxisPosition::Bottom));
         let val = parsed.value_axis.as_ref().unwrap();
-        assert_eq!(val.position, AxisPosition::Left);
+        assert_eq!(val.position, Some(AxisPosition::Left));
         assert_eq!(val.major_unit, Some(5.0));
         assert_eq!(val.minor_unit, Some(1.0));
     }

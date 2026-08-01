@@ -4479,11 +4479,11 @@ fn test_roundtrip_combo_secondary_axis_position() {
 
     let ax1 = &c.axes[1];
     assert_eq!(ax1.axis.axis_type, AxisType::Value);
-    assert_eq!(ax1.axis.position, AxisPosition::Left);
+    assert_eq!(ax1.axis.position, Some(AxisPosition::Left));
 
     let ax2 = &c.axes[2];
     assert_eq!(ax2.axis.axis_type, AxisType::Value);
-    assert_eq!(ax2.axis.position, AxisPosition::Right);
+    assert_eq!(ax2.axis.position, Some(AxisPosition::Right));
 }
 
 #[test]

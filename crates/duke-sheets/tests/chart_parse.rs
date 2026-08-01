@@ -188,7 +188,7 @@ fn kitchen_sink_parses_to_the_expected_model() {
     assert!(chart.series_lines.is_some(), "serLines");
 
     let cat = chart.category_axis.as_ref().expect("category axis");
-    assert_eq!(cat.position, duke_sheets_chart::AxisPosition::Bottom);
+    assert_eq!(cat.position, Some(duke_sheets_chart::AxisPosition::Bottom));
     assert_eq!(cat.delete, Some(false));
     assert!(!cat.major_gridlines);
 

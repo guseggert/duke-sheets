@@ -2454,7 +2454,9 @@ pub struct WasmAxis {
     pub maximum: Option<f64>,
     pub major_unit: Option<f64>,
     pub minor_unit: Option<f64>,
-    pub position: String,
+    /// `bottom`, `top`, `left` or `right`; unset when the source
+    /// omitted it and the writer will supply the conventional one.
+    pub position: Option<String>,
     pub number_format: Option<WasmChartNumberFormat>,
     pub major_gridlines: bool,
     pub minor_gridlines: bool,
@@ -2478,13 +2480,15 @@ impl From<&duke_sheets_chart::Axis> for WasmAxis {
             maximum: a.maximum,
             major_unit: a.major_unit,
             minor_unit: a.minor_unit,
-            position: match a.position {
-                duke_sheets_chart::AxisPosition::Bottom => "bottom",
-                duke_sheets_chart::AxisPosition::Top => "top",
-                duke_sheets_chart::AxisPosition::Left => "left",
-                duke_sheets_chart::AxisPosition::Right => "right",
-            }
-            .into(),
+            position: a.position.map(|position| {
+                match position {
+                    duke_sheets_chart::AxisPosition::Bottom => "bottom",
+                    duke_sheets_chart::AxisPosition::Top => "top",
+                    duke_sheets_chart::AxisPosition::Left => "left",
+                    duke_sheets_chart::AxisPosition::Right => "right",
+                }
+                .to_string()
+            }),
             number_format: a.number_format.as_ref().map(WasmChartNumberFormat::from),
             major_gridlines: a.major_gridlines,
             minor_gridlines: a.minor_gridlines,
