@@ -1980,3 +1980,69 @@ fn test_unknown_xlsx_profile_rejects() {
     let res = wb.save_xlsx_bytes_encrypted(PASSWORD, Some("not-a-thing".into()), None, None);
     assert!(res.is_err(), "unknown profile must reject");
 }
+
+/// The chart style part reaches JS under camelCase names. Serde decides
+/// those, so they are checked through reflection rather than Rust field
+/// access, which would not exercise the rename.
+#[wasm_bindgen_test]
+fn test_chart_style_js_surface() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    let chart_ex = make_options(&[
+        ("name", JsValue::from_str("cx")),
+        ("anchor", drawing_anchor(0, 0, 8, 15)),
+        ("kind", JsValue::from_str("chartEx")),
+        (
+            "chartEx",
+            make_options(&[("layout", JsValue::from_str("waterfall"))]),
+        ),
+    ]);
+    sheet.add_drawing(chart_ex).unwrap();
+    let bytes = wb.save_xlsx_bytes().unwrap();
+
+    let reopened = Workbook::from_bytes(&bytes).unwrap();
+    let sheet = reopened.get_sheet(0).unwrap();
+    let wrapper = Array::from(&sheet.charts_ex().unwrap()).get(0);
+    let cx = Reflect::get(&wrapper, &"chartEx".into()).unwrap();
+
+    let style = Reflect::get(&cx, &"style".into()).unwrap();
+    assert!(!style.is_undefined() && !style.is_null(), "style missing from JS");
+    // serde_wasm_bindgen renders None as undefined, not null.
+    let raw = Reflect::get(&style, &"raw".into()).unwrap();
+    assert!(
+        raw.is_undefined() || raw.is_null(),
+        "a written chartEx style must be modelled, not replayed raw"
+    );
+    assert!(
+        Reflect::get(&style, &"id".into()).unwrap().as_f64().is_some(),
+        "a modelled style carries an id"
+    );
+    let entries = Reflect::get(&style, &"entries".into()).unwrap();
+    let names = Object::keys(&Object::from(entries.clone()));
+    // The 29 required CT_StyleEntry of MS-ODRAWXML 5.15 plus the
+    // optional dataLabelCallout, which Excel's own part also carries.
+    assert_eq!(names.length(), 30, "entry count");
+
+    let entry = Reflect::get(&entries, &"dataPoint".into()).unwrap();
+    assert!(!entry.is_undefined(), "dataPoint entry missing");
+    for name in ["lineReference", "fillReference", "effectReference"] {
+        let reference = Reflect::get(&entry, &name.into()).unwrap();
+        assert!(!reference.is_undefined(), "{name} missing (camelCase rename)");
+        assert!(
+            Reflect::get(&reference, &"idx".into()).unwrap().as_f64().is_some(),
+            "{name}.idx missing"
+        );
+    }
+    let collection = get_string_field(&entry, "fontCollection");
+    assert!(
+        ["major", "minor", "none"].contains(&collection.as_str()),
+        "fontCollection was {collection}"
+    );
+
+    let color_style = Reflect::get(&cx, &"colorStyle".into()).unwrap();
+    assert!(!color_style.is_undefined(), "colorStyle missing from JS");
+    assert!(
+        !get_string_field(&color_style, "method").is_empty(),
+        "colorStyle.method missing"
+    );
+}
