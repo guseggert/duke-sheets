@@ -588,9 +588,20 @@ fn chart_corpus_roundtrip() {
     println!("\n=== Summary ===");
     println!("Roundtrip pass rate: {passed}/{total_compared} ({pass_rate:.1}%)");
 
-    // Fail on panics in write/read-back (those are bugs)
-    // Mismatches are reported but don't fail the test yet - we need to
-    // triage them first to separate real bugs from known limitations.
+    // A mismatch is data the writer lost or changed, and a write error is
+    // a chart we can read but not emit. Both are bugs, so both fail here;
+    // read failures are a property of the input, not of us, and only the
+    // counts above report them.
+    assert!(
+        write_errors.is_empty(),
+        "{} chart file(s) failed to write",
+        write_errors.len()
+    );
+    assert!(
+        chart_mismatches.is_empty(),
+        "{} chart file(s) changed across a round trip",
+        chart_mismatches.len()
+    );
 }
 
 fn collect_all_charts(wb: &Workbook) -> Vec<&duke_sheets_chart::Chart> {
