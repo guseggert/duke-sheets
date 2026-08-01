@@ -2676,6 +2676,8 @@ pub struct JsChart {
     pub high_low_lines: Option<JsChartLines>,
     pub series_lines: Option<JsChartLines>,
     pub up_down_bars: Option<JsUpDownBars>,
+    pub style: Option<JsChartStyle>,
+    pub color_style: Option<JsChartColorStyle>,
 }
 
 impl From<&duke_sheets_chart::Chart> for JsChart {
@@ -2720,6 +2722,8 @@ impl From<&duke_sheets_chart::Chart> for JsChart {
             high_low_lines: c.high_low_lines.as_ref().map(JsChartLines::from),
             series_lines: c.series_lines.as_ref().map(JsChartLines::from),
             up_down_bars: c.up_down_bars.as_ref().map(JsUpDownBars::from),
+            style: c.style.as_ref().map(JsChartStyle::from),
+            color_style: c.color_style.as_ref().map(JsChartColorStyle::from),
         }
     }
 }
