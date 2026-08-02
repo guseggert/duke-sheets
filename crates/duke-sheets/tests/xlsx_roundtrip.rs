@@ -5646,7 +5646,7 @@ fn test_roundtrip_multiple_chartsheets() {
             chart,
             visibility: SheetVisibility::Visible,
             raw_drawing_objects: Vec::new(),
-        raw_drawing_rels: Vec::new(),
+            raw_drawing_rels: Vec::new(),
         })
         .unwrap();
     }
@@ -6020,7 +6020,10 @@ fn xlsx_png_image_round_trips() {
 
     let img = &images[0];
     assert_eq!(img.object.unwrap().meta.name.as_deref(), Some("Pic1"));
-    assert_eq!(img.object.unwrap().meta.alt_text.as_deref(), Some("Test image"));
+    assert_eq!(
+        img.object.unwrap().meta.alt_text.as_deref(),
+        Some("Test image")
+    );
     assert_eq!(img.payload.format, ImageFormat::Png);
     assert_eq!(
         img.payload.data, TEST_PNG_1X1,
@@ -6034,7 +6037,10 @@ fn xlsx_png_image_round_trips() {
         assert_eq!(to.col, 5);
         assert_eq!(to.row, 10);
     } else {
-        panic!("expected TwoCell anchor, got {:?}", img.object.unwrap().anchor);
+        panic!(
+            "expected TwoCell anchor, got {:?}",
+            img.object.unwrap().anchor
+        );
     }
 }
 
@@ -6068,7 +6074,8 @@ fn xlsx_onecell_anchor_round_trips() {
             height_emu: 800_000,
         })
         .with_name("OneCellPic"),
-    ).unwrap();
+    )
+    .unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
@@ -6122,7 +6129,8 @@ fn xlsx_absolute_anchor_round_trips() {
             height_emu: 900_000,
         })
         .with_name("AbsolutePic"),
-    ).unwrap();
+    )
+    .unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
@@ -6187,7 +6195,8 @@ fn xlsx_twocell_anchor_editas_round_trips() {
                 edit_as: Some(ea.clone()),
             })
             .with_name(format!("Pic-{:?}", ea)),
-        ).unwrap();
+        )
+        .unwrap();
 
         let mut buf = Vec::new();
         XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
@@ -6264,7 +6273,10 @@ fn xlsx_images_round_trip_across_multiple_sheets() {
         let images: Vec<_> = rt.worksheet(sheet).unwrap().images().collect();
         assert_eq!(images.len(), 2, "sheet {sheet} image count");
         for i in 0..2usize {
-            assert_eq!(images[i].object.unwrap().meta.name, Some(format!("S{sheet}Pic{i}")));
+            assert_eq!(
+                images[i].object.unwrap().meta.name,
+                Some(format!("S{sheet}Pic{i}"))
+            );
             assert_eq!(
                 images[i].payload.data().last().copied(),
                 Some((sheet * 10 + i) as u8),
@@ -6384,7 +6396,8 @@ fn xlsx_form_controls_round_trip() {
         ws.add_form_control(
             FormControl::new(kind),
             control_anchor_2c(1, row, 3, row + 1),
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     let mut buf = Vec::new();
@@ -6413,7 +6426,10 @@ fn xlsx_form_controls_round_trip() {
         other => panic!("expected TwoCell anchor, got {other:?}"),
     }
     // Names are persisted (defaulted by the writer).
-    assert_eq!(controls[0].object.unwrap().meta.name.as_deref(), Some("Button 1"));
+    assert_eq!(
+        controls[0].object.unwrap().meta.name.as_deref(),
+        Some("Button 1")
+    );
 }
 
 #[test]
@@ -6430,7 +6446,8 @@ fn xlsx_form_controls_emit_expected_parts() {
             no_3d: false,
         }),
         control_anchor_2c(1, 1, 3, 2),
-    ).unwrap();
+    )
+    .unwrap();
     ws.add_form_control(
         FormControl::new(FormControlKind::ListBox {
             input_range: Some("$H$1:$H$4".to_string()),
@@ -6440,7 +6457,8 @@ fn xlsx_form_controls_emit_expected_parts() {
             no_3d: false,
         }),
         control_anchor_2c(1, 4, 3, 6),
-    ).unwrap();
+    )
+    .unwrap();
     ws.add_form_control(
         FormControl::new(FormControlKind::Dropdown {
             input_range: Some("$H$1:$H$4".to_string()),
@@ -6450,7 +6468,8 @@ fn xlsx_form_controls_emit_expected_parts() {
             no_3d: false,
         }),
         control_anchor_2c(1, 7, 3, 8),
-    ).unwrap();
+    )
+    .unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
@@ -6513,7 +6532,8 @@ fn xlsx_controls_without_comments_round_trip() {
             cell_link: None,
         }),
         control_anchor_2c(0, 0, 1, 3),
-    ).unwrap();
+    )
+    .unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
@@ -6539,11 +6559,55 @@ fn xlsx_control_named_and_flagged_round_trips() {
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
     let rt = XlsxReader::read(Cursor::new(&buf)).expect("read");
     let controls: Vec<_> = rt.worksheet(0).unwrap().form_controls().collect();
-    assert_eq!(controls[0].object.unwrap().meta.name.as_deref(), Some("My Button"));
+    assert_eq!(
+        controls[0].object.unwrap().meta.name.as_deref(),
+        Some("My Button")
+    );
     assert!(!controls[0].object.unwrap().meta.locked);
     assert!(!controls[0].object.unwrap().meta.printable);
     assert_eq!(
         controls[0].payload.caption_text().as_deref(),
         Some("Do <it> & more")
     );
+}
+
+/// Defined names must come back in the order the file listed them.
+///
+/// They were stored in a HashMap, so the order came out of whatever the
+/// map's seed produced. Writing the same workbook twice was stable, but
+/// reading and writing again reordered every name, which made a second
+/// save differ from the first across most of a real corpus.
+#[test]
+fn defined_name_order_survives_a_round_trip() {
+    let names = [
+        "Zulu", "alpha", "Mike", "bravo", "Yankee", "charlie", "Xray", "delta", "Whiskey", "echo",
+        "Victor", "foxtrot",
+    ];
+
+    let mut wb = Workbook::new();
+    for (i, name) in names.iter().enumerate() {
+        wb.named_ranges_mut()
+            .define(duke_sheets::named_range::NamedRange::new(
+                name.to_string(),
+                format!("Sheet1!$A${}", i + 1),
+                duke_sheets::named_range::NameScope::Workbook,
+            ))
+            .expect("define");
+    }
+    let authored: Vec<String> = wb.named_ranges().iter().map(|n| n.name.clone()).collect();
+    assert_eq!(authored, names, "authoring order must be preserved in memory");
+
+    let write = |wb: &Workbook| {
+        let mut buf = Vec::new();
+        XlsxWriter::write(wb, Cursor::new(&mut buf)).expect("write");
+        buf
+    };
+
+    let first = write(&wb);
+    let reread = XlsxReader::read(Cursor::new(first.clone())).expect("read");
+    let after: Vec<String> = reread.named_ranges().iter().map(|n| n.name.clone()).collect();
+    assert_eq!(after, names, "the file's order must survive the round trip");
+
+    // And so a second save reproduces the first byte for byte.
+    assert_eq!(write(&reread), first, "a second save must not reorder names");
 }
