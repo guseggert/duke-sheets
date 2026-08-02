@@ -867,3 +867,80 @@ fn test_roundtrip_dxf_alignment() {
         assert_eq!(format.alignment.rotation, 45, "Text rotation should be 45");
     }
 }
+
+/// A currency format holds literal quotes, and quick-xml escapes attribute
+/// values itself, so escaping before handing it over produced `&amp;quot;`
+/// where `&quot;` belonged. The format then gained another `amp;` on every
+/// save, growing without bound while displaying the wrong thing.
+#[test]
+fn number_formats_and_font_names_are_escaped_exactly_once() {
+    let format_code = r##""$"#,##0.00_);[Red]\("$"#,##0.00\)"##;
+
+    let mut wb = Workbook::new();
+    {
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", 1234.5).unwrap();
+        // An ampersand and angle brackets in a font name exercise the
+        // same attribute path.
+        let font = duke_sheets::FontStyle {
+            name: "Ampersand & <Co>".to_string(),
+            ..duke_sheets::FontStyle::default()
+        };
+        let style = Style {
+            number_format: NumberFormat::Custom(format_code.to_string()),
+            font,
+            ..Style::default()
+        };
+        sheet.set_cell_style("A1", &style).unwrap();
+    }
+
+    let write = |wb: &Workbook| {
+        let mut buf = Vec::new();
+        XlsxWriter::write(wb, Cursor::new(&mut buf)).expect("write");
+        buf
+    };
+    let part = |bytes: &[u8], name: &str| {
+        let mut zip = zip::ZipArchive::new(Cursor::new(bytes.to_vec())).expect("zip");
+        let mut xml = String::new();
+        zip.by_name(name)
+            .expect("part")
+            .read_to_string(&mut xml)
+            .expect("read part");
+        xml
+    };
+
+    let first = write(&wb);
+    let styles = part(&first, "xl/styles.xml");
+    assert!(
+        !styles.contains("&amp;quot;") && !styles.contains("&amp;amp;"),
+        "attribute values were escaped twice: {}",
+        &styles[..styles.len().min(700)]
+    );
+    assert!(
+        styles.contains("Ampersand &amp; &lt;Co&gt;"),
+        "the font name must be escaped exactly once: {}",
+        &styles[..styles.len().min(700)]
+    );
+
+    // The value must survive, and a second save must not change it again.
+    let reread = XlsxReader::read(Cursor::new(first.clone())).expect("read");
+    let style = reread
+        .worksheet(0)
+        .unwrap()
+        .cell_style("A1")
+        .expect("cell style lookup")
+        .expect("cell style");
+    assert_eq!(
+        style.number_format,
+        NumberFormat::Custom(format_code.to_string()),
+        "the format code must come back exactly as written"
+    );
+    assert_eq!(style.font.name, "Ampersand & <Co>");
+
+    let second = write(&reread);
+    assert_eq!(
+        part(&second, "xl/styles.xml"),
+        styles,
+        "a second save must not re-escape anything"
+    );
+}
