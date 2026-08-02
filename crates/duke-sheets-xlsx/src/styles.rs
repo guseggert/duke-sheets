@@ -6,7 +6,6 @@ use std::hash::{Hash, Hasher};
 use std::io::{BufReader, Cursor, Read};
 use std::sync::{Mutex, OnceLock};
 
-use quick_xml::escape::escape;
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::reader::Reader;
 use quick_xml::Writer;
@@ -361,10 +360,9 @@ impl XlsxStyleTable {
             w.write_event(Event::Start(tag))?;
             for (id, code) in &numfmts {
                 let id_s = id.to_string();
-                let code_esc = escape(code.as_str());
                 w.create_element("numFmt")
                     .with_attribute(("numFmtId", id_s.as_str()))
-                    .with_attribute(("formatCode", &*code_esc))
+                    .with_attribute(("formatCode", code.as_str()))
                     .write_empty()?;
             }
             w.write_event(Event::End(BytesEnd::new("numFmts")))?;
@@ -432,10 +430,10 @@ impl XlsxStyleTable {
         tag.push_attribute(("count", count.as_str()));
         w.write_event(Event::Start(tag))?;
         for named_style in &self.named_styles {
-            let name_esc = escape(named_style.name.as_str());
+
             let xf_id = named_style.xf_id.to_string();
             let mut cell_style = BytesStart::new("cellStyle");
-            cell_style.push_attribute(("name", &*name_esc));
+            cell_style.push_attribute(("name", named_style.name.as_str()));
             cell_style.push_attribute(("xfId", xf_id.as_str()));
             let builtin_id = named_style.builtin_id.map(|v| v.to_string());
             if let Some(builtin_id) = builtin_id.as_deref() {
@@ -556,9 +554,9 @@ fn write_font_xml(w: &mut XmlWriter, font: &FontStyle) -> std::io::Result<()> {
         write_color_xml(w, "color", &font.color)?;
     }
 
-    let name_esc = escape(&font.name);
+
     w.create_element("name")
-        .with_attribute(("val", &*name_esc))
+        .with_attribute(("val", font.name.as_str()))
         .write_empty()?;
 
     if let Some(family) = font.family {
@@ -912,10 +910,10 @@ fn write_dxf_xml(w: &mut XmlWriter, style: &Style) -> std::io::Result<()> {
             NumberFormat::Custom(code) => (164, code.clone()),
         };
         let id_s = id.to_string();
-        let code_esc = escape(&code);
+
         w.create_element("numFmt")
             .with_attribute(("numFmtId", id_s.as_str()))
-            .with_attribute(("formatCode", &*code_esc))
+            .with_attribute(("formatCode", code.as_str()))
             .write_empty()?;
     }
 
