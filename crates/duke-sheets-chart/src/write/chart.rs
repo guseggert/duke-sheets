@@ -57,9 +57,11 @@ fn write_chart_space(w: &mut XmlWriter, chart: &Chart) -> XlsxResult<()> {
         write_legend(w, legend)?;
     }
 
-    if let Some(true) = chart.plot_visible_only {
+    // c:plotVisOnly defaults to true, so dropping an explicit val="0"
+    // would stop the chart plotting data in hidden cells.
+    if let Some(plot_visible_only) = chart.plot_visible_only {
         w.create_element("c:plotVisOnly")
-            .with_attribute(("val", "1"))
+            .with_attribute(("val", if plot_visible_only { "1" } else { "0" }))
             .write_empty()?;
     }
     if let Some(ref dba) = chart.display_blanks_as {

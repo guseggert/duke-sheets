@@ -551,6 +551,24 @@ mod tests {
         );
     }
 
+    /// c:plotVisOnly defaults to true, so an explicit val="0" - plot the
+    /// data in hidden cells too - has to be written out, or the chart
+    /// quietly loses those points.
+    #[test]
+    fn plot_visible_only_false_survives_a_round_trip() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:layout/><c:barChart><c:barDir val="col"/><c:ser><c:idx val="0"/><c:order val="0"/></c:ser><c:axId val="111"/><c:axId val="222"/></c:barChart><c:catAx><c:axId val="111"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:axPos val="b"/><c:crossAx val="222"/></c:catAx><c:valAx><c:axId val="222"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:axPos val="l"/><c:crossAx val="111"/></c:valAx></c:plotArea><c:plotVisOnly val="0"/></c:chart></c:chartSpace>"#;
+        let chart = read_chart_from_xml(xml);
+        assert_eq!(chart.plot_visible_only, Some(false));
+
+        let written = chart_xml_after_write(&chart);
+        assert!(
+            written.contains(r#"<c:plotVisOnly val="0"/>"#),
+            "the explicit false must be written: {written}"
+        );
+        assert_eq!(read_chart_from_xml(&written).plot_visible_only, Some(false));
+    }
+
     /// Excel treats an axis with no c:delete as deleted: it adds
     /// <c:delete val="1"/> and discards the axis formatting when it opens
     /// such a chart. Reading the omission as "unspecified" and writing
