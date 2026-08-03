@@ -60,8 +60,13 @@ fuzz/corpus/
 *.xls
 *.xlsx
 *.xlsm
+*.xlsb
 *.xltx
 *.xltm
+*.ods
+*.fods
+*.csv
+*.tsv
 data/
 
 perf-snapshots/
