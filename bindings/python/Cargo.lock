@@ -475,7 +475,7 @@ dependencies = [
 
 [[package]]
 name = "duke-sheets-python"
-version = "0.1.18"
+version = "0.1.19"
 dependencies = [
  "duke-sheets",
  "duke-sheets-chart",
