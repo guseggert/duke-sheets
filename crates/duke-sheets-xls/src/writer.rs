@@ -195,11 +195,17 @@ impl XlsWriter {
 
 fn wrap_workbook_stream_in_cfb(stream: Vec<u8>) -> XlsResult<Vec<u8>> {
     let mut builder = CompoundFileBuilder::new();
+    builder.set_root_clsid(EXCEL_WORKBOOK_ROOT_CLSID);
     builder
         .add_stream("/Workbook", stream)
         .map_err(cfb_to_xls)?;
     builder.build().map_err(cfb_to_xls)
 }
+
+const EXCEL_WORKBOOK_ROOT_CLSID: [u8; 16] = [
+    0x20, 0x08, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x46,
+];
 
 fn cfb_to_xls(err: crate::cfb::CfbError) -> XlsError {
     XlsError::Io(std::io::Error::from(err))

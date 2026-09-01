@@ -11,6 +11,24 @@ use std::io::Cursor;
 use duke_sheets_core::Workbook;
 use duke_sheets_xls::{XlsReader, XlsWriter};
 
+const EXCEL_WORKBOOK_ROOT_CLSID: [u8; 16] = [
+    0x20, 0x08, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x46,
+];
+
+#[test]
+fn writer_emits_excel_workbook_root_clsid() {
+    let bytes = XlsWriter::write_to_bytes(&Workbook::new()).expect("serialize workbook");
+    let first_dir_sector =
+        u32::from_le_bytes(bytes[48..52].try_into().expect("directory sector")) as usize;
+    let root_entry = (1 + first_dir_sector) * 512;
+
+    assert_eq!(
+        &bytes[root_entry + 80..root_entry + 96],
+        &EXCEL_WORKBOOK_ROOT_CLSID
+    );
+}
+
 #[test]
 fn empty_default_workbook_round_trips_via_reader() {
     let wb = Workbook::new();
