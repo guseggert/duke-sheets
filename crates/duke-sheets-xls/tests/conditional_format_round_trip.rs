@@ -169,7 +169,6 @@ fn rule_with_multiple_ranges_round_trips() {
 /// and read the underlying cell values, which is enough to catch
 /// envelope-level malformations.
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_read_conditional_formats_we_emit() {
     duke_sheets_test_harness::lo::ensure_lo();
 
@@ -200,10 +199,12 @@ fn lo_can_read_conditional_formats_we_emit() {
         .build()
         .unwrap();
     let outcome: Result<(f64, f64, f64), String> = rt.block_on(async {
-        let mut bridge =
-            duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect("127.0.0.1", 2002)
-                .await
-                .map_err(|e| format!("connect: {e}"))?;
+        let mut bridge = duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect(
+            "127.0.0.1",
+            2002,
+        )
+        .await
+        .map_err(|e| format!("connect: {e}"))?;
         let mut wb = bridge
             .open_workbook(&path)
             .await

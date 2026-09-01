@@ -79,10 +79,13 @@ fn test_xls_large_sst_with_continue() {
         let lo = lo_bridge().await.unwrap();
         let mut b = lo.lock().await;
         let mut wb = b.create_workbook().await.unwrap();
-        for (i, s) in expected.iter().enumerate() {
-            let cell_ref = format!("A{}", i + 1);
-            wb.set_cell_value(&cell_ref, s.as_str()).await.unwrap();
-        }
+        // One setDataArray call instead of 300 per-cell writes: each of
+        // those costs ~3 URP round-trips, so this column alone was ~900.
+        let rows: Vec<Vec<duke_sheets_libreoffice::CellValue>> = expected
+            .iter()
+            .map(|s| vec![duke_sheets_libreoffice::CellValue::String(s.clone())])
+            .collect();
+        wb.set_range_values(0, 0, 0, &rows).await.unwrap();
         wb.save_as_xls(path.to_str().unwrap()).await.unwrap();
         wb.close().await.unwrap();
     });
@@ -132,16 +135,10 @@ fn test_xls_boolean_values() {
 
     // TRUE()/FALSE() formulas have boolean cached results
     let a1 = sheet.get_value_at(0, 0);
-    assert!(
-        matches!(a1, CellValue::Boolean(true)),
-        "A1 should be TRUE, got {a1:?}"
-    );
+    assert!(matches!(a1, CellValue::Boolean(true)), "A1 should be TRUE, got {a1:?}");
 
     let b1 = sheet.get_value_at(0, 1);
-    assert!(
-        matches!(b1, CellValue::Boolean(false)),
-        "B1 should be FALSE, got {b1:?}"
-    );
+    assert!(matches!(b1, CellValue::Boolean(false)), "B1 should be FALSE, got {b1:?}");
 
     cleanup_fixture(&path);
 }

@@ -210,6 +210,32 @@ impl XlsbWriter {
 
         let mut comment_sheet_indices = Vec::new();
         let mut all_drawing_overrides: Vec<(String, String)> = Vec::new();
+        let mut media_default_exts: BTreeSet<String> = BTreeSet::new();
+        let mut written_media: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        // A preserved part keeps the path its own relationship names, so
+        // everything the writer numbers itself starts above whatever
+        // those have already claimed, or the two collide on one path.
+        let mut claimed = drawing::ClaimedPartNumbers::default();
+        for i in 0..workbook.sheet_count() {
+            let ws = workbook.worksheet(i).unwrap();
+            for rel in drawing::sheet_raw_rels(ws) {
+                if rel.external || rel.part.is_none() {
+                    continue;
+                }
+                claimed.note(&drawing::resolve_rel_target("xl/drawings", &rel.target));
+            }
+        }
+        let mut next_drawing_num = claimed.drawing + 1;
+        let mut next_chart_num = claimed.chart + 1;
+        let mut next_chartex_num = claimed.chart_ex + 1;
+        let mut next_image_num = claimed.image + 1;
+        let total_standard_charts: usize = claimed.style.max(
+            (0..workbook.sheet_count())
+                .filter_map(|i| workbook.worksheet(i))
+                .map(|ws| drawing::sheet_charts(ws).len())
+                .sum(),
+        );
 
         let mut global_table_num = 1usize;
         let mut table_global_nums: Vec<Vec<usize>> = Vec::new();
@@ -236,9 +262,8 @@ impl XlsbWriter {
                 external_ixti,
             };
 
-            let has_raw_drawing = !ws.raw_drawing_objects.is_empty();
-            let has_charts = !ws.charts().is_empty() || !ws.charts_ex().is_empty();
-            let emit_brt_drawing = has_charts;
+            let has_drawing = drawing::sheet_has_drawing_content(ws);
+            let emit_brt_drawing = has_drawing;
 
             let mut result = worksheet::write_worksheet(
                 &mut zip,
@@ -287,10 +312,28 @@ impl XlsbWriter {
                 }
             }
 
-            let drawing_result = if has_raw_drawing || has_charts {
-                let dr =
-                    drawing::write_drawing_parts(&mut zip, &options, &ws.raw_drawing_objects, i)?;
+            let drawing_result = if has_drawing {
+                let numbering = drawing::DrawingNumbering {
+                    drawing_num: next_drawing_num,
+                    chart_start: next_chart_num,
+                    chartex_start: next_chartex_num,
+                    image_start: next_image_num,
+                    total_standard_charts,
+                };
+                next_drawing_num += 1;
+                next_chart_num += drawing::sheet_charts(ws).len();
+                next_chartex_num += ws.chart_ex_count();
+                next_image_num += drawing::sheet_image_payloads(ws).len();
+                let dr = drawing::write_drawing_parts(
+                    &mut zip,
+                    &options,
+                    ws,
+                    i,
+                    &numbering,
+                    &mut written_media,
+                )?;
                 all_drawing_overrides.extend(dr.content_type_overrides.iter().cloned());
+                media_default_exts.extend(dr.media_default_exts.iter().cloned());
                 Some(dr)
             } else {
                 None
@@ -301,14 +344,12 @@ impl XlsbWriter {
                 .and_then(|dr| dr.drawing_path.as_ref())
                 .is_some();
 
-            let has_vml = if result.has_comments {
+            if result.has_comments {
                 comments::write_comments(&mut zip, &options, i, ws)?;
-                let wrote_vml = vml::write_comment_vml(&mut zip, &options, i, ws)?;
                 comment_sheet_indices.push(i);
-                wrote_vml
-            } else {
-                false
-            };
+            }
+            let has_vml =
+                vml::write_legacy_vml(&mut zip, &options, i, ws, &workbook.theme_palette())?;
 
             if !result.sheet_rels.is_empty() || result.has_comments || has_drawing_rel || has_vml {
                 let drawing_path = drawing_result
@@ -333,6 +374,7 @@ impl XlsbWriter {
             &pivot_plan,
             &comment_sheet_indices,
             &all_drawing_overrides,
+            &media_default_exts,
             &table_global_nums,
         )?;
         pivot::write_pivot_parts(&mut zip, &options, workbook, &pivot_plan, &style_mapping)?;
@@ -341,6 +383,7 @@ impl XlsbWriter {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn write_content_types<W: Write + Seek>(
         zip: &mut ZipWriter<W>,
         options: &SimpleFileOptions,
@@ -348,6 +391,7 @@ impl XlsbWriter {
         pivot_plan: &FormatPivotPlan,
         comment_sheets: &[usize],
         drawing_overrides: &[(String, String)],
+        media_default_exts: &BTreeSet<String>,
         table_global_nums: &[Vec<usize>],
     ) -> XlsbResult<()> {
         zip.start_file("[Content_Types].xml", *options)?;
@@ -420,20 +464,26 @@ impl XlsbWriter {
                 connections::CT_CONNECTIONS
             ));
         }
-        let mut has_media_default = false;
+        // One Override per part, compared without case as OPC does; a
+        // part reached from two sheets is still one part.
+        let mut seen_overrides = std::collections::HashSet::new();
         for (part_name, ct) in drawing_overrides {
+            if !seen_overrides.insert(part_name.to_ascii_lowercase()) {
+                continue;
+            }
             xml.push_str(&format!(
                 "<Override PartName=\"{}\" ContentType=\"{}\"/>",
                 part_name, ct
             ));
-            if part_name.contains("/media/") {
-                has_media_default = true;
-            }
         }
-        if has_media_default || drawing_overrides.iter().any(|(p, _)| p.contains("/media/")) {
-            xml.push_str("<Default Extension=\"png\" ContentType=\"image/png\"/>");
-            xml.push_str("<Default Extension=\"jpeg\" ContentType=\"image/jpeg\"/>");
-            xml.push_str("<Default Extension=\"emf\" ContentType=\"image/x-emf\"/>");
+        for ext in media_default_exts {
+            let mime = duke_sheets_chart::ImageFormat::from_extension(ext)
+                .map(duke_sheets_chart::drawing_part::image_format_mime)
+                .unwrap_or("application/octet-stream");
+            xml.push_str(&format!(
+                "<Default Extension=\"{}\" ContentType=\"{}\"/>",
+                ext, mime
+            ));
         }
         xml.push_str("</Types>");
         zip.write_all(xml.as_bytes())?;

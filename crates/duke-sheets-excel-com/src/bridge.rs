@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
+use base64::prelude::{Engine as _, BASE64_STANDARD};
 use excel_com_protocol::{
     CellValue, ChainStep, Command, Request, Response, ResponseData, ResponseResult, SheetRef,
 };
@@ -70,9 +71,16 @@ impl Default for ExcelBridgeConfig {
 /// Provides both low-level generic COM proxy methods (`get`, `set`, `invoke`)
 /// and high-level Excel-specific convenience methods (`create_workbook`,
 /// `set_cell_value`, etc.).
+/// `&ExcelBridge` is safe to share: `send_command` holds `call_lock` across
+/// both the write and the read, so concurrent callers queue rather than
+/// interleave and swap each other's responses.
 pub struct ExcelBridge {
     reader: Mutex<BufReader<TcpStream>>,
     writer: Mutex<BufWriter<TcpStream>>,
+    /// Serializes whole request/response exchanges. Locking `writer` and
+    /// `reader` separately is not enough: two callers could both write, then
+    /// both read, and each receive the other's reply.
+    call_lock: Mutex<()>,
     next_id: AtomicU64,
 }
 
@@ -97,6 +105,7 @@ impl ExcelBridge {
         let bridge = Self {
             reader: Mutex::new(BufReader::new(reader)),
             writer: Mutex::new(BufWriter::new(stream)),
+            call_lock: Mutex::new(()),
             next_id: AtomicU64::new(1),
         };
 
@@ -131,23 +140,29 @@ impl ExcelBridge {
     // Low-level generic COM proxy operations
 
     /// Send a command and wait for the response.
+    ///
+    /// The whole exchange is serialized by `call_lock`, so this is safe to
+    /// call on a shared `&ExcelBridge` from multiple threads.
     fn send_command(&self, command: Command) -> Result<Option<ResponseData>, BridgeError> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let request = Request { id, command };
         let json = serde_json::to_string(&request)?;
 
-        // Send
+        // Poisoning would make every later call fail even though the
+        // connection is fine; the guard protects no invariant beyond
+        // "one exchange at a time".
+        let _call = self.call_lock.lock().unwrap_or_else(|e| e.into_inner());
+
         {
-            let mut writer = self.writer.lock().unwrap();
+            let mut writer = self.writer.lock().unwrap_or_else(|e| e.into_inner());
             writeln!(writer, "{json}").map_err(|e| BridgeError::SendFailed(e.to_string()))?;
             writer
                 .flush()
                 .map_err(|e| BridgeError::SendFailed(e.to_string()))?;
         }
 
-        // Read
         let response: Response = {
-            let mut reader = self.reader.lock().unwrap();
+            let mut reader = self.reader.lock().unwrap_or_else(|e| e.into_inner());
             let mut line = String::new();
             reader
                 .read_line(&mut line)
@@ -157,6 +172,13 @@ impl ExcelBridge {
             }
             serde_json::from_str(&line)?
         };
+
+        if response.id != id {
+            return Err(BridgeError::BridgeError(format!(
+                "response id {} does not match request id {id}; connection is out of sync",
+                response.id
+            )));
+        }
 
         match response.result {
             ResponseResult::Ok { data } => Ok(data),
@@ -227,6 +249,53 @@ impl ExcelBridge {
     /// Release a stored COM object handle on the server.
     pub fn release(&self, handle: u64) -> Result<(), BridgeError> {
         self.send_command(Command::Release { handle })?;
+        Ok(())
+    }
+
+    // VM filesystem operations
+    //
+    // These move fixtures over the bridge connection rather than WinRM. A
+    // WinRM SOAP session costs ~420ms; these are one ~15ms round-trip each.
+
+    /// Write `bytes` to `vm_path` inside the VM, creating parent directories.
+    pub fn put_file(&self, vm_path: &str, bytes: &[u8]) -> Result<(), BridgeError> {
+        self.send_command(Command::PutFile {
+            path: vm_path.to_string(),
+            contents_b64: BASE64_STANDARD.encode(bytes),
+        })?;
+        Ok(())
+    }
+
+    /// Read `vm_path` from inside the VM.
+    pub fn get_file(&self, vm_path: &str) -> Result<Vec<u8>, BridgeError> {
+        let data = self.send_command(Command::GetFile {
+            path: vm_path.to_string(),
+        })?;
+        let b64 = match data {
+            Some(ResponseData::Value { value }) => value
+                .as_str()
+                .ok_or_else(|| BridgeError::BridgeError("GetFile: value is not a string".into()))?
+                .to_string(),
+            _ => return Err(BridgeError::BridgeError("GetFile: no value returned".into())),
+        };
+        BASE64_STANDARD
+            .decode(b64.trim())
+            .map_err(|e| BridgeError::BridgeError(format!("GetFile: base64 decode failed: {e}")))
+    }
+
+    /// Delete `vm_path` inside the VM. Succeeds if it is already absent.
+    pub fn delete_file(&self, vm_path: &str) -> Result<(), BridgeError> {
+        self.send_command(Command::DeleteFile {
+            path: vm_path.to_string(),
+        })?;
+        Ok(())
+    }
+
+    /// Create a directory inside the VM, including parents. Idempotent.
+    pub fn create_dir(&self, vm_path: &str) -> Result<(), BridgeError> {
+        self.send_command(Command::CreateDir {
+            path: vm_path.to_string(),
+        })?;
         Ok(())
     }
 

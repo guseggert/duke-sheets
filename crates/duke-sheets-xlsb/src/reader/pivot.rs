@@ -355,8 +355,22 @@ fn read_pivot_table<R: Read + Seek>(
         &field_options,
         &column_field_indexes,
     );
-    let all_field_indexes = (0..field_options.len()).collect::<Vec<_>>();
-    push_hidden_axis_field_item_filters(&mut filters, &cache, &field_options, &all_field_indexes);
+    let unplaced_field_indexes = (0..field_options.len())
+        .filter(|&field_index| {
+            let field_name = semantic_cache_field_name(&cache, field_index);
+            !rows
+                .iter()
+                .chain(&columns)
+                .chain(&page_fields)
+                .any(|field| field.field.name.eq_ignore_ascii_case(&field_name))
+        })
+        .collect::<Vec<_>>();
+    push_hidden_axis_field_item_filters(
+        &mut filters,
+        &cache,
+        &field_options,
+        &unplaced_field_indexes,
+    );
     push_top_n_filters(&mut filters, &cache, &measures, &pending_top_n_filters);
     push_label_filters(&mut filters, &cache, &pending_label_filters);
     push_value_filters(&mut filters, &cache, &measures, &pending_value_filters);

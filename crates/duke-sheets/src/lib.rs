@@ -63,7 +63,13 @@ pub use duke_sheets_pivot::{PivotRefreshOptions, PivotRefreshStats, WorkbookPivo
 // Re-export core types
 pub use duke_sheets_core::auto_filter::{ColorFilter, DynamicFilter, DynamicFilterType};
 pub use duke_sheets_core::{
+    default_comment_anchor,
+    hash_legacy_protection_password,
+
+    radio_groups,
     rich_text_to_plain,
+    validate_anchor,
+    validate_group_child,
     Alignment,
     AutoFilter,
     BorderEdge,
@@ -87,24 +93,44 @@ pub use duke_sheets_core::{
     CfValueType,
     // Chart sheet types
     ChartSheet,
+    // Form control types
+    CheckState,
+    // Drawing types
+    ChildTransform,
     Color,
     ColumnFilter,
+    CommentRef,
     ConditionalFormatRule,
+    ControlText,
     // Data validation types
     CustomFilterCondition,
     CustomFilters,
     DataValidation,
+    DrawingKind,
+    DrawingMeta,
+    DrawingNodeMut,
+    DrawingNodeRef,
+    DrawingObject,
+    DrawingPath,
+    DrawingText,
     // Error types
     Error,
     FillStyle,
     FilterColumn,
     FilterOperator,
     FontStyle,
+    FormControl,
+    FormControlInteractionResult,
+    FormControlKind,
     // Sheet-level types
     FreezePanes,
+    Group,
+    GroupChild,
+    GroupTransform,
     HorizontalAlignment,
     Hyperlink,
     IconSetStyle,
+    ListSelection,
     // Locale for cell formatting
     Locale,
 
@@ -142,11 +168,21 @@ pub use duke_sheets_core::{
     PivotTable,
     PivotTableBuilder,
     PivotValue,
+    Placed,
+    PlacedControl,
+    ProtectedRange,
+    RawDrawing,
+    RawRel,
+    RectEmu,
     Result,
 
     // Rich text types
     RichTextRun,
     RunFont,
+    Shape,
+    ShapeFill,
+    ShapeGeometry,
+    ShapeLine,
     SheetProtection,
     SheetSlot,
     // Style types
@@ -156,6 +192,7 @@ pub use duke_sheets_core::{
     Table,
     TableColumn,
     TableStyleInfo,
+    ThemePalette,
     TimePeriod,
     Top10Filter,
     TotalsRowFunction,
@@ -167,9 +204,9 @@ pub use duke_sheets_core::{
     VerticalAlignment,
     // Main types
     Workbook,
+    WorkbookProtection,
     WorkbookSettings,
     Worksheet,
-
     MAX_COLS,
     // Constants
     MAX_ROWS,
@@ -187,17 +224,21 @@ pub use duke_sheets_formula::{
 
 // Re-export chart types
 pub use duke_sheets_chart::{
-    Axis, AxisPosition, CellMarker, Chart, ChartType, DataReference, DataSeries, DrawingAnchor,
-    EditAs, EmbeddedImage, ImageFormat, Legend, PivotChartSource,
+    column_width_to_emu, row_height_to_emu, Axis, AxisPosition, CellMarker, Chart, ChartEx,
+    ChartType, DataReference, DataSeries, DrawingAnchor, DrawingMetrics, EditAs, EmbeddedImage,
+    ImageFormat, Legend, PivotChartSource,
 };
 
 // Re-export I/O types
 pub use duke_sheets_csv::{CsvError, CsvReadOptions, CsvReader, CsvWriteOptions, CsvWriter};
 #[cfg(feature = "xls")]
-pub use duke_sheets_xls::{XlsError, XlsReader, XlsWriter};
+pub use duke_sheets_xls::{XlsError, XlsReadOptions, XlsReader, XlsWriter};
 #[cfg(feature = "xlsb")]
 pub use duke_sheets_xlsb::{XlsbError, XlsbReader, XlsbWriter};
-pub use duke_sheets_xlsx::{XlsxError, XlsxReader, XlsxWriter};
+pub use duke_sheets_xlsx::{
+    XlsxDiagnostic, XlsxDiagnosticCode, XlsxDiagnosticSeverity, XlsxError, XlsxPackagePolicy,
+    XlsxReadOptions, XlsxReadReport, XlsxReader, XlsxWriter,
+};
 
 use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::path::Path;
@@ -450,10 +491,18 @@ pub trait WorkbookExt {
     /// Open a workbook from bytes with explicit options.
     fn from_bytes_with(bytes: &[u8], opts: &WorkbookOpenOptions) -> Result<Workbook>;
 
-    /// Save the workbook to a file
+    /// Save the workbook to a file.
+    ///
+    /// Form-control state is synchronized into linked cells in the output,
+    /// replacing existing values and formulas there; the caller's workbook is
+    /// left unchanged.
     fn save<P: AsRef<Path>>(&self, path: P) -> Result<()>;
 
-    /// Save the workbook to a file with explicit options
+    /// Save the workbook to a file with explicit options.
+    ///
+    /// Form-control state is synchronized into linked cells in the output,
+    /// replacing existing values and formulas there; the caller's workbook is
+    /// left unchanged.
     /// (to write an encrypted file, etc.).
     fn save_with<P: AsRef<Path>>(&self, path: P, opts: &WorkbookSaveOptions) -> Result<()>;
 }
@@ -463,12 +512,21 @@ impl WorkbookExt for Workbook {
         let path = path.as_ref();
         let pw = opts.password.as_deref();
         let vs = opts.try_velvet_sweatshop;
-        let skip_ic = opts.skip_integrity_check;
+        let xlsx_opts = XlsxReadOptions {
+            password: opts.password.clone(),
+            try_velvet_sweatshop: vs,
+            skip_integrity_check: opts.skip_integrity_check,
+        };
+        #[cfg(feature = "xls")]
+        let xls_opts = XlsReadOptions {
+            password: opts.password.clone(),
+            try_velvet_sweatshop: vs,
+        };
 
         let format = detect_format_from_path(path)?;
 
         if (pw.is_some() || vs) && format == FileFormat::Xls {
-            match XlsxReader::read_file_with_options(path, pw, vs, skip_ic) {
+            match XlsxReader::read_file_with(path, &xlsx_opts) {
                 Ok(wb) => return Ok(wb),
                 Err(XlsxError::InvalidFormat(msg)) if is_ooxml_envelope_probe_miss(&msg) => {}
                 Err(e) => return Err(Error::other(e.to_string())),
@@ -476,11 +534,12 @@ impl WorkbookExt for Workbook {
         }
 
         match format {
-            FileFormat::Xlsx => XlsxReader::read_file_with_options(path, pw, vs, skip_ic)
+            FileFormat::Xlsx => XlsxReader::read_file_with(path, &xlsx_opts)
                 .map_err(|e| Error::other(e.to_string())),
             #[cfg(feature = "xls")]
-            FileFormat::Xls => XlsReader::read_file_with_password(path, pw, vs)
-                .map_err(|e| Error::other(e.to_string())),
+            FileFormat::Xls => {
+                XlsReader::read_file_with(path, &xls_opts).map_err(|e| Error::other(e.to_string()))
+            }
             #[cfg(not(feature = "xls"))]
             FileFormat::Xls => Err(Error::other(
                 "XLS format detected but the 'xls' feature is not enabled",
@@ -494,13 +553,12 @@ impl WorkbookExt for Workbook {
                 "XLSB format detected but the 'xlsb' feature is not enabled",
             )),
             FileFormat::Unknown if path_has_xlsx_family_extension(path) => {
-                XlsxReader::read_file_with_options(path, pw, vs, skip_ic)
+                XlsxReader::read_file_with(path, &xlsx_opts)
                     .map_err(|e| Error::other(e.to_string()))
             }
             #[cfg(feature = "xls")]
             FileFormat::Unknown if path_has_extension(path, "xls") => {
-                XlsReader::read_file_with_password(path, pw, vs)
-                    .map_err(|e| Error::other(e.to_string()))
+                XlsReader::read_file_with(path, &xls_opts).map_err(|e| Error::other(e.to_string()))
             }
             #[cfg(not(feature = "xls"))]
             FileFormat::Unknown if path_has_extension(path, "xls") => Err(Error::other(
@@ -522,7 +580,16 @@ impl WorkbookExt for Workbook {
     fn from_bytes_with(bytes: &[u8], opts: &WorkbookOpenOptions) -> Result<Workbook> {
         let pw = opts.password.as_deref();
         let vs = opts.try_velvet_sweatshop;
-        let skip_ic = opts.skip_integrity_check;
+        let xlsx_opts = XlsxReadOptions {
+            password: opts.password.clone(),
+            try_velvet_sweatshop: vs,
+            skip_integrity_check: opts.skip_integrity_check,
+        };
+        #[cfg(feature = "xls")]
+        let xls_opts = XlsReadOptions {
+            password: opts.password.clone(),
+            try_velvet_sweatshop: vs,
+        };
 
         // Encrypted XLSX files masquerade as XLS to detect_format because
         // both share the CFB magic header. When a password is supplied
@@ -535,20 +602,19 @@ impl WorkbookExt for Workbook {
         // UnsupportedEncryption, crypto-layer InvalidFormat) propagate
         // back to the caller instead of being silently retried as XLS.
         if (pw.is_some() || vs) && is_cfb_magic(bytes) {
-            match XlsxReader::read_bytes_with_options(bytes, pw, vs, skip_ic) {
+            match XlsxReader::read_bytes_with(bytes, &xlsx_opts) {
                 Ok(wb) => return Ok(wb),
                 Err(XlsxError::InvalidFormat(msg)) if is_ooxml_envelope_probe_miss(&msg) => {}
                 Err(e) => return Err(Error::other(e.to_string())),
             }
         }
         match detect_format(bytes) {
-            FileFormat::Xlsx => XlsxReader::read_bytes_with_password(bytes, pw, vs)
+            FileFormat::Xlsx => XlsxReader::read_bytes_with(bytes, &xlsx_opts)
                 .map_err(|e| Error::other(e.to_string())),
             #[cfg(feature = "xls")]
             FileFormat::Xls => {
                 let cursor = Cursor::new(bytes);
-                XlsReader::read_with_password(cursor, pw, vs)
-                    .map_err(|e| Error::other(e.to_string()))
+                XlsReader::read_with(cursor, &xls_opts).map_err(|e| Error::other(e.to_string()))
             }
             _ => Self::from_bytes(bytes),
         }
@@ -589,7 +655,9 @@ impl WorkbookExt for Workbook {
                         )));
                     }
                 };
-                XlsxWriter::write_file_encrypted(self, path, password, &xlsx_profile)
+                let snapshot = self.synchronized_for_save();
+                let workbook = snapshot.as_ref().unwrap_or(self);
+                XlsxWriter::write_file_encrypted(workbook, path, password, &xlsx_profile)
                     .map_err(|e| Error::other(e.to_string()))
             }
             #[cfg(feature = "xls")]
@@ -615,7 +683,9 @@ impl WorkbookExt for Workbook {
                         )));
                     }
                 };
-                XlsWriter::write_file_encrypted(self, path, password, variant)
+                let snapshot = self.synchronized_for_save();
+                let workbook = snapshot.as_ref().unwrap_or(self);
+                XlsWriter::write_file_encrypted(workbook, path, password, variant)
                     .map_err(|e| Error::other(e.to_string()))
             }
             _ => Err(Error::other(format!(
@@ -708,22 +778,30 @@ impl WorkbookExt for Workbook {
 
         match extension.as_deref() {
             Some("xlsx") => {
-                XlsxWriter::write_file(self, path).map_err(|e| Error::other(e.to_string()))
+                let snapshot = self.synchronized_for_save();
+                let workbook = snapshot.as_ref().unwrap_or(self);
+                XlsxWriter::write_file(workbook, path).map_err(|e| Error::other(e.to_string()))
             }
             #[cfg(feature = "xls")]
             Some("xls") => {
-                XlsWriter::write_file(self, path).map_err(|e| Error::other(e.to_string()))
+                let snapshot = self.synchronized_for_save();
+                let workbook = snapshot.as_ref().unwrap_or(self);
+                XlsWriter::write_file(workbook, path).map_err(|e| Error::other(e.to_string()))
             }
             #[cfg(not(feature = "xls"))]
             Some("xls") => Err(Error::other("XLS writing requires the 'xls' feature")),
             #[cfg(feature = "xlsb")]
             Some("xlsb") => {
-                XlsbWriter::write_file(self, path).map_err(|e| Error::other(e.to_string()))
+                let snapshot = self.synchronized_for_save();
+                let workbook = snapshot.as_ref().unwrap_or(self);
+                XlsbWriter::write_file(workbook, path).map_err(|e| Error::other(e.to_string()))
             }
             #[cfg(not(feature = "xlsb"))]
             Some("xlsb") => Err(Error::other("XLSB writing requires the 'xlsb' feature")),
             Some("csv") => {
-                if let Some(sheet) = self.worksheet(0) {
+                let snapshot = self.synchronized_for_save();
+                let workbook = snapshot.as_ref().unwrap_or(self);
+                if let Some(sheet) = workbook.worksheet(0) {
                     CsvWriter::write_file(sheet, path, &CsvWriteOptions::default())
                         .map_err(|e| Error::other(e.to_string()))
                 } else {

@@ -22,6 +22,7 @@ pub const STYLE: u16 = 0x0293; // Named cell style
 pub const WINDOW1: u16 = 0x003D; // Workbook window settings (active sheet, etc.)
 pub const PROTECT: u16 = 0x0012; // Sheet/workbook protection flag
 pub const PASSWORD: u16 = 0x0013; // Sheet/workbook protection password hash
+pub const WINDOWPROTECT: u16 = 0x0019; // Workbook window protection flag
 pub const SUPBOOK: u16 = 0x01AE; // Supporting workbook (self-ref, add-in, or external)
 pub const EXTERNSHEET: u16 = 0x0017; // Sheet reference index table (maps to SUPBOOK entries)
 pub const EXTERNNAME: u16 = 0x0023; // External name (add-in function / external defined name)
@@ -56,6 +57,8 @@ pub const SELECTION: u16 = 0x001D; // Selected cell range
 pub const HLINK: u16 = 0x01B8; // Hyperlink
 pub const SHEETLAYOUT: u16 = 0x0862;
 pub const HLINKTOOLTIP: u16 = 0x0800; // Hyperlink tooltip (FRT record)
+pub const FEATHDR: u16 = 0x0867; // Shared Feature header
+pub const FEAT: u16 = 0x0868; // Shared Feature data
 
 // ── Comments / drawing objects ──────────────────────────────────────────
 pub const NOTE: u16 = 0x001C; // Cell note (comment reference)

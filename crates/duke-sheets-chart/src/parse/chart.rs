@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::io::{BufReader, Cursor, Read};
 
-use quick_xml::events::Event;
+use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::reader::Reader;
 use quick_xml::Writer;
 
@@ -11,8 +11,8 @@ use crate::{
     ChartLine, ChartLines, ChartShapeProperties, ChartType, ChartTypeGroup, CrossBetween,
     DataLabelPosition, DataLabels, DataPoint, DataReference, DataSeries, DisplayBlanksAs,
     ErrorBarDirection, ErrorBarType, ErrorBars, ErrorValueType, Layout, Legend, LegendPosition,
-    ManualLayout, Marker, MarkerSymbol, NumberFormat, PivotChartSource, TickLabelPosition,
-    TickMark, Trendline, TrendlineType, UpDownBars, View3D,
+    ManualLayout, Marker, MarkerSymbol, NumberFormat, PivotChartSource, TickLabelPosition, TickMark,
+    Trendline, TrendlineType, UpDownBars, View3D,
 };
 
 /// Parsed chart data before anchor assignment.
@@ -58,7 +58,12 @@ struct ParsedChart {
 pub fn parse_chart_xml<R: Read>(reader: R) -> ChartParseResult<Chart> {
     let buf_reader = BufReader::new(reader);
     let mut xml_reader = Reader::from_reader(buf_reader);
-    xml_reader.config_mut().trim_text(true);
+    // Whitespace inside a text-bearing element is part of the value: a
+    // category can be named " Q1 " and a label separator can be " | ".
+    // The handlers below only take text while one of them is open, so
+    // the indentation between elements is ignored without trimming it
+    // away.
+    xml_reader.config_mut().trim_text(false);
 
     let mut buf = Vec::new();
     let parsed = parse_chart_xml_inner(&mut xml_reader, &mut buf)?;
@@ -121,1575 +126,1797 @@ enum SpPrContext {
     LeaderLines,
 }
 
+/// Append to a text target. A single element's content can arrive as
+/// more than one event, so assigning would keep only the last piece.
+fn push_text(slot: &mut Option<String>, t: &str) {
+    match slot {
+        Some(existing) => existing.push_str(t),
+        None => *slot = Some(t.to_string()),
+    }
+}
+
+/// Streaming state for one standard chart part.
+///
+/// The document is deep and its elements are context sensitive, so
+/// parsing is a state machine rather than a recursive descent. One
+/// value holds it so each event kind has a single handler, which is
+/// what stops an element being handled differently depending on
+/// whether it was written self-closing.
+struct ChartParser {
+    result: ParsedChart,
+    in_chart: bool,
+    in_plot_area: bool,
+    in_chart_type_element: bool,
+    chart_type_tag: Option<String>,
+    bar_dir: Option<String>,
+    grouping: Option<String>,
+    scatter_style: Option<String>,
+    vary_colors: Option<bool>,
+    gap_width: Option<u32>,
+    overlap: Option<i32>,
+    first_slice_angle: Option<u32>,
+    hole_size: Option<u32>,
+    bubble_scale: Option<u32>,
+    show_negative_bubbles: Option<bool>,
+    radar_style: Option<String>,
+    wireframe: Option<bool>,
+    in_chart_space: bool,
+    in_pivot_source: bool,
+    in_pivot_source_name: bool,
+    pivot_source_name: String,
+    pivot_source_format_id: Option<u32>,
+    group_series: Vec<DataSeries>,
+    group_data_labels: Option<DataLabels>,
+    group_axis_ids: Vec<u32>,
+    group_raw_ext: Option<Vec<u8>>,
+    group_drop_lines: Option<ChartLines>,
+    group_high_low_lines: Option<ChartLines>,
+    group_series_lines: Option<ChartLines>,
+    group_up_down_bars: Option<UpDownBars>,
+    in_drop_lines: bool,
+    in_hi_low_lines: bool,
+    in_ser_lines: bool,
+    in_up_down_bars: bool,
+    in_up_bars: bool,
+    in_down_bars: bool,
+    in_leader_lines: bool,
+    up_down_bars_gap_width: Option<u32>,
+    up_bars_sp: Option<ChartShapeProperties>,
+    down_bars_sp: Option<ChartShapeProperties>,
+    had_up_bars: bool,
+    had_down_bars: bool,
+    in_chart_title: bool,
+    in_title_tx: bool,
+    in_title_rich: bool,
+    in_title_p: bool,
+    in_title_r: bool,
+    in_title_t: bool,
+    title_text: String,
+    in_title_str_ref: bool,
+    in_title_str_ref_f: bool,
+    title_depth: u32,
+    in_ser: bool,
+    in_ser_tx: bool,
+    in_ser_tx_str_ref: bool,
+    in_ser_tx_str_ref_f: bool,
+    in_ser_tx_v: bool,
+    ser_name: Option<String>,
+    in_ser_val: bool,
+    in_ser_yval: bool,
+    in_ser_val_num_ref: bool,
+    in_ser_val_num_ref_f: bool,
+    ser_val_formula: Option<String>,
+    in_ser_val_num_cache: bool,
+    in_ser_val_pt: bool,
+    in_ser_val_pt_v: bool,
+    ser_val_cache: Vec<f64>,
+    in_ser_cat: bool,
+    in_ser_xval: bool,
+    in_ser_cat_ref: bool,
+    in_ser_cat_ref_f: bool,
+    ser_cat_formula: Option<String>,
+    ser_smooth: Option<bool>,
+    ser_explosion: Option<u32>,
+    ser_data_labels: Option<DataLabels>,
+    ser_marker: Option<Marker>,
+    ser_trendline: Option<Trendline>,
+    ser_error_bars: Option<ErrorBars>,
+    ser_shape_properties: Option<ChartShapeProperties>,
+    ser_raw_ext: Option<Vec<u8>>,
+    ser_invert_if_negative: Option<bool>,
+    in_dlbls: bool,
+    in_dlbls_separator: bool,
+    dlbls: DataLabels,
+    in_dpt: bool,
+    dpt_index: u32,
+    dpt_explosion: Option<u32>,
+    dpt_marker: Option<Marker>,
+    dpt_shape_properties: Option<ChartShapeProperties>,
+    ser_data_points: Vec<DataPoint>,
+    in_marker: bool,
+    marker_symbol: Option<MarkerSymbol>,
+    marker_size: Option<u8>,
+    in_trendline: bool,
+    in_trendline_name: bool,
+    trendline_type: Option<TrendlineType>,
+    trendline_name: Option<String>,
+    trendline_order: Option<u32>,
+    trendline_period: Option<u32>,
+    trendline_forward: Option<f64>,
+    trendline_backward: Option<f64>,
+    trendline_intercept: Option<f64>,
+    trendline_disp_r_sqr: Option<bool>,
+    trendline_disp_eq: Option<bool>,
+    in_err_bars: bool,
+    err_dir: Option<ErrorBarDirection>,
+    err_bar_type: Option<ErrorBarType>,
+    err_val_type: Option<ErrorValueType>,
+    err_val: Option<f64>,
+    err_no_end_cap: Option<bool>,
+    in_cat_ax: bool,
+    in_val_ax: bool,
+    in_ser_ax: bool,
+    is_date_ax: bool,
+    in_ax_title: bool,
+    in_ax_title_tx: bool,
+    in_ax_title_rich: bool,
+    in_ax_title_p: bool,
+    in_ax_title_r: bool,
+    in_ax_title_t: bool,
+    ax_title_text: String,
+    in_ax_scaling: bool,
+    ax_min: Option<f64>,
+    ax_max: Option<f64>,
+    ax_number_format: Option<NumberFormat>,
+    ax_major_gridlines: bool,
+    ax_minor_gridlines: bool,
+    in_ax_major_gridlines: bool,
+    in_ax_minor_gridlines: bool,
+    ax_major_gridlines_shape_properties: Option<ChartShapeProperties>,
+    ax_minor_gridlines_shape_properties: Option<ChartShapeProperties>,
+    ax_major_tick_mark: Option<TickMark>,
+    ax_minor_tick_mark: Option<TickMark>,
+    ax_label_position: Option<TickLabelPosition>,
+    ax_delete: Option<bool>,
+    ax_crosses: Option<AxisCrosses>,
+    ax_cross_between: Option<CrossBetween>,
+    ax_position: Option<AxisPosition>,
+    ax_major_unit: Option<f64>,
+    ax_minor_unit: Option<f64>,
+    ax_shape_properties: Option<ChartShapeProperties>,
+    ax_raw_ext: Option<Vec<u8>>,
+    ax_id: Option<u32>,
+    ax_cross_id: Option<u32>,
+    in_legend: bool,
+    legend_pos: Option<LegendPosition>,
+    legend_overlay: Option<bool>,
+    legend_shape_properties: Option<ChartShapeProperties>,
+    in_view_3d: bool,
+    view_3d: View3D,
+    in_layout: bool,
+    in_manual_layout: bool,
+    had_manual_layout: bool,
+    manual_layout: ManualLayout,
+    ext_writer: Option<Writer<Cursor<Vec<u8>>>>,
+    ext_depth: u32,
+    ext_dest: ExtLstDest,
+    in_sp_pr: bool,
+    sp_pr_depth: u32,
+    sp_solid_fill: Option<ChartColor>,
+    sp_no_fill: bool,
+    sp_line: Option<ChartLine>,
+    in_sp_ln: bool,
+    sp_ln_width: Option<i64>,
+    sp_ln_solid_fill: Option<ChartColor>,
+    sp_ln_no_fill: bool,
+    sp_ln_dash: Option<String>,
+    sp_pr_context: SpPrContext,
+    in_d_table: bool,
+    d_table: ChartDataTable,
+}
+
+impl ChartParser {
+    fn new() -> Self {
+        Self {
+            result: ParsedChart {
+                chart_type: ChartType::Unsupported("unknown".into()),
+                title: None,
+                series: Vec::new(),
+                category_axis: None,
+                value_axis: None,
+                series_axis: None,
+                legend: None,
+                data_labels: None,
+                view_3d: None,
+                data_table: None,
+                display_blanks_as: None,
+                plot_visible_only: None,
+                layout: None,
+                shape_properties: None,
+                vary_colors: None,
+                gap_width: None,
+                overlap: None,
+                raw_extensions: HashMap::new(),
+                is_3d: false,
+                first_slice_angle: None,
+                hole_size: None,
+                bubble_scale: None,
+                show_negative_bubbles: None,
+                radar_style: None,
+                auto_title_deleted: None,
+                rounded_corners: None,
+                pivot_source: None,
+                show_dlbls_over_max: None,
+                wireframe: None,
+                drop_lines: None,
+                high_low_lines: None,
+                up_down_bars: None,
+                series_lines: None,
+                type_groups: Vec::new(),
+                axes: Vec::new(),
+            },
+            in_chart: false,
+            in_plot_area: false,
+            in_chart_type_element: false,
+            chart_type_tag: None,
+            bar_dir: None,
+            grouping: None,
+            scatter_style: None,
+            vary_colors: None,
+            gap_width: None,
+            overlap: None,
+            first_slice_angle: None,
+            hole_size: None,
+            bubble_scale: None,
+            show_negative_bubbles: None,
+            radar_style: None,
+            wireframe: None,
+            in_chart_space: false,
+            in_pivot_source: false,
+            in_pivot_source_name: false,
+            pivot_source_name: String::new(),
+            pivot_source_format_id: None,
+            group_series: Vec::new(),
+            group_data_labels: None,
+            group_axis_ids: Vec::new(),
+            group_raw_ext: None,
+            group_drop_lines: None,
+            group_high_low_lines: None,
+            group_series_lines: None,
+            group_up_down_bars: None,
+            in_drop_lines: false,
+            in_hi_low_lines: false,
+            in_ser_lines: false,
+            in_up_down_bars: false,
+            in_up_bars: false,
+            in_down_bars: false,
+            in_leader_lines: false,
+            up_down_bars_gap_width: None,
+            up_bars_sp: None,
+            down_bars_sp: None,
+            had_up_bars: false,
+            had_down_bars: false,
+            in_chart_title: false,
+            in_title_tx: false,
+            in_title_rich: false,
+            in_title_p: false,
+            in_title_r: false,
+            in_title_t: false,
+            title_text: String::new(),
+            in_title_str_ref: false,
+            in_title_str_ref_f: false,
+            title_depth: 0u32,
+            in_ser: false,
+            in_ser_tx: false,
+            in_ser_tx_str_ref: false,
+            in_ser_tx_str_ref_f: false,
+            in_ser_tx_v: false,
+            ser_name: None,
+            in_ser_val: false,
+            in_ser_yval: false,
+            in_ser_val_num_ref: false,
+            in_ser_val_num_ref_f: false,
+            ser_val_formula: None,
+            in_ser_val_num_cache: false,
+            in_ser_val_pt: false,
+            in_ser_val_pt_v: false,
+            ser_val_cache: Vec::new(),
+            in_ser_cat: false,
+            in_ser_xval: false,
+            in_ser_cat_ref: false,
+            in_ser_cat_ref_f: false,
+            ser_cat_formula: None,
+            ser_smooth: None,
+            ser_explosion: None,
+            ser_data_labels: None,
+            ser_marker: None,
+            ser_trendline: None,
+            ser_error_bars: None,
+            ser_shape_properties: None,
+            ser_raw_ext: None,
+            ser_invert_if_negative: None,
+            in_dlbls: false,
+            in_dlbls_separator: false,
+            dlbls: DataLabels::default(),
+            in_dpt: false,
+            dpt_index: 0,
+            dpt_explosion: None,
+            dpt_marker: None,
+            dpt_shape_properties: None,
+            ser_data_points: Vec::new(),
+            in_marker: false,
+            marker_symbol: None,
+            marker_size: None,
+            in_trendline: false,
+            in_trendline_name: false,
+            trendline_type: None,
+            trendline_name: None,
+            trendline_order: None,
+            trendline_period: None,
+            trendline_forward: None,
+            trendline_backward: None,
+            trendline_intercept: None,
+            trendline_disp_r_sqr: None,
+            trendline_disp_eq: None,
+            in_err_bars: false,
+            err_dir: None,
+            err_bar_type: None,
+            err_val_type: None,
+            err_val: None,
+            err_no_end_cap: None,
+            in_cat_ax: false,
+            in_val_ax: false,
+            in_ser_ax: false,
+            is_date_ax: false,
+            in_ax_title: false,
+            in_ax_title_tx: false,
+            in_ax_title_rich: false,
+            in_ax_title_p: false,
+            in_ax_title_r: false,
+            in_ax_title_t: false,
+            ax_title_text: String::new(),
+            in_ax_scaling: false,
+            ax_min: None,
+            ax_max: None,
+            ax_number_format: None,
+            ax_major_gridlines: false,
+            ax_minor_gridlines: false,
+            in_ax_major_gridlines: false,
+            in_ax_minor_gridlines: false,
+            ax_major_gridlines_shape_properties: None,
+            ax_minor_gridlines_shape_properties: None,
+            ax_major_tick_mark: None,
+            ax_minor_tick_mark: None,
+            ax_label_position: None,
+            ax_delete: None,
+            ax_crosses: None,
+            ax_cross_between: None,
+            ax_position: None,
+            ax_major_unit: None,
+            ax_minor_unit: None,
+            ax_shape_properties: None,
+            ax_raw_ext: None,
+            ax_id: None,
+            ax_cross_id: None,
+            in_legend: false,
+            legend_pos: None,
+            legend_overlay: None,
+            legend_shape_properties: None,
+            in_view_3d: false,
+            view_3d: View3D::default(),
+            in_layout: false,
+            in_manual_layout: false,
+            had_manual_layout: false,
+            manual_layout: ManualLayout::default(),
+            ext_writer: None,
+            ext_depth: 0u32,
+            ext_dest: ExtLstDest::ChartSpace,
+            in_sp_pr: false,
+            sp_pr_depth: 0u32,
+            sp_solid_fill: None,
+            sp_no_fill: false,
+            sp_line: None,
+            in_sp_ln: false,
+            sp_ln_width: None,
+            sp_ln_solid_fill: None,
+            sp_ln_no_fill: false,
+            sp_ln_dash: None,
+            sp_pr_context: SpPrContext::None,
+            in_d_table: false,
+            d_table: ChartDataTable::default(),
+        }
+    }
+
+    /// True while an extLst is being kept as bytes.
+    fn capturing(&self) -> bool {
+        self.ext_writer.is_some()
+    }
+
+    /// Forward an event into the open capture, closing it at depth zero.
+    fn capture(&mut self, ev: &Event) {
+    let done = match ev {
+        Event::Start(_) => {
+            self.ext_depth += 1;
+            false
+        }
+        Event::End(_) => {
+            self.ext_depth -= 1;
+            self.ext_depth == 0
+        }
+        Event::Eof => true,
+        _ => false,
+    };
+    if let Some(w) = self.ext_writer.as_mut() {
+        if !matches!(ev, Event::Eof) {
+            let _ = w.write_event(ev.clone());
+        }
+    }
+    if done {
+        if let Some(w) = self.ext_writer.take() {
+            let raw = w.into_inner().into_inner();
+            match self.ext_dest {
+                ExtLstDest::Series => self.ser_raw_ext = Some(raw),
+                ExtLstDest::Axis => self.ax_raw_ext = Some(raw),
+                ExtLstDest::TypeGroup => self.group_raw_ext = Some(raw),
+                ExtLstDest::Chart => {
+                    self.result.raw_extensions.insert("chart".into(), raw);
+                }
+                ExtLstDest::PlotArea => {
+                    self.result.raw_extensions.insert("plotArea".into(), raw);
+                }
+                ExtLstDest::ChartSpace => {
+                    self.result.raw_extensions.insert("chartSpace".into(), raw);
+                }
+                ExtLstDest::Ignore => {}
+            }
+        }
+    }
+    }
+
+    fn on_start(&mut self, e: &BytesStart) {
+        let local = e.name().local_name();
+        let tag = local.as_ref();
+
+        // Inside a chart title or a spPr, every element start deepens the
+        // nesting and its end unwinds it, including the end synthesized
+        // for a self-closing element. Applied after the match, not
+        // before, so a guard still sees the depth its own element sits
+        // at, and tracked here rather than in individual arms so that
+        // adding an arm cannot unbalance it.
+        let deepen_title = self.in_chart_title;
+        let deepen_sp_pr = self.in_sp_pr;
+
+        match tag {
+        b"chartSpace" => self.in_chart_space = true,
+        b"pivotSource" if self.in_chart_space && !self.in_chart => {
+            self.in_pivot_source = true;
+            self.pivot_source_name.clear();
+            self.pivot_source_format_id = None;
+        }
+        b"name" if self.in_pivot_source => self.in_pivot_source_name = true,
+        b"chart" if !self.in_chart => self.in_chart = true,
+        b"plotArea" if self.in_chart => self.in_plot_area = true,
+        b"title"
+            if self.in_chart
+                && !self.in_plot_area
+                && !self.in_chart_title
+                && !self.in_cat_ax
+                && !self.in_val_ax
+                && !self.in_ser_ax =>
+        {
+            self.in_chart_title = true;
+            self.title_depth = 1;
+            self.title_text.clear();
+        }
+        b"tx" if self.in_chart_title && self.title_depth == 1 => self.in_title_tx = true,
+        b"rich" if self.in_title_tx => self.in_title_rich = true,
+        b"p" if self.in_title_rich => self.in_title_p = true,
+        b"r" if self.in_title_p => self.in_title_r = true,
+        b"t" if self.in_title_r => self.in_title_t = true,
+        b"strRef" if self.in_title_tx => self.in_title_str_ref = true,
+        b"f" if self.in_title_str_ref => self.in_title_str_ref_f = true,
+        // View 3D
+        b"view3D" if self.in_chart && !self.in_plot_area => {
+            self.in_view_3d = true;
+            self.view_3d = View3D::default();
+        }
+        // Chart type elements in plotArea
+        b"barChart" | b"bar3DChart" | b"lineChart" | b"line3DChart" | b"pieChart"
+        | b"pie3DChart" | b"doughnutChart" | b"areaChart" | b"area3DChart"
+        | b"scatterChart" | b"bubbleChart" | b"radarChart" | b"stockChart"
+        | b"surfaceChart" | b"surface3DChart" | b"ofPieChart"
+            if self.in_plot_area && !self.in_chart_type_element =>
+        {
+            self.in_chart_type_element = true;
+            let tag_str = std::str::from_utf8(tag).unwrap_or("unknown");
+            self.chart_type_tag = Some(tag_str.to_string());
+            self.bar_dir = None;
+            self.grouping = None;
+            self.scatter_style = None;
+            self.group_series.clear();
+            self.group_data_labels = None;
+            self.group_axis_ids.clear();
+            self.group_raw_ext = None;
+        }
+        // Layout
+        b"layout" if self.in_plot_area && !self.in_chart_type_element => {
+            self.in_layout = true;
+            self.had_manual_layout = false;
+        }
+        b"manualLayout" if self.in_layout => {
+            self.in_manual_layout = true;
+            self.had_manual_layout = true;
+            self.manual_layout = ManualLayout::default();
+        }
+        // Data table
+        b"dTable" if self.in_plot_area && !self.in_chart_type_element => {
+            self.in_d_table = true;
+            self.d_table = ChartDataTable::default();
+        }
+        // Data labels (chart-level or series-level)
+        b"dLbls" if self.in_chart_type_element && !self.in_dlbls => {
+            self.in_dlbls = true;
+            self.dlbls = DataLabels::default();
+        }
+        b"separator" if self.in_dlbls => self.in_dlbls_separator = true,
+        b"numFmt" if self.in_dlbls => {
+            self.dlbls.number_format = Some(parse_num_fmt(e));
+        }
+        // Chart lines and up-down bars
+        b"dropLines" if self.in_chart_type_element && !self.in_ser => {
+            self.in_drop_lines = true;
+        }
+        b"hiLowLines" if self.in_chart_type_element && !self.in_ser => {
+            self.in_hi_low_lines = true;
+        }
+        b"serLines" if self.in_chart_type_element && !self.in_ser => {
+            self.in_ser_lines = true;
+        }
+        b"upDownBars" if self.in_chart_type_element && !self.in_ser => {
+            self.in_up_down_bars = true;
+            self.up_down_bars_gap_width = None;
+            self.up_bars_sp = None;
+            self.down_bars_sp = None;
+            self.had_up_bars = false;
+            self.had_down_bars = false;
+        }
+        b"upBars" if self.in_up_down_bars => {
+            self.in_up_bars = true;
+            self.had_up_bars = true;
+        }
+        b"downBars" if self.in_up_down_bars => {
+            self.in_down_bars = true;
+            self.had_down_bars = true;
+        }
+        b"leaderLines" if self.in_dlbls => self.in_leader_lines = true,
+        b"ser" if self.in_chart_type_element => {
+            self.in_ser = true;
+            self.ser_name = None;
+            self.ser_val_formula = None;
+            self.ser_val_cache.clear();
+            self.ser_cat_formula = None;
+            self.ser_smooth = None;
+            self.ser_explosion = None;
+            self.ser_data_labels = None;
+            self.ser_marker = None;
+            self.ser_trendline = None;
+            self.ser_error_bars = None;
+            self.ser_data_points.clear();
+            self.ser_shape_properties = None;
+            self.ser_raw_ext = None;
+            self.ser_invert_if_negative = None;
+        }
+        b"tx" if self.in_ser => self.in_ser_tx = true,
+        b"strRef" if self.in_ser_tx => self.in_ser_tx_str_ref = true,
+        b"f" if self.in_ser_tx_str_ref => self.in_ser_tx_str_ref_f = true,
+        b"v" if self.in_ser_tx && !self.in_ser_tx_str_ref => self.in_ser_tx_v = true,
+        // Data points
+        b"dPt" if self.in_ser => {
+            self.in_dpt = true;
+            self.dpt_index = 0;
+            self.dpt_explosion = None;
+            self.dpt_marker = None;
+            self.dpt_shape_properties = None;
+        }
+        // Trendline
+        b"trendline" if self.in_ser => {
+            self.in_trendline = true;
+            self.trendline_type = None;
+            self.trendline_name = None;
+            self.trendline_order = None;
+            self.trendline_period = None;
+            self.trendline_forward = None;
+            self.trendline_backward = None;
+            self.trendline_intercept = None;
+            self.trendline_disp_r_sqr = None;
+            self.trendline_disp_eq = None;
+        }
+        b"name" if self.in_trendline => self.in_trendline_name = true,
+        // Error bars
+        b"errBars" if self.in_ser => {
+            self.in_err_bars = true;
+            self.err_dir = None;
+            self.err_bar_type = None;
+            self.err_val_type = None;
+            self.err_val = None;
+            self.err_no_end_cap = None;
+        }
+        // Marker (series or data point level)
+        b"marker" if self.in_ser && !self.in_dlbls && !self.in_trendline && !self.in_err_bars => {
+            self.in_marker = true;
+            self.marker_symbol = None;
+            self.marker_size = None;
+        }
+        b"val" if self.in_err_bars => self.err_val = get_val_f64(e),
+        b"val" if self.in_ser && !self.in_err_bars => self.in_ser_val = true,
+        b"yVal" if self.in_ser => self.in_ser_yval = true,
+        b"numRef" if self.in_ser_val || self.in_ser_yval => self.in_ser_val_num_ref = true,
+        b"f" if self.in_ser_val_num_ref => self.in_ser_val_num_ref_f = true,
+        b"numCache" if self.in_ser_val_num_ref => self.in_ser_val_num_cache = true,
+        b"pt" if self.in_ser_val_num_cache => self.in_ser_val_pt = true,
+        b"v" if self.in_ser_val_pt => self.in_ser_val_pt_v = true,
+        b"cat" if self.in_ser => self.in_ser_cat = true,
+        b"xVal" if self.in_ser => self.in_ser_xval = true,
+        b"strRef" | b"numRef" if self.in_ser_cat || self.in_ser_xval => {
+            self.in_ser_cat_ref = true;
+        }
+        b"f" if self.in_ser_cat_ref => self.in_ser_cat_ref_f = true,
+        // Axis elements
+        b"catAx" | b"dateAx" if self.in_plot_area => {
+            if tag == b"catAx" {
+            } else {
+            }
+            self.in_cat_ax = true;
+            self.is_date_ax = tag == b"dateAx";
+            self.ax_title_text.clear();
+            self.ax_min = None;
+            self.ax_max = None;
+            self.ax_number_format = None;
+            self.ax_major_gridlines = false;
+            self.ax_minor_gridlines = false;
+            self.in_ax_major_gridlines = false;
+            self.in_ax_minor_gridlines = false;
+            self.ax_major_gridlines_shape_properties = None;
+            self.ax_minor_gridlines_shape_properties = None;
+            self.ax_major_tick_mark = None;
+            self.ax_minor_tick_mark = None;
+            self.ax_label_position = None;
+            self.ax_delete = None;
+            self.ax_crosses = None;
+            self.ax_cross_between = None;
+            self.ax_position = None;
+            self.ax_major_unit = None;
+            self.ax_minor_unit = None;
+            self.ax_shape_properties = None;
+            self.ax_raw_ext = None;
+            self.ax_id = None;
+            self.ax_cross_id = None;
+        }
+        b"valAx" if self.in_plot_area => {
+            self.in_val_ax = true;
+            self.ax_title_text.clear();
+            self.ax_min = None;
+            self.ax_max = None;
+            self.ax_number_format = None;
+            self.ax_major_gridlines = false;
+            self.ax_minor_gridlines = false;
+            self.in_ax_major_gridlines = false;
+            self.in_ax_minor_gridlines = false;
+            self.ax_major_gridlines_shape_properties = None;
+            self.ax_minor_gridlines_shape_properties = None;
+            self.ax_major_tick_mark = None;
+            self.ax_minor_tick_mark = None;
+            self.ax_label_position = None;
+            self.ax_delete = None;
+            self.ax_crosses = None;
+            self.ax_cross_between = None;
+            self.ax_position = None;
+            self.ax_major_unit = None;
+            self.ax_minor_unit = None;
+            self.ax_shape_properties = None;
+            self.ax_raw_ext = None;
+            self.ax_id = None;
+            self.ax_cross_id = None;
+        }
+        b"serAx" if self.in_plot_area => {
+            self.in_ser_ax = true;
+            self.ax_title_text.clear();
+            self.ax_min = None;
+            self.ax_max = None;
+            self.ax_number_format = None;
+            self.ax_major_gridlines = false;
+            self.ax_minor_gridlines = false;
+            self.in_ax_major_gridlines = false;
+            self.in_ax_minor_gridlines = false;
+            self.ax_major_gridlines_shape_properties = None;
+            self.ax_minor_gridlines_shape_properties = None;
+            self.ax_major_tick_mark = None;
+            self.ax_minor_tick_mark = None;
+            self.ax_label_position = None;
+            self.ax_delete = None;
+            self.ax_crosses = None;
+            self.ax_cross_between = None;
+            self.ax_position = None;
+            self.ax_major_unit = None;
+            self.ax_minor_unit = None;
+            self.ax_shape_properties = None;
+            self.ax_raw_ext = None;
+            self.ax_id = None;
+            self.ax_cross_id = None;
+        }
+        b"title" if self.in_cat_ax || self.in_val_ax || self.in_ser_ax => self.in_ax_title = true,
+        b"tx" if self.in_ax_title => self.in_ax_title_tx = true,
+        b"rich" if self.in_ax_title_tx => self.in_ax_title_rich = true,
+        b"p" if self.in_ax_title_rich => self.in_ax_title_p = true,
+        b"r" if self.in_ax_title_p => self.in_ax_title_r = true,
+        b"t" if self.in_ax_title_r => self.in_ax_title_t = true,
+        b"scaling" if self.in_cat_ax || self.in_val_ax || self.in_ser_ax => {
+            self.in_ax_scaling = true;
+        }
+        b"majorGridlines" if (self.in_cat_ax || self.in_val_ax || self.in_ser_ax) && !self.in_ax_title => {
+            self.ax_major_gridlines = true;
+            self.in_ax_major_gridlines = true;
+        }
+        b"minorGridlines" if (self.in_cat_ax || self.in_val_ax || self.in_ser_ax) && !self.in_ax_title => {
+            self.ax_minor_gridlines = true;
+            self.in_ax_minor_gridlines = true;
+        }
+        b"numFmt"
+            if (self.in_cat_ax || self.in_val_ax || self.in_ser_ax) && !self.in_ax_title && !self.in_dlbls =>
+        {
+            self.ax_number_format = Some(parse_num_fmt(e));
+        }
+        // Legend
+        b"legend" if self.in_chart && !self.in_plot_area => {
+            self.in_legend = true;
+            self.legend_pos = None;
+        }
+        b"spPr" if !self.in_sp_pr => {
+            self.in_sp_pr = true;
+            self.sp_pr_depth = 1;
+            self.sp_solid_fill = None;
+            self.sp_no_fill = false;
+            self.sp_line = None;
+            self.in_sp_ln = false;
+            self.sp_ln_width = None;
+            self.sp_ln_solid_fill = None;
+            self.sp_ln_no_fill = false;
+            self.sp_ln_dash = None;
+            if self.in_drop_lines {
+                self.sp_pr_context = SpPrContext::DropLines;
+            } else if self.in_hi_low_lines {
+                self.sp_pr_context = SpPrContext::HiLowLines;
+            } else if self.in_ser_lines {
+                self.sp_pr_context = SpPrContext::SerLines;
+            } else if self.in_up_bars {
+                self.sp_pr_context = SpPrContext::UpBars;
+            } else if self.in_down_bars {
+                self.sp_pr_context = SpPrContext::DownBars;
+            } else if self.in_leader_lines {
+                self.sp_pr_context = SpPrContext::LeaderLines;
+            } else if self.in_dpt && !self.in_marker && !self.in_dlbls {
+                self.sp_pr_context = SpPrContext::DataPoint;
+            } else if self.in_ser
+                && !self.in_dpt
+                && !self.in_trendline
+                && !self.in_err_bars
+                && !self.in_marker
+                && !self.in_dlbls
+            {
+                self.sp_pr_context = SpPrContext::Series;
+            } else if self.in_ax_major_gridlines {
+                self.sp_pr_context = SpPrContext::MajorGridlines;
+            } else if self.in_ax_minor_gridlines {
+                self.sp_pr_context = SpPrContext::MinorGridlines;
+            } else if self.in_cat_ax || self.in_ser_ax {
+                self.sp_pr_context = SpPrContext::CatAxis;
+            } else if self.in_val_ax {
+                self.sp_pr_context = SpPrContext::ValAxis;
+            } else if self.in_legend {
+                self.sp_pr_context = SpPrContext::Legend;
+            } else if self.in_chart_space && !self.in_chart && !self.in_plot_area {
+                self.sp_pr_context = SpPrContext::ChartSpace;
+            } else {
+                self.sp_pr_context = SpPrContext::None;
+            }
+        }
+        b"ln" if self.in_sp_pr => {
+            self.in_sp_ln = true;
+            self.sp_ln_width = None;
+            self.sp_ln_solid_fill = None;
+            self.sp_ln_no_fill = false;
+            self.sp_ln_dash = None;
+            for attr in e.attributes().flatten() {
+                if attr.key.local_name().as_ref() == b"w" {
+                    self.sp_ln_width = attr
+                        .unescape_value()
+                        .ok()
+                        .and_then(|s| s.parse::<i64>().ok());
+                }
+            }
+        }
+        b"extLst" => {
+            self.ext_dest = if self.in_pivot_source {
+                ExtLstDest::Ignore
+            } else if self.in_ser {
+                ExtLstDest::Series
+            } else if self.in_cat_ax || self.in_val_ax || self.in_ser_ax {
+                ExtLstDest::Axis
+            } else if self.in_chart_type_element {
+                ExtLstDest::TypeGroup
+            } else if self.in_chart && !self.in_plot_area {
+                ExtLstDest::Chart
+            } else if self.in_plot_area {
+                ExtLstDest::PlotArea
+            } else {
+                ExtLstDest::ChartSpace
+            };
+            let mut w = Writer::new(Cursor::new(Vec::new()));
+            let _ = w.write_event(Event::Start(e.to_owned()));
+            self.ext_depth = 1;
+            self.ext_writer = Some(w);
+        }
+        // Handling merged from the former separate arm for empty
+        // elements, which a self-closing element no longer reaches.
+        b"barDir" if self.in_chart_type_element && !self.in_ser => {
+            for attr in e.attributes().flatten() {
+                if attr.key.local_name().as_ref() == b"val" {
+                    self.bar_dir = attr.unescape_value().ok().map(|s| s.to_string());
+                }
+            }
+        }
+        b"grouping" if self.in_chart_type_element && !self.in_ser => {
+            for attr in e.attributes().flatten() {
+                if attr.key.local_name().as_ref() == b"val" {
+                    self.grouping = attr.unescape_value().ok().map(|s| s.to_string());
+                }
+            }
+        }
+        b"scatterStyle" if self.in_chart_type_element && !self.in_ser => {
+            for attr in e.attributes().flatten() {
+                if attr.key.local_name().as_ref() == b"val" {
+                    self.scatter_style = attr.unescape_value().ok().map(|s| s.to_string());
+                }
+            }
+        }
+        b"radarStyle" if self.in_chart_type_element && !self.in_ser => {
+            self.radar_style = get_val_attr(e);
+        }
+        b"firstSliceAng" if self.in_chart_type_element && !self.in_ser => {
+            self.first_slice_angle = get_val_u32(e);
+        }
+        b"holeSize" if self.in_chart_type_element && !self.in_ser => {
+            self.hole_size = get_val_u32(e);
+        }
+        b"bubbleScale" if self.in_chart_type_element && !self.in_ser => {
+            self.bubble_scale = get_val_u32(e);
+        }
+        b"showNegBubbles" if self.in_chart_type_element && !self.in_ser => {
+            self.show_negative_bubbles = get_val_bool(e);
+        }
+        b"wireframe" if self.in_chart_type_element && !self.in_ser => {
+            self.wireframe = get_val_bool(e);
+        }
+        b"legendPos" if self.in_legend => {
+            for attr in e.attributes().flatten() {
+                if attr.key.local_name().as_ref() == b"val" {
+                    if let Ok(val) = attr.unescape_value() {
+                        self.legend_pos = Some(match val.as_ref() {
+                            "b" => LegendPosition::Bottom,
+                            "t" => LegendPosition::Top,
+                            "l" => LegendPosition::Left,
+                            "r" => LegendPosition::Right,
+                            "tr" => LegendPosition::TopRight,
+                            _ => LegendPosition::Right,
+                        });
+                    }
+                }
+            }
+        }
+        b"min" if self.in_ax_scaling => {
+            for attr in e.attributes().flatten() {
+                if attr.key.local_name().as_ref() == b"val" {
+                    self.ax_min = attr
+                        .unescape_value()
+                        .ok()
+                        .and_then(|s| s.parse::<f64>().ok());
+                }
+            }
+        }
+        b"max" if self.in_ax_scaling => {
+            for attr in e.attributes().flatten() {
+                if attr.key.local_name().as_ref() == b"val" {
+                    self.ax_max = attr
+                        .unescape_value()
+                        .ok()
+                        .and_then(|s| s.parse::<f64>().ok());
+                }
+            }
+        }
+        // Data label children
+        b"showLegendKey" if self.in_dlbls => {
+            self.dlbls.show_legend_key = get_val_bool(e);
+        }
+        b"showVal" if self.in_dlbls => self.dlbls.show_value = get_val_bool(e),
+        b"showCatName" if self.in_dlbls => {
+            self.dlbls.show_category_name = get_val_bool(e);
+        }
+        b"showSerName" if self.in_dlbls => {
+            self.dlbls.show_series_name = get_val_bool(e);
+        }
+        b"showPercent" if self.in_dlbls => self.dlbls.show_percent = get_val_bool(e),
+        b"showBubbleSize" if self.in_dlbls => {
+            self.dlbls.show_bubble_size = get_val_bool(e);
+        }
+        b"dLblPos" if self.in_dlbls => {
+            self.dlbls.position =
+                get_val_attr(e).and_then(|s| parse_data_label_position(&s));
+        }
+        b"showLeaderLines" if self.in_dlbls => {
+            self.dlbls.show_leader_lines = get_val_bool(e);
+        }
+        // Data point children
+        b"idx" if self.in_dpt => self.dpt_index = get_val_u32(e).unwrap_or(0),
+        b"explosion" if self.in_dpt => self.dpt_explosion = get_val_u32(e),
+        b"explosion" if self.in_ser && !self.in_dpt => self.ser_explosion = get_val_u32(e),
+        // Marker children
+        b"symbol" if self.in_marker => {
+            self.marker_symbol = get_val_attr(e).and_then(|s| parse_marker_symbol(&s));
+        }
+        b"size" if self.in_marker => self.marker_size = get_val_u8(e),
+        // Trendline children
+        b"trendlineType" if self.in_trendline => {
+            self.trendline_type = get_val_attr(e).and_then(|s| parse_trendline_type(&s));
+        }
+        b"order" if self.in_trendline => self.trendline_order = get_val_u32(e),
+        b"period" if self.in_trendline => self.trendline_period = get_val_u32(e),
+        b"forward" if self.in_trendline => self.trendline_forward = get_val_f64(e),
+        b"backward" if self.in_trendline => self.trendline_backward = get_val_f64(e),
+        b"intercept" if self.in_trendline => self.trendline_intercept = get_val_f64(e),
+        b"dispRSqr" if self.in_trendline => {
+            self.trendline_disp_r_sqr = get_val_bool(e);
+        }
+        b"dispEq" if self.in_trendline => self.trendline_disp_eq = get_val_bool(e),
+        // Error bar children
+        b"errDir" if self.in_err_bars => {
+            self.err_dir = get_val_attr(e).and_then(|s| match s.as_str() {
+                "x" => Some(ErrorBarDirection::X),
+                "y" => Some(ErrorBarDirection::Y),
+                _ => None,
+            });
+        }
+        b"errBarType" if self.in_err_bars => {
+            self.err_bar_type = get_val_attr(e).and_then(|s| match s.as_str() {
+                "both" => Some(ErrorBarType::Both),
+                "minus" => Some(ErrorBarType::Minus),
+                "plus" => Some(ErrorBarType::Plus),
+                _ => None,
+            });
+        }
+        b"errValType" if self.in_err_bars => {
+            self.err_val_type = get_val_attr(e).and_then(|s| match s.as_str() {
+                "cust" => Some(ErrorValueType::Custom),
+                "fixedVal" => Some(ErrorValueType::FixedValue),
+                "percentage" => Some(ErrorValueType::Percentage),
+                "stdDev" => Some(ErrorValueType::StandardDeviation),
+                "stdErr" => Some(ErrorValueType::StandardError),
+                _ => None,
+            });
+        }
+        b"noEndCap" if self.in_err_bars => self.err_no_end_cap = get_val_bool(e),
+        // Series smooth
+        b"smooth" if self.in_ser => self.ser_smooth = get_val_bool(e),
+        b"invertIfNegative" if self.in_ser => {
+            self.ser_invert_if_negative = get_val_bool(e);
+        }
+        // Axis enhancements
+        b"majorTickMark" if (self.in_cat_ax || self.in_val_ax || self.in_ser_ax) && !self.in_ax_title => {
+            self.ax_major_tick_mark = get_val_attr(e).and_then(|s| parse_tick_mark(&s));
+        }
+        b"minorTickMark" if (self.in_cat_ax || self.in_val_ax || self.in_ser_ax) && !self.in_ax_title => {
+            self.ax_minor_tick_mark = get_val_attr(e).and_then(|s| parse_tick_mark(&s));
+        }
+        b"tickLblPos" if (self.in_cat_ax || self.in_val_ax || self.in_ser_ax) && !self.in_ax_title => {
+            self.ax_label_position =
+                get_val_attr(e).and_then(|s| parse_tick_label_position(&s));
+        }
+        b"delete" if (self.in_cat_ax || self.in_val_ax || self.in_ser_ax) && !self.in_ax_title => {
+            self.ax_delete = get_val_bool(e);
+        }
+        b"crosses" if (self.in_cat_ax || self.in_val_ax || self.in_ser_ax) && !self.in_ax_title => {
+            self.ax_crosses = get_val_attr(e).and_then(|s| match s.as_str() {
+                "autoZero" => Some(AxisCrosses::AutoZero),
+                "min" => Some(AxisCrosses::Min),
+                "max" => Some(AxisCrosses::Max),
+                _ => None,
+            });
+        }
+        b"crossBetween" if (self.in_cat_ax || self.in_val_ax || self.in_ser_ax) && !self.in_ax_title => {
+            self.ax_cross_between = get_val_attr(e).and_then(|s| match s.as_str() {
+                "between" => Some(CrossBetween::Between),
+                "midCat" => Some(CrossBetween::MidCat),
+                _ => None,
+            });
+        }
+        // View 3D children
+        b"rotX" if self.in_view_3d => self.view_3d.rotate_x = get_val_i32(e),
+        b"rotY" if self.in_view_3d => self.view_3d.rotate_y = get_val_i32(e),
+        b"depthPercent" if self.in_view_3d => {
+            self.view_3d.depth_percent = get_val_u32(e);
+        }
+        b"hPercent" if self.in_view_3d => self.view_3d.height_percent = get_val_u32(e),
+        b"perspective" if self.in_view_3d => self.view_3d.perspective = get_val_u32(e),
+        b"rAngAx" if self.in_view_3d => {
+            self.view_3d.right_angle_axes = get_val_bool(e);
+        }
+        // Chart-level config
+        b"plotVisOnly" if self.in_chart && !self.in_plot_area => {
+            self.result.plot_visible_only = get_val_bool(e);
+        }
+        b"autoTitleDeleted" if self.in_chart && !self.in_plot_area => {
+            self.result.auto_title_deleted = get_val_bool(e);
+        }
+        b"showDLblsOverMax" if self.in_chart && !self.in_plot_area => {
+            self.result.show_dlbls_over_max = get_val_bool(e);
+        }
+        b"roundedCorners" if self.in_chart_space && !self.in_chart => {
+            self.result.rounded_corners = get_val_bool(e);
+        }
+        b"fmtId" if self.in_pivot_source => {
+            self.pivot_source_format_id = get_val_u32(e);
+        }
+        b"dispBlanksAs" if self.in_chart && !self.in_plot_area => {
+            self.result.display_blanks_as =
+                get_val_attr(e).and_then(|s| match s.as_str() {
+                    "gap" => Some(DisplayBlanksAs::Gap),
+                    "span" => Some(DisplayBlanksAs::Span),
+                    "zero" => Some(DisplayBlanksAs::Zero),
+                    _ => None,
+                });
+        }
+        // Manual layout children
+        b"x" if self.in_manual_layout => self.manual_layout.x = get_val_f64(e),
+        b"y" if self.in_manual_layout => self.manual_layout.y = get_val_f64(e),
+        b"w" if self.in_manual_layout => self.manual_layout.width = get_val_f64(e),
+        b"h" if self.in_manual_layout => self.manual_layout.height = get_val_f64(e),
+        // Data table children
+        b"showHorzBorder" if self.in_d_table => {
+            self.d_table.show_horizontal_border = get_val_bool(e);
+        }
+        b"showVertBorder" if self.in_d_table => {
+            self.d_table.show_vertical_border = get_val_bool(e);
+        }
+        b"showOutline" if self.in_d_table => {
+            self.d_table.show_outline = get_val_bool(e);
+        }
+        b"showKeys" if self.in_d_table => self.d_table.show_keys = get_val_bool(e),
+        b"srgbClr" if self.in_sp_pr && !self.in_sp_ln => {
+            if let Some(hex) = get_val_attr(e) {
+                self.sp_solid_fill = Some(ChartColor { hex });
+            }
+        }
+        b"srgbClr" if self.in_sp_ln => {
+            if let Some(hex) = get_val_attr(e) {
+                self.sp_ln_solid_fill = Some(ChartColor { hex });
+            }
+        }
+        b"noFill" if self.in_sp_pr && !self.in_sp_ln => self.sp_no_fill = true,
+        b"noFill" if self.in_sp_ln => self.sp_ln_no_fill = true,
+        b"prstDash" if self.in_sp_ln => self.sp_ln_dash = get_val_attr(e),
+        b"axPos" if (self.in_cat_ax || self.in_val_ax || self.in_ser_ax) && !self.in_ax_title => {
+            self.ax_position = get_val_attr(e).and_then(|s| match s.as_str() {
+                "b" => Some(AxisPosition::Bottom),
+                "t" => Some(AxisPosition::Top),
+                "l" => Some(AxisPosition::Left),
+                "r" => Some(AxisPosition::Right),
+                _ => None,
+            });
+        }
+        b"majorUnit" if (self.in_cat_ax || self.in_val_ax || self.in_ser_ax) && !self.in_ax_title => {
+            self.ax_major_unit = get_val_f64(e);
+        }
+        b"minorUnit" if (self.in_cat_ax || self.in_val_ax || self.in_ser_ax) && !self.in_ax_title => {
+            self.ax_minor_unit = get_val_f64(e);
+        }
+        b"overlay" if self.in_legend => self.legend_overlay = get_val_bool(e),
+        b"varyColors" if self.in_chart_type_element && !self.in_ser => {
+            self.vary_colors = get_val_bool(e);
+        }
+        b"gapWidth" if self.in_up_down_bars => {
+            self.up_down_bars_gap_width = get_val_u32(e);
+        }
+        b"gapWidth" if self.in_chart_type_element && !self.in_ser => {
+            self.gap_width = get_val_u32(e);
+        }
+        b"overlap" if self.in_chart_type_element && !self.in_ser => {
+            self.overlap = get_val_i32(e).map(|v| v as i32);
+        }
+        b"axId" if self.in_chart_type_element && !self.in_ser => {
+            if let Some(id) = get_val_u32(e) {
+                self.group_axis_ids.push(id);
+            }
+        }
+        b"axId" if (self.in_cat_ax || self.in_val_ax || self.in_ser_ax) && !self.in_ax_title => {
+            self.ax_id = get_val_u32(e);
+        }
+        b"crossAx" if (self.in_cat_ax || self.in_val_ax || self.in_ser_ax) && !self.in_ax_title => {
+            self.ax_cross_id = get_val_u32(e);
+        }
+        _ => {}
+        }
+
+        if deepen_title {
+            self.title_depth += 1;
+        }
+        if deepen_sp_pr {
+            self.sp_pr_depth += 1;
+        }
+    }
+
+    fn on_text(&mut self, e: &BytesText) {
+    if let Ok(text) = e.unescape() {
+        let text_str = text.as_ref();
+        if self.in_title_t {
+            self.title_text.push_str(text_str);
+        } else if self.in_title_str_ref_f {
+            self.title_text.push_str(text_str);
+        } else if self.in_ser_tx_str_ref_f {
+            push_text(&mut self.ser_name, text_str);
+        } else if self.in_ser_tx_v {
+            push_text(&mut self.ser_name, text_str);
+        } else if self.in_ser_val_num_ref_f {
+            push_text(&mut self.ser_val_formula, text_str);
+        } else if self.in_ser_val_pt_v {
+            if let Ok(v) = text_str.parse::<f64>() {
+                self.ser_val_cache.push(v);
+            }
+        } else if self.in_ser_cat_ref_f {
+            push_text(&mut self.ser_cat_formula, text_str);
+        } else if self.in_ax_title_t {
+            self.ax_title_text.push_str(text_str);
+        } else if self.in_trendline_name {
+            push_text(&mut self.trendline_name, text_str);
+        } else if self.in_dlbls_separator {
+            push_text(&mut self.dlbls.separator, text_str);
+        } else if self.in_pivot_source_name {
+            self.pivot_source_name.push_str(text_str);
+        }
+    }
+    }
+
+    /// Close the chart title, keeping whatever text it accumulated.
+    fn finish_title(&mut self) {
+        if !self.title_text.is_empty() {
+            self.result.title = Some(self.title_text.clone());
+        }
+        self.in_chart_title = false;
+    }
+
+    /// Close a cx:spPr, attaching what it described to whatever it
+    /// belongs to.
+    fn finish_shape_properties(&mut self) {
+            let props = ChartShapeProperties {
+                solid_fill: self.sp_solid_fill.take(),
+                no_fill: self.sp_no_fill,
+                line: self.sp_line.take(),
+            };
+            let has_content =
+                props.solid_fill.is_some() || props.no_fill || props.line.is_some();
+            if has_content {
+                match self.sp_pr_context {
+                    SpPrContext::Series => {
+                        self.ser_shape_properties = Some(props);
+                    }
+                    SpPrContext::DataPoint => {
+                        self.dpt_shape_properties = Some(props);
+                    }
+                    SpPrContext::CatAxis => {
+                        self.ax_shape_properties = Some(props);
+                    }
+                    SpPrContext::ValAxis => {
+                        self.ax_shape_properties = Some(props);
+                    }
+                    SpPrContext::MajorGridlines => {
+                        self.ax_major_gridlines = true;
+                        self.ax_major_gridlines_shape_properties = Some(props);
+                    }
+                    SpPrContext::MinorGridlines => {
+                        self.ax_minor_gridlines = true;
+                        self.ax_minor_gridlines_shape_properties = Some(props);
+                    }
+                    SpPrContext::ChartSpace => {
+                        self.result.shape_properties = Some(props);
+                    }
+                    SpPrContext::Legend => {
+                        self.legend_shape_properties = Some(props);
+                    }
+                    SpPrContext::None => {}
+                    SpPrContext::DropLines => {
+                        self.group_drop_lines = Some(ChartLines {
+                            shape_properties: Some(props),
+                        });
+                    }
+                    SpPrContext::HiLowLines => {
+                        self.group_high_low_lines = Some(ChartLines {
+                            shape_properties: Some(props),
+                        });
+                    }
+                    SpPrContext::SerLines => {
+                        self.group_series_lines = Some(ChartLines {
+                            shape_properties: Some(props),
+                        });
+                    }
+                    SpPrContext::UpBars => self.up_bars_sp = Some(props),
+                    SpPrContext::DownBars => self.down_bars_sp = Some(props),
+                    SpPrContext::LeaderLines => {
+                        self.dlbls.leader_lines = Some(ChartLines {
+                            shape_properties: Some(props),
+                        });
+                    }
+                }
+            }
+            self.in_sp_pr = false;
+            self.sp_no_fill = false;
+            self.sp_pr_context = SpPrContext::None;
+    }
+
+    fn on_end(&mut self, e: &BytesEnd) {
+        let local = e.name().local_name();
+        let tag = local.as_ref();
+
+        // The mirror of on_start's bookkeeping: one unwind per element
+        // end, wherever the element is handled, so that an arm existing
+        // for a tag cannot leave a region open.
+        if self.in_chart_title {
+            self.title_depth = self.title_depth.saturating_sub(1);
+            if self.title_depth == 0 {
+                self.finish_title();
+            }
+        }
+        if self.in_sp_pr {
+            self.sp_pr_depth = self.sp_pr_depth.saturating_sub(1);
+            if self.sp_pr_depth == 0 {
+                self.finish_shape_properties();
+            }
+        }
+
+        match tag {
+        b"chart" => self.in_chart = false,
+        b"name" if self.in_pivot_source_name => self.in_pivot_source_name = false,
+        b"pivotSource" if self.in_pivot_source => {
+            if !self.pivot_source_name.is_empty() {
+                self.result.pivot_source = Some(PivotChartSource {
+                    name: self.pivot_source_name.clone(),
+                    format_id: self.pivot_source_format_id.unwrap_or(0),
+                });
+            }
+            self.in_pivot_source = false;
+        }
+        b"plotArea" => self.in_plot_area = false,
+        b"view3D" if self.in_view_3d => {
+            self.result.view_3d = Some(self.view_3d.clone());
+            self.in_view_3d = false;
+        }
+        b"layout" if self.in_layout => {
+            if self.had_manual_layout {
+                self.result.layout = Some(Layout {
+                    manual_layout: Some(self.manual_layout.clone()),
+                });
+            }
+            self.had_manual_layout = false;
+            self.manual_layout = ManualLayout::default();
+            self.in_layout = false;
+        }
+        b"manualLayout" if self.in_manual_layout => self.in_manual_layout = false,
+        b"dTable" if self.in_d_table => {
+            self.result.data_table = Some(self.d_table.clone());
+            self.in_d_table = false;
+        }
+        b"title" if self.in_ax_title => self.in_ax_title = false,
+        b"tx" if self.in_title_tx => self.in_title_tx = false,
+        b"rich" if self.in_title_rich => self.in_title_rich = false,
+        b"p" if self.in_title_p && self.in_title_rich => self.in_title_p = false,
+        b"r" if self.in_title_r && self.in_title_p => self.in_title_r = false,
+        b"t" if self.in_title_t => self.in_title_t = false,
+        b"strRef" if self.in_title_str_ref => self.in_title_str_ref = false,
+        b"f" if self.in_title_str_ref_f => self.in_title_str_ref_f = false,
+        b"barChart" | b"bar3DChart" | b"lineChart" | b"line3DChart" | b"pieChart"
+        | b"pie3DChart" | b"doughnutChart" | b"areaChart" | b"area3DChart"
+        | b"scatterChart" | b"bubbleChart" | b"radarChart" | b"stockChart"
+        | b"surfaceChart" | b"surface3DChart" | b"ofPieChart"
+            if self.in_chart_type_element =>
+        {
+            let ct = resolve_chart_type(
+                self.chart_type_tag.as_deref(),
+                self.bar_dir.as_deref(),
+                self.grouping.as_deref(),
+                self.scatter_style.as_deref(),
+            );
+            let is_3d = self.chart_type_tag
+                .as_deref()
+                .map_or(false, |t| t.contains("3D"));
+            let group = ChartTypeGroup {
+                chart_type: ct,
+                is_3d,
+                series: std::mem::take(&mut self.group_series),
+                data_labels: self.group_data_labels.take(),
+                vary_colors: self.vary_colors.take(),
+                gap_width: self.gap_width.take(),
+                overlap: self.overlap.take(),
+                first_slice_angle: self.first_slice_angle.take(),
+                hole_size: self.hole_size.take(),
+                bubble_scale: self.bubble_scale.take(),
+                show_negative_bubbles: self.show_negative_bubbles.take(),
+                radar_style: self.radar_style.take(),
+                wireframe: self.wireframe.take(),
+                drop_lines: self.group_drop_lines.take(),
+                high_low_lines: self.group_high_low_lines.take(),
+                series_lines: self.group_series_lines.take(),
+                up_down_bars: self.group_up_down_bars.take(),
+                axis_ids: std::mem::take(&mut self.group_axis_ids),
+                raw_ext: self.group_raw_ext.take(),
+                of_pie_type: None,
+                split_type: None,
+                split_pos: None,
+                second_pie_size: None,
+                bar_shape: None,
+                floor: None,
+                side_wall: None,
+                back_wall: None,
+            };
+            self.result.type_groups.push(group);
+            self.in_chart_type_element = false;
+        }
+        b"dropLines" if self.in_drop_lines => {
+            if self.group_drop_lines.is_none() {
+                self.group_drop_lines = Some(ChartLines::default());
+            }
+            self.in_drop_lines = false;
+        }
+        b"hiLowLines" if self.in_hi_low_lines => {
+            if self.group_high_low_lines.is_none() {
+                self.group_high_low_lines = Some(ChartLines::default());
+            }
+            self.in_hi_low_lines = false;
+        }
+        b"serLines" if self.in_ser_lines => {
+            if self.group_series_lines.is_none() {
+                self.group_series_lines = Some(ChartLines::default());
+            }
+            self.in_ser_lines = false;
+        }
+        b"upBars" if self.in_up_bars => self.in_up_bars = false,
+        b"downBars" if self.in_down_bars => self.in_down_bars = false,
+        b"upDownBars" if self.in_up_down_bars => {
+            let up = self.up_bars_sp
+                .take()
+                .map(|sp| ChartLines {
+                    shape_properties: Some(sp),
+                })
+                .or(if self.had_up_bars {
+                    Some(ChartLines::default())
+                } else {
+                    None
+                });
+            let down = self.down_bars_sp
+                .take()
+                .map(|sp| ChartLines {
+                    shape_properties: Some(sp),
+                })
+                .or(if self.had_down_bars {
+                    Some(ChartLines::default())
+                } else {
+                    None
+                });
+            self.group_up_down_bars = Some(UpDownBars {
+                gap_width: self.up_down_bars_gap_width.take(),
+                up_bars: up,
+                down_bars: down,
+            });
+            self.had_up_bars = false;
+            self.had_down_bars = false;
+            self.in_up_down_bars = false;
+        }
+        b"leaderLines" if self.in_leader_lines => {
+            if self.dlbls.leader_lines.is_none() {
+                self.dlbls.leader_lines = Some(ChartLines::default());
+            }
+            self.in_leader_lines = false;
+        }
+        // Data labels
+        b"separator" if self.in_dlbls_separator => self.in_dlbls_separator = false,
+        b"dLbls" if self.in_dlbls => {
+            if self.in_ser {
+                self.ser_data_labels = Some(self.dlbls.clone());
+            } else {
+                self.group_data_labels = Some(self.dlbls.clone());
+            }
+            self.in_dlbls = false;
+        }
+        // Marker
+        b"marker" if self.in_marker => {
+            let m = Marker {
+                symbol: self.marker_symbol.take(),
+                size: self.marker_size.take(),
+            };
+            if self.in_dpt {
+                self.dpt_marker = Some(m);
+            } else {
+                self.ser_marker = Some(m);
+            }
+            self.in_marker = false;
+        }
+        // Data point
+        b"dPt" if self.in_dpt => {
+            self.ser_data_points.push(DataPoint {
+                index: self.dpt_index,
+                marker: self.dpt_marker.take(),
+                explosion: self.dpt_explosion.take(),
+                shape_properties: self.dpt_shape_properties.take(),
+            });
+            self.in_dpt = false;
+        }
+        // Trendline
+        b"name" if self.in_trendline_name => self.in_trendline_name = false,
+        b"trendline" if self.in_trendline => {
+            if let Some(tt) = self.trendline_type.take() {
+                self.ser_trendline = Some(Trendline {
+                    trendline_type: tt,
+                    name: self.trendline_name.take(),
+                    order: self.trendline_order.take(),
+                    period: self.trendline_period.take(),
+                    forward: self.trendline_forward.take(),
+                    backward: self.trendline_backward.take(),
+                    intercept: self.trendline_intercept.take(),
+                    label: None,
+                    display_r_squared: self.trendline_disp_r_sqr.take(),
+                    display_equation: self.trendline_disp_eq.take(),
+                });
+            }
+            self.in_trendline = false;
+        }
+        // Error bars
+        b"errBars" if self.in_err_bars => {
+            self.ser_error_bars = Some(ErrorBars {
+                direction: self.err_dir.unwrap_or(ErrorBarDirection::Y),
+                bar_type: self.err_bar_type.unwrap_or(ErrorBarType::Both),
+                value_type: self.err_val_type.unwrap_or(ErrorValueType::FixedValue),
+                value: self.err_val.take(),
+                no_end_cap: self.err_no_end_cap.take(),
+                plus: None,
+                minus: None,
+            });
+            self.in_err_bars = false;
+        }
+        b"ser" if self.in_ser => {
+            let values = if let Some(ref f) = self.ser_val_formula {
+                DataReference::formula(f)
+            } else if !self.ser_val_cache.is_empty() {
+                DataReference::numbers(self.ser_val_cache.clone())
+            } else {
+                DataReference::numbers(Vec::new())
+            };
+
+            let mut ds = DataSeries::new(values);
+            if let Some(ref name) = self.ser_name {
+                ds = ds.with_name(name);
+            }
+            if let Some(ref f) = self.ser_cat_formula {
+                ds = ds.with_categories(DataReference::formula(f));
+            }
+            ds.data_labels = self.ser_data_labels.take();
+            ds.trendline = self.ser_trendline.take();
+            ds.error_bars = self.ser_error_bars.take();
+            ds.marker = self.ser_marker.take();
+            ds.data_points = std::mem::take(&mut self.ser_data_points);
+            ds.smooth = self.ser_smooth.take();
+            ds.explosion = self.ser_explosion.take();
+            ds.shape_properties = self.ser_shape_properties.take();
+            ds.raw_ext = self.ser_raw_ext.take();
+            ds.invert_if_negative = self.ser_invert_if_negative.take();
+            self.group_series.push(ds);
+
+            self.in_ser = false;
+            self.ser_name = None;
+            self.ser_val_formula = None;
+            self.ser_val_cache.clear();
+            self.ser_cat_formula = None;
+        }
+        b"tx" if self.in_ser_tx => self.in_ser_tx = false,
+        b"strRef" if self.in_ser_tx_str_ref => self.in_ser_tx_str_ref = false,
+        b"f" if self.in_ser_tx_str_ref_f => self.in_ser_tx_str_ref_f = false,
+        b"v" if self.in_ser_tx_v => self.in_ser_tx_v = false,
+        b"val" if self.in_ser_val => {
+            self.in_ser_val = false;
+            self.in_ser_val_num_ref = false;
+        }
+        b"yVal" if self.in_ser_yval => {
+            self.in_ser_yval = false;
+            self.in_ser_val_num_ref = false;
+        }
+        b"numRef" if self.in_ser_val_num_ref => self.in_ser_val_num_ref = false,
+        b"f" if self.in_ser_val_num_ref_f => self.in_ser_val_num_ref_f = false,
+        b"numCache" if self.in_ser_val_num_cache => self.in_ser_val_num_cache = false,
+        b"pt" if self.in_ser_val_pt => self.in_ser_val_pt = false,
+        b"v" if self.in_ser_val_pt_v => self.in_ser_val_pt_v = false,
+        b"cat" if self.in_ser_cat => {
+            self.in_ser_cat = false;
+            self.in_ser_cat_ref = false;
+        }
+        b"xVal" if self.in_ser_xval => {
+            self.in_ser_xval = false;
+            self.in_ser_cat_ref = false;
+        }
+        b"strRef" | b"numRef" if self.in_ser_cat_ref => self.in_ser_cat_ref = false,
+        b"f" if self.in_ser_cat_ref_f => self.in_ser_cat_ref_f = false,
+        b"catAx" | b"dateAx" if self.in_cat_ax => {
+            let mut axis = Axis::new();
+            if !self.ax_title_text.is_empty() {
+                axis = axis.with_title(&self.ax_title_text);
+            }
+            if let (Some(min), Some(max)) = (self.ax_min, self.ax_max) {
+                axis = axis.with_bounds(min, max);
+            } else {
+                axis.minimum = self.ax_min;
+                axis.maximum = self.ax_max;
+            }
+            axis.number_format = self.ax_number_format.take();
+            axis.major_gridlines = self.ax_major_gridlines;
+            axis.minor_gridlines = self.ax_minor_gridlines;
+            axis.major_gridlines_shape_properties =
+                self.ax_major_gridlines_shape_properties.take();
+            axis.minor_gridlines_shape_properties =
+                self.ax_minor_gridlines_shape_properties.take();
+            axis.major_tick_mark = self.ax_major_tick_mark.take();
+            axis.minor_tick_mark = self.ax_minor_tick_mark.take();
+            axis.label_position = self.ax_label_position.take();
+            // An omitted c:delete is not "unspecified": Excel treats the
+            // axis as deleted. Recording that keeps a rewrite from
+            // silently making a hidden axis visible again.
+            axis.delete = Some(self.ax_delete.take().unwrap_or(true));
+            axis.crosses = self.ax_crosses.take();
+            axis.cross_between = self.ax_cross_between.take();
+            axis.position = self.ax_position.take();
+            axis.major_unit = self.ax_major_unit.take();
+            axis.minor_unit = self.ax_minor_unit.take();
+            axis.shape_properties = self.ax_shape_properties.take();
+            axis.raw_ext = self.ax_raw_ext.take();
+            if self.is_date_ax {
+                axis.axis_type = AxisType::Date;
+            }
+            self.result.category_axis = Some(axis.clone());
+            if let Some(id) = self.ax_id.take() {
+                self.result.axes.push(ChartAxis {
+                    id,
+                    cross_id: self.ax_cross_id.take().unwrap_or(0),
+                    axis: axis,
+                });
+            }
+            self.in_cat_ax = false;
+            self.ax_title_text.clear();
+        }
+        b"valAx" if self.in_val_ax => {
+            let mut axis = Axis::new();
+            if !self.ax_title_text.is_empty() {
+                axis = axis.with_title(&self.ax_title_text);
+            }
+            if let (Some(min), Some(max)) = (self.ax_min, self.ax_max) {
+                axis = axis.with_bounds(min, max);
+            } else {
+                axis.minimum = self.ax_min;
+                axis.maximum = self.ax_max;
+            }
+            axis.number_format = self.ax_number_format.take();
+            axis.major_gridlines = self.ax_major_gridlines;
+            axis.minor_gridlines = self.ax_minor_gridlines;
+            axis.major_gridlines_shape_properties =
+                self.ax_major_gridlines_shape_properties.take();
+            axis.minor_gridlines_shape_properties =
+                self.ax_minor_gridlines_shape_properties.take();
+            axis.major_tick_mark = self.ax_major_tick_mark.take();
+            axis.minor_tick_mark = self.ax_minor_tick_mark.take();
+            axis.label_position = self.ax_label_position.take();
+            // An omitted c:delete is not "unspecified": Excel treats the
+            // axis as deleted. Recording that keeps a rewrite from
+            // silently making a hidden axis visible again.
+            axis.delete = Some(self.ax_delete.take().unwrap_or(true));
+            axis.crosses = self.ax_crosses.take();
+            axis.cross_between = self.ax_cross_between.take();
+            axis.position = self.ax_position.take();
+            axis.major_unit = self.ax_major_unit.take();
+            axis.minor_unit = self.ax_minor_unit.take();
+            axis.shape_properties = self.ax_shape_properties.take();
+            axis.raw_ext = self.ax_raw_ext.take();
+            axis.axis_type = AxisType::Value;
+            self.result.value_axis = Some(axis.clone());
+            if let Some(id) = self.ax_id.take() {
+                self.result.axes.push(ChartAxis {
+                    id,
+                    cross_id: self.ax_cross_id.take().unwrap_or(0),
+                    axis: axis,
+                });
+            }
+            self.in_val_ax = false;
+            self.ax_title_text.clear();
+        }
+        b"serAx" if self.in_ser_ax => {
+            let mut axis = Axis::new();
+            axis.axis_type = AxisType::Series;
+            if !self.ax_title_text.is_empty() {
+                axis = axis.with_title(&self.ax_title_text);
+            }
+            if let (Some(min), Some(max)) = (self.ax_min, self.ax_max) {
+                axis = axis.with_bounds(min, max);
+            } else {
+                axis.minimum = self.ax_min;
+                axis.maximum = self.ax_max;
+            }
+            axis.number_format = self.ax_number_format.take();
+            axis.major_gridlines = self.ax_major_gridlines;
+            axis.minor_gridlines = self.ax_minor_gridlines;
+            axis.major_gridlines_shape_properties =
+                self.ax_major_gridlines_shape_properties.take();
+            axis.minor_gridlines_shape_properties =
+                self.ax_minor_gridlines_shape_properties.take();
+            axis.major_tick_mark = self.ax_major_tick_mark.take();
+            axis.minor_tick_mark = self.ax_minor_tick_mark.take();
+            axis.label_position = self.ax_label_position.take();
+            // An omitted c:delete is not "unspecified": Excel treats the
+            // axis as deleted. Recording that keeps a rewrite from
+            // silently making a hidden axis visible again.
+            axis.delete = Some(self.ax_delete.take().unwrap_or(true));
+            axis.crosses = self.ax_crosses.take();
+            axis.cross_between = self.ax_cross_between.take();
+            axis.position = self.ax_position.take();
+            axis.major_unit = self.ax_major_unit.take();
+            axis.minor_unit = self.ax_minor_unit.take();
+            axis.shape_properties = self.ax_shape_properties.take();
+            axis.raw_ext = self.ax_raw_ext.take();
+            self.result.series_axis = Some(axis.clone());
+            if let Some(id) = self.ax_id.take() {
+                self.result.axes.push(ChartAxis {
+                    id,
+                    cross_id: self.ax_cross_id.take().unwrap_or(0),
+                    axis: axis,
+                });
+            }
+            self.in_ser_ax = false;
+            self.ax_title_text.clear();
+        }
+        b"tx" if self.in_ax_title_tx => self.in_ax_title_tx = false,
+        b"rich" if self.in_ax_title_rich => self.in_ax_title_rich = false,
+        b"p" if self.in_ax_title_p && self.in_ax_title_rich => self.in_ax_title_p = false,
+        b"r" if self.in_ax_title_r => self.in_ax_title_r = false,
+        b"t" if self.in_ax_title_t => self.in_ax_title_t = false,
+        b"scaling" if self.in_ax_scaling => self.in_ax_scaling = false,
+        b"majorGridlines" if self.in_ax_major_gridlines => self.in_ax_major_gridlines = false,
+        b"minorGridlines" if self.in_ax_minor_gridlines => self.in_ax_minor_gridlines = false,
+        b"legend" if self.in_legend => {
+            let mut leg = Legend::new(self.legend_pos.unwrap_or(LegendPosition::Right));
+            if let Some(true) = self.legend_overlay {
+                leg.overlay = true;
+            }
+            leg.shape_properties = self.legend_shape_properties.take();
+            self.result.legend = Some(leg);
+            self.in_legend = false;
+        }
+        b"ln" if self.in_sp_ln => {
+            self.sp_line = Some(ChartLine {
+                width: self.sp_ln_width.take(),
+                solid_fill: self.sp_ln_solid_fill.take(),
+                no_fill: self.sp_ln_no_fill,
+                dash_style: self.sp_ln_dash.take(),
+            });
+            self.in_sp_ln = false;
+            self.sp_ln_no_fill = false;
+        }
+        _ => {}
+        }
+    }
+
+}
+
 fn parse_chart_xml_inner<R: Read>(
     xml_reader: &mut Reader<BufReader<R>>,
     buf: &mut Vec<u8>,
 ) -> ChartParseResult<ParsedChart> {
-    let mut result = ParsedChart {
-        chart_type: ChartType::Unsupported("unknown".into()),
-        title: None,
-        series: Vec::new(),
-        category_axis: None,
-        value_axis: None,
-        series_axis: None,
-        legend: None,
-        data_labels: None,
-        view_3d: None,
-        data_table: None,
-        display_blanks_as: None,
-        plot_visible_only: None,
-        layout: None,
-        shape_properties: None,
-        vary_colors: None,
-        gap_width: None,
-        overlap: None,
-        raw_extensions: HashMap::new(),
-        is_3d: false,
-        first_slice_angle: None,
-        hole_size: None,
-        bubble_scale: None,
-        show_negative_bubbles: None,
-        radar_style: None,
-        auto_title_deleted: None,
-        rounded_corners: None,
-        pivot_source: None,
-        show_dlbls_over_max: None,
-        wireframe: None,
-        drop_lines: None,
-        high_low_lines: None,
-        up_down_bars: None,
-        series_lines: None,
-        type_groups: Vec::new(),
-        axes: Vec::new(),
-    };
+    let mut parser = ChartParser::new();
 
-    // Nesting tracking
-    let mut in_chart = false;
-    let mut in_plot_area = false;
-    let mut in_chart_type_element = false;
-    let mut chart_type_tag: Option<String> = None;
-    let mut bar_dir: Option<String> = None;
-    let mut grouping: Option<String> = None;
-    let mut scatter_style: Option<String> = None;
-    let mut vary_colors: Option<bool> = None;
-    let mut gap_width: Option<u32> = None;
-    let mut overlap: Option<i32> = None;
-    let mut first_slice_angle: Option<u32> = None;
-    let mut hole_size: Option<u32> = None;
-    let mut bubble_scale: Option<u32> = None;
-    let mut show_negative_bubbles: Option<bool> = None;
-    let mut radar_style: Option<String> = None;
-    let mut wireframe: Option<bool> = None;
-    let mut in_chart_space = false;
-    let mut in_pivot_source = false;
-    let mut in_pivot_source_name = false;
-    let mut pivot_source_name = String::new();
-    let mut pivot_source_format_id: Option<u32> = None;
-
-    // Per-group accumulators for combo chart support
-    let mut group_series: Vec<DataSeries> = Vec::new();
-    let mut group_data_labels: Option<DataLabels> = None;
-    let mut group_axis_ids: Vec<u32> = Vec::new();
-    let mut group_raw_ext: Option<Vec<u8>> = None;
-    let mut group_drop_lines: Option<ChartLines> = None;
-    let mut group_high_low_lines: Option<ChartLines> = None;
-    let mut group_series_lines: Option<ChartLines> = None;
-    let mut group_up_down_bars: Option<UpDownBars> = None;
-
-    // Chart lines / up-down bars state
-    let mut in_drop_lines = false;
-    let mut in_hi_low_lines = false;
-    let mut in_ser_lines = false;
-    let mut in_up_down_bars = false;
-    let mut in_up_bars = false;
-    let mut in_down_bars = false;
-    let mut in_leader_lines = false;
-    let mut up_down_bars_gap_width: Option<u32> = None;
-    let mut up_bars_sp: Option<ChartShapeProperties> = None;
-    let mut down_bars_sp: Option<ChartShapeProperties> = None;
-    let mut had_up_bars = false;
-    let mut had_down_bars = false;
-
-    // Title parsing state
-    let mut in_chart_title = false;
-    let mut in_title_tx = false;
-    let mut in_title_rich = false;
-    let mut in_title_p = false;
-    let mut in_title_r = false;
-    let mut in_title_t = false;
-    let mut title_text = String::new();
-    let mut in_title_str_ref = false;
-    let mut in_title_str_ref_f = false;
-    // Track depth to distinguish chart-level title from axis titles
-    let mut title_depth = 0u32;
-
-    // Series parsing state
-    let mut in_ser = false;
-    let mut in_ser_tx = false;
-    let mut in_ser_tx_str_ref = false;
-    let mut in_ser_tx_str_ref_f = false;
-    let mut in_ser_tx_v = false;
-    let mut ser_name: Option<String> = None;
-    let mut in_ser_val = false;
-    let mut in_ser_yval = false;
-    let mut in_ser_val_num_ref = false;
-    let mut in_ser_val_num_ref_f = false;
-    let mut ser_val_formula: Option<String> = None;
-    let mut in_ser_val_num_cache = false;
-    let mut in_ser_val_pt = false;
-    let mut in_ser_val_pt_v = false;
-    let mut ser_val_cache: Vec<f64> = Vec::new();
-    let mut in_ser_cat = false;
-    let mut in_ser_xval = false;
-    let mut in_ser_cat_ref = false;
-    let mut in_ser_cat_ref_f = false;
-    let mut ser_cat_formula: Option<String> = None;
-
-    // Series extras
-    let mut ser_smooth: Option<bool> = None;
-    let mut ser_explosion: Option<u32> = None;
-    let mut ser_data_labels: Option<DataLabels> = None;
-    let mut ser_marker: Option<Marker> = None;
-    let mut ser_trendline: Option<Trendline> = None;
-    let mut ser_error_bars: Option<ErrorBars> = None;
-    let mut ser_shape_properties: Option<ChartShapeProperties> = None;
-    let mut ser_raw_ext: Option<Vec<u8>> = None;
-    let mut ser_invert_if_negative: Option<bool> = None;
-
-    // Data labels state
-    let mut in_dlbls = false;
-    let mut in_dlbls_separator = false;
-    let mut dlbls = DataLabels::default();
-
-    // Data point state
-    let mut in_dpt = false;
-    let mut dpt_index: u32 = 0;
-    let mut dpt_explosion: Option<u32> = None;
-    let mut dpt_marker: Option<Marker> = None;
-    let mut dpt_shape_properties: Option<ChartShapeProperties> = None;
-    let mut ser_data_points: Vec<DataPoint> = Vec::new();
-
-    // Marker state
-    let mut in_marker = false;
-    let mut marker_symbol: Option<MarkerSymbol> = None;
-    let mut marker_size: Option<u8> = None;
-
-    // Trendline state
-    let mut in_trendline = false;
-    let mut in_trendline_name = false;
-    let mut trendline_type: Option<TrendlineType> = None;
-    let mut trendline_name: Option<String> = None;
-    let mut trendline_order: Option<u32> = None;
-    let mut trendline_period: Option<u32> = None;
-    let mut trendline_forward: Option<f64> = None;
-    let mut trendline_backward: Option<f64> = None;
-    let mut trendline_intercept: Option<f64> = None;
-    let mut trendline_disp_r_sqr: Option<bool> = None;
-    let mut trendline_disp_eq: Option<bool> = None;
-
-    // Error bars state
-    let mut in_err_bars = false;
-    let mut err_dir: Option<ErrorBarDirection> = None;
-    let mut err_bar_type: Option<ErrorBarType> = None;
-    let mut err_val_type: Option<ErrorValueType> = None;
-    let mut err_val: Option<f64> = None;
-    let mut err_no_end_cap: Option<bool> = None;
-
-    // Axis parsing state
-    let mut in_cat_ax = false;
-    let mut in_val_ax = false;
-    let mut in_ser_ax = false;
-    let mut is_date_ax = false;
-    let mut in_ax_title = false;
-    let mut in_ax_title_tx = false;
-    let mut in_ax_title_rich = false;
-    let mut in_ax_title_p = false;
-    let mut in_ax_title_r = false;
-    let mut in_ax_title_t = false;
-    let mut ax_title_text = String::new();
-    let mut in_ax_scaling = false;
-    let mut ax_min: Option<f64> = None;
-    let mut ax_max: Option<f64> = None;
-    let mut ax_number_format: Option<NumberFormat> = None;
-    let mut ax_major_gridlines = false;
-    let mut ax_minor_gridlines = false;
-    let mut in_ax_major_gridlines = false;
-    let mut in_ax_minor_gridlines = false;
-    let mut ax_major_gridlines_shape_properties: Option<ChartShapeProperties> = None;
-    let mut ax_minor_gridlines_shape_properties: Option<ChartShapeProperties> = None;
-    let mut ax_major_tick_mark: Option<TickMark> = None;
-    let mut ax_minor_tick_mark: Option<TickMark> = None;
-    let mut ax_label_position: Option<TickLabelPosition> = None;
-    let mut ax_delete: Option<bool> = None;
-    let mut ax_crosses: Option<AxisCrosses> = None;
-    let mut ax_cross_between: Option<CrossBetween> = None;
-    let mut ax_position: Option<AxisPosition> = None;
-    let mut ax_major_unit: Option<f64> = None;
-    let mut ax_minor_unit: Option<f64> = None;
-    let mut ax_shape_properties: Option<ChartShapeProperties> = None;
-    let mut ax_raw_ext: Option<Vec<u8>> = None;
-    let mut ax_id: Option<u32> = None;
-    let mut ax_cross_id: Option<u32> = None;
-
-    // Legend parsing state
-    let mut in_legend = false;
-    let mut legend_pos: Option<LegendPosition> = None;
-    let mut legend_overlay: Option<bool> = None;
-    let mut legend_shape_properties: Option<ChartShapeProperties> = None;
-
-    // View 3D state
-    let mut in_view_3d = false;
-    let mut view_3d = View3D::default();
-
-    // Layout state
-    let mut in_layout = false;
-    let mut in_manual_layout = false;
-    let mut had_manual_layout = false;
-    let mut manual_layout = ManualLayout::default();
-
-    // Shape properties state
-    let mut in_sp_pr = false;
-    let mut sp_pr_depth = 0u32;
-    let mut sp_solid_fill: Option<ChartColor> = None;
-    let mut sp_no_fill = false;
-    let mut sp_line: Option<ChartLine> = None;
-    let mut in_sp_ln = false;
-    let mut sp_ln_width: Option<i64> = None;
-    let mut sp_ln_solid_fill: Option<ChartColor> = None;
-    let mut sp_ln_no_fill = false;
-    let mut sp_ln_dash: Option<String> = None;
-    let mut sp_pr_context: SpPrContext = SpPrContext::None;
-
-    // Data table state
-    let mut in_d_table = false;
-    let mut d_table = ChartDataTable::default();
+    // `<x/>` and `<x></x>` are the same document, so a self-closing
+    // element is split into the start and end its expanded form would
+    // produce and handled by one code path; keeping two let them drift.
+    // An extLst being kept as bytes is exempt, so that what it replays
+    // matches its source.
+    let mut pending_end: Option<Event<'static>> = None;
 
     loop {
-        match xml_reader.read_event_into(buf) {
-            Ok(Event::Start(e)) => {
-                let local = e.name().local_name();
-                let tag = local.as_ref();
-                match tag {
-                    b"chartSpace" => in_chart_space = true,
-                    b"pivotSource" if in_chart_space && !in_chart => {
-                        in_pivot_source = true;
-                        pivot_source_name.clear();
-                        pivot_source_format_id = None;
-                    }
-                    b"name" if in_pivot_source => in_pivot_source_name = true,
-                    b"chart" if !in_chart => in_chart = true,
-                    b"plotArea" if in_chart => in_plot_area = true,
-                    b"title"
-                        if in_chart
-                            && !in_plot_area
-                            && !in_chart_title
-                            && !in_cat_ax
-                            && !in_val_ax
-                            && !in_ser_ax =>
-                    {
-                        in_chart_title = true;
-                        title_depth = 1;
-                        title_text.clear();
-                    }
-                    b"tx" if in_chart_title && title_depth == 1 => in_title_tx = true,
-                    b"rich" if in_title_tx => in_title_rich = true,
-                    b"p" if in_title_rich => in_title_p = true,
-                    b"r" if in_title_p => in_title_r = true,
-                    b"t" if in_title_r => in_title_t = true,
-                    b"strRef" if in_title_tx => in_title_str_ref = true,
-                    b"f" if in_title_str_ref => in_title_str_ref_f = true,
-                    // View 3D
-                    b"view3D" if in_chart && !in_plot_area => {
-                        in_view_3d = true;
-                        view_3d = View3D::default();
-                    }
-                    // Chart type elements in plotArea
-                    b"barChart" | b"bar3DChart" | b"lineChart" | b"line3DChart" | b"pieChart"
-                    | b"pie3DChart" | b"doughnutChart" | b"areaChart" | b"area3DChart"
-                    | b"scatterChart" | b"bubbleChart" | b"radarChart" | b"stockChart"
-                    | b"surfaceChart" | b"surface3DChart" | b"ofPieChart"
-                        if in_plot_area && !in_chart_type_element =>
-                    {
-                        in_chart_type_element = true;
-                        let tag_str = std::str::from_utf8(tag).unwrap_or("unknown");
-                        chart_type_tag = Some(tag_str.to_string());
-                        bar_dir = None;
-                        grouping = None;
-                        scatter_style = None;
-                        group_series.clear();
-                        group_data_labels = None;
-                        group_axis_ids.clear();
-                        group_raw_ext = None;
-                    }
-                    // Layout
-                    b"layout" if in_plot_area && !in_chart_type_element => {
-                        in_layout = true;
-                        had_manual_layout = false;
-                    }
-                    b"manualLayout" if in_layout => {
-                        in_manual_layout = true;
-                        had_manual_layout = true;
-                        manual_layout = ManualLayout::default();
-                    }
-                    // Data table
-                    b"dTable" if in_plot_area && !in_chart_type_element => {
-                        in_d_table = true;
-                        d_table = ChartDataTable::default();
-                    }
-                    // Data labels (chart-level or series-level)
-                    b"dLbls" if in_chart_type_element && !in_dlbls => {
-                        in_dlbls = true;
-                        dlbls = DataLabels::default();
-                    }
-                    b"separator" if in_dlbls => in_dlbls_separator = true,
-                    b"numFmt" if in_dlbls => {
-                        dlbls.number_format = Some(parse_num_fmt(&e));
-                    }
-                    // Chart lines and up-down bars
-                    b"dropLines" if in_chart_type_element && !in_ser => {
-                        in_drop_lines = true;
-                    }
-                    b"hiLowLines" if in_chart_type_element && !in_ser => {
-                        in_hi_low_lines = true;
-                    }
-                    b"serLines" if in_chart_type_element && !in_ser => {
-                        in_ser_lines = true;
-                    }
-                    b"upDownBars" if in_chart_type_element && !in_ser => {
-                        in_up_down_bars = true;
-                        up_down_bars_gap_width = None;
-                        up_bars_sp = None;
-                        down_bars_sp = None;
-                        had_up_bars = false;
-                        had_down_bars = false;
-                    }
-                    b"upBars" if in_up_down_bars => {
-                        in_up_bars = true;
-                        had_up_bars = true;
-                    }
-                    b"downBars" if in_up_down_bars => {
-                        in_down_bars = true;
-                        had_down_bars = true;
-                    }
-                    b"leaderLines" if in_dlbls => in_leader_lines = true,
-                    b"ser" if in_chart_type_element => {
-                        in_ser = true;
-                        ser_name = None;
-                        ser_val_formula = None;
-                        ser_val_cache.clear();
-                        ser_cat_formula = None;
-                        ser_smooth = None;
-                        ser_explosion = None;
-                        ser_data_labels = None;
-                        ser_marker = None;
-                        ser_trendline = None;
-                        ser_error_bars = None;
-                        ser_data_points.clear();
-                        ser_shape_properties = None;
-                        ser_raw_ext = None;
-                        ser_invert_if_negative = None;
-                    }
-                    b"tx" if in_ser => in_ser_tx = true,
-                    b"strRef" if in_ser_tx => in_ser_tx_str_ref = true,
-                    b"f" if in_ser_tx_str_ref => in_ser_tx_str_ref_f = true,
-                    b"v" if in_ser_tx && !in_ser_tx_str_ref => in_ser_tx_v = true,
-                    // Data points
-                    b"dPt" if in_ser => {
-                        in_dpt = true;
-                        dpt_index = 0;
-                        dpt_explosion = None;
-                        dpt_marker = None;
-                        dpt_shape_properties = None;
-                    }
-                    // Trendline
-                    b"trendline" if in_ser => {
-                        in_trendline = true;
-                        trendline_type = None;
-                        trendline_name = None;
-                        trendline_order = None;
-                        trendline_period = None;
-                        trendline_forward = None;
-                        trendline_backward = None;
-                        trendline_intercept = None;
-                        trendline_disp_r_sqr = None;
-                        trendline_disp_eq = None;
-                    }
-                    b"name" if in_trendline => in_trendline_name = true,
-                    // Error bars
-                    b"errBars" if in_ser => {
-                        in_err_bars = true;
-                        err_dir = None;
-                        err_bar_type = None;
-                        err_val_type = None;
-                        err_val = None;
-                        err_no_end_cap = None;
-                    }
-                    // Marker (series or data point level)
-                    b"marker" if in_ser && !in_dlbls && !in_trendline && !in_err_bars => {
-                        in_marker = true;
-                        marker_symbol = None;
-                        marker_size = None;
-                    }
-                    b"val" if in_err_bars => err_val = get_val_f64(&e),
-                    b"val" if in_ser && !in_err_bars => in_ser_val = true,
-                    b"yVal" if in_ser => in_ser_yval = true,
-                    b"numRef" if in_ser_val || in_ser_yval => in_ser_val_num_ref = true,
-                    b"f" if in_ser_val_num_ref => in_ser_val_num_ref_f = true,
-                    b"numCache" if in_ser_val_num_ref => in_ser_val_num_cache = true,
-                    b"pt" if in_ser_val_num_cache => in_ser_val_pt = true,
-                    b"v" if in_ser_val_pt => in_ser_val_pt_v = true,
-                    b"cat" if in_ser => in_ser_cat = true,
-                    b"xVal" if in_ser => in_ser_xval = true,
-                    b"strRef" | b"numRef" if in_ser_cat || in_ser_xval => {
-                        in_ser_cat_ref = true;
-                    }
-                    b"f" if in_ser_cat_ref => in_ser_cat_ref_f = true,
-                    // Axis elements
-                    b"catAx" | b"dateAx" if in_plot_area => {
-                        if tag == b"catAx" {
-                        } else {
-                        }
-                        in_cat_ax = true;
-                        is_date_ax = tag == b"dateAx";
-                        ax_title_text.clear();
-                        ax_min = None;
-                        ax_max = None;
-                        ax_number_format = None;
-                        ax_major_gridlines = false;
-                        ax_minor_gridlines = false;
-                        in_ax_major_gridlines = false;
-                        in_ax_minor_gridlines = false;
-                        ax_major_gridlines_shape_properties = None;
-                        ax_minor_gridlines_shape_properties = None;
-                        ax_major_tick_mark = None;
-                        ax_minor_tick_mark = None;
-                        ax_label_position = None;
-                        ax_delete = None;
-                        ax_crosses = None;
-                        ax_cross_between = None;
-                        ax_position = None;
-                        ax_major_unit = None;
-                        ax_minor_unit = None;
-                        ax_shape_properties = None;
-                        ax_raw_ext = None;
-                        ax_id = None;
-                        ax_cross_id = None;
-                    }
-                    b"valAx" if in_plot_area => {
-                        in_val_ax = true;
-                        ax_title_text.clear();
-                        ax_min = None;
-                        ax_max = None;
-                        ax_number_format = None;
-                        ax_major_gridlines = false;
-                        ax_minor_gridlines = false;
-                        in_ax_major_gridlines = false;
-                        in_ax_minor_gridlines = false;
-                        ax_major_gridlines_shape_properties = None;
-                        ax_minor_gridlines_shape_properties = None;
-                        ax_major_tick_mark = None;
-                        ax_minor_tick_mark = None;
-                        ax_label_position = None;
-                        ax_delete = None;
-                        ax_crosses = None;
-                        ax_cross_between = None;
-                        ax_position = None;
-                        ax_major_unit = None;
-                        ax_minor_unit = None;
-                        ax_shape_properties = None;
-                        ax_raw_ext = None;
-                        ax_id = None;
-                        ax_cross_id = None;
-                    }
-                    b"serAx" if in_plot_area => {
-                        in_ser_ax = true;
-                        ax_title_text.clear();
-                        ax_min = None;
-                        ax_max = None;
-                        ax_number_format = None;
-                        ax_major_gridlines = false;
-                        ax_minor_gridlines = false;
-                        in_ax_major_gridlines = false;
-                        in_ax_minor_gridlines = false;
-                        ax_major_gridlines_shape_properties = None;
-                        ax_minor_gridlines_shape_properties = None;
-                        ax_major_tick_mark = None;
-                        ax_minor_tick_mark = None;
-                        ax_label_position = None;
-                        ax_delete = None;
-                        ax_crosses = None;
-                        ax_cross_between = None;
-                        ax_position = None;
-                        ax_major_unit = None;
-                        ax_minor_unit = None;
-                        ax_shape_properties = None;
-                        ax_raw_ext = None;
-                        ax_id = None;
-                        ax_cross_id = None;
-                    }
-                    b"title" if in_cat_ax || in_val_ax || in_ser_ax => in_ax_title = true,
-                    b"tx" if in_ax_title => in_ax_title_tx = true,
-                    b"rich" if in_ax_title_tx => in_ax_title_rich = true,
-                    b"p" if in_ax_title_rich => in_ax_title_p = true,
-                    b"r" if in_ax_title_p => in_ax_title_r = true,
-                    b"t" if in_ax_title_r => in_ax_title_t = true,
-                    b"scaling" if in_cat_ax || in_val_ax || in_ser_ax => {
-                        in_ax_scaling = true;
-                    }
-                    b"majorGridlines" if (in_cat_ax || in_val_ax || in_ser_ax) && !in_ax_title => {
-                        ax_major_gridlines = true;
-                        in_ax_major_gridlines = true;
-                    }
-                    b"minorGridlines" if (in_cat_ax || in_val_ax || in_ser_ax) && !in_ax_title => {
-                        ax_minor_gridlines = true;
-                        in_ax_minor_gridlines = true;
-                    }
-                    b"numFmt"
-                        if (in_cat_ax || in_val_ax || in_ser_ax) && !in_ax_title && !in_dlbls =>
-                    {
-                        ax_number_format = Some(parse_num_fmt(&e));
-                    }
-                    // Legend
-                    b"legend" if in_chart && !in_plot_area => {
-                        in_legend = true;
-                        legend_pos = None;
-                    }
-                    b"spPr" if !in_sp_pr => {
-                        in_sp_pr = true;
-                        sp_pr_depth = 1;
-                        sp_solid_fill = None;
-                        sp_no_fill = false;
-                        sp_line = None;
-                        in_sp_ln = false;
-                        sp_ln_width = None;
-                        sp_ln_solid_fill = None;
-                        sp_ln_no_fill = false;
-                        sp_ln_dash = None;
-                        if in_drop_lines {
-                            sp_pr_context = SpPrContext::DropLines;
-                        } else if in_hi_low_lines {
-                            sp_pr_context = SpPrContext::HiLowLines;
-                        } else if in_ser_lines {
-                            sp_pr_context = SpPrContext::SerLines;
-                        } else if in_up_bars {
-                            sp_pr_context = SpPrContext::UpBars;
-                        } else if in_down_bars {
-                            sp_pr_context = SpPrContext::DownBars;
-                        } else if in_leader_lines {
-                            sp_pr_context = SpPrContext::LeaderLines;
-                        } else if in_dpt && !in_marker && !in_dlbls {
-                            sp_pr_context = SpPrContext::DataPoint;
-                        } else if in_ser
-                            && !in_dpt
-                            && !in_trendline
-                            && !in_err_bars
-                            && !in_marker
-                            && !in_dlbls
-                        {
-                            sp_pr_context = SpPrContext::Series;
-                        } else if in_ax_major_gridlines {
-                            sp_pr_context = SpPrContext::MajorGridlines;
-                        } else if in_ax_minor_gridlines {
-                            sp_pr_context = SpPrContext::MinorGridlines;
-                        } else if in_cat_ax || in_ser_ax {
-                            sp_pr_context = SpPrContext::CatAxis;
-                        } else if in_val_ax {
-                            sp_pr_context = SpPrContext::ValAxis;
-                        } else if in_legend {
-                            sp_pr_context = SpPrContext::Legend;
-                        } else if in_chart_space && !in_chart && !in_plot_area {
-                            sp_pr_context = SpPrContext::ChartSpace;
-                        } else {
-                            sp_pr_context = SpPrContext::None;
-                        }
-                    }
-                    b"ln" if in_sp_pr => {
-                        sp_pr_depth += 1;
-                        in_sp_ln = true;
-                        sp_ln_width = None;
-                        sp_ln_solid_fill = None;
-                        sp_ln_no_fill = false;
-                        sp_ln_dash = None;
-                        for attr in e.attributes().flatten() {
-                            if attr.key.local_name().as_ref() == b"w" {
-                                sp_ln_width = attr
-                                    .unescape_value()
-                                    .ok()
-                                    .and_then(|s| s.parse::<i64>().ok());
-                            }
-                        }
-                    }
-                    b"solidFill" if in_sp_pr && !in_sp_ln => sp_pr_depth += 1,
-                    b"solidFill" if in_sp_ln => sp_pr_depth += 1,
-                    b"extLst" => {
-                        if let Some(raw) = capture_extlst(xml_reader, &e)? {
-                            if in_pivot_source {
-                                // PivotSource extensions are not modeled yet.
-                            } else if in_ser {
-                                ser_raw_ext = Some(raw);
-                            } else if in_cat_ax || in_val_ax || in_ser_ax {
-                                ax_raw_ext = Some(raw);
-                            } else if in_chart_type_element {
-                                group_raw_ext = Some(raw);
-                            } else if in_chart && !in_plot_area {
-                                result.raw_extensions.insert("chart".into(), raw);
-                            } else if in_plot_area {
-                                result.raw_extensions.insert("plotArea".into(), raw);
-                            } else {
-                                result.raw_extensions.insert("chartSpace".into(), raw);
-                            }
-                        }
-                    }
-                    _ => {
-                        if in_chart_title {
-                            title_depth += 1;
-                        }
-                        if in_sp_pr {
-                            sp_pr_depth += 1;
-                        }
-                    }
-                }
+        let event = match pending_end.take() {
+            Some(ev) => ev,
+            None => {
+                let ev = match xml_reader.read_event_into(buf) {
+                    Ok(ev) => ev.into_owned(),
+                    Err(e) => return Err(ChartParseError::Xml(e)),
+                };
+                buf.clear();
+                ev
             }
-            Ok(Event::Empty(e)) => {
-                let local = e.name().local_name();
-                let tag = local.as_ref();
-                match tag {
-                    b"barDir" if in_chart_type_element && !in_ser => {
-                        for attr in e.attributes().flatten() {
-                            if attr.key.local_name().as_ref() == b"val" {
-                                bar_dir = attr.unescape_value().ok().map(|s| s.to_string());
-                            }
-                        }
-                    }
-                    b"grouping" if in_chart_type_element && !in_ser => {
-                        for attr in e.attributes().flatten() {
-                            if attr.key.local_name().as_ref() == b"val" {
-                                grouping = attr.unescape_value().ok().map(|s| s.to_string());
-                            }
-                        }
-                    }
-                    b"scatterStyle" if in_chart_type_element && !in_ser => {
-                        for attr in e.attributes().flatten() {
-                            if attr.key.local_name().as_ref() == b"val" {
-                                scatter_style = attr.unescape_value().ok().map(|s| s.to_string());
-                            }
-                        }
-                    }
-                    b"radarStyle" if in_chart_type_element && !in_ser => {
-                        radar_style = get_val_attr(&e);
-                    }
-                    b"firstSliceAng" if in_chart_type_element && !in_ser => {
-                        first_slice_angle = get_val_u32(&e);
-                    }
-                    b"holeSize" if in_chart_type_element && !in_ser => {
-                        hole_size = get_val_u32(&e);
-                    }
-                    b"bubbleScale" if in_chart_type_element && !in_ser => {
-                        bubble_scale = get_val_u32(&e);
-                    }
-                    b"showNegBubbles" if in_chart_type_element && !in_ser => {
-                        show_negative_bubbles = get_val_bool(&e);
-                    }
-                    b"wireframe" if in_chart_type_element && !in_ser => {
-                        wireframe = get_val_bool(&e);
-                    }
-                    b"legendPos" if in_legend => {
-                        for attr in e.attributes().flatten() {
-                            if attr.key.local_name().as_ref() == b"val" {
-                                if let Ok(val) = attr.unescape_value() {
-                                    legend_pos = Some(match val.as_ref() {
-                                        "b" => LegendPosition::Bottom,
-                                        "t" => LegendPosition::Top,
-                                        "l" => LegendPosition::Left,
-                                        "r" => LegendPosition::Right,
-                                        "tr" => LegendPosition::TopRight,
-                                        _ => LegendPosition::Right,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                    b"min" if in_ax_scaling => {
-                        for attr in e.attributes().flatten() {
-                            if attr.key.local_name().as_ref() == b"val" {
-                                ax_min = attr
-                                    .unescape_value()
-                                    .ok()
-                                    .and_then(|s| s.parse::<f64>().ok());
-                            }
-                        }
-                    }
-                    b"max" if in_ax_scaling => {
-                        for attr in e.attributes().flatten() {
-                            if attr.key.local_name().as_ref() == b"val" {
-                                ax_max = attr
-                                    .unescape_value()
-                                    .ok()
-                                    .and_then(|s| s.parse::<f64>().ok());
-                            }
-                        }
-                    }
-                    // Data label children
-                    b"showLegendKey" if in_dlbls => {
-                        dlbls.show_legend_key = get_val_bool(&e);
-                    }
-                    b"showVal" if in_dlbls => dlbls.show_value = get_val_bool(&e),
-                    b"showCatName" if in_dlbls => {
-                        dlbls.show_category_name = get_val_bool(&e);
-                    }
-                    b"showSerName" if in_dlbls => {
-                        dlbls.show_series_name = get_val_bool(&e);
-                    }
-                    b"showPercent" if in_dlbls => dlbls.show_percent = get_val_bool(&e),
-                    b"showBubbleSize" if in_dlbls => {
-                        dlbls.show_bubble_size = get_val_bool(&e);
-                    }
-                    b"dLblPos" if in_dlbls => {
-                        dlbls.position =
-                            get_val_attr(&e).and_then(|s| parse_data_label_position(&s));
-                    }
-                    b"numFmt" if in_dlbls => {
-                        dlbls.number_format = Some(parse_num_fmt(&e));
-                    }
-                    b"showLeaderLines" if in_dlbls => {
-                        dlbls.show_leader_lines = get_val_bool(&e);
-                    }
-                    // Data point children
-                    b"idx" if in_dpt => dpt_index = get_val_u32(&e).unwrap_or(0),
-                    b"explosion" if in_dpt => dpt_explosion = get_val_u32(&e),
-                    b"explosion" if in_ser && !in_dpt => ser_explosion = get_val_u32(&e),
-                    // Marker children
-                    b"symbol" if in_marker => {
-                        marker_symbol = get_val_attr(&e).and_then(|s| parse_marker_symbol(&s));
-                    }
-                    b"size" if in_marker => marker_size = get_val_u8(&e),
-                    // Trendline children
-                    b"trendlineType" if in_trendline => {
-                        trendline_type = get_val_attr(&e).and_then(|s| parse_trendline_type(&s));
-                    }
-                    b"order" if in_trendline => trendline_order = get_val_u32(&e),
-                    b"period" if in_trendline => trendline_period = get_val_u32(&e),
-                    b"forward" if in_trendline => trendline_forward = get_val_f64(&e),
-                    b"backward" if in_trendline => trendline_backward = get_val_f64(&e),
-                    b"intercept" if in_trendline => trendline_intercept = get_val_f64(&e),
-                    b"dispRSqr" if in_trendline => {
-                        trendline_disp_r_sqr = get_val_bool(&e);
-                    }
-                    b"dispEq" if in_trendline => trendline_disp_eq = get_val_bool(&e),
-                    // Error bar children
-                    b"errDir" if in_err_bars => {
-                        err_dir = get_val_attr(&e).and_then(|s| match s.as_str() {
-                            "x" => Some(ErrorBarDirection::X),
-                            "y" => Some(ErrorBarDirection::Y),
-                            _ => None,
-                        });
-                    }
-                    b"errBarType" if in_err_bars => {
-                        err_bar_type = get_val_attr(&e).and_then(|s| match s.as_str() {
-                            "both" => Some(ErrorBarType::Both),
-                            "minus" => Some(ErrorBarType::Minus),
-                            "plus" => Some(ErrorBarType::Plus),
-                            _ => None,
-                        });
-                    }
-                    b"errValType" if in_err_bars => {
-                        err_val_type = get_val_attr(&e).and_then(|s| match s.as_str() {
-                            "cust" => Some(ErrorValueType::Custom),
-                            "fixedVal" => Some(ErrorValueType::FixedValue),
-                            "percentage" => Some(ErrorValueType::Percentage),
-                            "stdDev" => Some(ErrorValueType::StandardDeviation),
-                            "stdErr" => Some(ErrorValueType::StandardError),
-                            _ => None,
-                        });
-                    }
-                    b"val" if in_err_bars => err_val = get_val_f64(&e),
-                    b"noEndCap" if in_err_bars => err_no_end_cap = get_val_bool(&e),
-                    // Series smooth
-                    b"smooth" if in_ser => ser_smooth = get_val_bool(&e),
-                    b"invertIfNegative" if in_ser => {
-                        ser_invert_if_negative = get_val_bool(&e);
-                    }
-                    // Axis enhancements
-                    b"numFmt"
-                        if (in_cat_ax || in_val_ax || in_ser_ax) && !in_ax_title && !in_dlbls =>
-                    {
-                        ax_number_format = Some(parse_num_fmt(&e));
-                    }
-                    b"majorGridlines" if (in_cat_ax || in_val_ax || in_ser_ax) && !in_ax_title => {
-                        ax_major_gridlines = true;
-                    }
-                    b"minorGridlines" if (in_cat_ax || in_val_ax || in_ser_ax) && !in_ax_title => {
-                        ax_minor_gridlines = true;
-                    }
-                    b"majorTickMark" if (in_cat_ax || in_val_ax || in_ser_ax) && !in_ax_title => {
-                        ax_major_tick_mark = get_val_attr(&e).and_then(|s| parse_tick_mark(&s));
-                    }
-                    b"minorTickMark" if (in_cat_ax || in_val_ax || in_ser_ax) && !in_ax_title => {
-                        ax_minor_tick_mark = get_val_attr(&e).and_then(|s| parse_tick_mark(&s));
-                    }
-                    b"tickLblPos" if (in_cat_ax || in_val_ax || in_ser_ax) && !in_ax_title => {
-                        ax_label_position =
-                            get_val_attr(&e).and_then(|s| parse_tick_label_position(&s));
-                    }
-                    b"delete" if (in_cat_ax || in_val_ax || in_ser_ax) && !in_ax_title => {
-                        ax_delete = get_val_bool(&e);
-                    }
-                    b"crosses" if (in_cat_ax || in_val_ax || in_ser_ax) && !in_ax_title => {
-                        ax_crosses = get_val_attr(&e).and_then(|s| match s.as_str() {
-                            "autoZero" => Some(AxisCrosses::AutoZero),
-                            "min" => Some(AxisCrosses::Min),
-                            "max" => Some(AxisCrosses::Max),
-                            _ => None,
-                        });
-                    }
-                    b"crossBetween" if (in_cat_ax || in_val_ax || in_ser_ax) && !in_ax_title => {
-                        ax_cross_between = get_val_attr(&e).and_then(|s| match s.as_str() {
-                            "between" => Some(CrossBetween::Between),
-                            "midCat" => Some(CrossBetween::MidCat),
-                            _ => None,
-                        });
-                    }
-                    // View 3D children
-                    b"rotX" if in_view_3d => view_3d.rotate_x = get_val_i32(&e),
-                    b"rotY" if in_view_3d => view_3d.rotate_y = get_val_i32(&e),
-                    b"depthPercent" if in_view_3d => {
-                        view_3d.depth_percent = get_val_u32(&e);
-                    }
-                    b"hPercent" if in_view_3d => view_3d.height_percent = get_val_u32(&e),
-                    b"perspective" if in_view_3d => view_3d.perspective = get_val_u32(&e),
-                    b"rAngAx" if in_view_3d => {
-                        view_3d.right_angle_axes = get_val_bool(&e);
-                    }
-                    // Chart-level config
-                    b"plotVisOnly" if in_chart && !in_plot_area => {
-                        result.plot_visible_only = get_val_bool(&e);
-                    }
-                    b"autoTitleDeleted" if in_chart && !in_plot_area => {
-                        result.auto_title_deleted = get_val_bool(&e);
-                    }
-                    b"showDLblsOverMax" if in_chart && !in_plot_area => {
-                        result.show_dlbls_over_max = get_val_bool(&e);
-                    }
-                    b"roundedCorners" if in_chart_space && !in_chart => {
-                        result.rounded_corners = get_val_bool(&e);
-                    }
-                    b"fmtId" if in_pivot_source => {
-                        pivot_source_format_id = get_val_u32(&e);
-                    }
-                    b"dispBlanksAs" if in_chart && !in_plot_area => {
-                        result.display_blanks_as =
-                            get_val_attr(&e).and_then(|s| match s.as_str() {
-                                "gap" => Some(DisplayBlanksAs::Gap),
-                                "span" => Some(DisplayBlanksAs::Span),
-                                "zero" => Some(DisplayBlanksAs::Zero),
-                                _ => None,
-                            });
-                    }
-                    // Manual layout children
-                    b"x" if in_manual_layout => manual_layout.x = get_val_f64(&e),
-                    b"y" if in_manual_layout => manual_layout.y = get_val_f64(&e),
-                    b"w" if in_manual_layout => manual_layout.width = get_val_f64(&e),
-                    b"h" if in_manual_layout => manual_layout.height = get_val_f64(&e),
-                    // Data table children
-                    b"showHorzBorder" if in_d_table => {
-                        d_table.show_horizontal_border = get_val_bool(&e);
-                    }
-                    b"showVertBorder" if in_d_table => {
-                        d_table.show_vertical_border = get_val_bool(&e);
-                    }
-                    b"showOutline" if in_d_table => {
-                        d_table.show_outline = get_val_bool(&e);
-                    }
-                    b"showKeys" if in_d_table => d_table.show_keys = get_val_bool(&e),
-                    b"srgbClr" if in_sp_pr && !in_sp_ln => {
-                        if let Some(hex) = get_val_attr(&e) {
-                            sp_solid_fill = Some(ChartColor { hex });
-                        }
-                    }
-                    b"srgbClr" if in_sp_ln => {
-                        if let Some(hex) = get_val_attr(&e) {
-                            sp_ln_solid_fill = Some(ChartColor { hex });
-                        }
-                    }
-                    b"noFill" if in_sp_pr && !in_sp_ln => sp_no_fill = true,
-                    b"noFill" if in_sp_ln => sp_ln_no_fill = true,
-                    b"prstDash" if in_sp_ln => sp_ln_dash = get_val_attr(&e),
-                    b"axPos" if (in_cat_ax || in_val_ax || in_ser_ax) && !in_ax_title => {
-                        ax_position = get_val_attr(&e).and_then(|s| match s.as_str() {
-                            "b" => Some(AxisPosition::Bottom),
-                            "t" => Some(AxisPosition::Top),
-                            "l" => Some(AxisPosition::Left),
-                            "r" => Some(AxisPosition::Right),
-                            _ => None,
-                        });
-                    }
-                    b"majorUnit" if (in_cat_ax || in_val_ax || in_ser_ax) && !in_ax_title => {
-                        ax_major_unit = get_val_f64(&e);
-                    }
-                    b"minorUnit" if (in_cat_ax || in_val_ax || in_ser_ax) && !in_ax_title => {
-                        ax_minor_unit = get_val_f64(&e);
-                    }
-                    b"overlay" if in_legend => legend_overlay = get_val_bool(&e),
-                    b"varyColors" if in_chart_type_element && !in_ser => {
-                        vary_colors = get_val_bool(&e);
-                    }
-                    b"gapWidth" if in_up_down_bars => {
-                        up_down_bars_gap_width = get_val_u32(&e);
-                    }
-                    b"gapWidth" if in_chart_type_element && !in_ser => {
-                        gap_width = get_val_u32(&e);
-                    }
-                    b"overlap" if in_chart_type_element && !in_ser => {
-                        overlap = get_val_i32(&e).map(|v| v as i32);
-                    }
-                    b"axId" if in_chart_type_element && !in_ser => {
-                        if let Some(id) = get_val_u32(&e) {
-                            group_axis_ids.push(id);
-                        }
-                    }
-                    b"axId" if (in_cat_ax || in_val_ax || in_ser_ax) && !in_ax_title => {
-                        ax_id = get_val_u32(&e);
-                    }
-                    b"crossAx" if (in_cat_ax || in_val_ax || in_ser_ax) && !in_ax_title => {
-                        ax_cross_id = get_val_u32(&e);
-                    }
-                    b"dropLines" if in_chart_type_element && !in_ser => {
-                        group_drop_lines = Some(ChartLines::default());
-                    }
-                    b"hiLowLines" if in_chart_type_element && !in_ser => {
-                        group_high_low_lines = Some(ChartLines::default());
-                    }
-                    b"serLines" if in_chart_type_element && !in_ser => {
-                        group_series_lines = Some(ChartLines::default());
-                    }
-                    b"leaderLines" if in_dlbls => {
-                        dlbls.leader_lines = Some(ChartLines::default());
-                    }
-                    b"upBars" if in_up_down_bars => had_up_bars = true,
-                    b"downBars" if in_up_down_bars => had_down_bars = true,
-                    _ => {}
-                }
+        };
+        if parser.capturing() {
+            parser.capture(&event);
+            continue;
+        }
+        let event = match event {
+            Event::Empty(e) => {
+                pending_end = Some(Event::End(BytesEnd::new(
+                    String::from_utf8_lossy(e.name().as_ref()).into_owned(),
+                )));
+                Event::Start(e)
             }
-            Ok(Event::Text(e)) => {
-                if let Ok(text) = e.unescape() {
-                    let text_str = text.as_ref();
-                    if in_title_t {
-                        title_text.push_str(text_str);
-                    } else if in_title_str_ref_f {
-                        title_text.push_str(text_str);
-                    } else if in_ser_tx_str_ref_f {
-                        ser_name = Some(text_str.to_string());
-                    } else if in_ser_tx_v {
-                        ser_name = Some(text_str.to_string());
-                    } else if in_ser_val_num_ref_f {
-                        ser_val_formula = Some(text_str.to_string());
-                    } else if in_ser_val_pt_v {
-                        if let Ok(v) = text_str.parse::<f64>() {
-                            ser_val_cache.push(v);
-                        }
-                    } else if in_ser_cat_ref_f {
-                        ser_cat_formula = Some(text_str.to_string());
-                    } else if in_ax_title_t {
-                        ax_title_text.push_str(text_str);
-                    } else if in_trendline_name {
-                        trendline_name = Some(text_str.to_string());
-                    } else if in_dlbls_separator {
-                        dlbls.separator = Some(text_str.to_string());
-                    } else if in_pivot_source_name {
-                        pivot_source_name.push_str(text_str);
-                    }
-                }
-            }
-            Ok(Event::End(e)) => {
-                let local = e.name().local_name();
-                let tag = local.as_ref();
-                match tag {
-                    b"chart" => in_chart = false,
-                    b"name" if in_pivot_source_name => in_pivot_source_name = false,
-                    b"pivotSource" if in_pivot_source => {
-                        if !pivot_source_name.is_empty() {
-                            result.pivot_source = Some(PivotChartSource {
-                                name: pivot_source_name.clone(),
-                                format_id: pivot_source_format_id.unwrap_or(0),
-                            });
-                        }
-                        in_pivot_source = false;
-                    }
-                    b"plotArea" => in_plot_area = false,
-                    b"view3D" if in_view_3d => {
-                        result.view_3d = Some(view_3d.clone());
-                        in_view_3d = false;
-                    }
-                    b"layout" if in_layout => {
-                        if had_manual_layout {
-                            result.layout = Some(Layout {
-                                manual_layout: Some(manual_layout.clone()),
-                            });
-                        }
-                        had_manual_layout = false;
-                        manual_layout = ManualLayout::default();
-                        in_layout = false;
-                    }
-                    b"manualLayout" if in_manual_layout => in_manual_layout = false,
-                    b"dTable" if in_d_table => {
-                        result.data_table = Some(d_table.clone());
-                        in_d_table = false;
-                    }
-                    b"title" if in_ax_title => in_ax_title = false,
-                    b"title" if in_chart_title => {
-                        title_depth = title_depth.saturating_sub(1);
-                        if title_depth == 0 {
-                            if !title_text.is_empty() {
-                                result.title = Some(title_text.clone());
-                            }
-                            in_chart_title = false;
-                        }
-                    }
-                    b"tx" if in_title_tx => in_title_tx = false,
-                    b"rich" if in_title_rich => in_title_rich = false,
-                    b"p" if in_title_p && in_title_rich => in_title_p = false,
-                    b"r" if in_title_r && in_title_p => in_title_r = false,
-                    b"t" if in_title_t => in_title_t = false,
-                    b"strRef" if in_title_str_ref => in_title_str_ref = false,
-                    b"f" if in_title_str_ref_f => in_title_str_ref_f = false,
-                    b"barChart" | b"bar3DChart" | b"lineChart" | b"line3DChart" | b"pieChart"
-                    | b"pie3DChart" | b"doughnutChart" | b"areaChart" | b"area3DChart"
-                    | b"scatterChart" | b"bubbleChart" | b"radarChart" | b"stockChart"
-                    | b"surfaceChart" | b"surface3DChart" | b"ofPieChart"
-                        if in_chart_type_element =>
-                    {
-                        let ct = resolve_chart_type(
-                            chart_type_tag.as_deref(),
-                            bar_dir.as_deref(),
-                            grouping.as_deref(),
-                            scatter_style.as_deref(),
-                        );
-                        let is_3d = chart_type_tag
-                            .as_deref()
-                            .map_or(false, |t| t.contains("3D"));
-                        let group = ChartTypeGroup {
-                            chart_type: ct,
-                            is_3d,
-                            series: std::mem::take(&mut group_series),
-                            data_labels: group_data_labels.take(),
-                            vary_colors: vary_colors.take(),
-                            gap_width: gap_width.take(),
-                            overlap: overlap.take(),
-                            first_slice_angle: first_slice_angle.take(),
-                            hole_size: hole_size.take(),
-                            bubble_scale: bubble_scale.take(),
-                            show_negative_bubbles: show_negative_bubbles.take(),
-                            radar_style: radar_style.take(),
-                            wireframe: wireframe.take(),
-                            drop_lines: group_drop_lines.take(),
-                            high_low_lines: group_high_low_lines.take(),
-                            series_lines: group_series_lines.take(),
-                            up_down_bars: group_up_down_bars.take(),
-                            axis_ids: std::mem::take(&mut group_axis_ids),
-                            raw_ext: group_raw_ext.take(),
-                            of_pie_type: None,
-                            split_type: None,
-                            split_pos: None,
-                            second_pie_size: None,
-                            bar_shape: None,
-                            floor: None,
-                            side_wall: None,
-                            back_wall: None,
-                        };
-                        result.type_groups.push(group);
-                        in_chart_type_element = false;
-                    }
-                    b"dropLines" if in_drop_lines => {
-                        if group_drop_lines.is_none() {
-                            group_drop_lines = Some(ChartLines::default());
-                        }
-                        in_drop_lines = false;
-                    }
-                    b"hiLowLines" if in_hi_low_lines => {
-                        if group_high_low_lines.is_none() {
-                            group_high_low_lines = Some(ChartLines::default());
-                        }
-                        in_hi_low_lines = false;
-                    }
-                    b"serLines" if in_ser_lines => {
-                        if group_series_lines.is_none() {
-                            group_series_lines = Some(ChartLines::default());
-                        }
-                        in_ser_lines = false;
-                    }
-                    b"upBars" if in_up_bars => in_up_bars = false,
-                    b"downBars" if in_down_bars => in_down_bars = false,
-                    b"upDownBars" if in_up_down_bars => {
-                        let up = up_bars_sp
-                            .take()
-                            .map(|sp| ChartLines {
-                                shape_properties: Some(sp),
-                            })
-                            .or(if had_up_bars {
-                                Some(ChartLines::default())
-                            } else {
-                                None
-                            });
-                        let down = down_bars_sp
-                            .take()
-                            .map(|sp| ChartLines {
-                                shape_properties: Some(sp),
-                            })
-                            .or(if had_down_bars {
-                                Some(ChartLines::default())
-                            } else {
-                                None
-                            });
-                        group_up_down_bars = Some(UpDownBars {
-                            gap_width: up_down_bars_gap_width.take(),
-                            up_bars: up,
-                            down_bars: down,
-                        });
-                        had_up_bars = false;
-                        had_down_bars = false;
-                        in_up_down_bars = false;
-                    }
-                    b"leaderLines" if in_leader_lines => {
-                        if dlbls.leader_lines.is_none() {
-                            dlbls.leader_lines = Some(ChartLines::default());
-                        }
-                        in_leader_lines = false;
-                    }
-                    // Data labels
-                    b"separator" if in_dlbls_separator => in_dlbls_separator = false,
-                    b"dLbls" if in_dlbls => {
-                        if in_ser {
-                            ser_data_labels = Some(dlbls.clone());
-                        } else {
-                            group_data_labels = Some(dlbls.clone());
-                        }
-                        in_dlbls = false;
-                    }
-                    // Marker
-                    b"marker" if in_marker => {
-                        let m = Marker {
-                            symbol: marker_symbol.take(),
-                            size: marker_size.take(),
-                        };
-                        if in_dpt {
-                            dpt_marker = Some(m);
-                        } else {
-                            ser_marker = Some(m);
-                        }
-                        in_marker = false;
-                    }
-                    // Data point
-                    b"dPt" if in_dpt => {
-                        ser_data_points.push(DataPoint {
-                            index: dpt_index,
-                            marker: dpt_marker.take(),
-                            explosion: dpt_explosion.take(),
-                            shape_properties: dpt_shape_properties.take(),
-                        });
-                        in_dpt = false;
-                    }
-                    // Trendline
-                    b"name" if in_trendline_name => in_trendline_name = false,
-                    b"trendline" if in_trendline => {
-                        if let Some(tt) = trendline_type.take() {
-                            ser_trendline = Some(Trendline {
-                                trendline_type: tt,
-                                name: trendline_name.take(),
-                                order: trendline_order.take(),
-                                period: trendline_period.take(),
-                                forward: trendline_forward.take(),
-                                backward: trendline_backward.take(),
-                                intercept: trendline_intercept.take(),
-                                label: None,
-                                display_r_squared: trendline_disp_r_sqr.take(),
-                                display_equation: trendline_disp_eq.take(),
-                            });
-                        }
-                        in_trendline = false;
-                    }
-                    // Error bars
-                    b"errBars" if in_err_bars => {
-                        ser_error_bars = Some(ErrorBars {
-                            direction: err_dir.unwrap_or(ErrorBarDirection::Y),
-                            bar_type: err_bar_type.unwrap_or(ErrorBarType::Both),
-                            value_type: err_val_type.unwrap_or(ErrorValueType::FixedValue),
-                            value: err_val.take(),
-                            no_end_cap: err_no_end_cap.take(),
-                            plus: None,
-                            minus: None,
-                        });
-                        in_err_bars = false;
-                    }
-                    b"ser" if in_ser => {
-                        let values = if let Some(ref f) = ser_val_formula {
-                            DataReference::formula(f)
-                        } else if !ser_val_cache.is_empty() {
-                            DataReference::numbers(ser_val_cache.clone())
-                        } else {
-                            DataReference::numbers(Vec::new())
-                        };
-
-                        let mut ds = DataSeries::new(values);
-                        if let Some(ref name) = ser_name {
-                            ds = ds.with_name(name);
-                        }
-                        if let Some(ref f) = ser_cat_formula {
-                            ds = ds.with_categories(DataReference::formula(f));
-                        }
-                        ds.data_labels = ser_data_labels.take();
-                        ds.trendline = ser_trendline.take();
-                        ds.error_bars = ser_error_bars.take();
-                        ds.marker = ser_marker.take();
-                        ds.data_points = std::mem::take(&mut ser_data_points);
-                        ds.smooth = ser_smooth.take();
-                        ds.explosion = ser_explosion.take();
-                        ds.shape_properties = ser_shape_properties.take();
-                        ds.raw_ext = ser_raw_ext.take();
-                        ds.invert_if_negative = ser_invert_if_negative.take();
-                        group_series.push(ds);
-
-                        in_ser = false;
-                        ser_name = None;
-                        ser_val_formula = None;
-                        ser_val_cache.clear();
-                        ser_cat_formula = None;
-                    }
-                    b"tx" if in_ser_tx => in_ser_tx = false,
-                    b"strRef" if in_ser_tx_str_ref => in_ser_tx_str_ref = false,
-                    b"f" if in_ser_tx_str_ref_f => in_ser_tx_str_ref_f = false,
-                    b"v" if in_ser_tx_v => in_ser_tx_v = false,
-                    b"val" if in_ser_val => {
-                        in_ser_val = false;
-                        in_ser_val_num_ref = false;
-                    }
-                    b"yVal" if in_ser_yval => {
-                        in_ser_yval = false;
-                        in_ser_val_num_ref = false;
-                    }
-                    b"numRef" if in_ser_val_num_ref => in_ser_val_num_ref = false,
-                    b"f" if in_ser_val_num_ref_f => in_ser_val_num_ref_f = false,
-                    b"numCache" if in_ser_val_num_cache => in_ser_val_num_cache = false,
-                    b"pt" if in_ser_val_pt => in_ser_val_pt = false,
-                    b"v" if in_ser_val_pt_v => in_ser_val_pt_v = false,
-                    b"cat" if in_ser_cat => {
-                        in_ser_cat = false;
-                        in_ser_cat_ref = false;
-                    }
-                    b"xVal" if in_ser_xval => {
-                        in_ser_xval = false;
-                        in_ser_cat_ref = false;
-                    }
-                    b"strRef" | b"numRef" if in_ser_cat_ref => in_ser_cat_ref = false,
-                    b"f" if in_ser_cat_ref_f => in_ser_cat_ref_f = false,
-                    b"catAx" | b"dateAx" if in_cat_ax => {
-                        let mut axis = Axis::new();
-                        if !ax_title_text.is_empty() {
-                            axis = axis.with_title(&ax_title_text);
-                        }
-                        if let (Some(min), Some(max)) = (ax_min, ax_max) {
-                            axis = axis.with_bounds(min, max);
-                        } else {
-                            axis.minimum = ax_min;
-                            axis.maximum = ax_max;
-                        }
-                        axis.number_format = ax_number_format.take();
-                        axis.major_gridlines = ax_major_gridlines;
-                        axis.minor_gridlines = ax_minor_gridlines;
-                        axis.major_gridlines_shape_properties =
-                            ax_major_gridlines_shape_properties.take();
-                        axis.minor_gridlines_shape_properties =
-                            ax_minor_gridlines_shape_properties.take();
-                        axis.major_tick_mark = ax_major_tick_mark.take();
-                        axis.minor_tick_mark = ax_minor_tick_mark.take();
-                        axis.label_position = ax_label_position.take();
-                        axis.delete = ax_delete.take();
-                        axis.crosses = ax_crosses.take();
-                        axis.cross_between = ax_cross_between.take();
-                        if let Some(pos) = ax_position.take() {
-                            axis.position = pos;
-                        }
-                        axis.major_unit = ax_major_unit.take();
-                        axis.minor_unit = ax_minor_unit.take();
-                        axis.shape_properties = ax_shape_properties.take();
-                        axis.raw_ext = ax_raw_ext.take();
-                        if is_date_ax {
-                            axis.axis_type = AxisType::Date;
-                        }
-                        result.category_axis = Some(axis.clone());
-                        if let Some(id) = ax_id.take() {
-                            result.axes.push(ChartAxis {
-                                id,
-                                cross_id: ax_cross_id.take().unwrap_or(0),
-                                axis: axis,
-                            });
-                        }
-                        in_cat_ax = false;
-                        ax_title_text.clear();
-                    }
-                    b"valAx" if in_val_ax => {
-                        let mut axis = Axis::new();
-                        if !ax_title_text.is_empty() {
-                            axis = axis.with_title(&ax_title_text);
-                        }
-                        if let (Some(min), Some(max)) = (ax_min, ax_max) {
-                            axis = axis.with_bounds(min, max);
-                        } else {
-                            axis.minimum = ax_min;
-                            axis.maximum = ax_max;
-                        }
-                        axis.number_format = ax_number_format.take();
-                        axis.major_gridlines = ax_major_gridlines;
-                        axis.minor_gridlines = ax_minor_gridlines;
-                        axis.major_gridlines_shape_properties =
-                            ax_major_gridlines_shape_properties.take();
-                        axis.minor_gridlines_shape_properties =
-                            ax_minor_gridlines_shape_properties.take();
-                        axis.major_tick_mark = ax_major_tick_mark.take();
-                        axis.minor_tick_mark = ax_minor_tick_mark.take();
-                        axis.label_position = ax_label_position.take();
-                        axis.delete = ax_delete.take();
-                        axis.crosses = ax_crosses.take();
-                        axis.cross_between = ax_cross_between.take();
-                        if let Some(pos) = ax_position.take() {
-                            axis.position = pos;
-                        }
-                        axis.major_unit = ax_major_unit.take();
-                        axis.minor_unit = ax_minor_unit.take();
-                        axis.shape_properties = ax_shape_properties.take();
-                        axis.raw_ext = ax_raw_ext.take();
-                        axis.axis_type = AxisType::Value;
-                        result.value_axis = Some(axis.clone());
-                        if let Some(id) = ax_id.take() {
-                            result.axes.push(ChartAxis {
-                                id,
-                                cross_id: ax_cross_id.take().unwrap_or(0),
-                                axis: axis,
-                            });
-                        }
-                        in_val_ax = false;
-                        ax_title_text.clear();
-                    }
-                    b"serAx" if in_ser_ax => {
-                        let mut axis = Axis::new();
-                        axis.axis_type = AxisType::Series;
-                        if !ax_title_text.is_empty() {
-                            axis = axis.with_title(&ax_title_text);
-                        }
-                        if let (Some(min), Some(max)) = (ax_min, ax_max) {
-                            axis = axis.with_bounds(min, max);
-                        } else {
-                            axis.minimum = ax_min;
-                            axis.maximum = ax_max;
-                        }
-                        axis.number_format = ax_number_format.take();
-                        axis.major_gridlines = ax_major_gridlines;
-                        axis.minor_gridlines = ax_minor_gridlines;
-                        axis.major_gridlines_shape_properties =
-                            ax_major_gridlines_shape_properties.take();
-                        axis.minor_gridlines_shape_properties =
-                            ax_minor_gridlines_shape_properties.take();
-                        axis.major_tick_mark = ax_major_tick_mark.take();
-                        axis.minor_tick_mark = ax_minor_tick_mark.take();
-                        axis.label_position = ax_label_position.take();
-                        axis.delete = ax_delete.take();
-                        axis.crosses = ax_crosses.take();
-                        axis.cross_between = ax_cross_between.take();
-                        if let Some(pos) = ax_position.take() {
-                            axis.position = pos;
-                        }
-                        axis.major_unit = ax_major_unit.take();
-                        axis.minor_unit = ax_minor_unit.take();
-                        axis.shape_properties = ax_shape_properties.take();
-                        axis.raw_ext = ax_raw_ext.take();
-                        result.series_axis = Some(axis.clone());
-                        if let Some(id) = ax_id.take() {
-                            result.axes.push(ChartAxis {
-                                id,
-                                cross_id: ax_cross_id.take().unwrap_or(0),
-                                axis: axis,
-                            });
-                        }
-                        in_ser_ax = false;
-                        ax_title_text.clear();
-                    }
-                    b"tx" if in_ax_title_tx => in_ax_title_tx = false,
-                    b"rich" if in_ax_title_rich => in_ax_title_rich = false,
-                    b"p" if in_ax_title_p && in_ax_title_rich => in_ax_title_p = false,
-                    b"r" if in_ax_title_r => in_ax_title_r = false,
-                    b"t" if in_ax_title_t => in_ax_title_t = false,
-                    b"scaling" if in_ax_scaling => in_ax_scaling = false,
-                    b"majorGridlines" if in_ax_major_gridlines => in_ax_major_gridlines = false,
-                    b"minorGridlines" if in_ax_minor_gridlines => in_ax_minor_gridlines = false,
-                    b"legend" if in_legend => {
-                        let mut leg = Legend::new(legend_pos.unwrap_or(LegendPosition::Right));
-                        if let Some(true) = legend_overlay {
-                            leg.overlay = true;
-                        }
-                        leg.shape_properties = legend_shape_properties.take();
-                        result.legend = Some(leg);
-                        in_legend = false;
-                    }
-                    b"ln" if in_sp_ln => {
-                        sp_line = Some(ChartLine {
-                            width: sp_ln_width.take(),
-                            solid_fill: sp_ln_solid_fill.take(),
-                            no_fill: sp_ln_no_fill,
-                            dash_style: sp_ln_dash.take(),
-                        });
-                        in_sp_ln = false;
-                        sp_ln_no_fill = false;
-                        sp_pr_depth = sp_pr_depth.saturating_sub(1);
-                    }
-                    b"spPr" if in_sp_pr => {
-                        sp_pr_depth = sp_pr_depth.saturating_sub(1);
-                        if sp_pr_depth == 0 {
-                            let props = ChartShapeProperties {
-                                solid_fill: sp_solid_fill.take(),
-                                no_fill: sp_no_fill,
-                                line: sp_line.take(),
-                            };
-                            let has_content =
-                                props.solid_fill.is_some() || props.no_fill || props.line.is_some();
-                            if has_content {
-                                match sp_pr_context {
-                                    SpPrContext::Series => {
-                                        ser_shape_properties = Some(props);
-                                    }
-                                    SpPrContext::DataPoint => {
-                                        dpt_shape_properties = Some(props);
-                                    }
-                                    SpPrContext::CatAxis => {
-                                        ax_shape_properties = Some(props);
-                                    }
-                                    SpPrContext::ValAxis => {
-                                        ax_shape_properties = Some(props);
-                                    }
-                                    SpPrContext::MajorGridlines => {
-                                        ax_major_gridlines = true;
-                                        ax_major_gridlines_shape_properties = Some(props);
-                                    }
-                                    SpPrContext::MinorGridlines => {
-                                        ax_minor_gridlines = true;
-                                        ax_minor_gridlines_shape_properties = Some(props);
-                                    }
-                                    SpPrContext::ChartSpace => {
-                                        result.shape_properties = Some(props);
-                                    }
-                                    SpPrContext::Legend => {
-                                        legend_shape_properties = Some(props);
-                                    }
-                                    SpPrContext::None => {}
-                                    SpPrContext::DropLines => {
-                                        group_drop_lines = Some(ChartLines {
-                                            shape_properties: Some(props),
-                                        });
-                                    }
-                                    SpPrContext::HiLowLines => {
-                                        group_high_low_lines = Some(ChartLines {
-                                            shape_properties: Some(props),
-                                        });
-                                    }
-                                    SpPrContext::SerLines => {
-                                        group_series_lines = Some(ChartLines {
-                                            shape_properties: Some(props),
-                                        });
-                                    }
-                                    SpPrContext::UpBars => up_bars_sp = Some(props),
-                                    SpPrContext::DownBars => down_bars_sp = Some(props),
-                                    SpPrContext::LeaderLines => {
-                                        dlbls.leader_lines = Some(ChartLines {
-                                            shape_properties: Some(props),
-                                        });
-                                    }
-                                }
-                            }
-                            in_sp_pr = false;
-                            sp_no_fill = false;
-                            sp_pr_context = SpPrContext::None;
-                        }
-                    }
-                    _ => {
-                        if in_chart_title {
-                            title_depth = title_depth.saturating_sub(1);
-                            if title_depth == 0 {
-                                if !title_text.is_empty() {
-                                    result.title = Some(title_text.clone());
-                                }
-                                in_chart_title = false;
-                            }
-                        }
-                        if in_sp_pr {
-                            sp_pr_depth = sp_pr_depth.saturating_sub(1);
-                            if sp_pr_depth == 0 {
-                                in_sp_pr = false;
-                                sp_no_fill = false;
-                                sp_pr_context = SpPrContext::None;
-                            }
-                        }
-                    }
-                }
-            }
-            Ok(Event::Eof) => break,
-            Err(e) => return Err(ChartParseError::Xml(e)),
+            other => other,
+        };
+        match event {
+            Event::Start(ref e) => parser.on_start(e),
+            Event::Text(ref e) => parser.on_text(e),
+            Event::End(ref e) => parser.on_end(e),
+            Event::Eof => break,
             _ => {}
         }
-        buf.clear();
     }
 
     // Populate legacy fields from type_groups for backward compatibility
-    if let Some(first) = result.type_groups.first() {
-        result.chart_type = first.chart_type.clone();
-        result.is_3d = first.is_3d;
-        result.series = first.series.clone();
-        result.data_labels = first.data_labels.clone();
-        result.vary_colors = first.vary_colors;
-        result.gap_width = first.gap_width;
-        result.overlap = first.overlap;
-        result.first_slice_angle = first.first_slice_angle;
-        result.hole_size = first.hole_size;
-        result.bubble_scale = first.bubble_scale;
-        result.show_negative_bubbles = first.show_negative_bubbles;
-        result.radar_style = first.radar_style.clone();
-        result.wireframe = first.wireframe;
-        result.drop_lines = first.drop_lines.clone();
-        result.high_low_lines = first.high_low_lines.clone();
-        result.up_down_bars = first.up_down_bars.clone();
-        result.series_lines = first.series_lines.clone();
+    if let Some(first) = parser.result.type_groups.first() {
+        parser.result.chart_type = first.chart_type.clone();
+        parser.result.is_3d = first.is_3d;
+        parser.result.series = first.series.clone();
+        parser.result.data_labels = first.data_labels.clone();
+        parser.result.vary_colors = first.vary_colors;
+        parser.result.gap_width = first.gap_width;
+        parser.result.overlap = first.overlap;
+        parser.result.first_slice_angle = first.first_slice_angle;
+        parser.result.hole_size = first.hole_size;
+        parser.result.bubble_scale = first.bubble_scale;
+        parser.result.show_negative_bubbles = first.show_negative_bubbles;
+        parser.result.radar_style = first.radar_style.clone();
+        parser.result.wireframe = first.wireframe;
+        parser.result.drop_lines = first.drop_lines.clone();
+        parser.result.high_low_lines = first.high_low_lines.clone();
+        parser.result.up_down_bars = first.up_down_bars.clone();
+        parser.result.series_lines = first.series_lines.clone();
     }
 
     // Detect PieExploded: shares the same XML element (pieChart) as Pie
     // but has explosion attributes on series.
-    if result.chart_type == ChartType::Pie {
-        let has_explosion = result.series.iter().any(|s| s.explosion.is_some());
+    if parser.result.chart_type == ChartType::Pie {
+        let has_explosion = parser.result.series.iter().any(|s| s.explosion.is_some());
         if has_explosion {
-            result.chart_type = ChartType::PieExploded;
+            parser.result.chart_type = ChartType::PieExploded;
         }
     }
 
     // Re-populate legacy axis fields from result.axes using first group's axis_ids.
     // Only needed for combo charts (2+ groups) where multiple value axes exist
     // and the parse-loop's last-wins behavior gives the wrong legacy value_axis.
-    if result.type_groups.len() >= 2 {
-        if let Some(first) = result.type_groups.first() {
+    if parser.result.type_groups.len() >= 2 {
+        if let Some(first) = parser.result.type_groups.first() {
             let axis_ids = &first.axis_ids;
-            result.category_axis = None;
-            result.value_axis = None;
-            for ax in &result.axes {
+            parser.result.category_axis = None;
+            parser.result.value_axis = None;
+            for ax in &parser.result.axes {
                 if axis_ids.contains(&ax.id) {
                     match ax.axis.axis_type {
                         AxisType::Category | AxisType::Date => {
-                            if result.category_axis.is_none() {
-                                result.category_axis = Some(ax.axis.clone());
+                            if parser.result.category_axis.is_none() {
+                                parser.result.category_axis = Some(ax.axis.clone());
                             }
                         }
                         AxisType::Value => {
-                            if result.value_axis.is_none() {
-                                result.value_axis = Some(ax.axis.clone());
+                            if parser.result.value_axis.is_none() {
+                                parser.result.value_axis = Some(ax.axis.clone());
                             }
                         }
                         AxisType::Series => {
-                            if result.series_axis.is_none() {
-                                result.series_axis = Some(ax.axis.clone());
+                            if parser.result.series_axis.is_none() {
+                                parser.result.series_axis = Some(ax.axis.clone());
                             }
                         }
                     }
@@ -1699,50 +1926,29 @@ fn parse_chart_xml_inner<R: Read>(
     }
 
     // Only keep type_groups/axes in combo mode (2+ groups)
-    if result.type_groups.len() < 2 {
-        if let Some(first) = result.type_groups.first_mut() {
+    if parser.result.type_groups.len() < 2 {
+        if let Some(first) = parser.result.type_groups.first_mut() {
             if let Some(raw) = first.raw_ext.take() {
-                result.raw_extensions.insert("chartType".into(), raw);
+                parser.result.raw_extensions.insert("chartType".into(), raw);
             }
         }
-        result.type_groups.clear();
-        result.axes.clear();
+        parser.result.type_groups.clear();
+        parser.result.axes.clear();
     }
 
-    Ok(result)
+    Ok(parser.result)
 }
 
-/// Capture an entire `<c:extLst>...</c:extLst>` element as raw XML bytes.
-/// The Start event for `extLst` has already been read; we write it plus all
-/// inner events until the matching End into a buffer.
-fn capture_extlst<R: Read>(
-    xml_reader: &mut Reader<BufReader<R>>,
-    start_event: &quick_xml::events::BytesStart,
-) -> ChartParseResult<Option<Vec<u8>>> {
-    let mut writer = Writer::new(Cursor::new(Vec::new()));
-    writer.write_event(Event::Start(start_event.to_owned()))?;
-
-    let mut depth: u32 = 1;
-    let mut read_buf = Vec::new();
-    loop {
-        read_buf.clear();
-        match xml_reader.read_event_into(&mut read_buf) {
-            Ok(ref ev @ Event::Start(_)) => {
-                depth += 1;
-                writer.write_event(ev.clone())?;
-            }
-            Ok(ref ev @ Event::End(_)) => {
-                depth -= 1;
-                writer.write_event(ev.clone())?;
-                if depth == 0 {
-                    return Ok(Some(writer.into_inner().into_inner()));
-                }
-            }
-            Ok(Event::Eof) => return Ok(None),
-            Ok(ref ev) => writer.write_event(ev.clone())?,
-            Err(e) => return Err(ChartParseError::Xml(e)),
-        }
-    }
+/// Where a captured `c:extLst` belongs, decided when it opens.
+#[derive(Debug, Clone, Copy)]
+enum ExtLstDest {
+    Series,
+    Axis,
+    TypeGroup,
+    Chart,
+    PlotArea,
+    ChartSpace,
+    Ignore,
 }
 
 fn resolve_chart_type(
@@ -1930,8 +2136,7 @@ mod tests {
     #[test]
     fn test_parse_pivot_source() {
         let xml = r#"<?xml version="1.0"?>
-<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"
-              xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
   <c:pivotSource>
     <c:name>SalesPivot</c:name>
     <c:fmtId val="4"/>
@@ -2913,9 +3118,9 @@ mod tests {
 
         let parsed = parse_chart_xml_str(xml);
         let cat = parsed.category_axis.as_ref().unwrap();
-        assert_eq!(cat.position, AxisPosition::Bottom);
+        assert_eq!(cat.position, Some(AxisPosition::Bottom));
         let val = parsed.value_axis.as_ref().unwrap();
-        assert_eq!(val.position, AxisPosition::Left);
+        assert_eq!(val.position, Some(AxisPosition::Left));
         assert_eq!(val.major_unit, Some(5.0));
         assert_eq!(val.minor_unit, Some(1.0));
     }

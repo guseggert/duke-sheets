@@ -17,6 +17,7 @@ members = [
     "crates/duke-sheets-libreoffice",
     "crates/duke-sheets-html",
     "crates/duke-sheets-xlsb",
+    "crates/duke-sheets-vml",
     "crates/duke-sheets-crypto",
     "crates/duke-sheets-test-harness",
     "crates/ssfmt",
@@ -44,6 +45,7 @@ duke-sheets-xlsx = { path = "crates/duke-sheets-xlsx" }
 duke-sheets-xls = { path = "crates/duke-sheets-xls" }
 duke-sheets-csv = { path = "crates/duke-sheets-csv" }
 duke-sheets-chart = { path = "crates/duke-sheets-chart" }
+duke-sheets-vml = { path = "crates/duke-sheets-vml" }
 duke-sheets-html = { path = "crates/duke-sheets-html" }
 duke-sheets-xlsb = { path = "crates/duke-sheets-xlsb" }
 duke-sheets-crypto = { path = "crates/duke-sheets-crypto" }

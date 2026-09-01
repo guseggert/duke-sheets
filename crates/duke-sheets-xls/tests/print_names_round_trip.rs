@@ -146,7 +146,6 @@ fn no_print_area_means_no_name_record() {
 /// pointing at the local sheet — wrong byte order or off-by-one
 /// indices would render the file as a non-printable workbook.
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_read_print_names_we_emit() {
     duke_sheets_test_harness::lo::ensure_lo();
 
@@ -172,10 +171,12 @@ fn lo_can_read_print_names_we_emit() {
         .build()
         .unwrap();
     let outcome: Result<(String, f64), String> = rt.block_on(async {
-        let mut bridge =
-            duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect("127.0.0.1", 2002)
-                .await
-                .map_err(|e| format!("connect: {e}"))?;
+        let mut bridge = duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect(
+            "127.0.0.1",
+            2002,
+        )
+        .await
+        .map_err(|e| format!("connect: {e}"))?;
         let mut wb = bridge
             .open_workbook(&path)
             .await

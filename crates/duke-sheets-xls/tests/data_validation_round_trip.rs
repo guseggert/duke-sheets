@@ -326,7 +326,6 @@ fn no_validations_emits_no_dval_record() {
 /// a custom-formula validation in one workbook so a single LO open
 /// covers the variety of DV `valType` enum values our writer emits.
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_read_data_validations_we_emit() {
     duke_sheets_test_harness::lo::ensure_lo();
 
@@ -340,7 +339,8 @@ fn lo_can_read_data_validations_we_emit() {
     v_list.ranges = vec![range("A1", "A1")];
     ws.add_data_validation(v_list);
 
-    let mut v_whole = DataValidation::whole_number_between(ValidationOperator::Between, "1", "100");
+    let mut v_whole =
+        DataValidation::whole_number_between(ValidationOperator::Between, "1", "100");
     v_whole.ranges = vec![range("B1", "B1")];
     v_whole.error_style = ValidationErrorStyle::Stop;
     v_whole.error_title = Some("Out of range".into());
@@ -365,10 +365,12 @@ fn lo_can_read_data_validations_we_emit() {
         .build()
         .unwrap();
     let outcome: Result<(String, f64, f64), String> = rt.block_on(async {
-        let mut bridge =
-            duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect("127.0.0.1", 2002)
-                .await
-                .map_err(|e| format!("connect: {e}"))?;
+        let mut bridge = duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect(
+            "127.0.0.1",
+            2002,
+        )
+        .await
+        .map_err(|e| format!("connect: {e}"))?;
         let mut wb = bridge
             .open_workbook(&path)
             .await

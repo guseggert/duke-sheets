@@ -1731,7 +1731,6 @@ mod tests {
 
     #[test]
     fn test_parse_structured_ref_this_row_escaped_column() {
-        // Table1[@[Column Name]] - shorthand for this-row with an escaped column name
         let ast = parse_formula("=Table1[@[Column Name]]").unwrap();
         if let FormulaExpr::StructuredRef(sr) = ast {
             assert_eq!(sr.table, Some("Table1".to_string()));

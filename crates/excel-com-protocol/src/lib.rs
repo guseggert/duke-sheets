@@ -125,6 +125,23 @@ pub enum Command {
         chain: Vec<ChainStep>,
     },
 
+    /// Write `contents_b64` to `path` inside the VM, creating parent
+    /// directories as needed.
+    ///
+    /// Exists so tests can move fixtures over this connection instead of
+    /// WinRM. A WinRM SOAP session costs ~420ms and the chunked base64 push
+    /// needed ~50 of them per file; this is one ~15ms round-trip.
+    PutFile { path: String, contents_b64: String },
+
+    /// Read `path` inside the VM and return its bytes as base64.
+    GetFile { path: String },
+
+    /// Delete `path` inside the VM. Succeeds if the file is already absent.
+    DeleteFile { path: String },
+
+    /// Create a directory inside the VM, including parents. Idempotent.
+    CreateDir { path: String },
+
     /// Shut down: release all handles, quit Excel, uninitialize COM.
     Shutdown,
 }

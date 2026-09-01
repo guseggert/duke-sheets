@@ -20,6 +20,7 @@ duke-sheets-formula = { path = "../crates/duke-sheets-formula" }
 duke-sheets-core = { path = "../crates/duke-sheets-core" }
 duke-sheets = { path = "../crates/duke-sheets", features = ["full"] }
 duke-sheets-chart = { path = "../crates/duke-sheets-chart" }
+duke-sheets-vml = { path = "../crates/duke-sheets-vml" }
 
 [workspace]
 members = ["."]
@@ -86,4 +87,14 @@ doc = false
 [[bin]]
 name = "xls_roundtrip"
 path = "fuzz_targets/xls_roundtrip.rs"
+doc = false
+
+[[bin]]
+name = "vml_controls"
+path = "fuzz_targets/vml_controls.rs"
+doc = false
+
+[[bin]]
+name = "xls_obj"
+path = "fuzz_targets/xls_obj.rs"
 doc = false

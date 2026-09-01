@@ -18,8 +18,7 @@ fn require_lo() {
 fn build_wb() -> Workbook {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
-    ws.set_cell_value("A1", "standard compat round-trip")
-        .unwrap();
+    ws.set_cell_value("A1", "standard compat round-trip").unwrap();
     ws.set_cell_value("B1", 4242.5).unwrap();
     wb
 }
@@ -35,7 +34,6 @@ fn write_encrypted_to_shared(profile: &EncryptionProfile) -> PathBuf {
 }
 
 #[test]
-#[ignore = "requires running LibreOffice on 127.0.0.1:2002"]
 fn lo_can_read_standard_aes128_default_profile() {
     require_lo();
     let path = write_encrypted_to_shared(&EncryptionProfile::standard_default());

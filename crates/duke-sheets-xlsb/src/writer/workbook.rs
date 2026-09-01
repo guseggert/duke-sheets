@@ -40,6 +40,23 @@ pub(crate) fn write_workbook<W: Write + Seek>(
     wb_prop.extend_from_slice(&encode_wide_str(""));
     rw.write_record(records::BRT_WB_PROP, &wb_prop)?;
 
+    if let Some(protection) = workbook.workbook_protection() {
+        if protection.structure || protection.windows || protection.password_hash.is_some() {
+            let mut payload = Vec::with_capacity(6);
+            payload.extend_from_slice(&protection.password_hash.unwrap_or(0).to_le_bytes());
+            payload.extend_from_slice(&0u16.to_le_bytes()); // revision protection password
+            let mut flags: u16 = 0;
+            if protection.structure {
+                flags |= 0x0001;
+            }
+            if protection.windows {
+                flags |= 0x0002;
+            }
+            payload.extend_from_slice(&flags.to_le_bytes());
+            rw.write_record(records::BRT_BOOK_PROTECTION, &payload)?;
+        }
+    }
+
     write_book_views(&mut rw, workbook.active_sheet())?;
 
     rw.write_record(0x008F, &[])?; // BrtBeginBundleShs

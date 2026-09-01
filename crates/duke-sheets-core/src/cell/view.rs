@@ -696,9 +696,6 @@ mod tests {
         let val = CellValue::Number(46022.0);
         let fmt_code = NumberFormat::Custom("m/d/yyyy_)".to_string());
         let result = fmt(&val, &fmt_code, false);
-        assert_eq!(
-            result, "12/31/2025 ",
-            "underscore-paren should produce a space, not a literal ')'"
-        );
+        assert_eq!(result, "12/31/2025 ", "underscore-paren should produce a space, not a literal ')'");
     }
 }

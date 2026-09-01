@@ -1,25 +1,14 @@
-use std::io::{BufReader, Read, Seek};
+use std::io::{BufReader, Read};
 
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
-use super::archive_by_name;
 use crate::error::{XlsxError, XlsxResult};
 use duke_sheets_core::table::{Table, TableColumn, TableStyleInfo, TotalsRowFunction};
 use duke_sheets_core::CellRange;
 
-/// Read a table definition from `xl/tables/tableN.xml`.
-pub(crate) fn read_table<R: Read + Seek>(
-    archive: &mut zip::ZipArchive<R>,
-    table_path: &str,
-) -> XlsxResult<Option<Table>> {
-    let file = match archive_by_name(archive, table_path) {
-        Ok(f) => f,
-        Err(_) => return Ok(None),
-    };
-
-    let reader = BufReader::new(file);
-    let mut xml_reader = Reader::from_reader(reader);
+pub(crate) fn parse_table<R: Read>(reader: R) -> XlsxResult<Option<Table>> {
+    let mut xml_reader = Reader::from_reader(BufReader::new(reader));
     xml_reader.config_mut().trim_text(true);
 
     let mut buf = Vec::new();
@@ -100,6 +89,18 @@ pub(crate) fn read_table<R: Read + Seek>(
     }
 
     Ok(table)
+}
+
+#[cfg(test)]
+fn read_table<R: Read + std::io::Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    table_path: &str,
+) -> XlsxResult<Option<Table>> {
+    let file = match archive.by_name(table_path) {
+        Ok(file) => file,
+        Err(_) => return Ok(None),
+    };
+    parse_table(file)
 }
 
 /// Parse the `<table>` element attributes.

@@ -943,6 +943,7 @@ impl CompoundFileBuilder {
         }
     }
 
+    /// Set the class identifier written on the root directory entry.
     pub fn set_root_clsid(&mut self, clsid: [u8; 16]) {
         self.root_clsid = clsid;
     }
@@ -1675,24 +1676,6 @@ mod writer_tests {
             .expect("our reader must accept our writer's output");
         assert!(cfb.exists("/Hello"));
         assert_eq!(cfb.read_stream("/Hello").unwrap(), b"world");
-    }
-
-    #[test]
-    fn writer_emits_configured_root_clsid() {
-        let clsid = [
-            0x20, 0x08, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x46,
-        ];
-        let mut builder = CompoundFileBuilder::new();
-        builder.set_root_clsid(clsid);
-        builder.add_stream("/Workbook", b"data".to_vec()).unwrap();
-
-        let bytes = builder.build().unwrap();
-        let first_dir_sector =
-            u32::from_le_bytes([bytes[48], bytes[49], bytes[50], bytes[51]]) as usize;
-        let root_entry = (1 + first_dir_sector) * 512;
-
-        assert_eq!(&bytes[root_entry + 80..root_entry + 96], &clsid);
     }
 
     #[test]

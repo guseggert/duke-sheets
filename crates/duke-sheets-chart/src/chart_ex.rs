@@ -8,9 +8,7 @@
 
 use std::collections::HashMap;
 
-use crate::chart::DrawingAnchor;
 use crate::formatting::{ChartShapeProperties, NumberFormat};
-use crate::text_properties::TextProperties;
 
 /// Series layout type (the `layoutId` attribute on `cx:series`).
 #[derive(Debug, Clone, PartialEq)]
@@ -58,22 +56,39 @@ pub struct ChartEx {
     pub plot_area: ChartExPlotArea,
     /// Legend (`cx:chart > cx:legend`)
     pub legend: Option<ChartExLegend>,
-    /// Drawing anchor (cell positioning)
-    pub anchor: DrawingAnchor,
     /// Chart-level shape properties (`cx:chartSpace > cx:spPr`)
     pub shape_properties: Option<ChartShapeProperties>,
-    /// Chart-level text properties (`cx:chartSpace > cx:txPr`, raw XML bytes)
-    pub text_properties: Option<TextProperties>,
-    /// Color map override (`cx:chartSpace > cx:clrMapOvr`, raw XML bytes)
+    /// Chart-level text properties: the complete `cx:txPr` element,
+    /// verbatim.
+    pub text_properties: Option<Vec<u8>>,
+    /// Colour map override: the complete `cx:clrMapOvr` element,
+    /// verbatim. Its content is entirely attributes, so the element
+    /// itself is part of what is stored.
     pub color_map_override: Option<Vec<u8>>,
     /// Format overrides (`cx:chartSpace > cx:fmtOvrs > cx:fmtOvr`)
     pub format_overrides: Vec<ChartExFormatOverride>,
     /// Print settings (`cx:chartSpace > cx:printSettings`)
     pub print_settings: Option<ChartExPrintSettings>,
-    /// Raw chart style XML (preserved for roundtrip)
-    pub raw_chart_style: Option<Vec<u8>>,
-    /// Raw chart color style XML (preserved for roundtrip)
-    pub raw_chart_color_style: Option<Vec<u8>>,
+    /// Chart style part (`xl/charts/styleN.xml`).
+    ///
+    /// Excel refuses to open a workbook whose chartEx part has no chart
+    /// style sibling, so when this is `None` the writer emits a
+    /// generated default rather than omitting the part.
+    pub style: Option<crate::chart_style::ChartStylePart>,
+    /// Chart colour style part (`xl/charts/colorsN.xml`). Same contract
+    /// as [`ChartEx::style`].
+    pub color_style: Option<crate::chart_style::ChartColorStylePart>,
+    /// Relationships the chartEx part declares beyond its style and
+    /// colour style, captured with their target parts.
+    ///
+    /// `cx:externalData` and the `fallbackImg` attribute name
+    /// relationships by id. Those ids are written back as they were
+    /// read, so the relationships they name have to come back too or
+    /// they resolve to nothing. Kept as captured relationships rather
+    /// than modelled, since what they point at - an embedded workbook,
+    /// an image - is outside what this crate reads.
+    #[doc(hidden)]
+    pub preserved_rels: Vec<crate::raw_rel::RawRel>,
     /// Extension list (`cx:extLst`, raw XML bytes)
     pub extensions: Option<Vec<u8>>,
     /// Raw extension elements keyed by namespace (preserved for roundtrip)
@@ -87,7 +102,7 @@ pub struct ChartEx {
 pub struct ChartExTitle {
     /// Literal text from `cx:txData > cx:v`, or formula from `cx:f`
     pub text: Option<String>,
-    /// Rich text (`cx:rich`, raw DrawingML XML bytes)
+    /// Rich text: the complete `cx:rich` element, verbatim.
     pub rich_text: Option<Vec<u8>>,
     /// Position attribute (`t`, `b`, `l`, `r`)
     pub position: Option<String>,
@@ -99,8 +114,8 @@ pub struct ChartExTitle {
     pub offset: Option<ChartExOffset>,
     /// Shape properties
     pub shape_properties: Option<ChartShapeProperties>,
-    /// Text properties (`cx:txPr`, raw XML bytes)
-    pub text_properties: Option<TextProperties>,
+    /// Text properties: the complete `cx:txPr` element, verbatim.
+    pub text_properties: Option<Vec<u8>>,
     /// Extension list (`cx:extLst`, raw XML bytes)
     pub extensions: Option<Vec<u8>>,
 }
@@ -257,7 +272,7 @@ pub struct ChartExSeries {
 pub struct ChartExText {
     /// Text data with formula/literal (`cx:txData`)
     pub data: Option<ChartExTextData>,
-    /// Rich text (`cx:rich`, raw DrawingML XML bytes)
+    /// Rich text: the complete `cx:rich` element, verbatim.
     pub rich: Option<Vec<u8>>,
 }
 
@@ -322,8 +337,14 @@ pub struct ChartExLayoutPr {
     pub geography: Option<ChartExGeography>,
     /// Box & whisker statistics settings
     pub statistics: Option<ChartExStatistics>,
-    /// Waterfall subtotal bar indices
-    pub subtotals: Vec<u32>,
+    /// Waterfall subtotal bar indices (`cx:subtotals`).
+    ///
+    /// `None` is an absent `cx:subtotals` element; `Some(vec![])` is a
+    /// present but empty one, which is what Excel writes for a waterfall
+    /// with no subtotal bars. The wrapper is `minOccurs="0"` in
+    /// [MS-ODRAWXML] §5.22 `CT_SeriesLayoutProperties`, so the two are
+    /// distinct documents and round-trip separately.
+    pub subtotals: Option<Vec<u32>>,
     /// Extension list (`cx:extLst`, raw XML bytes)
     pub extensions: Option<Vec<u8>>,
 }
@@ -396,10 +417,10 @@ pub struct ChartExAxis {
     pub title: Option<ChartExAxisTitle>,
     /// Axis units (`cx:units`)
     pub units: Option<ChartExAxisUnits>,
-    /// Major gridlines shape properties (`cx:majorGridlines > cx:spPr`)
-    pub major_gridlines: Option<ChartShapeProperties>,
-    /// Minor gridlines shape properties (`cx:minorGridlines > cx:spPr`)
-    pub minor_gridlines: Option<ChartShapeProperties>,
+    /// Major gridlines (`cx:majorGridlines`)
+    pub major_gridlines: Option<ChartExGridlines>,
+    /// Minor gridlines (`cx:minorGridlines`)
+    pub minor_gridlines: Option<ChartExGridlines>,
     /// Major tick mark type (`in`, `out`, `cross`, `none`)
     pub major_tick_marks: Option<String>,
     /// Minor tick mark type
@@ -410,10 +431,25 @@ pub struct ChartExAxis {
     pub number_format: Option<NumberFormat>,
     /// Axis shape properties (`cx:spPr`)
     pub shape_properties: Option<ChartShapeProperties>,
-    /// Axis text properties (`cx:txPr`, raw XML bytes)
-    pub text_properties: Option<TextProperties>,
+    /// Text properties: the complete `cx:txPr` element, verbatim.
+    pub text_properties: Option<Vec<u8>>,
     /// Extension list (`cx:extLst`, raw XML bytes)
     pub extensions: Option<Vec<u8>>,
+}
+
+/// Gridlines on a ChartEx axis (`cx:majorGridlines` / `cx:minorGridlines`).
+///
+/// Presence of the element is what turns gridlines on; the formatting
+/// override is separate and optional, so `CT_Gridlines`
+/// ([MS-ODRAWXML] §5.22) is modelled as its own type rather than as a
+/// bare `Option<ChartShapeProperties>`. That keeps a bare
+/// `<cx:majorGridlines/>` - the form Excel writes - distinct from one
+/// carrying a `cx:spPr`, and stops the writer inventing an empty
+/// `cx:spPr` for gridlines that never had one.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChartExGridlines {
+    /// Formatting override (`cx:spPr`), absent for plain gridlines.
+    pub shape_properties: Option<ChartShapeProperties>,
 }
 
 /// Axis scaling - either category-based or value-based.
@@ -446,8 +482,8 @@ pub struct ChartExAxisTitle {
     pub offset: Option<ChartExOffset>,
     /// Shape properties
     pub shape_properties: Option<ChartShapeProperties>,
-    /// Text properties (`cx:txPr`, raw XML bytes)
-    pub text_properties: Option<TextProperties>,
+    /// Text properties: the complete `cx:txPr` element, verbatim.
+    pub text_properties: Option<Vec<u8>>,
     /// Extension list (`cx:extLst`, raw XML bytes)
     pub extensions: Option<Vec<u8>>,
 }
@@ -470,8 +506,8 @@ pub struct ChartExAxisUnitsLabel {
     pub text: Option<ChartExText>,
     /// Shape properties
     pub shape_properties: Option<ChartShapeProperties>,
-    /// Text properties (`cx:txPr`, raw XML bytes)
-    pub text_properties: Option<TextProperties>,
+    /// Text properties: the complete `cx:txPr` element, verbatim.
+    pub text_properties: Option<Vec<u8>>,
     /// Extension list (`cx:extLst`, raw XML bytes)
     pub extensions: Option<Vec<u8>>,
 }
@@ -498,8 +534,8 @@ pub struct ChartExLegend {
     pub offset: Option<ChartExOffset>,
     /// Shape properties
     pub shape_properties: Option<ChartShapeProperties>,
-    /// Text properties (`cx:txPr`, raw XML bytes)
-    pub text_properties: Option<TextProperties>,
+    /// Text properties: the complete `cx:txPr` element, verbatim.
+    pub text_properties: Option<Vec<u8>>,
     /// Extension list (`cx:extLst`, raw XML bytes)
     pub extensions: Option<Vec<u8>>,
 }
@@ -521,8 +557,8 @@ pub struct ChartExDataLabels {
     pub separator: Option<String>,
     /// Shape properties for labels
     pub shape_properties: Option<ChartShapeProperties>,
-    /// Text properties (`cx:txPr`, raw XML bytes)
-    pub text_properties: Option<TextProperties>,
+    /// Text properties: the complete `cx:txPr` element, verbatim.
+    pub text_properties: Option<Vec<u8>>,
     /// Per-point data label overrides
     pub overrides: Vec<ChartExDataLabel>,
     /// Indices of hidden labels (`cx:dataLabelHidden`)
@@ -550,8 +586,8 @@ pub struct ChartExDataLabel {
     pub separator: Option<String>,
     /// Shape properties override
     pub shape_properties: Option<ChartShapeProperties>,
-    /// Text properties override (`cx:txPr`, raw XML bytes)
-    pub text_properties: Option<TextProperties>,
+    /// Text properties: the complete `cx:txPr` element, verbatim.
+    pub text_properties: Option<Vec<u8>>,
     /// Extension list (`cx:extLst`, raw XML bytes)
     pub extensions: Option<Vec<u8>>,
 }

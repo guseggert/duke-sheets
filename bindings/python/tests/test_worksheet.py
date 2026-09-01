@@ -129,6 +129,80 @@ class TestUsedRange:
         assert max_col == 2  # C is column 2
 
 
+class TestProtection:
+    """Test workbook and worksheet protection setters."""
+
+    def test_workbook_sheet_and_protected_ranges(self, workbook):
+        workbook.set_workbook_protection(
+            {"structure": True, "windows": True, "password": "password"}
+        )
+        book_protection = workbook.workbook_protection
+        assert book_protection.structure is True
+        assert book_protection.windows is True
+        assert book_protection.password_hash == 0x83AF
+
+        sheet = workbook.get_sheet(0)
+        sheet.set_protection(
+            {
+                "protected": True,
+                "password": "password",
+                "select_locked_cells": True,
+                "select_unlocked_cells": True,
+                "format_cells": True,
+                "sort": True,
+            }
+        )
+        protection = sheet.protection
+        assert protection.protected is True
+        assert protection.password_hash == 0x83AF
+        assert protection.select_locked_cells is True
+        assert protection.select_unlocked_cells is True
+        assert protection.format_cells is True
+        assert protection.sort is True
+
+        sheet.set_protected_ranges(
+            [
+                {
+                    "name": "Editable",
+                    "ranges": ["A1:B2", "D4:D5"],
+                    "password_hash": 0xCAFE,
+                    "security_descriptor": "S-1-5-21",
+                }
+            ]
+        )
+        ranges = sheet.protected_ranges
+        assert len(ranges) == 1
+        assert ranges[0].name == "Editable"
+        assert ranges[0].ranges == ["A1:B2", "D4:D5"]
+        assert ranges[0].password_hash == 0xCAFE
+        assert ranges[0].security_descriptor == "S-1-5-21"
+
+        workbook.set_workbook_protection(None)
+        sheet.set_protection(None)
+        assert workbook.workbook_protection is None
+        assert sheet.protection is None
+
+    def test_sheet_protection_defaults_allow_selection(self, workbook):
+        sheet = workbook.get_sheet(0)
+
+        sheet.set_protection({"password": "password"})
+
+        protection = sheet.protection
+        assert protection.protected is True
+        assert protection.password_hash == 0x83AF
+        assert protection.select_locked_cells is True
+        assert protection.select_unlocked_cells is True
+
+    def test_password_and_hash_are_mutually_exclusive(self, workbook):
+        sheet = workbook.get_sheet(0)
+        with pytest.raises(ValueError, match="password"):
+            sheet.set_protection({"password": "password", "password_hash": 0x83AF})
+        with pytest.raises(ValueError, match="password"):
+            workbook.set_workbook_protection(
+                {"password": "password", "password_hash": 0x83AF}
+            )
+
+
 class TestRowColumnDimensions:
     """Test row height and column width."""
 

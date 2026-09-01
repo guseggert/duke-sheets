@@ -1,6 +1,5 @@
 #![cfg_attr(test, allow(clippy::approx_constant))]
 pub mod biff12;
-pub(crate) mod drawing_bundle;
 pub mod error;
 pub mod reader;
 pub mod writer;

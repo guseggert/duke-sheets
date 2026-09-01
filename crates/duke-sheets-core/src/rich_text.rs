@@ -65,6 +65,11 @@ pub struct RichTextRun {
 
 impl RichTextRun {
     /// Create a plain run with no formatting (inherits cell style).
+    ///
+    /// This always creates a run, even for empty text. Caption-style
+    /// containers represent empty text as zero runs instead:
+    /// [`crate::DrawingText::plain`] with an empty string produces no
+    /// runs rather than one empty run.
     pub fn plain(text: impl Into<String>) -> Self {
         Self {
             text: text.into(),

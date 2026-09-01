@@ -51,7 +51,6 @@ fn last_sheet_active_round_trips() {
 /// LibreOffice must accept the WINDOW1 record's iTabCur (active
 /// sheet index) without rejecting the workbook.
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_read_active_sheet_we_emit() {
     duke_sheets_test_harness::lo::ensure_lo();
 
@@ -59,10 +58,7 @@ fn lo_can_read_active_sheet_we_emit() {
     wb.rename_worksheet(0, "First").expect("rename");
     wb.add_worksheet_with_name("Second").expect("add");
     wb.add_worksheet_with_name("Third").expect("add");
-    wb.worksheet_mut(0)
-        .unwrap()
-        .set_cell_value("A1", "alpha")
-        .expect("A1");
+    wb.worksheet_mut(0).unwrap().set_cell_value("A1", "alpha").expect("A1");
     wb.set_active_sheet(2).expect("set active");
 
     let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
@@ -76,10 +72,12 @@ fn lo_can_read_active_sheet_we_emit() {
         .build()
         .unwrap();
     let outcome: Result<String, String> = rt.block_on(async {
-        let mut bridge =
-            duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect("127.0.0.1", 2002)
-                .await
-                .map_err(|e| format!("connect: {e}"))?;
+        let mut bridge = duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect(
+            "127.0.0.1",
+            2002,
+        )
+        .await
+        .map_err(|e| format!("connect: {e}"))?;
         let mut wb = bridge
             .open_workbook(&path)
             .await
@@ -89,8 +87,5 @@ fn lo_can_read_active_sheet_we_emit() {
             .map_err(|e| format!("A1: {e}"))
     });
     let _ = std::fs::remove_file(&path);
-    assert_eq!(
-        outcome.expect("LO must open active-sheet workbook"),
-        "alpha"
-    );
+    assert_eq!(outcome.expect("LO must open active-sheet workbook"), "alpha");
 }

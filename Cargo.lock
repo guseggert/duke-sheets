@@ -815,6 +815,7 @@ name = "duke-sheets-excel-com"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "duke-sheets",
  "duke-sheets-chart",
  "duke-sheets-core",
  "duke-sheets-crypto",
@@ -895,6 +896,15 @@ name = "duke-sheets-test-harness"
 version = "0.1.0"
 
 [[package]]
+name = "duke-sheets-vml"
+version = "0.1.0"
+dependencies = [
+ "duke-sheets-chart",
+ "duke-sheets-core",
+ "quick-xml 0.37.5",
+]
+
+[[package]]
 name = "duke-sheets-xls"
 version = "0.1.0"
 dependencies = [
@@ -924,6 +934,7 @@ dependencies = [
  "duke-sheets-core",
  "duke-sheets-formula",
  "duke-sheets-pivot",
+ "duke-sheets-vml",
  "encoding_rs",
  "log",
  "pretty_assertions",
@@ -946,6 +957,7 @@ dependencies = [
  "duke-sheets-formula",
  "duke-sheets-libreoffice",
  "duke-sheets-test-harness",
+ "duke-sheets-vml",
  "duke-sheets-xls",
  "libreoffice-urp",
  "log",

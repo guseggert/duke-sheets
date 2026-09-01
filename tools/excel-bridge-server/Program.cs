@@ -86,9 +86,7 @@ class Program
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Command dispatch - small generic COM protocol
-    // -----------------------------------------------------------------------
+    // Command dispatch - all generic: COM navigation plus VM file transfer.
 
     static (Response resp, bool shutdown) Dispatch(ComObjectStore store, Request req)
     {
@@ -179,6 +177,45 @@ class Program
                 {
                     var handle = p!.Value.GetProperty("handle").GetUInt64();
                     store.Release(handle);
+                    return (Response.Ok(id), false);
+                }
+
+                // File transfer over this connection instead of WinRM. A
+                // WinRM SOAP session costs ~420ms and push_file_to_vm used
+                // ~50 of them (base64 in 2000-char chunks, one session
+                // each); the same transfer here is a single ~15ms
+                // round-trip. Not Excel-specific, but the VM filesystem is
+                // exactly what the tests need and this connection is
+                // already open.
+                case "PutFile":
+                {
+                    var path = p!.Value.GetProperty("path").GetString()!;
+                    var b64 = p.Value.GetProperty("contents_b64").GetString()!;
+                    var dir = Path.GetDirectoryName(path);
+                    if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                    File.WriteAllBytes(path, Convert.FromBase64String(b64));
+                    return (Response.Ok(id), false);
+                }
+
+                case "GetFile":
+                {
+                    var path = p!.Value.GetProperty("path").GetString()!;
+                    var bytes = File.ReadAllBytes(path);
+                    return (Response.Ok(id, new ValueData(Convert.ToBase64String(bytes))), false);
+                }
+
+                case "DeleteFile":
+                {
+                    var path = p!.Value.GetProperty("path").GetString()!;
+                    // Absent file is success: callers use this for cleanup.
+                    if (File.Exists(path)) File.Delete(path);
+                    return (Response.Ok(id), false);
+                }
+
+                case "CreateDir":
+                {
+                    var path = p!.Value.GetProperty("path").GetString()!;
+                    Directory.CreateDirectory(path);
                     return (Response.Ok(id), false);
                 }
 

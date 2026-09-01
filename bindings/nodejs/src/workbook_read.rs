@@ -6,7 +6,8 @@ use napi_derive::napi;
 use duke_sheets_core::named_range::NameScope;
 
 use super::{
-    catch_panic, to_napi_err, JsChartSheet, JsNamedRange, JsSheetSlot, JsWorkbookSettings, Workbook,
+    catch_panic, to_napi_err, JsChartSheet, JsNamedRange, JsSheetSlot, JsWorkbookProtection,
+    JsWorkbookSettings, Workbook,
 };
 
 #[napi]
@@ -47,6 +48,17 @@ impl Workbook {
         })
     }
 
+    /// Workbook structure/window protection settings, or null if unprotected.
+    #[napi(getter)]
+    pub fn workbook_protection(&self) -> Result<Option<JsWorkbookProtection>> {
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            Ok(wb
+                .workbook_protection()
+                .map(|protection| JsWorkbookProtection::from(&protection)))
+        })
+    }
+
     /// Get all named ranges defined in the workbook.
     #[napi(getter)]
     pub fn named_ranges(&self) -> Result<Vec<JsNamedRange>> {
@@ -70,6 +82,37 @@ impl Workbook {
                     hidden: nr.hidden,
                 })
                 .collect())
+        })
+    }
+
+    /// The workbook theme's 12 clrScheme colors as `RRGGBB` hex, in
+    /// theme-index order (background 1, text 1, background 2, text 2,
+    /// accent 1-6, hyperlink, followed hyperlink). The Office default
+    /// palette when the file carries no theme.
+    #[napi(getter)]
+    pub fn theme_palette(&self) -> Result<Vec<String>> {
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            Ok(wb
+                .theme_palette()
+                .colors
+                .iter()
+                .map(|(r, g, b)| format!("{r:02X}{g:02X}{b:02X}"))
+                .collect())
+        })
+    }
+
+    /// Resolve a drawing color to display RGB (`RRGGBB` hex) against
+    /// this workbook's theme palette. `auto` has no fixed RGB and
+    /// resolves to `null`.
+    #[napi(ts_args_type = "color: object", ts_return_type = "string | null")]
+    pub fn resolve_color(&self, env: Env, color: Unknown) -> Result<Option<String>> {
+        catch_panic(|| {
+            let color = crate::drawings::drawing_color_from_js(&env, color)?;
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            Ok(wb
+                .resolve_color(&color)
+                .map(|(r, g, b)| format!("{r:02X}{g:02X}{b:02X}")))
         })
     }
 }

@@ -144,6 +144,10 @@ pub struct CalculationStats {
 }
 
 /// Extension trait for Workbook to add calculation methods
+///
+/// Calculation keeps form-control linked cells live, as in Excel: control
+/// state is projected into constant linked cells before evaluation, and
+/// recalculated formulas in linked cells drive their controls afterwards.
 pub trait WorkbookCalculationExt {
     /// Calculate all formulas in the workbook with default options
     fn calculate(&mut self) -> Result<CalculationStats>;
@@ -161,8 +165,11 @@ impl WorkbookCalculationExt for Workbook {
     }
 
     fn calculate_with_options(&mut self, options: &CalculationOptions) -> Result<CalculationStats> {
+        self.sync_form_control_links_for_calculation();
         let mut engine = CalculationEngine::new(options.clone());
-        engine.calculate_all(self)
+        let stats = engine.calculate_all(self)?;
+        self.sync_form_controls_from_linked_cells();
+        Ok(stats)
     }
 
     fn calculate_sheets(&mut self, sheets: &[usize]) -> Result<CalculationStats> {
@@ -2831,10 +2838,7 @@ mod tests {
             external_fn: Some(Arc::new(|book, name, args| {
                 assert_eq!(book, "1");
                 assert_eq!(name, "TBLink");
-                assert_eq!(
-                    args,
-                    &["acct".to_string(), "7".to_string(), "3".to_string()]
-                );
+                assert_eq!(args, &["acct".to_string(), "7".to_string(), "3".to_string()]);
                 Some(FormulaValue::Number(99.0))
             })),
             ..Default::default()
@@ -2854,12 +2858,8 @@ mod tests {
     fn test_unresolved_external_function_preserves_cached_value() {
         let mut workbook = Workbook::new();
         let sheet = workbook.worksheet_mut(0).unwrap();
-        sheet
-            .set_cell_formula("A1", r#"=[1]!TBLink("acct")"#)
-            .unwrap();
-        sheet
-            .set_formula_result(0, 0, CellValue::Number(42.0))
-            .unwrap();
+        sheet.set_cell_formula("A1", r#"=[1]!TBLink("acct")"#).unwrap();
+        sheet.set_formula_result(0, 0, CellValue::Number(42.0)).unwrap();
 
         let stats = workbook.calculate().unwrap();
         assert_eq!(stats.errors, 0);

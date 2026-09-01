@@ -1,51 +1,64 @@
+#[cfg(test)]
 use std::collections::HashMap;
-use std::io::{BufReader, Read, Seek};
+#[cfg(test)]
+use std::io::Seek;
+use std::io::{BufReader, Read};
 
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
-use super::archive_by_name;
+use super::decode_excel_escapes;
+use super::shared_strings::parse_rpr_element;
 use crate::error::{XlsxError, XlsxResult};
 use duke_sheets_core::comment::CellComment;
-use duke_sheets_core::CellAddress;
+use duke_sheets_core::rich_text::{RichTextRun, RunFont};
+use duke_sheets_core::{CellAddress, DrawingText};
 
-pub(crate) fn read_worksheet_comments<R: Read + Seek>(
-    archive: &mut zip::ZipArchive<R>,
-    comments_path: &str,
-    vml_path: Option<&str>,
-    worksheet: &mut duke_sheets_core::Worksheet,
-) -> XlsxResult<()> {
-    let visible_map = read_comment_visibility_map(archive, vml_path)?;
-
-    let file = match archive_by_name(archive, comments_path) {
-        Ok(f) => f,
-        Err(_) => return Ok(()),
-    };
-
-    let reader = BufReader::new(file);
-    let mut xml_reader = Reader::from_reader(reader);
-    xml_reader.config_mut().trim_text(true);
+/// Parse a comments part into `(row, col, comment)` tuples in
+/// document order. Placement (anchor, visibility, z-position) is
+/// resolved by the caller against the legacy VML part.
+pub(crate) fn read_comments_list<R: Read>(reader: R) -> XlsxResult<Vec<(u32, u16, CellComment)>> {
+    let mut comments = Vec::new();
+    let mut xml_reader = Reader::from_reader(BufReader::new(reader));
+    // Keep whitespace: rich runs carry significant leading/trailing
+    // spaces.
+    xml_reader.config_mut().trim_text(false);
 
     let mut buf = Vec::new();
     let mut authors: Vec<String> = Vec::new();
 
     let mut in_author = false;
+    let mut author_text = String::new();
     let mut in_comment = false;
     let mut in_text = false;
     let mut in_t = false;
     let mut current_ref: Option<String> = None;
     let mut current_author_id: Option<usize> = None;
-    let mut current_text = String::new();
+    let mut plain_text = String::new();
+
+    // Rich-run state, mirroring the shared-strings CT_Rst parser.
+    let mut in_r = false;
+    let mut in_rpr = false;
+    let mut in_run_t = false;
+    let mut has_runs = false;
+    let mut runs: Vec<RichTextRun> = Vec::new();
+    let mut run_text = String::new();
+    let mut run_font: Option<RunFont> = None;
 
     loop {
         match xml_reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => match e.name().local_name().as_ref() {
-                b"author" => in_author = true,
+                b"author" => {
+                    in_author = true;
+                    author_text.clear();
+                }
                 b"comment" => {
                     in_comment = true;
                     current_ref = None;
                     current_author_id = None;
-                    current_text.clear();
+                    plain_text.clear();
+                    runs.clear();
+                    has_runs = false;
 
                     for attr in e.attributes().flatten() {
                         match attr.key.local_name().as_ref() {
@@ -61,11 +74,26 @@ pub(crate) fn read_worksheet_comments<R: Read + Seek>(
                     }
                 }
                 b"text" if in_comment => in_text = true,
+                b"r" if in_text => {
+                    in_r = true;
+                    has_runs = true;
+                    run_text.clear();
+                    run_font = None;
+                }
+                b"rPr" if in_r => {
+                    in_rpr = true;
+                    run_font = Some(RunFont::default());
+                }
+                b"t" if in_r => in_run_t = true,
                 b"t" if in_text => in_t = true,
+                name if in_rpr => parse_rpr_element(name, &e, &mut run_font),
                 _ => {}
             },
             Ok(Event::End(e)) => match e.name().local_name().as_ref() {
-                b"author" => in_author = false,
+                b"author" => {
+                    authors.push(std::mem::take(&mut author_text).trim().to_string());
+                    in_author = false;
+                }
                 b"comment" => {
                     if let Some(ref cell_ref) = current_ref {
                         match CellAddress::parse(cell_ref) {
@@ -74,41 +102,64 @@ pub(crate) fn read_worksheet_comments<R: Read + Seek>(
                                     .and_then(|id| authors.get(id))
                                     .cloned()
                                     .unwrap_or_default();
-
-                                let visible = visible_map
-                                    .get(&(addr.row, addr.col))
-                                    .copied()
-                                    .unwrap_or(false);
-                                let comment = CellComment::new(author, current_text.trim())
-                                    .with_visible(visible);
-                                worksheet.set_comment_at(addr.row, addr.col, comment);
+                                let text = if has_runs {
+                                    let mut runs = std::mem::take(&mut runs);
+                                    for run in &mut runs {
+                                        run.text = decode_excel_escapes(&run.text);
+                                    }
+                                    DrawingText {
+                                        runs,
+                                        ..DrawingText::default()
+                                    }
+                                } else {
+                                    DrawingText::plain(decode_excel_escapes(&plain_text))
+                                };
+                                comments.push((addr.row, addr.col, CellComment { author, text }));
                             }
                             Err(e) => log::warn!("Skipping comment at '{}': {}", cell_ref, e),
                         }
                     }
                     in_comment = false;
-                    current_text.clear();
+                    plain_text.clear();
                 }
                 b"text" => in_text = false,
+                b"r" if in_r => {
+                    let font =
+                        run_font
+                            .take()
+                            .and_then(|font| if font.is_empty() { None } else { Some(font) });
+                    runs.push(RichTextRun {
+                        text: std::mem::take(&mut run_text),
+                        font,
+                    });
+                    in_r = false;
+                }
+                b"rPr" => in_rpr = false,
+                b"t" if in_run_t => in_run_t = false,
                 b"t" => in_t = false,
                 _ => {}
             },
             Ok(Event::Text(e)) => {
                 if in_author {
                     if let Ok(text) = e.unescape() {
-                        authors.push(text.to_string());
+                        author_text.push_str(&text);
+                    }
+                } else if in_run_t {
+                    if let Ok(text) = e.unescape() {
+                        run_text.push_str(&text);
                     }
                 } else if in_t {
                     if let Ok(text) = e.unescape() {
-                        if !current_text.is_empty() {
-                            current_text.push(' ');
-                        }
-                        current_text.push_str(&text);
+                        plain_text.push_str(&text);
                     }
                 }
             }
             Ok(Event::Empty(e)) => {
-                if e.name().local_name().as_ref() == b"author" {
+                let local = e.name().local_name();
+                let name = local.as_ref();
+                if in_rpr {
+                    parse_rpr_element(name, &e, &mut run_font);
+                } else if name == b"author" {
                     authors.push(String::new());
                 }
             }
@@ -119,9 +170,10 @@ pub(crate) fn read_worksheet_comments<R: Read + Seek>(
         buf.clear();
     }
 
-    Ok(())
+    Ok(comments)
 }
 
+#[cfg(test)]
 pub(crate) fn read_comment_visibility_map<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     vml_path: Option<&str>,
@@ -130,7 +182,7 @@ pub(crate) fn read_comment_visibility_map<R: Read + Seek>(
         return Ok(HashMap::new());
     };
 
-    let file = match archive_by_name(archive, vml_path) {
+    let file = match archive.by_name(vml_path) {
         Ok(f) => f,
         Err(_) => return Ok(HashMap::new()),
     };
@@ -351,8 +403,8 @@ mod tests {
         let sheet = workbook.worksheet(0).unwrap();
         let comment = sheet.comment("C2").unwrap().expect("comment should exist");
         assert_eq!(comment.author, "John");
-        assert_eq!(comment.text, "Visible note");
-        assert!(comment.visible);
+        assert_eq!(comment.plain_text(), "Visible note");
+        assert_eq!(sheet.comment_visible(1, 2), Some(true));
     }
 
     #[test]

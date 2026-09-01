@@ -15,77 +15,15 @@ pub(super) fn write_vml_drawing<W: Write + Seek>(
         .worksheet(sheet_index)
         .ok_or_else(|| XlsxError::InvalidFormat("Sheet not found".into()))?;
 
-    if sheet.comment_count() == 0 {
+    duke_sheets_vml::validate_sheet_raw_client_data(sheet).map_err(XlsxError::InvalidFormat)?;
+    let Some(xml) =
+        duke_sheets_vml::build_legacy_vml(sheet, sheet_index, &workbook.theme_palette())
+    else {
         return Ok(());
-    }
-
+    };
     let path = format!("xl/drawings/vmlDrawing{}.vml", sheet_index + 1);
     let options = zip::write::SimpleFileOptions::default();
     zip.start_file(path, options)?;
-
-    let sheet_idx = sheet_index + 1;
-    let mut comments: Vec<_> = sheet.comments().collect();
-    comments.sort_by_key(|((row, col), _)| (*row, *col));
-
-    let mut xml = String::new();
-    xml.push_str("<xml xmlns:v=\"urn:schemas-microsoft-com:vml\"\n");
-    xml.push_str(" xmlns:o=\"urn:schemas-microsoft-com:office:office\"\n");
-    xml.push_str(" xmlns:x=\"urn:schemas-microsoft-com:office:excel\">\n");
-    xml.push_str(" <o:shapelayout v:ext=\"edit\">\n");
-    xml.push_str(&format!(
-        "  <o:idmap v:ext=\"edit\" data=\"{}\"/>\n",
-        sheet_idx
-    ));
-    xml.push_str(" </o:shapelayout>\n");
-    xml.push_str(" <v:shapetype id=\"_x0000_t202\" coordsize=\"21600,21600\" o:spt=\"202\"\n");
-    xml.push_str("  path=\"m,l,21600r21600,l21600,xe\">\n");
-    xml.push_str("  <v:stroke joinstyle=\"miter\"/>\n");
-    xml.push_str("  <v:path gradientshapeok=\"t\" o:connecttype=\"rect\"/>\n");
-    xml.push_str(" </v:shapetype>\n");
-
-    for (shape_index, ((row, col), comment)) in comments.iter().enumerate() {
-        let row = *row;
-        let col = *col;
-        let row_above = row.saturating_sub(1);
-        let shape_id = sheet_idx * 1024 + 1 + shape_index;
-        let z_index = shape_index + 1;
-        let left = (u32::from(col) + 1) * 64;
-        let top = row * 15;
-        let visibility = if comment.visible { "visible" } else { "hidden" };
-
-        xml.push_str(&format!(
-            " <v:shape id=\"_x0000_s{}\" type=\"#_x0000_t202\"\n",
-            shape_id
-        ));
-        xml.push_str(&format!(
-            "  style='position:absolute;margin-left:{}pt;margin-top:{}pt;width:96pt;height:55.5pt;z-index:{};visibility:{}'\n",
-            left, top, z_index, visibility
-        ));
-        xml.push_str("  fillcolor=\"#ffffe1\" o:insetmode=\"auto\">\n");
-        xml.push_str("  <v:fill color2=\"#ffffe1\"/>\n");
-        xml.push_str("  <v:shadow on=\"t\" color=\"black\" obscured=\"t\"/>\n");
-        xml.push_str("  <v:path o:connecttype=\"none\"/>\n");
-        xml.push_str("  <v:textbox style='mso-direction-alt:auto'>\n");
-        xml.push_str("   <div style='text-align:left'></div>\n");
-        xml.push_str("  </v:textbox>\n");
-        xml.push_str("  <x:ClientData ObjectType=\"Note\">\n");
-        xml.push_str("   <x:MoveWithCells/>\n");
-        xml.push_str("   <x:SizeWithCells/>\n");
-        xml.push_str(&format!(
-            "   <x:Anchor>{}, 15, {}, 10, {}, 15, {}, 4</x:Anchor>\n",
-            col + 1,
-            row_above,
-            col + 3,
-            row + 3
-        ));
-        xml.push_str("   <x:AutoFill>False</x:AutoFill>\n");
-        xml.push_str(&format!("   <x:Row>{}</x:Row>\n", row));
-        xml.push_str(&format!("   <x:Column>{}</x:Column>\n", col));
-        xml.push_str("  </x:ClientData>\n");
-        xml.push_str(" </v:shape>\n");
-    }
-
-    xml.push_str("</xml>");
     zip.write_all(xml.as_bytes())?;
     Ok(())
 }
@@ -111,7 +49,7 @@ pub(super) fn write_comments<W: Write + Seek>(
 
         w.write_event(Event::Start(BytesStart::new("authors")))?;
         let authors = sheet.comment_authors();
-        for author in authors {
+        for author in &authors {
             w.create_element("author")
                 .write_text_content(BytesText::new(author))?;
         }
@@ -134,14 +72,10 @@ pub(super) fn write_comments<W: Write + Seek>(
 
         for ((row, col), comment) in comments {
             let cell_ref = CellAddress::new(row, col).to_a1_string();
-            let author_id = if comment.author.is_empty() {
-                0
-            } else {
-                author_index
-                    .get(comment.author.as_str())
-                    .copied()
-                    .unwrap_or(0)
-            };
+            let author_id = author_index
+                .get(comment.author.as_str())
+                .copied()
+                .unwrap_or(0);
             let aid = author_id.to_string();
 
             let mut c_tag = BytesStart::new("comment");
@@ -150,10 +84,7 @@ pub(super) fn write_comments<W: Write + Seek>(
             w.write_event(Event::Start(c_tag))?;
 
             w.write_event(Event::Start(BytesStart::new("text")))?;
-            w.write_event(Event::Start(BytesStart::new("r")))?;
-            w.create_element("t")
-                .write_text_content(BytesText::new(&comment.text))?;
-            w.write_event(Event::End(BytesEnd::new("r")))?;
+            super::XlsxWriter::write_rich_text_runs(w, &comment.text.runs)?;
             w.write_event(Event::End(BytesEnd::new("text")))?;
 
             w.write_event(Event::End(BytesEnd::new("comment")))?;

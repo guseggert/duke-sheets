@@ -26,25 +26,25 @@ jobs:
         settings:
           - host: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            build: npx napi build --platform --release --js index.js --dts index.d.ts --target x86_64-unknown-linux-gnu --use-napi-cross
+            build: npx napi build --platform --release --js index.js --dts generated.d.ts --no-const-enum --target x86_64-unknown-linux-gnu --use-napi-cross
           - host: ubuntu-latest
             target: aarch64-unknown-linux-gnu
-            build: npx napi build --platform --release --js index.js --dts index.d.ts --target aarch64-unknown-linux-gnu --use-napi-cross
+            build: npx napi build --platform --release --js index.js --dts generated.d.ts --no-const-enum --target aarch64-unknown-linux-gnu --use-napi-cross
           - host: ubuntu-latest
             target: x86_64-unknown-linux-musl
-            build: npx napi build --platform --release --js index.js --dts index.d.ts --target x86_64-unknown-linux-musl -x
+            build: npx napi build --platform --release --js index.js --dts generated.d.ts --no-const-enum --target x86_64-unknown-linux-musl -x
           - host: ubuntu-latest
             target: aarch64-unknown-linux-musl
-            build: npx napi build --platform --release --js index.js --dts index.d.ts --target aarch64-unknown-linux-musl -x
+            build: npx napi build --platform --release --js index.js --dts generated.d.ts --no-const-enum --target aarch64-unknown-linux-musl -x
           - host: macos-latest
             target: x86_64-apple-darwin
-            build: npx napi build --platform --release --js index.js --dts index.d.ts --target x86_64-apple-darwin
+            build: npx napi build --platform --release --js index.js --dts generated.d.ts --no-const-enum --target x86_64-apple-darwin
           - host: macos-latest
             target: aarch64-apple-darwin
-            build: npx napi build --platform --release --js index.js --dts index.d.ts --target aarch64-apple-darwin
+            build: npx napi build --platform --release --js index.js --dts generated.d.ts --no-const-enum --target aarch64-apple-darwin
           - host: windows-latest
             target: x86_64-pc-windows-msvc
-            build: npx napi build --platform --release --js index.js --dts index.d.ts --target x86_64-pc-windows-msvc
+            build: npx napi build --platform --release --js index.js --dts generated.d.ts --no-const-enum --target x86_64-pc-windows-msvc
 
     name: Build - ${{ matrix.settings.target }}
     runs-on: ${{ matrix.settings.host }}

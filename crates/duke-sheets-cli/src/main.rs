@@ -164,11 +164,7 @@ fn to_csv(
             stats.iterations,
             if stats.iterations == 1 { "" } else { "es" },
             stats.errors,
-            if stats.converged {
-                ""
-            } else {
-                ", did not converge"
-            },
+            if stats.converged { "" } else { ", did not converge" },
         );
     }
 
@@ -349,6 +345,7 @@ fn to_html(
         full_document: !fragment,
         title,
         formatted: !raw,
+        theme_palette: workbook.theme_palette(),
     };
 
     let html = duke_sheets_html::worksheet_to_html(sheet, &options);

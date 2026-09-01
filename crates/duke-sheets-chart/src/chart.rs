@@ -196,8 +196,6 @@ pub struct Chart {
     pub series_axis: Option<Axis>,
     /// Legend
     pub legend: Option<Legend>,
-    /// Position anchor
-    pub anchor: DrawingAnchor,
     pub data_labels: Option<DataLabels>,
     pub view_3d: Option<View3D>,
     pub data_table: Option<ChartDataTable>,
@@ -240,10 +238,10 @@ pub struct Chart {
     pub raw_extensions: HashMap<String, Vec<u8>>,
     /// Raw chart style XML (Office 2013+), preserved for roundtrip.
     #[doc(hidden)]
-    pub raw_chart_style: Option<Vec<u8>>,
+    pub style: Option<crate::chart_style::ChartStylePart>,
     /// Raw chart color style XML (Office 2013+), preserved for roundtrip.
     #[doc(hidden)]
-    pub raw_chart_color_style: Option<Vec<u8>>,
+    pub color_style: Option<crate::chart_style::ChartColorStylePart>,
     /// Chart type groups for combo charts (multiple chart types in one plotArea).
     /// When non-empty, the writer uses these instead of the legacy single-group fields.
     pub type_groups: Vec<ChartTypeGroup>,
@@ -262,7 +260,6 @@ impl Chart {
             value_axis: None,
             series_axis: None,
             legend: None,
-            anchor: DrawingAnchor::default(),
             data_labels: None,
             view_3d: None,
             data_table: None,
@@ -299,8 +296,8 @@ impl Chart {
             back_wall: None,
             text_properties: None,
             raw_extensions: HashMap::new(),
-            raw_chart_style: None,
-            raw_chart_color_style: None,
+            style: None,
+            color_style: None,
             type_groups: Vec::new(),
             axes: Vec::new(),
         }
@@ -374,6 +371,63 @@ impl Default for DrawingAnchor {
     }
 }
 
+impl DrawingAnchor {
+    /// The canonical two-cell form of any anchor. OneCell and
+    /// Absolute anchors are flattened to from/to markers at Excel's
+    /// default cell metrics (609,600 EMU per column, 190,500 EMU per
+    /// row), with `edit_as` preserving the original sizing behavior.
+    /// Markers clamp to the grid limits; off-grid negative
+    /// coordinates clamp to the grid origin. TwoCell anchors are
+    /// returned unchanged.
+    pub fn to_two_cell(&self) -> DrawingAnchor {
+        self.to_two_cell_with_metrics(&crate::DefaultDrawingMetrics)
+    }
+
+    /// The canonical two-cell form of this anchor using the worksheet's
+    /// actual row heights and column widths. TwoCell anchors are returned
+    /// unchanged; OneCell and Absolute anchors retain their sizing behavior
+    /// in `edit_as` while their endpoint markers are resolved through
+    /// `metrics`.
+    pub fn to_two_cell_with_metrics(
+        &self,
+        metrics: &(impl crate::DrawingMetrics + ?Sized),
+    ) -> DrawingAnchor {
+        match self {
+            DrawingAnchor::TwoCell { .. } => self.clone(),
+            DrawingAnchor::OneCell {
+                from,
+                width_emu,
+                height_emu,
+            } => {
+                let (x, y) = crate::marker_position_emu(from, metrics);
+                DrawingAnchor::TwoCell {
+                    from: from.clone(),
+                    to: crate::marker_at_emu(
+                        x + i128::from((*width_emu).max(0)),
+                        y + i128::from((*height_emu).max(0)),
+                        metrics,
+                    ),
+                    edit_as: Some(EditAs::OneCell),
+                }
+            }
+            DrawingAnchor::Absolute {
+                x_emu,
+                y_emu,
+                width_emu,
+                height_emu,
+            } => DrawingAnchor::TwoCell {
+                from: crate::marker_at_emu(i128::from(*x_emu), i128::from(*y_emu), metrics),
+                to: crate::marker_at_emu(
+                    i128::from(*x_emu) + i128::from((*width_emu).max(0)),
+                    i128::from(*y_emu) + i128::from((*height_emu).max(0)),
+                    metrics,
+                ),
+                edit_as: Some(EditAs::Absolute),
+            },
+        }
+    }
+}
+
 /// Image format for embedded images.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ImageFormat {
@@ -417,12 +471,11 @@ impl ImageFormat {
 }
 
 /// An image embedded in a worksheet drawing.
+///
+/// Placement, shape name, and description (alt text) live on the
+/// wrapping drawing object in `duke-sheets-core`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EmbeddedImage {
-    pub id: u32,
-    pub name: String,
-    pub description: Option<String>,
-    pub anchor: DrawingAnchor,
     pub format: ImageFormat,
     pub media_path: String,
     pub svg_media_path: Option<String>,
@@ -503,5 +556,127 @@ mod tests {
         );
         assert_eq!(ChartType::from_name("donut"), Some(ChartType::Doughnut));
         assert_eq!(ChartType::from_name("notAChart"), None);
+    }
+
+    #[test]
+    fn two_cell_anchor_is_returned_unchanged() {
+        let anchor = DrawingAnchor::TwoCell {
+            from: CellMarker {
+                col: 1,
+                col_offset_emu: 100,
+                row: 2,
+                row_offset_emu: 200,
+            },
+            to: CellMarker {
+                col: 3,
+                col_offset_emu: 300,
+                row: 4,
+                row_offset_emu: 400,
+            },
+            edit_as: Some(EditAs::OneCell),
+        };
+        assert_eq!(anchor.to_two_cell(), anchor);
+    }
+
+    #[test]
+    fn one_cell_anchor_flattens_at_default_metrics() {
+        let anchor = DrawingAnchor::OneCell {
+            from: CellMarker {
+                col: 2,
+                col_offset_emu: 9_600,
+                row: 1,
+                row_offset_emu: 500,
+            },
+            width_emu: 1_219_200, // exactly two columns
+            height_emu: 381_000,  // exactly two rows
+        };
+        match anchor.to_two_cell() {
+            DrawingAnchor::TwoCell { from, to, edit_as } => {
+                assert_eq!((from.col, from.row), (2, 1));
+                assert_eq!((to.col, to.col_offset_emu), (4, 9_600));
+                assert_eq!((to.row, to.row_offset_emu), (3, 500));
+                assert_eq!(edit_as, Some(EditAs::OneCell));
+            }
+            other => panic!("expected TwoCell, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn absolute_anchor_flattens_at_default_metrics() {
+        let anchor = DrawingAnchor::Absolute {
+            x_emu: 1_219_300,
+            y_emu: 190_600,
+            width_emu: 609_600,
+            height_emu: 190_500,
+        };
+        match anchor.to_two_cell() {
+            DrawingAnchor::TwoCell { from, to, edit_as } => {
+                assert_eq!((from.col, from.col_offset_emu), (2, 100));
+                assert_eq!((from.row, from.row_offset_emu), (1, 100));
+                assert_eq!((to.col, to.col_offset_emu), (3, 100));
+                assert_eq!((to.row, to.row_offset_emu), (2, 100));
+                assert_eq!(edit_as, Some(EditAs::Absolute));
+            }
+            other => panic!("expected TwoCell, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn negative_absolute_coordinates_clamp_to_grid_origin() {
+        // Off-grid negative coordinates from permissively-read files
+        // clamp to the grid origin; wrapping them onto the far edge of
+        // the first cell would misplace the object.
+        let anchor = DrawingAnchor::Absolute {
+            x_emu: -1_000,
+            y_emu: -1_000,
+            width_emu: 0,
+            height_emu: 0,
+        };
+        match anchor.to_two_cell() {
+            DrawingAnchor::TwoCell { from, to, .. } => {
+                assert_eq!((from.col, from.col_offset_emu), (0, 0));
+                assert_eq!((from.row, from.row_offset_emu), (0, 0));
+                assert_eq!(to, from);
+            }
+            other => panic!("expected TwoCell, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn extreme_anchor_values_clamp_without_panicking() {
+        // Offsets near i64::MAX must not overflow the flattening
+        // arithmetic; markers clamp to the grid limits.
+        let hostile = DrawingAnchor::OneCell {
+            from: CellMarker {
+                col: u16::MAX,
+                col_offset_emu: i64::MAX,
+                row: u32::MAX,
+                row_offset_emu: i64::MAX,
+            },
+            width_emu: i64::MAX,
+            height_emu: i64::MAX,
+        };
+        match hostile.to_two_cell() {
+            DrawingAnchor::TwoCell { to, .. } => {
+                assert_eq!(to.col, u16::MAX);
+                assert_eq!(to.row, u32::MAX);
+                assert!((0..609_600).contains(&to.col_offset_emu));
+                assert!((0..190_500).contains(&to.row_offset_emu));
+            }
+            other => panic!("expected TwoCell, got {other:?}"),
+        }
+
+        let hostile_absolute = DrawingAnchor::Absolute {
+            x_emu: i64::MIN,
+            y_emu: i64::MIN,
+            width_emu: i64::MAX,
+            height_emu: i64::MAX,
+        };
+        match hostile_absolute.to_two_cell() {
+            DrawingAnchor::TwoCell { from, .. } => {
+                assert_eq!((from.col, from.row), (0, 0));
+            }
+            other => panic!("expected TwoCell, got {other:?}"),
+        }
     }
 }

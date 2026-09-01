@@ -6,12 +6,15 @@ use duke_sheets::{
     AutoFilter, ColumnFilter, CustomFilterCondition, CustomFilters, DynamicFilter,
     DynamicFilterType, FilterColumn, FilterOperator, Top10Filter, ValueFilter,
 };
+use duke_sheets::{CellMarker, CheckState, ListSelection};
 use duke_sheets_core::style::Underline;
+use duke_sheets_core::worksheet::SheetProtection;
 use duke_sheets_core::{
-    CellAddress, PageOrientation, Selection, SplitPanes, Table, TableColumn, TableStyleInfo,
-    TotalsRowFunction,
+    hash_legacy_protection_password, CellAddress, CellRange, PageOrientation, ProtectedRange,
+    Selection, SplitPanes, Table, TableColumn, TableStyleInfo, TotalsRowFunction,
+    WorkbookProtection,
 };
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 
 fn formula_text_at<'a>(sheet: &'a duke_sheets_core::Worksheet, address: &str) -> Option<&'a str> {
     let addr = CellAddress::parse(address).expect("valid cell address");
@@ -24,6 +27,135 @@ fn is_array_formula_at(sheet: &duke_sheets_core::Worksheet, address: &str) -> bo
         .formula_data_at(addr.row, addr.col)
         .map(|formula| formula.is_array_formula())
         .unwrap_or(false)
+}
+
+#[test]
+fn test_roundtrip_protection_settings() {
+    let mut wb = Workbook::new();
+    wb.set_workbook_protection(Some(WorkbookProtection {
+        structure: true,
+        windows: true,
+        password_hash: Some(hash_legacy_protection_password("book")),
+    }));
+
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_cell_value("A1", "locked").unwrap();
+    sheet.set_protection(Some(SheetProtection {
+        protected: true,
+        password_hash: Some(hash_legacy_protection_password("password")),
+        select_locked_cells: true,
+        select_unlocked_cells: true,
+        format_cells: true,
+        format_columns: true,
+        format_rows: true,
+        insert_columns: true,
+        insert_rows: true,
+        insert_hyperlinks: true,
+        delete_columns: true,
+        delete_rows: true,
+        sort: true,
+        auto_filter: true,
+        pivot_tables: true,
+        ..Default::default()
+    }));
+    sheet.set_protected_ranges(vec![ProtectedRange {
+        name: "Editable".to_string(),
+        ranges: vec![
+            CellRange::parse("A1:B2").unwrap(),
+            CellRange::parse("D4:D5").unwrap(),
+        ],
+        password_hash: Some(0xCAFE),
+        security_descriptor: Some("S-1-5-21".to_string()),
+    }]);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+
+    let workbook_protection = wb2.workbook_protection().expect("workbook protection");
+    assert!(workbook_protection.structure);
+    assert!(workbook_protection.windows);
+    assert_eq!(
+        workbook_protection.password_hash,
+        Some(hash_legacy_protection_password("book"))
+    );
+
+    let sheet2 = wb2.worksheet(0).unwrap();
+    let protection = sheet2.protection().expect("sheet protection");
+    assert!(protection.protected);
+    assert_eq!(
+        protection.password_hash,
+        Some(hash_legacy_protection_password("password"))
+    );
+    assert!(protection.select_locked_cells);
+    assert!(protection.select_unlocked_cells);
+    assert!(protection.format_cells);
+    assert!(protection.format_columns);
+    assert!(protection.format_rows);
+    assert!(protection.insert_columns);
+    assert!(protection.insert_rows);
+    assert!(protection.insert_hyperlinks);
+    assert!(protection.delete_columns);
+    assert!(protection.delete_rows);
+    assert!(protection.sort);
+    assert!(protection.auto_filter);
+    assert!(protection.pivot_tables);
+
+    let ranges = sheet2.protected_ranges();
+    assert_eq!(ranges.len(), 1);
+    assert_eq!(ranges[0].name, "Editable");
+    assert_eq!(ranges[0].ranges.len(), 2);
+    assert_eq!(ranges[0].ranges[0].to_string(), "A1:B2");
+    assert_eq!(ranges[0].ranges[1].to_string(), "D4:D5");
+    assert_eq!(ranges[0].password_hash, Some(0xCAFE));
+    assert_eq!(ranges[0].security_descriptor.as_deref(), Some("S-1-5-21"));
+}
+
+#[test]
+fn test_roundtrip_sheet_protection_raw_hash() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_cell_value("A1", "locked").unwrap();
+    sheet.set_protection(Some(SheetProtection {
+        protected: true,
+        password_hash: Some(0xCAFE),
+        ..Default::default()
+    }));
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    assert_eq!(
+        wb2.worksheet(0)
+            .unwrap()
+            .protection()
+            .expect("sheet protection")
+            .password_hash,
+        Some(0xCAFE)
+    );
+}
+
+#[test]
+fn test_xlsx_skips_empty_protected_ranges_wrapper() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_protected_ranges(vec![ProtectedRange {
+        name: "Empty".to_string(),
+        ranges: Vec::new(),
+        password_hash: None,
+        security_descriptor: None,
+    }]);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    let mut zip = zip::ZipArchive::new(Cursor::new(buf)).unwrap();
+    let mut sheet_xml = String::new();
+    zip.by_name("xl/worksheets/sheet1.xml")
+        .unwrap()
+        .read_to_string(&mut sheet_xml)
+        .unwrap();
+    assert!(!sheet_xml.contains("<protectedRanges"));
 }
 
 /// Test basic roundtrip with numeric values
@@ -1856,7 +1988,9 @@ fn roundtrip_dynamic_array_content_types_and_rels() {
             "Content_Types should reference metadata.xml"
         );
         assert!(
-            ct_xml.contains("metadata+xml"),
+            ct_xml.contains(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml"
+            ),
             "Content_Types should have metadata content type"
         );
     }
@@ -2331,7 +2465,7 @@ fn test_roundtrip_chart_bar() {
 
     let mut chart = Chart::new(ChartType::ColumnClustered);
     chart.title = Some("Sales Chart".to_string());
-    chart.anchor = DrawingAnchor::TwoCell {
+    let anchor = DrawingAnchor::TwoCell {
         from: CellMarker {
             col: 1,
             col_offset_emu: 0,
@@ -2357,7 +2491,7 @@ fn test_roundtrip_chart_bar() {
     chart.category_axis = Some(Axis::new().with_title("Quarter"));
     chart.value_axis = Some(Axis::new().with_title("Amount").with_bounds(0.0, 50000.0));
     chart.legend = Some(Legend::new(LegendPosition::Bottom));
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, anchor).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -2365,7 +2499,8 @@ fn test_roundtrip_chart_bar() {
     let sheet2 = wb2.worksheet(0).unwrap();
 
     assert_eq!(sheet2.chart_count(), 1);
-    let c = &sheet2.charts()[0];
+    let drawn = sheet2.charts().next().unwrap();
+    let c = drawn.payload;
     assert_eq!(c.chart_type, ChartType::ColumnClustered);
     assert_eq!(c.title.as_deref(), Some("Sales Chart"));
     assert_eq!(c.series.len(), 2);
@@ -2388,7 +2523,7 @@ fn test_roundtrip_chart_bar() {
     assert_eq!(vax.minimum, Some(0.0));
     assert_eq!(vax.maximum, Some(50000.0));
     assert_eq!(c.legend.as_ref().unwrap().position, LegendPosition::Bottom);
-    if let DrawingAnchor::TwoCell { from, to, .. } = &c.anchor {
+    if let DrawingAnchor::TwoCell { from, to, .. } = &drawn.object.unwrap().anchor {
         assert_eq!(from.col, 1);
         assert_eq!(from.row, 5);
         assert_eq!(to.col, 10);
@@ -2416,12 +2551,12 @@ fn test_roundtrip_chart_line() {
     chart.category_axis = Some(Axis::new().with_title("Time"));
     chart.value_axis = Some(Axis::new().with_title("Value"));
     chart.legend = Some(Legend::new(LegendPosition::Right));
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     assert_eq!(c.chart_type, ChartType::Line);
     assert_eq!(c.title.as_deref(), Some("Trend"));
@@ -2450,12 +2585,12 @@ fn test_roundtrip_chart_pie() {
         .with_name("Shares")
         .with_categories(DataReference::formula("Sheet1!$A$1:$A$4"));
     chart.add_series(s);
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     assert_eq!(c.chart_type, ChartType::Pie);
     assert_eq!(c.title.as_deref(), Some("Market Share"));
@@ -2475,12 +2610,12 @@ fn test_roundtrip_chart_scatter() {
     let s = DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$5"))
         .with_categories(DataReference::formula("Sheet1!$A$1:$A$5"));
     chart.add_series(s);
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     assert_eq!(c.chart_type, ChartType::ScatterMarkers);
     assert_eq!(c.series.len(), 1);
@@ -2503,12 +2638,12 @@ fn test_roundtrip_chart_no_series() {
     let mut wb = Workbook::new();
     let sheet = wb.worksheet_mut(0).unwrap();
     let chart = Chart::new(ChartType::Area);
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     assert_eq!(c.chart_type, ChartType::Area);
     assert_eq!(c.series.len(), 0);
@@ -2524,17 +2659,22 @@ fn test_roundtrip_multiple_charts() {
     let mut c1 = Chart::new(ChartType::BarClustered);
     c1.title = Some("Bar".to_string());
     c1.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(c1);
+    sheet.add_chart(c1, DrawingAnchor::default()).unwrap();
 
     let mut c2 = Chart::new(ChartType::Doughnut);
     c2.title = Some("Donut".to_string());
     c2.add_series(DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$5")));
-    sheet.add_chart(c2);
+    sheet.add_chart(c2, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let charts = wb2.worksheet(0).unwrap().charts();
+    let charts: Vec<&Chart> = wb2
+        .worksheet(0)
+        .unwrap()
+        .charts()
+        .map(|drawn| drawn.payload)
+        .collect();
 
     assert_eq!(charts.len(), 2);
     let types: Vec<&ChartType> = charts.iter().map(|c| &c.chart_type).collect();
@@ -2555,7 +2695,7 @@ fn test_roundtrip_chart_anchor_offsets() {
     let sheet = wb.worksheet_mut(0).unwrap();
 
     let mut chart = Chart::new(ChartType::Line);
-    chart.anchor = DrawingAnchor::TwoCell {
+    let anchor = DrawingAnchor::TwoCell {
         from: CellMarker {
             col: 3,
             col_offset_emu: 152400,
@@ -2571,14 +2711,14 @@ fn test_roundtrip_chart_anchor_offsets() {
         edit_as: None,
     };
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, anchor).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap();
 
-    if let DrawingAnchor::TwoCell { from, to, .. } = &c.anchor {
+    if let DrawingAnchor::TwoCell { from, to, .. } = &c.object.unwrap().anchor {
         assert_eq!(from.col, 3);
         assert_eq!(from.row, 7);
         assert_eq!(from.col_offset_emu, 152400);
@@ -2610,12 +2750,12 @@ fn test_roundtrip_chart_data_labels() {
         ..Default::default()
     });
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     let dl = c
         .data_labels
@@ -2642,12 +2782,12 @@ fn test_roundtrip_chart_series_data_labels() {
         ..Default::default()
     });
     chart.add_series(s);
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     let dl = c.series[0]
         .data_labels
@@ -2681,12 +2821,12 @@ fn test_roundtrip_chart_trendline() {
         label: None,
     });
     chart.add_series(s);
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     let t = c.series[0]
         .trendline
@@ -2721,12 +2861,12 @@ fn test_roundtrip_chart_error_bars() {
         minus: None,
     });
     chart.add_series(s);
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     let eb = c.series[0]
         .error_bars
@@ -2752,12 +2892,12 @@ fn test_roundtrip_chart_markers() {
         size: Some(8),
     });
     chart.add_series(s);
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     let m = c.series[0].marker.as_ref().expect("marker should survive");
     assert_eq!(m.symbol, Some(MarkerSymbol::Circle));
@@ -2788,12 +2928,12 @@ fn test_roundtrip_chart_data_points() {
         }),
     }];
     chart.add_series(s);
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     assert_eq!(c.series[0].data_points.len(), 1);
     let dp = &c.series[0].data_points[0];
@@ -2820,12 +2960,12 @@ fn test_roundtrip_chart_series_smooth() {
     let mut s = DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5"));
     s.smooth = Some(true);
     chart.add_series(s);
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     assert_eq!(c.series[0].smooth, Some(true));
 }
@@ -2879,12 +3019,12 @@ fn test_roundtrip_chart_axis_enhancements() {
     cat_axis.crosses = Some(AxisCrosses::AutoZero);
     chart.category_axis = Some(cat_axis);
     chart.value_axis = Some(Axis::new());
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     let ax = c
         .category_axis
@@ -2934,12 +3074,12 @@ fn test_roundtrip_chart_view_3d() {
         perspective: Some(30),
         ..Default::default()
     });
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     let v = c.view_3d.as_ref().expect("view_3d should survive");
     assert_eq!(v.rotate_x, Some(15));
@@ -2962,12 +3102,12 @@ fn test_roundtrip_chart_data_table() {
         show_outline: Some(true),
         show_keys: Some(true),
     });
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     let dt = c.data_table.as_ref().expect("data_table should survive");
     assert_eq!(dt.show_horizontal_border, Some(true));
@@ -2987,12 +3127,12 @@ fn test_roundtrip_chart_display_blanks_and_plot_visible() {
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
     chart.display_blanks_as = Some(DisplayBlanksAs::Gap);
     chart.plot_visible_only = Some(true);
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     assert_eq!(c.display_blanks_as, Some(DisplayBlanksAs::Gap));
     assert_eq!(c.plot_visible_only, Some(true));
@@ -3015,12 +3155,12 @@ fn test_roundtrip_chart_layout() {
             height: Some(0.6),
         }),
     });
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     let layout = c.layout.as_ref().expect("layout should survive");
     let ml = layout
@@ -3041,12 +3181,12 @@ fn test_roundtrip_column_stacked() {
     let sheet = wb.worksheet_mut(0).unwrap();
     let mut chart = Chart::new(ChartType::ColumnStacked);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
     assert_eq!(c.chart_type, ChartType::ColumnStacked);
 }
 
@@ -3058,12 +3198,12 @@ fn test_roundtrip_column_percent_stacked() {
     let sheet = wb.worksheet_mut(0).unwrap();
     let mut chart = Chart::new(ChartType::ColumnPercentStacked);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
     assert_eq!(c.chart_type, ChartType::ColumnPercentStacked);
 }
 
@@ -3075,12 +3215,12 @@ fn test_roundtrip_bar_stacked() {
     let sheet = wb.worksheet_mut(0).unwrap();
     let mut chart = Chart::new(ChartType::BarStacked);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
     assert_eq!(c.chart_type, ChartType::BarStacked);
 }
 
@@ -3092,12 +3232,12 @@ fn test_roundtrip_bar_percent_stacked() {
     let sheet = wb.worksheet_mut(0).unwrap();
     let mut chart = Chart::new(ChartType::BarPercentStacked);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
     assert_eq!(c.chart_type, ChartType::BarPercentStacked);
 }
 
@@ -3109,12 +3249,12 @@ fn test_roundtrip_line_stacked() {
     let sheet = wb.worksheet_mut(0).unwrap();
     let mut chart = Chart::new(ChartType::LineStacked);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
     assert_eq!(c.chart_type, ChartType::LineStacked);
 }
 
@@ -3128,12 +3268,12 @@ fn test_roundtrip_pie_exploded() {
     let mut s = DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5"));
     s.explosion = Some(25);
     chart.add_series(s);
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
     assert_eq!(c.chart_type, ChartType::PieExploded);
     assert_eq!(c.series[0].explosion, Some(25));
 }
@@ -3146,12 +3286,12 @@ fn test_roundtrip_area_stacked() {
     let sheet = wb.worksheet_mut(0).unwrap();
     let mut chart = Chart::new(ChartType::AreaStacked);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
     assert_eq!(c.chart_type, ChartType::AreaStacked);
 }
 
@@ -3163,12 +3303,12 @@ fn test_roundtrip_area_percent_stacked() {
     let sheet = wb.worksheet_mut(0).unwrap();
     let mut chart = Chart::new(ChartType::AreaPercentStacked);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
     assert_eq!(c.chart_type, ChartType::AreaPercentStacked);
 }
 
@@ -3182,12 +3322,12 @@ fn test_roundtrip_scatter_lines() {
     let s = DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$5"))
         .with_categories(DataReference::formula("Sheet1!$A$1:$A$5"));
     chart.add_series(s);
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
     assert_eq!(c.chart_type, ChartType::ScatterLines);
     assert_eq!(c.series.len(), 1);
 }
@@ -3202,12 +3342,12 @@ fn test_roundtrip_scatter_smooth() {
     let s = DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$5"))
         .with_categories(DataReference::formula("Sheet1!$A$1:$A$5"));
     chart.add_series(s);
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
     assert_eq!(c.chart_type, ChartType::ScatterSmooth);
     assert_eq!(c.series.len(), 1);
 }
@@ -3222,12 +3362,12 @@ fn test_roundtrip_bubble() {
     let s = DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$5"))
         .with_categories(DataReference::formula("Sheet1!$A$1:$A$5"));
     chart.add_series(s);
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
     assert_eq!(c.chart_type, ChartType::Bubble);
     assert_eq!(c.series.len(), 1);
 }
@@ -3240,12 +3380,12 @@ fn test_roundtrip_radar() {
     let sheet = wb.worksheet_mut(0).unwrap();
     let mut chart = Chart::new(ChartType::Radar);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
     assert_eq!(c.chart_type, ChartType::Radar);
 }
 
@@ -3257,12 +3397,12 @@ fn test_roundtrip_stock() {
     let sheet = wb.worksheet_mut(0).unwrap();
     let mut chart = Chart::new(ChartType::Stock);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
     assert_eq!(c.chart_type, ChartType::Stock);
 }
 
@@ -3274,12 +3414,12 @@ fn test_roundtrip_surface() {
     let sheet = wb.worksheet_mut(0).unwrap();
     let mut chart = Chart::new(ChartType::Surface);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
     assert_eq!(c.chart_type, ChartType::Surface);
 }
 
@@ -3309,12 +3449,12 @@ fn test_roundtrip_shape_properties() {
         }),
     });
     chart.add_series(s);
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     let ssp = c.series[0]
         .shape_properties
@@ -3339,12 +3479,12 @@ fn test_roundtrip_vary_colors_gap_overlap() {
     chart.gap_width = Some(150);
     chart.overlap = Some(-25);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     assert_eq!(c.vary_colors, Some(true));
     assert_eq!(c.gap_width, Some(150));
@@ -3363,12 +3503,12 @@ fn test_roundtrip_rounded_corners_auto_title() {
     chart.auto_title_deleted = Some(true);
     chart.show_dlbls_over_max = Some(true);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     assert_eq!(c.rounded_corners, Some(true));
     assert_eq!(c.auto_title_deleted, Some(true));
@@ -3386,12 +3526,12 @@ fn test_roundtrip_invert_if_negative() {
     let mut s = DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5"));
     s.invert_if_negative = Some(true);
     chart.add_series(s);
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     assert_eq!(c.series[0].invert_if_negative, Some(true));
 }
@@ -3407,12 +3547,12 @@ fn test_roundtrip_first_slice_angle_hole_size() {
     chart.first_slice_angle = Some(90);
     chart.hole_size = Some(50);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     assert_eq!(c.first_slice_angle, Some(90));
     assert_eq!(c.hole_size, Some(50));
@@ -3429,12 +3569,12 @@ fn test_roundtrip_bubble_scale() {
     chart.bubble_scale = Some(200);
     chart.show_negative_bubbles = Some(false);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     assert_eq!(c.bubble_scale, Some(200));
     assert_eq!(c.show_negative_bubbles, Some(false));
@@ -3450,12 +3590,12 @@ fn test_roundtrip_radar_style() {
     let mut chart = Chart::new(ChartType::Radar);
     chart.radar_style = Some("filled".to_string());
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     assert_eq!(c.radar_style.as_deref(), Some("filled"));
 }
@@ -3470,12 +3610,12 @@ fn test_roundtrip_surface_wireframe() {
     let mut chart = Chart::new(ChartType::Surface);
     chart.wireframe = Some(true);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     assert_eq!(c.wireframe, Some(true));
 }
@@ -3489,12 +3629,12 @@ fn test_roundtrip_data_reference_numbers() {
 
     let mut chart = Chart::new(ChartType::ColumnClustered);
     chart.add_series(DataSeries::new(DataReference::Numbers(vec![1.0, 2.0, 3.0])));
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     match &c.series[0].values {
         DataReference::Numbers(nums) => assert_eq!(nums, &[1.0, 2.0, 3.0]),
@@ -3513,12 +3653,12 @@ fn test_roundtrip_data_reference_strings() {
     let s = DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5"))
         .with_categories(DataReference::Strings(vec!["A".into(), "B".into()]));
     chart.add_series(s);
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     // The reader doesn't yet parse strCache for categories, so categories
     // come back as None. Verify the roundtrip doesn't crash and the chart
@@ -3542,12 +3682,12 @@ fn test_roundtrip_axis_cross_between_major_minor() {
     vax.minor_unit = Some(1.0);
     chart.value_axis = Some(vax);
     chart.category_axis = Some(Axis::new());
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     let ax = c.value_axis.as_ref().expect("value_axis should survive");
     assert_eq!(ax.cross_between, Some(CrossBetween::MidCat));
@@ -3576,12 +3716,12 @@ fn test_roundtrip_legend_shape_properties() {
         line: None,
     });
     chart.legend = Some(legend);
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     let leg = c.legend.as_ref().expect("legend should survive");
     assert_eq!(leg.position, LegendPosition::Bottom);
@@ -3602,12 +3742,12 @@ fn test_roundtrip_3d_chart() {
     let mut chart = Chart::new(ChartType::ColumnClustered);
     chart.is_3d = true;
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     assert_eq!(c.chart_type, ChartType::ColumnClustered);
     assert!(c.is_3d, "is_3d should be true after roundtrip");
@@ -3622,13 +3762,13 @@ fn test_roundtrip_charts_on_multiple_sheets() {
     let sheet1 = wb.worksheet_mut(0).unwrap();
     let mut c1 = Chart::new(ChartType::Line);
     c1.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet1.add_chart(c1);
+    sheet1.add_chart(c1, DrawingAnchor::default()).unwrap();
 
     wb.add_worksheet_with_name("Sheet2").unwrap();
     let sheet2 = wb.worksheet_mut(1).unwrap();
     let mut c2 = Chart::new(ChartType::Pie);
     c2.add_series(DataSeries::new(DataReference::formula("Sheet2!$A$1:$A$5")));
-    sheet2.add_chart(c2);
+    sheet2.add_chart(c2, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -3636,11 +3776,17 @@ fn test_roundtrip_charts_on_multiple_sheets() {
 
     let s1 = wb2.worksheet(0).unwrap();
     assert_eq!(s1.chart_count(), 1);
-    assert_eq!(s1.charts()[0].chart_type, ChartType::Line);
+    assert_eq!(
+        s1.charts().next().unwrap().payload.chart_type,
+        ChartType::Line
+    );
 
     let s2 = wb2.worksheet(1).unwrap();
     assert_eq!(s2.chart_count(), 1);
-    assert_eq!(s2.charts()[0].chart_type, ChartType::Pie);
+    assert_eq!(
+        s2.charts().next().unwrap().payload.chart_type,
+        ChartType::Pie
+    );
 }
 
 #[test]
@@ -3770,12 +3916,12 @@ fn test_roundtrip_kitchen_sink() {
         line: None,
     });
     chart.add_series(s);
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     assert_eq!(c.chart_type, ChartType::ColumnClustered);
     assert_eq!(c.title.as_deref(), Some("Kitchen Sink"));
@@ -3968,14 +4114,14 @@ fn test_roundtrip_combo_bar_line() {
         },
     ];
 
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
     let sheet2 = wb2.worksheet(0).unwrap();
 
-    let c = &sheet2.charts()[0];
+    let c = sheet2.charts().next().unwrap().payload;
     assert_eq!(c.type_groups.len(), 2);
     assert_eq!(c.type_groups[0].chart_type, ChartType::ColumnClustered);
     assert_eq!(c.type_groups[0].series.len(), 1);
@@ -4016,14 +4162,14 @@ fn test_roundtrip_combo_preserves_legacy() {
     // No type_groups set => legacy mode
     assert!(chart.type_groups.is_empty());
 
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
     let sheet2 = wb2.worksheet(0).unwrap();
 
-    let c = &sheet2.charts()[0];
+    let c = sheet2.charts().next().unwrap().payload;
     assert_eq!(c.chart_type, ChartType::Line);
     assert_eq!(c.series.len(), 1);
     assert_eq!(c.series[0].name.as_deref(), Some("Series1"));
@@ -4127,14 +4273,14 @@ fn test_roundtrip_combo_axes() {
         },
     ];
 
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
     let sheet2 = wb2.worksheet(0).unwrap();
 
-    let c = &sheet2.charts()[0];
+    let c = sheet2.charts().next().unwrap().payload;
     assert_eq!(c.axes.len(), 3);
 
     let ax0 = &c.axes[0];
@@ -4210,12 +4356,12 @@ fn test_roundtrip_single_type_group_uses_legacy() {
             axis: val_ax,
         },
     ];
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     // Single type_group should be written as legacy and read back without type_groups
     assert!(
@@ -4324,20 +4470,20 @@ fn test_roundtrip_combo_secondary_axis_position() {
             axis: val_ax2,
         },
     ];
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     let ax1 = &c.axes[1];
     assert_eq!(ax1.axis.axis_type, AxisType::Value);
-    assert_eq!(ax1.axis.position, AxisPosition::Left);
+    assert_eq!(ax1.axis.position, Some(AxisPosition::Left));
 
     let ax2 = &c.axes[2];
     assert_eq!(ax2.axis.axis_type, AxisType::Value);
-    assert_eq!(ax2.axis.position, AxisPosition::Right);
+    assert_eq!(ax2.axis.position, Some(AxisPosition::Right));
 }
 
 #[test]
@@ -4350,12 +4496,12 @@ fn test_roundtrip_vary_colors_false() {
     let mut chart = Chart::new(ChartType::ColumnClustered);
     chart.vary_colors = Some(false);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     assert_eq!(c.vary_colors, Some(false));
 }
@@ -4379,12 +4525,12 @@ fn test_roundtrip_drop_lines() {
             ..Default::default()
         }),
     });
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     let dl = c.drop_lines.as_ref().expect("drop_lines lost in roundtrip");
     let sp = dl.shape_properties.as_ref().expect("drop_lines spPr lost");
@@ -4401,12 +4547,12 @@ fn test_roundtrip_high_low_lines() {
     let mut chart = Chart::new(ChartType::Stock);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
     chart.high_low_lines = Some(ChartLines::default());
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     assert!(
         c.high_low_lines.is_some(),
@@ -4424,12 +4570,12 @@ fn test_roundtrip_series_lines_legacy() {
     let mut chart = Chart::new(ChartType::BarStacked);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
     chart.series_lines = Some(ChartLines::default());
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     assert!(
         c.series_lines.is_some(),
@@ -4524,12 +4670,12 @@ fn test_roundtrip_series_lines() {
             },
         },
     ];
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     assert!(c.type_groups.len() >= 2, "combo groups lost");
     assert!(
@@ -4552,12 +4698,12 @@ fn test_roundtrip_up_down_bars() {
         up_bars: Some(ChartLines::default()),
         down_bars: Some(ChartLines::default()),
     });
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     let udb = c
         .up_down_bars
@@ -4582,12 +4728,12 @@ fn test_roundtrip_leader_lines() {
         leader_lines: Some(ChartLines::default()),
         ..DataLabels::default()
     });
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     let dl = c.data_labels.as_ref().expect("data_labels lost");
     assert!(dl.leader_lines.is_some(), "leader_lines lost in roundtrip");
@@ -4611,6 +4757,7 @@ fn test_roundtrip_chartsheet() {
         chart,
         visibility: SheetVisibility::Visible,
         raw_drawing_objects: Vec::new(),
+        raw_drawing_rels: Vec::new(),
     })
     .unwrap();
 
@@ -4641,6 +4788,7 @@ fn test_roundtrip_chartsheet_only() {
         chart,
         visibility: SheetVisibility::Visible,
         raw_drawing_objects: Vec::new(),
+        raw_drawing_rels: Vec::new(),
     })
     .unwrap();
 
@@ -4672,7 +4820,7 @@ fn test_roundtrip_chartsheet_with_worksheet_charts() {
     ws_chart.title = Some("Embedded".to_string());
     ws_chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
     let sheet = wb.worksheet_mut(0).unwrap();
-    sheet.add_chart(ws_chart);
+    sheet.add_chart(ws_chart, DrawingAnchor::default()).unwrap();
 
     // Add a separate chartsheet
     let mut cs_chart = Chart::new(ChartType::BarClustered);
@@ -4683,6 +4831,7 @@ fn test_roundtrip_chartsheet_with_worksheet_charts() {
         chart: cs_chart,
         visibility: SheetVisibility::Visible,
         raw_drawing_objects: Vec::new(),
+        raw_drawing_rels: Vec::new(),
     })
     .unwrap();
 
@@ -4692,7 +4841,7 @@ fn test_roundtrip_chartsheet_with_worksheet_charts() {
 
     // Worksheet chart survives
     assert_eq!(wb2.worksheet(0).unwrap().chart_count(), 1);
-    let wsc = &wb2.worksheet(0).unwrap().charts()[0];
+    let wsc = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
     assert_eq!(wsc.chart_type, ChartType::Line);
     assert_eq!(wsc.title.as_deref(), Some("Embedded"));
 
@@ -4722,6 +4871,7 @@ fn test_roundtrip_interleaved_tab_order() {
         },
         visibility: duke_sheets_core::SheetVisibility::Visible,
         raw_drawing_objects: Vec::new(),
+        raw_drawing_rels: Vec::new(),
     };
     wb.add_chartsheet(cs).unwrap();
     wb.add_worksheet_with_name("Sheet2").unwrap();
@@ -4767,6 +4917,7 @@ fn test_roundtrip_empty_sheet_order_uses_default() {
         },
         visibility: duke_sheets_core::SheetVisibility::Visible,
         raw_drawing_objects: Vec::new(),
+        raw_drawing_rels: Vec::new(),
     };
     wb.add_chartsheet(cs).unwrap();
 
@@ -4806,6 +4957,7 @@ fn test_add_worksheet_after_read_appears_in_sheet_order() {
         chart,
         visibility: SheetVisibility::Visible,
         raw_drawing_objects: Vec::new(),
+        raw_drawing_rels: Vec::new(),
     })
     .unwrap();
 
@@ -4840,28 +4992,53 @@ fn test_add_worksheet_after_read_appears_in_sheet_order() {
 
 #[test]
 fn test_roundtrip_chart_style_color_passthrough() {
-    use duke_sheets_chart::{Chart, ChartType};
+    use duke_sheets_chart::{
+        Chart, ChartColorStyle, ChartColorStylePart, ChartStyle, ChartStylePart, ChartType,
+    };
 
+    // A part that cannot be modelled - no entries at all - is kept as
+    // the bytes it was given and comes back as those bytes.
     let style_bytes = b"<cs:chartStyle xmlns:cs=\"http://schemas.microsoft.com/office/drawing/2012/chartStyle\" id=\"102\"/>".to_vec();
     let color_bytes = b"<cs:colorStyle xmlns:cs=\"http://schemas.microsoft.com/office/drawing/2012/chartStyle\" meth=\"cycle\" id=\"10\"/>".to_vec();
 
     let mut wb = Workbook::new();
     let sheet = wb.worksheet_mut(0).unwrap();
     let mut chart = Chart::new(ChartType::ColumnClustered);
-    chart.raw_chart_style = Some(style_bytes.clone());
-    chart.raw_chart_color_style = Some(color_bytes.clone());
-    sheet.add_chart(chart);
+    chart.style = Some(ChartStylePart::Raw(style_bytes.clone()));
+    chart.color_style = Some(ChartColorStylePart::Raw(color_bytes.clone()));
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
     let sheet2 = wb2.worksheet(0).unwrap();
     assert_eq!(sheet2.chart_count(), 1);
-    let c = &sheet2.charts()[0];
-    assert_eq!(c.raw_chart_style.as_deref(), Some(style_bytes.as_slice()));
+    let c = sheet2.charts().next().unwrap().payload;
+    assert_eq!(c.style, Some(ChartStylePart::Raw(style_bytes)));
+    assert_eq!(c.color_style, Some(ChartColorStylePart::Raw(color_bytes)));
+
+    // A part that can be modelled comes back modelled, not as bytes.
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    let mut style = ChartStyle::default();
+    style.id = 42;
+    chart.style = Some(ChartStylePart::Typed(Box::new(style.clone())));
+    chart.color_style = Some(ChartColorStylePart::Typed(ChartColorStyle::default()));
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
     assert_eq!(
-        c.raw_chart_color_style.as_deref(),
-        Some(color_bytes.as_slice())
+        c.style,
+        Some(ChartStylePart::Typed(Box::new(style))),
+        "a conforming style part round-trips through the model"
+    );
+    assert_eq!(
+        c.color_style,
+        Some(ChartColorStylePart::Typed(ChartColorStyle::default()))
     );
 }
 
@@ -4880,12 +5057,12 @@ fn test_roundtrip_axis_delete() {
     let mut val_axis = Axis::new();
     val_axis.delete = Some(false);
     chart.value_axis = Some(val_axis);
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     assert_eq!(c.category_axis.as_ref().unwrap().delete, Some(true));
     assert_eq!(c.value_axis.as_ref().unwrap().delete, Some(false));
@@ -4909,12 +5086,12 @@ fn test_roundtrip_axis_label_positions() {
         cat_axis.label_position = Some(pos);
         chart.category_axis = Some(cat_axis);
         chart.value_axis = Some(Axis::new());
-        sheet.add_chart(chart);
+        sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
         let mut buf = Vec::new();
         XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
         let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-        let c = &wb2.worksheet(0).unwrap().charts()[0];
+        let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
         assert_eq!(
             c.category_axis.as_ref().unwrap().label_position,
@@ -4939,12 +5116,12 @@ fn test_roundtrip_axis_crosses_min_max() {
         cat_axis.crosses = Some(crosses);
         chart.category_axis = Some(cat_axis);
         chart.value_axis = Some(Axis::new());
-        sheet.add_chart(chart);
+        sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
         let mut buf = Vec::new();
         XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
         let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-        let c = &wb2.worksheet(0).unwrap().charts()[0];
+        let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
         assert_eq!(
             c.category_axis.as_ref().unwrap().crosses,
@@ -4979,12 +5156,12 @@ fn test_roundtrip_trendline_polynomial() {
         label: None,
     });
     chart.add_series(s);
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     let t = c.series[0]
         .trendline
@@ -5021,12 +5198,12 @@ fn test_roundtrip_trendline_moving_average() {
         label: None,
     });
     chart.add_series(s);
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     let t = c.series[0]
         .trendline
@@ -5061,12 +5238,12 @@ fn test_roundtrip_trendline_logarithmic_power() {
             label: None,
         });
         chart.add_series(s);
-        sheet.add_chart(chart);
+        sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
         let mut buf = Vec::new();
         XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
         let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-        let c = &wb2.worksheet(0).unwrap().charts()[0];
+        let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
         let t = c.series[0]
             .trendline
@@ -5108,12 +5285,12 @@ fn test_roundtrip_error_bars_percentage_stddev() {
             minus: None,
         });
         chart.add_series(s);
-        sheet.add_chart(chart);
+        sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
         let mut buf = Vec::new();
         XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
         let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-        let c = &wb2.worksheet(0).unwrap().charts()[0];
+        let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
         let eb = c.series[0]
             .error_bars
@@ -5154,12 +5331,12 @@ fn test_roundtrip_marker_symbols() {
             size: Some(6),
         });
         chart.add_series(s);
-        sheet.add_chart(chart);
+        sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
         let mut buf = Vec::new();
         XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
         let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-        let c = &wb2.worksheet(0).unwrap().charts()[0];
+        let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
         let m = c.series[0].marker.as_ref().expect("marker should survive");
         assert_eq!(
@@ -5194,12 +5371,12 @@ fn test_roundtrip_data_label_positions() {
             ..Default::default()
         });
         chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-        sheet.add_chart(chart);
+        sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
         let mut buf = Vec::new();
         XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
         let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-        let c = &wb2.worksheet(0).unwrap().charts()[0];
+        let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
         let dl = c.data_labels.as_ref().expect("data_labels should survive");
         assert_eq!(
@@ -5221,12 +5398,12 @@ fn test_roundtrip_display_blanks_as_span() {
     let mut chart = Chart::new(ChartType::Line);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
     chart.display_blanks_as = Some(DisplayBlanksAs::Span);
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     assert_eq!(c.display_blanks_as, Some(DisplayBlanksAs::Span));
 }
@@ -5242,12 +5419,12 @@ fn test_roundtrip_legend_positions() {
         let mut chart = Chart::new(ChartType::ColumnClustered);
         chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
         chart.legend = Some(Legend::new(pos));
-        sheet.add_chart(chart);
+        sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
         let mut buf = Vec::new();
         XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
         let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-        let c = &wb2.worksheet(0).unwrap().charts()[0];
+        let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
         assert_eq!(
             c.legend.as_ref().unwrap().position,
@@ -5270,12 +5447,12 @@ fn test_roundtrip_legend_overlay() {
     let mut legend = Legend::new(LegendPosition::Right);
     legend.overlay = true;
     chart.legend = Some(legend);
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     let leg = c.legend.as_ref().expect("legend should survive");
     assert!(leg.overlay, "legend overlay should be true after roundtrip");
@@ -5294,12 +5471,12 @@ fn test_roundtrip_axis_date_type() {
     cat_axis.axis_type = AxisType::Date;
     chart.category_axis = Some(cat_axis);
     chart.value_axis = Some(Axis::new());
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     assert_eq!(c.category_axis.as_ref().unwrap().axis_type, AxisType::Date,);
 }
@@ -5320,12 +5497,12 @@ fn test_roundtrip_axis_series_type() {
     chart.series_axis = Some(ser_axis);
     chart.category_axis = Some(Axis::new());
     chart.value_axis = Some(Axis::new());
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     let ser_ax = c.series_axis.as_ref().expect("series_axis should survive");
     assert_eq!(ser_ax.axis_type, AxisType::Series);
@@ -5350,12 +5527,12 @@ fn test_roundtrip_view3d_all_fields() {
         perspective: Some(45),
         right_angle_axes: Some(false),
     });
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     let v = c.view_3d.as_ref().expect("view_3d should survive");
     assert_eq!(v.rotate_x, Some(20));
@@ -5377,12 +5554,12 @@ fn test_roundtrip_chart_no_title() {
     chart.title = None;
     chart.auto_title_deleted = Some(true);
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     assert!(
         c.title.is_none(),
@@ -5403,12 +5580,12 @@ fn test_roundtrip_chart_empty_series_name() {
     let mut s = DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5"));
     s.name = Some("".into());
     chart.add_series(s);
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     assert_eq!(c.series.len(), 1);
     // Empty string name may come back as Some("") or None - either is acceptable
@@ -5434,6 +5611,7 @@ fn test_roundtrip_chartsheet_hidden() {
         chart,
         visibility: SheetVisibility::Hidden,
         raw_drawing_objects: Vec::new(),
+        raw_drawing_rels: Vec::new(),
     })
     .unwrap();
 
@@ -5468,6 +5646,7 @@ fn test_roundtrip_multiple_chartsheets() {
             chart,
             visibility: SheetVisibility::Visible,
             raw_drawing_objects: Vec::new(),
+            raw_drawing_rels: Vec::new(),
         })
         .unwrap();
     }
@@ -5506,12 +5685,12 @@ fn test_roundtrip_axis_tick_marks_cross_none() {
     cat_axis.minor_tick_mark = Some(TickMark::None);
     chart.category_axis = Some(cat_axis);
     chart.value_axis = Some(Axis::new());
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     let ax = c.category_axis.as_ref().unwrap();
     assert_eq!(ax.major_tick_mark, Some(TickMark::Cross));
@@ -5541,12 +5720,12 @@ fn test_roundtrip_error_bars_direction_x() {
         minus: None,
     });
     chart.add_series(s);
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     let eb = c.series[0]
         .error_bars
@@ -5578,12 +5757,12 @@ fn test_roundtrip_error_bars_minus_type() {
         minus: None,
     });
     chart.add_series(s);
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     let eb = c.series[0]
         .error_bars
@@ -5612,12 +5791,12 @@ fn test_roundtrip_data_label_number_format() {
         ..Default::default()
     });
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     let dl = c.data_labels.as_ref().expect("data_labels should survive");
     let nf = dl
@@ -5642,12 +5821,12 @@ fn test_roundtrip_data_label_show_leader_lines() {
         ..Default::default()
     });
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     let dl = c.data_labels.as_ref().expect("data_labels should survive");
     assert_eq!(dl.show_leader_lines, Some(true));
@@ -5668,12 +5847,12 @@ fn test_roundtrip_chart_shape_properties_no_fill() {
         line: None,
     });
     chart.add_series(s);
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     let sp = c.series[0]
         .shape_properties
@@ -5705,12 +5884,12 @@ fn test_roundtrip_chart_line_no_fill() {
         }),
     });
     chart.add_series(s);
-    sheet.add_chart(chart);
+    sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
     let sp = c.series[0]
         .shape_properties
@@ -5737,12 +5916,12 @@ fn test_roundtrip_data_label_position_pie() {
             ..Default::default()
         });
         chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-        sheet.add_chart(chart);
+        sheet.add_chart(chart, DrawingAnchor::default()).unwrap();
 
         let mut buf = Vec::new();
         XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
         let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
-        let c = &wb2.worksheet(0).unwrap().charts()[0];
+        let c = wb2.worksheet(0).unwrap().charts().next().unwrap().payload;
 
         let dl = c.data_labels.as_ref().expect("data_labels should survive");
         assert_eq!(
@@ -5763,7 +5942,7 @@ fn test_images_empty_by_default() {
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let rt = XlsxReader::read(Cursor::new(&buf)).unwrap();
-    assert!(rt.worksheet(0).unwrap().images().is_empty());
+    assert!(rt.worksheet(0).unwrap().images().next().is_none());
 }
 
 /// A 1x1 transparent PNG (68 bytes) used as a deterministic image
@@ -5780,35 +5959,16 @@ const TEST_PNG_1X1: &[u8] = &[
     0xAE, 0x42, 0x60, 0x82, // IEND CRC
 ];
 
-/// Build a TwoCell `EmbeddedImage` over a known PNG payload.
+/// Build a TwoCell-anchored image drawing object over a known PNG payload.
 fn test_two_cell_image(
-    id: u32,
     name: &str,
     from_col: u16,
     from_row: u32,
     to_col: u16,
     to_row: u32,
-) -> duke_sheets_chart::EmbeddedImage {
+) -> DrawingObject {
     use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
-    EmbeddedImage {
-        id,
-        name: name.to_string(),
-        description: None,
-        anchor: DrawingAnchor::TwoCell {
-            from: CellMarker {
-                col: from_col,
-                col_offset_emu: 0,
-                row: from_row,
-                row_offset_emu: 0,
-            },
-            to: CellMarker {
-                col: to_col,
-                col_offset_emu: 0,
-                row: to_row,
-                row_offset_emu: 0,
-            },
-            edit_as: None,
-        },
+    let image = EmbeddedImage {
         format: ImageFormat::Png,
         media_path: String::new(),
         svg_media_path: None,
@@ -5819,7 +5979,25 @@ fn test_two_cell_image(
         flip_v: false,
         data: TEST_PNG_1X1.to_vec(),
         svg_data: None,
-    }
+    };
+    let anchor = DrawingAnchor::TwoCell {
+        from: CellMarker {
+            col: from_col,
+            col_offset_emu: 0,
+            row: from_row,
+            row_offset_emu: 0,
+        },
+        to: CellMarker {
+            col: to_col,
+            col_offset_emu: 0,
+            row: to_row,
+            row_offset_emu: 0,
+        },
+        edit_as: None,
+    };
+    DrawingObject::image(image)
+        .with_anchor(anchor)
+        .with_name(name)
 }
 
 #[test]
@@ -5829,31 +6007,40 @@ fn xlsx_png_image_round_trips() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "anchor").unwrap();
-    let mut img = test_two_cell_image(1, "Pic1", 1, 2, 5, 10);
-    img.description = Some("Test image".into());
-    ws.add_image(img);
+    let mut img = test_two_cell_image("Pic1", 1, 2, 5, 10);
+    img.meta.alt_text = Some("Test image".into());
+    ws.add_drawing(img).unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
     let rt = XlsxReader::read(Cursor::new(&buf)).expect("read");
     let ws_in = rt.worksheet(0).unwrap();
-    let images = ws_in.images();
+    let images: Vec<_> = ws_in.images().collect();
     assert_eq!(images.len(), 1, "exactly one image must round-trip");
 
     let img = &images[0];
-    assert_eq!(img.name, "Pic1");
-    assert_eq!(img.description.as_deref(), Some("Test image"));
-    assert_eq!(img.format, ImageFormat::Png);
-    assert_eq!(img.data, TEST_PNG_1X1, "PNG bytes must round-trip verbatim");
-    assert_eq!(img.width_emu, 1_000_000);
-    assert_eq!(img.height_emu, 2_000_000);
-    if let DrawingAnchor::TwoCell { from, to, .. } = &img.anchor {
+    assert_eq!(img.object.unwrap().meta.name.as_deref(), Some("Pic1"));
+    assert_eq!(
+        img.object.unwrap().meta.alt_text.as_deref(),
+        Some("Test image")
+    );
+    assert_eq!(img.payload.format, ImageFormat::Png);
+    assert_eq!(
+        img.payload.data, TEST_PNG_1X1,
+        "PNG bytes must round-trip verbatim"
+    );
+    assert_eq!(img.payload.width_emu, 1_000_000);
+    assert_eq!(img.payload.height_emu, 2_000_000);
+    if let DrawingAnchor::TwoCell { from, to, .. } = &img.object.unwrap().anchor {
         assert_eq!(from.col, 1);
         assert_eq!(from.row, 2);
         assert_eq!(to.col, 5);
         assert_eq!(to.row, 10);
     } else {
-        panic!("expected TwoCell anchor, got {:?}", img.anchor);
+        panic!(
+            "expected TwoCell anchor, got {:?}",
+            img.object.unwrap().anchor
+        );
     }
 }
 
@@ -5863,11 +6050,20 @@ fn xlsx_onecell_anchor_round_trips() {
 
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
-    ws.add_image(EmbeddedImage {
-        id: 1,
-        name: "OneCellPic".into(),
-        description: None,
-        anchor: DrawingAnchor::OneCell {
+    ws.add_drawing(
+        DrawingObject::image(EmbeddedImage {
+            format: ImageFormat::Png,
+            media_path: String::new(),
+            svg_media_path: None,
+            width_emu: 1_500_000,
+            height_emu: 800_000,
+            rotation: None,
+            flip_h: false,
+            flip_v: false,
+            data: TEST_PNG_1X1.to_vec(),
+            svg_data: None,
+        })
+        .with_anchor(DrawingAnchor::OneCell {
             from: CellMarker {
                 col: 2,
                 col_offset_emu: 50_000,
@@ -5876,28 +6072,20 @@ fn xlsx_onecell_anchor_round_trips() {
             },
             width_emu: 1_500_000,
             height_emu: 800_000,
-        },
-        format: ImageFormat::Png,
-        media_path: String::new(),
-        svg_media_path: None,
-        width_emu: 1_500_000,
-        height_emu: 800_000,
-        rotation: None,
-        flip_h: false,
-        flip_v: false,
-        data: TEST_PNG_1X1.to_vec(),
-        svg_data: None,
-    });
+        })
+        .with_name("OneCellPic"),
+    )
+    .unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
     let rt = XlsxReader::read(Cursor::new(&buf)).expect("read");
-    let img = &rt.worksheet(0).unwrap().images()[0];
+    let img = rt.worksheet(0).unwrap().images().next().unwrap();
     if let DrawingAnchor::OneCell {
         from,
         width_emu,
         height_emu,
-    } = &img.anchor
+    } = &img.object.unwrap().anchor
     {
         assert_eq!(from.col, 2);
         assert_eq!(from.col_offset_emu, 50_000);
@@ -5908,11 +6096,11 @@ fn xlsx_onecell_anchor_round_trips() {
     } else {
         panic!(
             "expected OneCell anchor after round-trip, got {:?}",
-            img.anchor
+            img.object.unwrap().anchor
         );
     }
-    assert_eq!(img.format, ImageFormat::Png);
-    assert_eq!(img.data, TEST_PNG_1X1);
+    assert_eq!(img.payload.format, ImageFormat::Png);
+    assert_eq!(img.payload.data, TEST_PNG_1X1);
 }
 
 #[test]
@@ -5921,38 +6109,39 @@ fn xlsx_absolute_anchor_round_trips() {
 
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
-    ws.add_image(EmbeddedImage {
-        id: 1,
-        name: "AbsolutePic".into(),
-        description: None,
-        anchor: DrawingAnchor::Absolute {
+    ws.add_drawing(
+        DrawingObject::image(EmbeddedImage {
+            format: ImageFormat::Png,
+            media_path: String::new(),
+            svg_media_path: None,
+            width_emu: 1_000_000,
+            height_emu: 900_000,
+            rotation: None,
+            flip_h: false,
+            flip_v: false,
+            data: TEST_PNG_1X1.to_vec(),
+            svg_data: None,
+        })
+        .with_anchor(DrawingAnchor::Absolute {
             x_emu: 2_500_000,
             y_emu: 1_200_000,
             width_emu: 1_000_000,
             height_emu: 900_000,
-        },
-        format: ImageFormat::Png,
-        media_path: String::new(),
-        svg_media_path: None,
-        width_emu: 1_000_000,
-        height_emu: 900_000,
-        rotation: None,
-        flip_h: false,
-        flip_v: false,
-        data: TEST_PNG_1X1.to_vec(),
-        svg_data: None,
-    });
+        })
+        .with_name("AbsolutePic"),
+    )
+    .unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
     let rt = XlsxReader::read(Cursor::new(&buf)).expect("read");
-    let img = &rt.worksheet(0).unwrap().images()[0];
+    let img = rt.worksheet(0).unwrap().images().next().unwrap();
     if let DrawingAnchor::Absolute {
         x_emu,
         y_emu,
         width_emu,
         height_emu,
-    } = &img.anchor
+    } = &img.object.unwrap().anchor
     {
         assert_eq!(*x_emu, 2_500_000);
         assert_eq!(*y_emu, 1_200_000);
@@ -5961,11 +6150,11 @@ fn xlsx_absolute_anchor_round_trips() {
     } else {
         panic!(
             "expected Absolute anchor after round-trip, got {:?}",
-            img.anchor
+            img.object.unwrap().anchor
         );
     }
-    assert_eq!(img.format, ImageFormat::Png);
-    assert_eq!(img.data, TEST_PNG_1X1);
+    assert_eq!(img.payload.format, ImageFormat::Png);
+    assert_eq!(img.payload.data, TEST_PNG_1X1);
 }
 
 #[test]
@@ -5977,11 +6166,20 @@ fn xlsx_twocell_anchor_editas_round_trips() {
     for ea in [EditAs::TwoCell, EditAs::OneCell, EditAs::Absolute] {
         let mut wb = Workbook::new();
         let ws = wb.worksheet_mut(0).unwrap();
-        ws.add_image(EmbeddedImage {
-            id: 1,
-            name: format!("Pic-{:?}", ea),
-            description: None,
-            anchor: DrawingAnchor::TwoCell {
+        ws.add_drawing(
+            DrawingObject::image(EmbeddedImage {
+                format: ImageFormat::Png,
+                media_path: String::new(),
+                svg_media_path: None,
+                width_emu: 1_000_000,
+                height_emu: 1_000_000,
+                rotation: None,
+                flip_h: false,
+                flip_v: false,
+                data: TEST_PNG_1X1.to_vec(),
+                svg_data: None,
+            })
+            .with_anchor(DrawingAnchor::TwoCell {
                 from: CellMarker {
                     col: 0,
                     col_offset_emu: 0,
@@ -5995,24 +6193,16 @@ fn xlsx_twocell_anchor_editas_round_trips() {
                     row_offset_emu: 0,
                 },
                 edit_as: Some(ea.clone()),
-            },
-            format: ImageFormat::Png,
-            media_path: String::new(),
-            svg_media_path: None,
-            width_emu: 1_000_000,
-            height_emu: 1_000_000,
-            rotation: None,
-            flip_h: false,
-            flip_v: false,
-            data: TEST_PNG_1X1.to_vec(),
-            svg_data: None,
-        });
+            })
+            .with_name(format!("Pic-{:?}", ea)),
+        )
+        .unwrap();
 
         let mut buf = Vec::new();
         XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
         let rt = XlsxReader::read(Cursor::new(&buf)).expect("read");
-        let img = &rt.worksheet(0).unwrap().images()[0];
-        if let DrawingAnchor::TwoCell { edit_as, .. } = &img.anchor {
+        let img = rt.worksheet(0).unwrap().images().next().unwrap();
+        if let DrawingAnchor::TwoCell { edit_as, .. } = &img.object.unwrap().anchor {
             assert_eq!(
                 edit_as.as_ref(),
                 Some(&ea),
@@ -6031,22 +6221,25 @@ fn xlsx_multiple_images_round_trip_on_same_sheet() {
     let ws = wb.worksheet_mut(0).unwrap();
     for i in 0..3u32 {
         let name = format!("Pic{i}");
-        let mut img = test_two_cell_image(i + 1, &name, i as u16, i, i as u16 + 2, i + 2);
+        let mut img = test_two_cell_image(&name, i as u16, i, i as u16 + 2, i + 2);
         // Distinct payloads: identical bytes would let a media/rels
         // mix-up (every rId resolving to image1.png) pass unnoticed.
-        img.data.push(i as u8);
-        ws.add_image(img);
+        match &mut img.kind {
+            DrawingKind::Image(image) => image.data.push(i as u8),
+            other => panic!("expected image kind, got {other:?}"),
+        }
+        ws.add_drawing(img).unwrap();
     }
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
     let rt = XlsxReader::read(Cursor::new(&buf)).expect("read");
-    let images = rt.worksheet(0).unwrap().images();
+    let images: Vec<_> = rt.worksheet(0).unwrap().images().collect();
     assert_eq!(images.len(), 3);
     for i in 0..3usize {
-        assert_eq!(images[i].name, format!("Pic{i}"));
+        assert_eq!(images[i].object.unwrap().meta.name, Some(format!("Pic{i}")));
         assert_eq!(
-            images[i].data().last().copied(),
+            images[i].payload.data().last().copied(),
             Some(i as u8),
             "image {i} bytes mixed up with another image's media part"
         );
@@ -6064,9 +6257,12 @@ fn xlsx_images_round_trip_across_multiple_sheets() {
         let ws = wb.worksheet_mut(sheet).unwrap();
         for i in 0..2u32 {
             let name = format!("S{sheet}Pic{i}");
-            let mut img = test_two_cell_image(i + 1, &name, i as u16, i, i as u16 + 2, i + 2);
-            img.data.push((sheet * 10 + i as usize) as u8);
-            ws.add_image(img);
+            let mut img = test_two_cell_image(&name, i as u16, i, i as u16 + 2, i + 2);
+            match &mut img.kind {
+                DrawingKind::Image(image) => image.data.push((sheet * 10 + i as usize) as u8),
+                other => panic!("expected image kind, got {other:?}"),
+            }
+            ws.add_drawing(img).unwrap();
         }
     }
 
@@ -6074,15 +6270,344 @@ fn xlsx_images_round_trip_across_multiple_sheets() {
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
     let rt = XlsxReader::read(Cursor::new(&buf)).expect("read");
     for sheet in 0..2usize {
-        let images = rt.worksheet(sheet).unwrap().images();
+        let images: Vec<_> = rt.worksheet(sheet).unwrap().images().collect();
         assert_eq!(images.len(), 2, "sheet {sheet} image count");
         for i in 0..2usize {
-            assert_eq!(images[i].name, format!("S{sheet}Pic{i}"));
             assert_eq!(
-                images[i].data().last().copied(),
+                images[i].object.unwrap().meta.name,
+                Some(format!("S{sheet}Pic{i}"))
+            );
+            assert_eq!(
+                images[i].payload.data().last().copied(),
                 Some((sheet * 10 + i) as u8),
                 "sheet {sheet} image {i} bytes resolved to the wrong media part"
             );
         }
     }
+}
+
+// Form controls
+
+fn control_anchor_2c(from_col: u16, from_row: u32, to_col: u16, to_row: u32) -> DrawingAnchor {
+    DrawingAnchor::TwoCell {
+        from: CellMarker {
+            col: from_col,
+            col_offset_emu: 0,
+            row: from_row,
+            row_offset_emu: 0,
+        },
+        to: CellMarker {
+            col: to_col,
+            col_offset_emu: 0,
+            row: to_row,
+            row_offset_emu: 0,
+        },
+        edit_as: None,
+    }
+}
+
+fn all_form_control_kinds() -> Vec<FormControlKind> {
+    vec![
+        FormControlKind::Button {
+            caption: "Run Report".into(),
+        },
+        FormControlKind::Checkbox {
+            caption: "Enable audit".into(),
+            state: CheckState::Checked,
+            cell_link: Some("$D$2".to_string()),
+            no_3d: true,
+        },
+        FormControlKind::Checkbox {
+            caption: "Tri state".into(),
+            state: CheckState::Mixed,
+            cell_link: None,
+            no_3d: true,
+        },
+        FormControlKind::OptionButton {
+            caption: "Opt A".into(),
+            state: CheckState::Checked,
+            cell_link: Some("$D$3".to_string()),
+            first_in_group: false,
+            no_3d: true,
+        },
+        FormControlKind::OptionButton {
+            caption: "Opt B".into(),
+            state: CheckState::Unchecked,
+            cell_link: None,
+            first_in_group: false,
+            no_3d: true,
+        },
+        FormControlKind::Label {
+            caption: "Status label".into(),
+        },
+        FormControlKind::GroupBox {
+            caption: "Choices".into(),
+            no_3d: true,
+        },
+        FormControlKind::ListBox {
+            input_range: Some("$H$1:$H$4".to_string()),
+            cell_link: Some("$D$5".to_string()),
+            selection: ListSelection::Single,
+            selected: vec![3],
+            no_3d: true,
+        },
+        FormControlKind::ListBox {
+            input_range: Some("$H$1:$H$5".to_string()),
+            cell_link: None,
+            selection: ListSelection::Multi,
+            selected: vec![0, 2, 4],
+            no_3d: true,
+        },
+        FormControlKind::Dropdown {
+            input_range: Some("$H$1:$H$4".to_string()),
+            cell_link: Some("$D$4".to_string()),
+            selected: Some(2),
+            lines: 6,
+            no_3d: true,
+        },
+        FormControlKind::Scrollbar {
+            value: 40,
+            min: 5,
+            max: 95,
+            increment: 2,
+            page: 10,
+            horizontal: true,
+            cell_link: Some("$D$6".to_string()),
+        },
+        FormControlKind::Spinner {
+            value: 12,
+            min: 0,
+            max: 30,
+            increment: 3,
+            cell_link: Some("$D$7".to_string()),
+        },
+    ]
+}
+
+#[test]
+fn xlsx_form_controls_round_trip() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 42.0).unwrap();
+    let kinds = all_form_control_kinds();
+    let count = kinds.len();
+    for (i, kind) in kinds.into_iter().enumerate() {
+        let row = 1 + 2 * i as u32;
+        ws.add_form_control(
+            FormControl::new(kind),
+            control_anchor_2c(1, row, 3, row + 1),
+        )
+        .unwrap();
+    }
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
+    let rt = XlsxReader::read(Cursor::new(&buf)).expect("read");
+    let controls: Vec<_> = rt.worksheet(0).unwrap().form_controls().collect();
+    assert_eq!(controls.len(), count, "every control survives");
+    let original = all_form_control_kinds();
+    for (i, control) in controls.iter().enumerate() {
+        // The writer recomputes radio grouping: the sheet group's
+        // first radio (control 3) carries firstButton after the trip.
+        let mut expected = original[i].clone();
+        if let FormControlKind::OptionButton { first_in_group, .. } = &mut expected {
+            *first_in_group = i == 3;
+        }
+        assert_eq!(control.payload.kind, expected, "control {i} kind mismatch");
+        assert!(control.object.unwrap().meta.locked);
+        assert!(control.object.unwrap().meta.printable);
+    }
+    // Anchors survive exactly (EMU in controlPr).
+    match &controls[0].object.unwrap().anchor {
+        DrawingAnchor::TwoCell { from, to, .. } => {
+            assert_eq!((from.col, from.row), (1, 1));
+            assert_eq!((to.col, to.row), (3, 2));
+        }
+        other => panic!("expected TwoCell anchor, got {other:?}"),
+    }
+    // Names are persisted (defaulted by the writer).
+    assert_eq!(
+        controls[0].object.unwrap().meta.name.as_deref(),
+        Some("Button 1")
+    );
+}
+
+#[test]
+fn xlsx_form_controls_emit_expected_parts() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_comment("A1", CellComment::new("Author", "note"))
+        .unwrap();
+    ws.add_form_control(
+        FormControl::new(FormControlKind::Checkbox {
+            caption: "check".into(),
+            state: CheckState::Checked,
+            cell_link: Some("$D$2".to_string()),
+            no_3d: false,
+        }),
+        control_anchor_2c(1, 1, 3, 2),
+    )
+    .unwrap();
+    ws.add_form_control(
+        FormControl::new(FormControlKind::ListBox {
+            input_range: Some("$H$1:$H$4".to_string()),
+            cell_link: None,
+            selection: ListSelection::Multi,
+            selected: vec![0, 2],
+            no_3d: false,
+        }),
+        control_anchor_2c(1, 4, 3, 6),
+    )
+    .unwrap();
+    ws.add_form_control(
+        FormControl::new(FormControlKind::Dropdown {
+            input_range: Some("$H$1:$H$4".to_string()),
+            cell_link: None,
+            selected: Some(1),
+            lines: 8,
+            no_3d: false,
+        }),
+        control_anchor_2c(1, 7, 3, 8),
+    )
+    .unwrap();
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
+
+    let mut zip = zip::ZipArchive::new(Cursor::new(&buf)).expect("zip");
+    let read_part = |zip: &mut zip::ZipArchive<Cursor<&Vec<u8>>>, name: &str| -> String {
+        use std::io::Read;
+        let mut s = String::new();
+        zip.by_name(name)
+            .unwrap_or_else(|_| panic!("part {name} missing"))
+            .read_to_string(&mut s)
+            .expect("read part");
+        s
+    };
+
+    let ctrl_prop = read_part(&mut zip, "xl/ctrlProps/ctrlProp1.xml");
+    assert!(ctrl_prop.contains("objectType=\"CheckBox\""));
+    assert!(ctrl_prop.contains("checked=\"Checked\""));
+    assert!(ctrl_prop.contains("fmlaLink=\"$D$2\""));
+
+    // Zero-based model selections serialize one-based on disk.
+    let list_prop = read_part(&mut zip, "xl/ctrlProps/ctrlProp2.xml");
+    assert!(list_prop.contains("multiSel=\"1,3\""), "{list_prop}");
+    let drop_prop = read_part(&mut zip, "xl/ctrlProps/ctrlProp3.xml");
+    assert!(drop_prop.contains("sel=\"2\""), "{drop_prop}");
+
+    let vml = read_part(&mut zip, "xl/drawings/vmlDrawing1.vml");
+    assert!(vml.contains("ObjectType=\"Note\""), "comment shape present");
+    assert!(
+        vml.contains("ObjectType=\"Checkbox\""),
+        "control shape present"
+    );
+    assert!(vml.contains("_x0000_t201"), "control shapetype declared");
+
+    let sheet = read_part(&mut zip, "xl/worksheets/sheet1.xml");
+    assert!(sheet.contains("<legacyDrawing r:id=\"rId1\"/>"));
+    assert!(sheet.contains("<controls>"));
+    // Comment occupies shape 1025; the control is 1026.
+    assert!(
+        sheet.contains("shapeId=\"1026\""),
+        "control shapeId offset by comment"
+    );
+
+    let content_types = read_part(&mut zip, "[Content_Types].xml");
+    assert!(content_types.contains("/xl/ctrlProps/ctrlProp1.xml"));
+    assert!(content_types.contains("Extension=\"vml\""));
+}
+
+#[test]
+fn xlsx_controls_without_comments_round_trip() {
+    // VML part exists for the controls alone; no comments part.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.add_form_control(
+        FormControl::new(FormControlKind::Spinner {
+            value: 5,
+            min: 0,
+            max: 10,
+            increment: 1,
+            cell_link: None,
+        }),
+        control_anchor_2c(0, 0, 1, 3),
+    )
+    .unwrap();
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
+    let rt = XlsxReader::read(Cursor::new(&buf)).expect("read");
+    assert_eq!(rt.worksheet(0).unwrap().form_control_count(), 1);
+    assert_eq!(rt.worksheet(0).unwrap().comment_count(), 0);
+}
+
+#[test]
+fn xlsx_control_named_and_flagged_round_trips() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    let mut object = DrawingObject::form_control(FormControl::new(FormControlKind::Button {
+        caption: "Do <it> & more".into(),
+    }))
+    .with_anchor(control_anchor_2c(2, 2, 4, 4))
+    .with_name("My Button");
+    object.meta.locked = false;
+    object.meta.printable = false;
+    ws.add_drawing(object).unwrap();
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
+    let rt = XlsxReader::read(Cursor::new(&buf)).expect("read");
+    let controls: Vec<_> = rt.worksheet(0).unwrap().form_controls().collect();
+    assert_eq!(
+        controls[0].object.unwrap().meta.name.as_deref(),
+        Some("My Button")
+    );
+    assert!(!controls[0].object.unwrap().meta.locked);
+    assert!(!controls[0].object.unwrap().meta.printable);
+    assert_eq!(
+        controls[0].payload.caption_text().as_deref(),
+        Some("Do <it> & more")
+    );
+}
+
+/// Defined names must come back in the order the file listed them.
+///
+/// They were stored in a HashMap, so the order came out of whatever the
+/// map's seed produced. Writing the same workbook twice was stable, but
+/// reading and writing again reordered every name, which made a second
+/// save differ from the first across most of a real corpus.
+#[test]
+fn defined_name_order_survives_a_round_trip() {
+    let names = [
+        "Zulu", "alpha", "Mike", "bravo", "Yankee", "charlie", "Xray", "delta", "Whiskey", "echo",
+        "Victor", "foxtrot",
+    ];
+
+    let mut wb = Workbook::new();
+    for (i, name) in names.iter().enumerate() {
+        wb.named_ranges_mut()
+            .define(duke_sheets::named_range::NamedRange::new(
+                name.to_string(),
+                format!("Sheet1!$A${}", i + 1),
+                duke_sheets::named_range::NameScope::Workbook,
+            ))
+            .expect("define");
+    }
+    let authored: Vec<String> = wb.named_ranges().iter().map(|n| n.name.clone()).collect();
+    assert_eq!(authored, names, "authoring order must be preserved in memory");
+
+    let write = |wb: &Workbook| {
+        let mut buf = Vec::new();
+        XlsxWriter::write(wb, Cursor::new(&mut buf)).expect("write");
+        buf
+    };
+
+    let first = write(&wb);
+    let reread = XlsxReader::read(Cursor::new(first.clone())).expect("read");
+    let after: Vec<String> = reread.named_ranges().iter().map(|n| n.name.clone()).collect();
+    assert_eq!(after, names, "the file's order must survive the round trip");
+
+    // And so a second save reproduces the first byte for byte.
+    assert_eq!(write(&reread), first, "a second save must not reorder names");
 }

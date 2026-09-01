@@ -4,11 +4,11 @@ use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
 use super::{
-    catch_panic, to_napi_err, JsAutoFilter, JsChart, JsChartEx, JsColor, JsComment, JsCommentEntry,
-    JsConditionalFormatRule, JsDataValidation, JsEmbeddedImage, JsFormulaCell, JsFreezePanes,
-    JsHyperlink, JsHyperlinkEntry, JsImageInfo, JsMergeSpan, JsMergedRegion, JsPageBreak,
-    JsPageSetup, JsRow, JsRowCell, JsRowsOptions, JsSelection, JsSheetProtection, JsSpillSource,
-    JsSplitPanes, JsStyle, JsTable, Worksheet,
+    catch_panic, to_napi_err, JsAutoFilter, JsColor, JsComment, JsCommentEntry,
+    JsConditionalFormatRule, JsDataValidation, JsFormulaCell, JsFreezePanes, JsHyperlink,
+    JsHyperlinkEntry, JsImageInfo, JsMergeSpan, JsMergedRegion, JsPageBreak, JsPageSetup,
+    JsProtectedRange, JsRow, JsRowCell, JsRowsOptions, JsSelection, JsSheetProtection,
+    JsSpillSource, JsSplitPanes, JsStyle, JsTable, Worksheet,
 };
 
 #[napi]
@@ -333,7 +333,13 @@ impl Worksheet {
                 };
 
                 let comment = if inc_comments {
-                    ws.comment_at(row, col).map(JsComment::from)
+                    ws.comment_at(row, col).map(|comment| {
+                        JsComment::from_with_visibility(
+                            comment,
+                            ws.comment_object(row, col)
+                                .is_some_and(|object| !object.meta.hidden),
+                        )
+                    })
                 } else {
                     None
                 };
@@ -573,8 +579,15 @@ impl Worksheet {
             let ws = wb
                 .worksheet(self.sheet_index)
                 .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
-            let comment = ws.comment(&address).map_err(to_napi_err)?;
-            Ok(comment.map(JsComment::from))
+            let cell = duke_sheets_core::CellAddress::parse(&address).map_err(to_napi_err)?;
+            let comment = ws.comment_at(cell.row, cell.col).map(|comment| {
+                JsComment::from_with_visibility(
+                    comment,
+                    ws.comment_object(cell.row, cell.col)
+                        .is_some_and(|object| !object.meta.hidden),
+                )
+            });
+            Ok(comment)
         })
     }
 
@@ -586,7 +599,14 @@ impl Worksheet {
             let ws = wb
                 .worksheet(self.sheet_index)
                 .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
-            Ok(ws.comment_at(row, col as u16).map(JsComment::from))
+            let col = col as u16;
+            Ok(ws.comment_at(row, col).map(|comment| {
+                JsComment::from_with_visibility(
+                    comment,
+                    ws.comment_object(row, col)
+                        .is_some_and(|object| !object.meta.hidden),
+                )
+            }))
         })
     }
 
@@ -635,11 +655,14 @@ impl Worksheet {
                 .worksheet(self.sheet_index)
                 .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
             Ok(ws
-                .comments()
-                .map(|((row, col), c)| JsCommentEntry {
-                    row,
-                    col: col as u32,
-                    comment: JsComment::from(c),
+                .comments_drawn()
+                .map(|drawn| JsCommentEntry {
+                    row: drawn.row,
+                    col: drawn.col as u32,
+                    comment: JsComment::from_with_visibility(
+                        drawn.comment,
+                        !drawn.object.meta.hidden,
+                    ),
                 })
                 .collect())
         })
@@ -780,6 +803,22 @@ impl Worksheet {
                 .worksheet(self.sheet_index)
                 .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
             Ok(ws.protection().map(JsSheetProtection::from))
+        })
+    }
+
+    /// Protected editable ranges on this worksheet.
+    #[napi(getter)]
+    pub fn protected_ranges(&self) -> Result<Vec<JsProtectedRange>> {
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            Ok(ws
+                .protected_ranges()
+                .iter()
+                .map(JsProtectedRange::from)
+                .collect())
         })
     }
 
@@ -1011,79 +1050,6 @@ impl Worksheet {
                 .worksheet(self.sheet_index)
                 .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
             Ok(ws.is_merged_secondary(row, col as u16))
-        })
-    }
-    // Charts (read)
-
-    /// Get all charts embedded in the worksheet.
-    #[napi(getter)]
-    pub fn charts(&self) -> Result<Vec<JsChart>> {
-        catch_panic(|| {
-            let wb = self.workbook.read().map_err(to_napi_err)?;
-            let ws = wb
-                .worksheet(self.sheet_index)
-                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
-            Ok(ws.charts().iter().map(JsChart::from).collect())
-        })
-    }
-
-    /// Number of charts in the worksheet.
-    #[napi(getter)]
-    pub fn chart_count(&self) -> Result<u32> {
-        catch_panic(|| {
-            let wb = self.workbook.read().map_err(to_napi_err)?;
-            let ws = wb
-                .worksheet(self.sheet_index)
-                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
-            Ok(ws.chart_count() as u32)
-        })
-    }
-
-    /// Get all ChartEx charts (Office 2016+ extended charts) in the worksheet.
-    #[napi(getter)]
-    pub fn charts_ex(&self) -> Result<Vec<JsChartEx>> {
-        catch_panic(|| {
-            let wb = self.workbook.read().map_err(to_napi_err)?;
-            let ws = wb
-                .worksheet(self.sheet_index)
-                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
-            Ok(ws.charts_ex().iter().map(JsChartEx::from).collect())
-        })
-    }
-
-    /// Number of ChartEx charts in the worksheet.
-    #[napi(getter)]
-    pub fn chart_ex_count(&self) -> Result<u32> {
-        catch_panic(|| {
-            let wb = self.workbook.read().map_err(to_napi_err)?;
-            let ws = wb
-                .worksheet(self.sheet_index)
-                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
-            Ok(ws.chart_ex_count() as u32)
-        })
-    }
-
-    /// Get all embedded images in the worksheet.
-    #[napi(getter)]
-    pub fn images(&self) -> Result<Vec<JsEmbeddedImage>> {
-        catch_panic(|| {
-            let wb = self.workbook.read().map_err(to_napi_err)?;
-            let ws = wb
-                .worksheet(self.sheet_index)
-                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
-            Ok(ws.images().iter().map(JsEmbeddedImage::from).collect())
-        })
-    }
-
-    /// Number of embedded images in the worksheet.
-    #[napi(getter)]
-    pub fn image_count(&self) -> Result<u32> {
-        catch_panic(|| {
-            let wb = self.workbook.read().map_err(to_napi_err)?;
-            let ws = wb
-                .worksheet(self.sheet_index)
-                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
-            Ok(ws.image_count() as u32)
         })
     }
 }

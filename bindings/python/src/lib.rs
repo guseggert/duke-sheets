@@ -27,6 +27,8 @@ use duke_sheets_core::{
 
 mod types;
 pub use types::*;
+mod drawings;
+pub use drawings::*;
 mod workbook_read;
 mod worksheet_read;
 pub use worksheet_read::PyRowIterator;
@@ -2392,6 +2394,28 @@ impl PyWorksheet {
         Ok(())
     }
 
+    /// Set or clear sheet protection settings.
+    #[pyo3(signature = (protection))]
+    fn set_protection(&self, protection: &Bound<'_, PyAny>) -> PyResult<()> {
+        let mut wb = self.workbook.write().map_err(to_py_err)?;
+        let ws = wb
+            .worksheet_mut(self.sheet_index)
+            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
+        ws.set_protection(types::sheet_protection_input_to_core(protection)?);
+        Ok(())
+    }
+
+    /// Replace the protected editable ranges for this sheet.
+    #[pyo3(signature = (ranges))]
+    fn set_protected_ranges(&self, ranges: &Bound<'_, PyAny>) -> PyResult<()> {
+        let mut wb = self.workbook.write().map_err(to_py_err)?;
+        let ws = wb
+            .worksheet_mut(self.sheet_index)
+            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
+        ws.set_protected_ranges(types::protected_ranges_input_to_core(ranges)?);
+        Ok(())
+    }
+
     /// Get the raw cell value (not calculated)
     #[pyo3(signature = (address))]
     fn get_cell(&self, address: &str) -> PyResult<PyCellValue> {
@@ -2716,7 +2740,11 @@ impl PyWorkbook {
         })
     }
 
-    /// Save the workbook to a file
+    /// Save the workbook to a file.
+    ///
+    /// Form-control state is synchronized into linked cells in the output,
+    /// replacing existing values and formulas there; this workbook is left
+    /// unchanged.
     ///
     /// The format is determined by the file extension:
     /// - .xlsx for Excel format
@@ -2735,7 +2763,9 @@ impl PyWorkbook {
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 
-    /// Save the workbook to a password-protected file.
+    /// Save the workbook to a password-protected file. Form-control state is
+    /// synchronized into linked cells in the serialized file, replacing
+    /// existing values and formulas there.
     ///
     /// The encryption variant is chosen by `profile`:
     /// - "default" (or None): Agile AES-256 for .xlsx, RC4 CryptoAPI 128
@@ -2868,6 +2898,14 @@ impl PyWorkbook {
     fn add_sheet(&self, name: &str) -> PyResult<usize> {
         let mut wb = self.inner.write().map_err(to_py_err)?;
         wb.add_worksheet_with_name(name).map_err(to_py_err)
+    }
+
+    /// Set or clear workbook structure/window protection settings.
+    #[pyo3(signature = (protection))]
+    fn set_workbook_protection(&self, protection: &Bound<'_, PyAny>) -> PyResult<()> {
+        let mut wb = self.inner.write().map_err(to_py_err)?;
+        wb.set_workbook_protection(types::workbook_protection_input_to_core(protection)?);
+        Ok(())
     }
 
     /// Remove a worksheet by index
@@ -3187,6 +3225,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCalculationImage>()?;
     m.add_class::<PyCalculationStats>()?;
     m.add_class::<PyColor>()?;
+    m.add_class::<crate::drawings::PyRectEmu>()?;
     m.add_class::<PyFontStyle>()?;
     m.add_class::<PyGradientStop>()?;
     m.add_class::<PyFillStyle>()?;
@@ -3203,6 +3242,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySplitPanes>()?;
     m.add_class::<PySelection>()?;
     m.add_class::<PySheetProtection>()?;
+    m.add_class::<PyWorkbookProtection>()?;
+    m.add_class::<PyProtectedRange>()?;
     m.add_class::<PyPageSetup>()?;
     m.add_class::<PyPageBreak>()?;
     m.add_class::<PyWorkbookSettings>()?;
@@ -3227,6 +3268,20 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyChart>()?;
     m.add_class::<PyPivotChartSource>()?;
     m.add_class::<PyDrawingAnchor>()?;
+    m.add_class::<PyChildTransform>()?;
+    m.add_class::<PyGroupTransform>()?;
+    m.add_class::<PyDrawingMeta>()?;
+    m.add_class::<PyDrawingText>()?;
+    m.add_class::<PyShapeFill>()?;
+    m.add_class::<PyShapeLine>()?;
+    m.add_class::<PyShape>()?;
+    m.add_class::<PyDrawingComment>()?;
+    m.add_class::<PyDrawingGroup>()?;
+    m.add_class::<PyRawDrawingRelationship>()?;
+    m.add_class::<PyRawDrawing>()?;
+    m.add_class::<PyDrawing>()?;
+    m.add_class::<PyFormControlInteractionResult>()?;
+    m.add_class::<PyFormControl>()?;
     m.add_class::<PyDataSeries>()?;
     m.add_class::<PyDataReference>()?;
     m.add_class::<PyAxis>()?;
@@ -3253,6 +3308,11 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyChartExData>()?;
     m.add_class::<PyChartExDimension>()?;
     m.add_class::<PyChartExAxis>()?;
+    m.add_class::<PyChartExGridlines>()?;
+    m.add_class::<PyChartStyle>()?;
+    m.add_class::<PyChartStyleEntry>()?;
+    m.add_class::<PyChartStyleReference>()?;
+    m.add_class::<PyChartColorStyle>()?;
     m.add_class::<PyChartExLegend>()?;
     m.add_class::<PyChartExDataLabels>()?;
     m.add_class::<PyChartExTitle>()?;

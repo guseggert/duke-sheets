@@ -288,17 +288,38 @@ pub const BRT_END_SX_FILTERS: u16 = 0x0258;
 pub const BRT_BEGIN_SX_FILTER: u16 = 0x0259;
 pub const BRT_END_SX_FILTER: u16 = 0x025A;
 
-pub const BRT_BEGIN_COMMENT_AUTHORS: u16 = 0x0278;
-pub const BRT_END_COMMENT_AUTHORS: u16 = 0x0279;
-pub const BRT_COMMENT_AUTHOR: u16 = 0x027A;
-pub const BRT_BEGIN_COMMENT_LIST: u16 = 0x027B;
-pub const BRT_END_COMMENT_LIST: u16 = 0x027C;
-pub const BRT_BEGIN_COMMENT: u16 = 0x027D;
-pub const BRT_END_COMMENT: u16 = 0x027E;
-pub const BRT_COMMENT_TEXT: u16 = 0x027F;
+// Comments part records per MS-XLSB 2.4.33 (pinned against
+// Excel-authored xl/comments1.bin).
+pub const BRT_BEGIN_COMMENTS: u16 = 0x0274;
+pub const BRT_END_COMMENTS: u16 = 0x0275;
+pub const BRT_BEGIN_COMMENT_AUTHORS: u16 = 0x0276;
+pub const BRT_END_COMMENT_AUTHORS: u16 = 0x0277;
+pub const BRT_COMMENT_AUTHOR: u16 = 0x0278;
+pub const BRT_BEGIN_COMMENT_LIST: u16 = 0x0279;
+pub const BRT_END_COMMENT_LIST: u16 = 0x027A;
+pub const BRT_BEGIN_COMMENT: u16 = 0x027B;
+pub const BRT_END_COMMENT: u16 = 0x027C;
+pub const BRT_COMMENT_TEXT: u16 = 0x027D;
 
-pub const BRT_LEGACY_DRAWING: u16 = 0x0228;
-pub const BRT_DRAWING: u16 = 0x0235;
+// Off-spec 0x0278-based ids our writer used to emit (Excel refuses
+// them); the reader still accepts them for back-compat. The legacy
+// BrtBeginComment body was 12 bytes (iauthor + row + col) instead of
+// the spec's 36.
+pub const BRT_LEGACY_BEGIN_COMMENT_AUTHORS: u16 = 0x0278;
+pub const BRT_LEGACY_COMMENT_AUTHOR: u16 = 0x027A;
+pub const BRT_LEGACY_END_COMMENT_LIST: u16 = 0x027C;
+pub const BRT_LEGACY_BEGIN_COMMENT: u16 = 0x027D;
+pub const BRT_LEGACY_END_COMMENT: u16 = 0x027E;
+pub const BRT_LEGACY_COMMENT_TEXT: u16 = 0x027F;
+
+// Future-record wrapper (skipped transparently around comments).
+pub const BRT_AC_BEGIN: u16 = 0x0025;
+pub const BRT_AC_END: u16 = 0x0026;
+
+// MS-XLSB §2.2.1: BrtDrawing = 550, BrtLegacyDrawing = 551
+// (552 is BrtLegacyDrawingHF, the header/footer variant).
+pub const BRT_DRAWING: u16 = 0x0226;
+pub const BRT_LEGACY_DRAWING: u16 = 0x0227;
 
 pub const BRT_BEGIN_DIMS: u16 = 0x0111;
 pub const BRT_END_DIMS: u16 = 0x0112;
@@ -317,7 +338,12 @@ pub const BRT_BEGIN_LIST_PARTS: u16 = 0x0294; // 660
 pub const BRT_LIST_PART: u16 = 0x0295; // 661
 pub const BRT_END_LIST_PARTS: u16 = 0x0296; // 662
 
-pub const BRT_SHEET_PROTECTION: u16 = 0x0217; // 535
+// Pinned from Excel-authored XLSB files. These protection records are
+// adjacent in the BIFF12 stream and using the wrong neighbor ID makes Excel
+// reject the workbook before repair.
+pub const BRT_BOOK_PROTECTION: u16 = 0x0216;
+pub const BRT_SHEET_PROTECTION: u16 = 0x0217;
+pub const BRT_RANGE_PROTECTION: u16 = 0x0218;
 
 pub const BRT_BEGIN_RW_BRK: u16 = 0x0188; // 392
 pub const BRT_END_RW_BRK: u16 = 0x0189; // 393

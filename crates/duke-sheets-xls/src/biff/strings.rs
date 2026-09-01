@@ -847,7 +847,7 @@ mod tests {
         // String 1: "04/02/2023" - header only (char data in CONTINUE)
         seg0.extend_from_slice(&10u16.to_le_bytes()); // char_count = 10
         seg0.push(0x00); // flags: compressed
-                         // No char data in seg0 - boundary falls exactly here
+        // No char data in seg0 - boundary falls exactly here
 
         // CONTINUE: flags byte + char data
         let mut seg1 = Vec::new();
@@ -876,7 +876,7 @@ mod tests {
         // String 1: "Hi" (wide) - header only, char data in CONTINUE
         seg0.extend_from_slice(&2u16.to_le_bytes()); // char_count = 2
         seg0.push(0x01); // flags: wide
-                         // No char data - boundary falls here
+        // No char data - boundary falls here
 
         let mut seg1 = Vec::new();
         seg1.push(0x01); // flags: wide

@@ -1,5 +1,13 @@
+//! Reader-side parity assertions against `data/formula-parity.xlsx`.
+//!
+//! Lives beside its generator (`formula_parity`) so the fixture is built
+//! by a direct function call. `data/` is gitignored, so this fixture is a
+//! local build artifact and these assertions can only run where Excel is
+//! reachable - which is why they belong in this suite rather than in the
+//! `duke-sheets` crate behind a subprocess.
+
 use duke_sheets::prelude::*;
-use duke_sheets_test_harness::fixture::ensure_via_cargo_test;
+use crate::formula_parity::formula_parity_fixture;
 
 #[derive(Debug, Clone)]
 struct ParityCase {
@@ -11,21 +19,8 @@ struct ParityCase {
 }
 
 #[test]
-#[ignore = "auto-generates data/formula-parity.xlsx via Excel COM on first run"]
 fn formula_parity_matches_excel_cached_values() {
-    let fixture_path = ensure_via_cargo_test(
-        "data/formula-parity.xlsx",
-        &[
-            "-p",
-            "duke-sheets-excel-com",
-            "--test",
-            "e2e",
-            "generate_formula_parity_spreadsheet",
-            "--",
-            "--ignored",
-            "--nocapture",
-        ],
-    );
+    let fixture_path = formula_parity_fixture();
 
     let mut workbook = XlsxReader::read_file(&fixture_path)
         .unwrap_or_else(|e| panic!("read {}: {e}", fixture_path.display()));

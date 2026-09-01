@@ -3,8 +3,8 @@
 //! These tests verify comma-based number formatting including thousands
 //! separators and comma divisors (,, = millions, ,,, = billions, etc.)
 
-use flate2::read::GzDecoder;
 use ssfmt::format_default;
+use flate2::read::GzDecoder;
 use std::io::Read;
 
 #[derive(Debug)]
@@ -111,16 +111,8 @@ fn test_ssf_comma_formats() {
     }
 
     println!("Total:   {}", total);
-    println!(
-        "Passed:  {} ({:.1}%)",
-        passed,
-        (passed as f64 / total as f64) * 100.0
-    );
-    println!(
-        "Failed:  {} ({:.1}%)",
-        failed,
-        (failed as f64 / total as f64) * 100.0
-    );
+    println!("Passed:  {} ({:.1}%)", passed, (passed as f64 / total as f64) * 100.0);
+    println!("Failed:  {} ({:.1}%)", failed, (failed as f64 / total as f64) * 100.0);
 
     // We should pass most tests, but some edge cases might fail
     assert!(passed > total / 2, "More than half of tests should pass");

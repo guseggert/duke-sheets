@@ -78,6 +78,7 @@ pub(crate) fn catch_panic<T>(f: impl FnOnce() -> napi::Result<T>) -> napi::Resul
 
 mod types;
 pub use types::*;
+pub(crate) mod drawings;
 mod workbook_read;
 mod worksheet_read;
 
@@ -1815,6 +1816,39 @@ impl Worksheet {
         })
     }
 
+    /// Set or clear sheet protection settings.
+    #[napi(js_name = "setProtection")]
+    pub fn set_protection(&self, protection: Option<JsSheetProtectionInput>) -> Result<()> {
+        catch_panic(|| {
+            let mut wb = self.workbook.write().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet_mut(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            let protection = protection
+                .map(JsSheetProtectionInput::into_core)
+                .transpose()?;
+            ws.set_protection(protection);
+            Ok(())
+        })
+    }
+
+    /// Replace the protected editable ranges for this sheet.
+    #[napi(js_name = "setProtectedRanges")]
+    pub fn set_protected_ranges(&self, ranges: Vec<JsProtectedRangeInput>) -> Result<()> {
+        catch_panic(|| {
+            let mut wb = self.workbook.write().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet_mut(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            let ranges = ranges
+                .into_iter()
+                .map(JsProtectedRangeInput::into_core)
+                .collect::<Result<Vec<_>>>()?;
+            ws.set_protected_ranges(ranges);
+            Ok(())
+        })
+    }
+
     /// Get the raw cell value (not calculated)
     #[napi]
     pub fn get_cell(&self, address: String) -> Result<CellValue> {
@@ -2100,6 +2134,7 @@ impl Worksheet {
             Ok(ws.unmerge_cells(&range))
         })
     }
+
 }
 
 /// A workbook containing one or more worksheets.
@@ -2192,7 +2227,11 @@ impl Workbook {
         })
     }
 
-    /// Save the workbook to a file
+    /// Save the workbook to a file.
+    ///
+    /// Form-control state is synchronized into linked cells in the output,
+    /// replacing existing values and formulas there; this workbook is left
+    /// unchanged.
     ///
     /// The format is determined by the file extension:
     /// - `.xlsx` for Excel format
@@ -2210,7 +2249,9 @@ impl Workbook {
         })
     }
 
-    /// Save the workbook to a password-protected file. The encryption
+    /// Save the workbook to a password-protected file. Form-control state is
+    /// synchronized into linked cells in the serialized file, replacing
+    /// existing values and formulas there. The encryption
     /// variant is selected via `profile`:
     ///
     /// - `"default"` (or null) - Agile-256 for .xlsx, RC4 CryptoAPI 128 for .xls
@@ -2273,11 +2314,14 @@ impl Workbook {
         })
     }
 
-    /// Save the workbook as a CSV string (first sheet only)
+    /// Save the workbook as a CSV string (first sheet only, with
+    /// form-control state synchronized into linked cells in the output)
     #[napi]
     pub fn save_csv_string(&self) -> Result<String> {
         catch_panic(|| {
             let wb = self.inner.read().map_err(to_napi_err)?;
+            let snapshot = wb.synchronized_for_save();
+            let wb = snapshot.as_ref().unwrap_or_else(|| &*wb);
             let ws = wb
                 .worksheet(0)
                 .ok_or_else(|| napi::Error::from_reason("No worksheets to save"))?;
@@ -2362,6 +2406,22 @@ impl Workbook {
             wb.add_worksheet_with_name(&name)
                 .map(|idx| idx as u32)
                 .map_err(to_napi_err)
+        })
+    }
+
+    /// Set or clear workbook structure/window protection settings.
+    #[napi(js_name = "setWorkbookProtection")]
+    pub fn set_workbook_protection(
+        &self,
+        protection: Option<JsWorkbookProtectionInput>,
+    ) -> Result<()> {
+        catch_panic(|| {
+            let mut wb = self.inner.write().map_err(to_napi_err)?;
+            let protection = protection
+                .map(JsWorkbookProtectionInput::into_core)
+                .transpose()?;
+            wb.set_workbook_protection(protection);
+            Ok(())
         })
     }
 
@@ -2698,6 +2758,8 @@ pub fn from_bytes_async(data: Buffer) -> AsyncTask<OpenBytesTask> {
 #[napi]
 impl Workbook {
     /// Save the workbook to a file asynchronously (non-blocking).
+    /// Form-control state is synchronized into linked cells in the output
+    /// without changing this workbook.
     ///
     /// @param path - Path to save to
     /// @returns Promise<void>

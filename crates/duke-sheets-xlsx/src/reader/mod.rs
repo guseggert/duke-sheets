@@ -2,17 +2,22 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{BufReader, Read, Seek};
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
 use crate::error::{XlsxError, XlsxResult};
+use crate::opc::{
+    resolve_internal_target, ContentTypeExpectation, OpcPackage, PartName, Relationship,
+    RelationshipKind, RelationshipSet, XlsxDiagnosticCode, XlsxDiagnosticSeverity,
+    XlsxPackagePolicy,
+};
 use crate::styles::{
     read_styles_xml, register_roundtrip_style_data, register_roundtrip_theme_data, ParsedStyles,
 };
-use comments::read_worksheet_comments;
+use comments::read_comments_list;
 use conditional_format::{
     apply_cf_formulas, parse_cf_rule_attrs, parse_color_element, parse_sqref,
 };
@@ -29,9 +34,8 @@ use duke_sheets_core::{
 use formulas::{
     parse_cell_formula_state, resolve_cell_formula, CellFormulaKind, SharedFormulaMaster,
 };
-use theme::{read_theme_palette, resolve_style_theme_colors};
+use theme::read_theme_palette;
 
-mod archive;
 pub(crate) mod chart;
 pub(crate) mod chart_ex;
 mod chartsheet;
@@ -39,6 +43,7 @@ mod comments;
 mod conditional_format;
 mod data_validation;
 mod drawing;
+mod form_controls;
 mod formulas;
 mod pivot;
 mod shared_strings;
@@ -46,14 +51,29 @@ mod table;
 mod theme;
 mod workbook;
 
-pub(crate) use archive::archive_by_name;
 pub(crate) use formulas::CellFormulaState;
 use shared_strings::SharedStringEntry;
 pub(crate) use theme::ThemePalette;
 use workbook::{
-    read_sheet_rels, read_workbook_connections, read_workbook_rels, read_workbook_xml,
-    SheetRelationship, WorkbookExtensionRelationship,
+    read_part_rels, read_workbook_connections, read_workbook_rels, read_workbook_xml,
+    WorkbookExtensionRelationship,
 };
+
+pub(crate) fn archive_by_name<'a, R: Read + Seek>(
+    archive: &'a mut zip::ZipArchive<R>,
+    path: &str,
+) -> zip::result::ZipResult<zip::read::ZipFile<'a>> {
+    if archive.file_names().any(|name| name == path) {
+        return archive.by_name(path);
+    }
+    if path.contains('/') {
+        let backslashed = path.replace('/', "\\");
+        if archive.file_names().any(|name| name == backslashed) {
+            return archive.by_name(&backslashed);
+        }
+    }
+    archive.by_name(path)
+}
 
 /// Resolve a relative path from a drawing's .rels against the drawing's own path.
 
@@ -64,7 +84,7 @@ use workbook::{
 /// - `_x000a_` = LF (line feed)
 /// - `_x0009_` = Tab
 /// - `_x005f_` = Underscore (escaped underscore)
-fn decode_excel_escapes(s: &str) -> String {
+pub(crate) fn decode_excel_escapes(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
 
@@ -118,56 +138,472 @@ fn decode_excel_escapes(s: &str) -> String {
 }
 
 fn read_chart_style_color<R: Read + Seek>(
-    archive: &mut zip::ZipArchive<R>,
+    package: &mut OpcPackage<R>,
     chart_path: &str,
     chart: &mut duke_sheets_chart::Chart,
-) {
-    let chart_rels = match workbook::read_sheet_rels(archive, chart_path) {
-        Ok(r) => r,
-        Err(_) => return,
-    };
-    for rel in chart_rels.values() {
-        if rel.rel_type.ends_with("/chartStyle") {
-            if let Ok(mut f) = archive_by_name(archive, &rel.target) {
+) -> XlsxResult<()> {
+    let chart_rels = read_part_rels(package, chart_path)?;
+    for rel in chart_rels.iter() {
+        if rel.kind() == Some(RelationshipKind::ChartStyle) {
+            if let Some(mut f) = package.open_related_part(rel)? {
                 let mut bytes = Vec::new();
-                if f.read_to_end(&mut bytes).is_ok() {
-                    chart.raw_chart_style = Some(bytes);
-                }
+                f.read_to_end(&mut bytes)?;
+                chart.style = Some(chart_style_part(bytes));
             }
-        } else if rel.rel_type.ends_with("/chartColorStyle") {
-            if let Ok(mut f) = archive_by_name(archive, &rel.target) {
+        } else if rel.kind() == Some(RelationshipKind::ChartColorStyle) {
+            if let Some(mut f) = package.open_related_part(rel)? {
                 let mut bytes = Vec::new();
-                if f.read_to_end(&mut bytes).is_ok() {
-                    chart.raw_chart_color_style = Some(bytes);
-                }
+                f.read_to_end(&mut bytes)?;
+                chart.color_style = Some(chart_color_style_part(bytes));
             }
+        }
+    }
+    Ok(())
+}
+
+/// A chart style part as read: modelled when it conforms, kept as bytes
+/// when it does not, so a file this crate cannot fully describe still
+/// round-trips.
+fn chart_style_part(bytes: Vec<u8>) -> duke_sheets_chart::ChartStylePart {
+    match duke_sheets_chart::parse::parse_chart_style(&bytes[..]) {
+        Ok(style) => duke_sheets_chart::ChartStylePart::Typed(Box::new(style)),
+        Err(reason) => {
+            log::debug!("keeping chart style part as read: {reason}");
+            duke_sheets_chart::ChartStylePart::Raw(bytes)
+        }
+    }
+}
+
+/// As [`chart_style_part`], for the colour style.
+fn chart_color_style_part(bytes: Vec<u8>) -> duke_sheets_chart::ChartColorStylePart {
+    match duke_sheets_chart::parse::parse_chart_color_style(&bytes[..]) {
+        Ok(style) => duke_sheets_chart::ChartColorStylePart::Typed(style),
+        Err(reason) => {
+            log::debug!("keeping chart colour style part as read: {reason}");
+            duke_sheets_chart::ChartColorStylePart::Raw(bytes)
         }
     }
 }
 
 fn read_chart_style_color_for_chart_ex<R: Read + Seek>(
-    archive: &mut zip::ZipArchive<R>,
+    package: &mut OpcPackage<R>,
     chart_path: &str,
     chart: &mut duke_sheets_chart::ChartEx,
-) {
-    let chart_rels = match workbook::read_sheet_rels(archive, chart_path) {
-        Ok(r) => r,
-        Err(_) => return,
-    };
-    for rel in chart_rels.values() {
-        if rel.rel_type.ends_with("/chartStyle") {
-            if let Ok(mut f) = archive_by_name(archive, &rel.target) {
+) -> XlsxResult<()> {
+    let chart_rels = read_part_rels(package, chart_path)?;
+    for rel in chart_rels.iter() {
+        if rel.kind() == Some(RelationshipKind::ChartStyle) {
+            if let Some(mut f) = package.open_related_part(rel)? {
                 let mut bytes = Vec::new();
-                if f.read_to_end(&mut bytes).is_ok() {
-                    chart.raw_chart_style = Some(bytes);
+                f.read_to_end(&mut bytes)?;
+                chart.style = Some(chart_style_part(bytes));
+            }
+        } else if rel.kind() == Some(RelationshipKind::ChartColorStyle) {
+            if let Some(mut f) = package.open_related_part(rel)? {
+                let mut bytes = Vec::new();
+                f.read_to_end(&mut bytes)?;
+                chart.color_style = Some(chart_color_style_part(bytes));
+            }
+        } else {
+            // cx:externalData and the fallbackImg attribute name a
+            // relationship by id, and those ids are written back as they
+            // were read, so the relationships have to come back too.
+            let part = match package.open_related_part(rel)? {
+                Some(mut f) => {
+                    let mut bytes = Vec::new();
+                    f.read_to_end(&mut bytes)?;
+                    Some(bytes)
+                }
+                None => None,
+            };
+            chart.preserved_rels.push(duke_sheets_chart::RawRel {
+                id: rel.id.clone(),
+                rel_type: rel.rel_type.clone(),
+                target: rel.raw_target.clone(),
+                external: rel.is_external(),
+                part,
+                part_rels: Vec::new(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// A `<control>` entry resolved against its ctrlProp part and VML
+/// shape, waiting to be matched to its drawing-part twin.
+struct AssembledControl {
+    shape_id: u32,
+    object: duke_sheets_core::DrawingObject,
+    /// True when neither controlPr nor VML supplied an anchor, so a
+    /// matched twin's anchor is the last-resort fallback.
+    anchor_defaulted: bool,
+    consumed: bool,
+}
+
+/// Consume the first unconsumed control matching a twin's shape id.
+fn take_control(
+    controls: &mut [AssembledControl],
+    shape_num: Option<u32>,
+) -> Option<(u32, duke_sheets_core::DrawingObject, bool)> {
+    let num = shape_num?;
+    let control = controls
+        .iter_mut()
+        .find(|control| !control.consumed && control.shape_id == num)?;
+    control.consumed = true;
+    Some((
+        control.shape_id,
+        control.object.clone(),
+        control.anchor_defaulted,
+    ))
+}
+
+/// Build an `EmbeddedImage` from a parsed pic, resolving the blip
+/// relationship to media bytes. For group children (`in_group`) the
+/// child transform carries rotation/flips, so the payload keeps none.
+fn resolve_pic_image<R: Read + Seek>(
+    package: &mut OpcPackage<R>,
+    drawing_rels: &RelationshipSet,
+    pic: drawing::PicShape,
+    in_group: bool,
+) -> XlsxResult<duke_sheets_chart::EmbeddedImage> {
+    let mut image = duke_sheets_chart::EmbeddedImage {
+        format: duke_sheets_chart::ImageFormat::Png, // placeholder, resolved from media path
+        media_path: pic.blip_rel.unwrap_or_default(),
+        svg_media_path: pic.svg_rel,
+        width_emu: pic.ext_cx,
+        height_emu: pic.ext_cy,
+        rotation: if in_group { None } else { pic.rotation },
+        flip_h: !in_group && pic.flip_h,
+        flip_v: !in_group && pic.flip_v,
+        data: Vec::new(),
+        svg_data: None,
+    };
+    let image_rel_id = image.media_path.clone();
+    if let Some(rel) = drawing_rels.get(&image_rel_id) {
+        // An external or unresolvable target keeps its raw URI so the
+        // model carries the link rather than a stale relationship id.
+        let path = rel.internal_path().unwrap_or_else(|| rel.target());
+        let ext = path.rsplit('.').next().unwrap_or("");
+        if let Some(fmt) = duke_sheets_chart::ImageFormat::from_extension(ext) {
+            image.format = fmt;
+        }
+        image.media_path = path.to_string();
+        if let Some(mut f) = package.open_related_part(rel)? {
+            let mut buf = Vec::new();
+            if std::io::Read::read_to_end(&mut f, &mut buf).is_ok() {
+                image.data = buf;
+            }
+        }
+    }
+    if let Some(svg_rel_id) = image.svg_media_path.clone() {
+        if let Some(rel) = drawing_rels.get(svg_rel_id.as_str()) {
+            let path = rel.internal_path().unwrap_or_else(|| rel.target());
+            image.svg_media_path = Some(path.to_string());
+            if let Some(mut f) = package.open_related_part(rel)? {
+                let mut buf = Vec::new();
+                if std::io::Read::read_to_end(&mut f, &mut buf).is_ok() {
+                    image.svg_data = Some(buf);
                 }
             }
-        } else if rel.rel_type.ends_with("/chartColorStyle") {
-            if let Ok(mut f) = archive_by_name(archive, &rel.target) {
-                let mut bytes = Vec::new();
-                if f.read_to_end(&mut bytes).is_ok() {
-                    chart.raw_chart_color_style = Some(bytes);
+        }
+    }
+    Ok(image)
+}
+
+fn shape_from_parsed(parsed: &drawing::ParsedShape) -> duke_sheets_core::Shape {
+    let fill = match parsed.fill {
+        duke_sheets_chart::drawing_part::ShapeFill::None => duke_sheets_core::ShapeFill::None,
+        duke_sheets_chart::drawing_part::ShapeFill::Solid(color) => {
+            duke_sheets_core::ShapeFill::Solid(duke_sheets_core::drawing::color_from_drawing_part(
+                color,
+            ))
+        }
+    };
+    let mut shape = duke_sheets_core::Shape::preset(parsed.geometry.clone());
+    shape.fill = fill;
+    shape.line = duke_sheets_core::ShapeLine {
+        color: parsed
+            .line
+            .color
+            .map(duke_sheets_core::drawing::color_from_drawing_part),
+        width_emu: parsed.line.width_emu,
+        dash_style: parsed.line.dash_style.clone(),
+        no_fill: parsed.line.no_fill,
+    };
+    shape.text = parsed
+        .text
+        .as_ref()
+        .map(duke_sheets_core::DrawingText::from_drawing_part_text);
+    shape.rotation = parsed.xfrm.rotation;
+    shape.flip_h = parsed.xfrm.flip_h;
+    shape.flip_v = parsed.xfrm.flip_v;
+    shape.set_preserved_shape_properties(parsed.raw_shape_properties.clone());
+    shape.set_preserved_text_body(parsed.raw_text_body.clone());
+    shape
+}
+
+/// Convert a parsed group into the model, resolving child images and
+/// matching control-twin children to their controls (placed in the
+/// group with the twin's child transform).
+fn build_group<R: Read + Seek>(
+    package: &mut OpcPackage<R>,
+    drawing_rels: &RelationshipSet,
+    group: drawing::ParsedGroup,
+    controls: &mut [AssembledControl],
+) -> XlsxResult<duke_sheets_core::Group> {
+    use duke_sheets_core::{ChildTransform, DrawingKind, DrawingMeta, GroupChild};
+    let mut children = Vec::new();
+    for child in group.children {
+        match child {
+            drawing::ParsedChild::Pic(pic) => {
+                let transform = ChildTransform {
+                    x_emu: pic.off_x,
+                    y_emu: pic.off_y,
+                    cx_emu: pic.ext_cx,
+                    cy_emu: pic.ext_cy,
+                    rotation: pic.rotation.unwrap_or(0),
+                    flip_h: pic.flip_h,
+                    flip_v: pic.flip_v,
+                };
+                let meta = DrawingMeta {
+                    name: Some(pic.name.clone()),
+                    alt_text: pic.descr.clone(),
+                    title: pic.title.clone(),
+                    hidden: pic.hidden,
+                    ..DrawingMeta::default()
+                };
+                let image = resolve_pic_image(package, drawing_rels, pic, true)?;
+                children.push(GroupChild {
+                    meta,
+                    transform,
+                    kind: DrawingKind::Image(image),
+                });
+            }
+            drawing::ParsedChild::Shape(shape) => {
+                let meta = DrawingMeta {
+                    name: Some(shape.name.clone()),
+                    alt_text: shape.descr.clone(),
+                    title: shape.title.clone(),
+                    hidden: shape.hidden,
+                    ..DrawingMeta::default()
+                };
+                children.push(GroupChild {
+                    meta,
+                    transform: shape.xfrm.clone(),
+                    kind: DrawingKind::Shape(Box::new(shape_from_parsed(&shape))),
+                });
+            }
+            drawing::ParsedChild::Group(inner) => {
+                let transform = ChildTransform {
+                    x_emu: inner.transform.x_emu,
+                    y_emu: inner.transform.y_emu,
+                    cx_emu: inner.transform.cx_emu,
+                    cy_emu: inner.transform.cy_emu,
+                    rotation: inner.transform.rotation,
+                    flip_h: inner.transform.flip_h,
+                    flip_v: inner.transform.flip_v,
+                };
+                let meta = DrawingMeta {
+                    name: Some(inner.name.clone()),
+                    alt_text: inner.descr.clone(),
+                    title: inner.title.clone(),
+                    hidden: inner.hidden,
+                    ..DrawingMeta::default()
+                };
+                let built = build_group(package, drawing_rels, inner, controls)?;
+                children.push(GroupChild {
+                    meta,
+                    transform,
+                    kind: DrawingKind::Group(Box::new(built)),
+                });
+            }
+            drawing::ParsedChild::Twin(twin) => {
+                // A control-twin child becomes the matched control,
+                // positioned by the twin's child transform.
+                if let Some((_, mut object, _)) = take_control(controls, twin.shape_num) {
+                    if let Some(name) = twin.name {
+                        object.meta.name = Some(name);
+                    }
+                    if twin.descr.is_some() {
+                        object.meta.alt_text = twin.descr;
+                    }
+                    object.meta.title = twin.title;
+                    if let Some(control) = object.kind.as_form_control_mut() {
+                        // Foreign files may put a txBody on twins of
+                        // caption-less kinds; ignore the stray text.
+                        if let (Some(text), Some(caption)) =
+                            (twin.text.as_ref(), control.caption_mut())
+                        {
+                            *caption = form_controls::control_text_from_twin(text);
+                        }
+                        if control.macro_name.is_none() {
+                            control.macro_name = twin
+                                .macro_name
+                                .as_deref()
+                                .map(duke_sheets_vml::decode_macro_formula);
+                        }
+                    }
+                    children.push(GroupChild {
+                        meta: object.meta,
+                        transform: twin.xfrm,
+                        kind: object.kind,
+                    });
                 }
+            }
+        }
+    }
+    Ok(duke_sheets_core::Group {
+        transform: group.transform,
+        children,
+    })
+}
+
+/// Scan a raw anchor's bytes for relationship references and capture
+/// each referenced relationship with its original id/target plus the
+/// target part bytes when internal. References are found by value:
+/// any attribute whose value equals a rel id in the drawing's .rels
+/// counts (r:id/r:embed/r:link, SmartArt `dgm:relIds` r:dm/r:lo/r:qs/
+/// r:cs, VML `o:relid`, arbitrary prefixes).
+/// How far to follow relationships out from a preserved anchor.
+///
+/// A diagram reaches its images in two steps (anchor -> data part ->
+/// image) and a chart its style parts in one, so a small bound covers
+/// what exists while keeping a malformed package from walking forever.
+const RAW_REL_MAX_DEPTH: usize = 4;
+
+fn capture_raw_rels<R: Read + Seek>(
+    package: &mut OpcPackage<R>,
+    source_part: &str,
+    bytes: &[u8],
+    relationships: &RelationshipSet,
+) -> XlsxResult<Vec<duke_sheets_core::RawRel>> {
+    let mut visited = Vec::new();
+    capture_raw_rels_within(
+        package,
+        source_part,
+        bytes,
+        relationships,
+        RAW_REL_MAX_DEPTH,
+        &mut visited,
+    )
+}
+
+fn capture_raw_rels_within<R: Read + Seek>(
+    package: &mut OpcPackage<R>,
+    source_part: &str,
+    bytes: &[u8],
+    relationships: &RelationshipSet,
+    depth: usize,
+    visited: &mut Vec<String>,
+) -> XlsxResult<Vec<duke_sheets_core::RawRel>> {
+    let mut ids: Vec<String> = Vec::new();
+    let mut reader = quick_xml::Reader::from_reader(bytes);
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+                for attr in e.attributes().flatten() {
+                    if let Ok(value) = attr.unescape_value() {
+                        if relationships.get(value.as_ref()).is_some()
+                            && !ids.iter().any(|id| id == value.as_ref())
+                        {
+                            ids.push(value.to_string());
+                        }
+                    }
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    let mut rels = Vec::new();
+    for id in ids {
+        let Some(rel) = relationships.get(&id) else {
+            continue;
+        };
+        let source_name = PartName::from_zip_name(source_part).ok();
+        let part = if source_name.as_ref() == rel.internal_part() {
+            None
+        } else {
+            match package.open_related_part(rel)? {
+                Some(mut file) => {
+                    let mut bytes = Vec::new();
+                    file.read_to_end(&mut bytes)?;
+                    Some(bytes)
+                }
+                None => None,
+            }
+        };
+        // Follow the part's own relationships, so what is replayed is
+        // the whole subtree rather than one part with dangling ids.
+        let mut part_rels = Vec::new();
+        if let (Some(part_bytes), Some(part_path)) = (part.as_deref(), rel.internal_part()) {
+            let part_path = part_path.as_str().to_string();
+            if depth > 0 && !visited.iter().any(|seen| seen == &part_path) {
+                visited.push(part_path.clone());
+                let child_rels = read_part_rels(package, &part_path)?;
+                part_rels = capture_raw_rels_within(
+                    package,
+                    &part_path,
+                    part_bytes,
+                    &child_rels,
+                    depth - 1,
+                    visited,
+                )?;
+            }
+        }
+        rels.push(duke_sheets_core::RawRel {
+            id,
+            rel_type: rel.rel_type.clone(),
+            target: rel.raw_target.clone(),
+            external: rel.is_external(),
+            part,
+            part_rels,
+        });
+    }
+    Ok(rels)
+}
+
+/// Options for opening an XLSX/XLSM workbook.
+#[derive(Debug, Clone, Default)]
+pub struct XlsxReadOptions {
+    /// Password for encrypted workbooks.
+    pub password: Option<String>,
+    /// Retry encrypted workbooks with Excel's well-known
+    /// `VelvetSweatshop` sentinel when no password is supplied,
+    /// before reporting them as encrypted.
+    pub try_velvet_sweatshop: bool,
+    /// Skip the post-decrypt HMAC integrity check; default-off
+    /// (false) matches Office.
+    pub skip_integrity_check: bool,
+}
+
+/// Workbook and package diagnostics returned by report-oriented read APIs.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct XlsxReadReport {
+    /// Parsed workbook.
+    pub workbook: Workbook,
+    /// Recoverable OPC package problems encountered while traversing it.
+    pub diagnostics: Vec<crate::opc::XlsxDiagnostic>,
+}
+
+/// XLSX file reader
+pub struct XlsxReader;
+
+fn log_package_diagnostics(diagnostics: &[crate::opc::XlsxDiagnostic]) {
+    for diagnostic in diagnostics {
+        let code = diagnostic.code;
+        let source = diagnostic.source_part.as_deref().unwrap_or("/");
+        let message = &diagnostic.message;
+        match diagnostic.severity {
+            XlsxDiagnosticSeverity::Recovery => {
+                log::info!("{code:?} in {source}: {message}");
+            }
+            XlsxDiagnosticSeverity::Warning => {
+                log::warn!("{code:?} in {source}: {message}");
             }
         }
     }
@@ -217,13 +653,13 @@ fn read_content_type_overrides<R: Read + Seek>(
 }
 
 fn read_workbook_extension_parts<R: Read + Seek>(
-    archive: &mut zip::ZipArchive<R>,
+    package: &mut OpcPackage<R>,
     relationships: &[WorkbookExtensionRelationship],
     content_type_overrides: &HashMap<String, String>,
 ) -> XlsxResult<Vec<WorkbookExtensionPart>> {
     let mut parts = Vec::new();
     for relationship in relationships {
-        let mut file = match archive_by_name(archive, &relationship.target) {
+        let mut file = match package.open_zip_name(&relationship.target) {
             Ok(file) => file,
             Err(_) => continue,
         };
@@ -244,8 +680,51 @@ fn read_workbook_extension_parts<R: Read + Seek>(
     Ok(parts)
 }
 
-/// XLSX file reader
-pub struct XlsxReader;
+fn workbook_resource_path<R: Read + Seek>(
+    package: &mut OpcPackage<R>,
+    workbook_path: &PartName,
+    relationship_path: Option<&str>,
+    kind: RelationshipKind,
+) -> XlsxResult<Option<String>> {
+    if let Some(path) = relationship_path {
+        let part_name = PartName::from_zip_name(path)?;
+        if package.part_exists(&part_name) {
+            return Ok(Some(path.to_string()));
+        }
+        package.diagnostics_mut().violation(
+            XlsxDiagnosticCode::MissingRelationshipTarget,
+            format!("missing Workbook resource {part_name}"),
+            Some(workbook_path.as_str()),
+            None,
+            Some(part_name.as_str()),
+        )?;
+        return Ok(None);
+    }
+
+    if package.policy() == XlsxPackagePolicy::Compatible {
+        let Some(conventional_target) = kind.conventional_workbook_target() else {
+            return Ok(None);
+        };
+        let path = resolve_internal_target(workbook_path.zip_name(), conventional_target)?;
+        let part_name = PartName::from_zip_name(&path)?;
+        if package.part_exists(&part_name) {
+            if let Some(ContentTypeExpectation::Exact(expected)) = kind.content_type() {
+                package.validate_part_content_type(&part_name, expected)?;
+            }
+            package.diagnostics_mut().recovery(
+                XlsxDiagnosticCode::CanonicalPartFallback,
+                format!(
+                    "using conventional Workbook resource {part_name} because its relationship is absent"
+                ),
+                Some(workbook_path.as_str()),
+                None,
+                Some(part_name.as_str()),
+            );
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
+}
 
 /// CFB magic: encrypted XLSX files are CFB envelopes rather than ZIPs,
 /// so a leading match here means we should run the bytes through the
@@ -305,99 +784,91 @@ impl XlsxReader {
         Self::read(file)
     }
 
-    /// Read a workbook from a file path, supplying a password for
-    /// encrypted files. When `password` is `None` and
-    /// `try_velvet_sweatshop` is true, encrypted files are
-    /// transparently retried with the well-known `VelvetSweatshop`
-    /// password before reporting them as encrypted.
-    pub fn read_file_with_password<P: AsRef<Path>>(
+    /// Read a workbook from a file path with explicit open options
+    /// (password, encrypted-workbook handling).
+    pub fn read_file_with<P: AsRef<Path>>(
         path: P,
-        password: Option<&str>,
-        try_velvet_sweatshop: bool,
-    ) -> XlsxResult<Workbook> {
-        Self::read_file_with_options(path, password, try_velvet_sweatshop, false)
-    }
-
-    /// Read a workbook from a file path with full open-options control.
-    /// `skip_integrity_check` opts out of the post-decrypt HMAC check;
-    /// default-off (false) matches Office.
-    pub fn read_file_with_options<P: AsRef<Path>>(
-        path: P,
-        password: Option<&str>,
-        try_velvet_sweatshop: bool,
-        skip_integrity_check: bool,
+        options: &XlsxReadOptions,
     ) -> XlsxResult<Workbook> {
         let bytes = std::fs::read(path)?;
-        Self::read_bytes_with_options(&bytes, password, try_velvet_sweatshop, skip_integrity_check)
+        Self::read_bytes_with(&bytes, options)
     }
 
-    /// Read a workbook from raw bytes with an optional password.
+    /// Read a file and return structured OPC package diagnostics.
+    pub fn read_file_with_report<P: AsRef<Path>>(
+        path: P,
+        options: &XlsxReadOptions,
+        policy: XlsxPackagePolicy,
+    ) -> XlsxResult<XlsxReadReport> {
+        let bytes = std::fs::read(path)?;
+        Self::read_bytes_with_report(&bytes, options, policy)
+    }
+
+    /// Read a workbook from raw bytes with explicit open options.
     ///
     /// Encrypted XLSX files are CFB envelopes (not plain ZIPs); when
     /// the leading magic bytes match CFB we delegate to
     /// `duke_sheets_crypto::ooxml::decrypt` and then proceed with the
     /// resulting plaintext ZIP.
-    pub fn read_bytes_with_password(
-        bytes: &[u8],
-        password: Option<&str>,
-        try_velvet_sweatshop: bool,
-    ) -> XlsxResult<Workbook> {
-        Self::read_bytes_with_options(bytes, password, try_velvet_sweatshop, false)
+    pub fn read_bytes_with(bytes: &[u8], options: &XlsxReadOptions) -> XlsxResult<Workbook> {
+        let report = Self::read_bytes_with_report(bytes, options, XlsxPackagePolicy::Compatible)?;
+        log_package_diagnostics(&report.diagnostics);
+        Ok(report.workbook)
     }
 
-    /// Read a workbook from raw bytes with full open-options control.
-    /// `skip_integrity_check` opts out of the post-decrypt HMAC check.
-    pub fn read_bytes_with_options(
+    /// Read bytes and return structured OPC package diagnostics.
+    pub fn read_bytes_with_report(
         bytes: &[u8],
-        password: Option<&str>,
-        try_velvet_sweatshop: bool,
-        skip_integrity_check: bool,
-    ) -> XlsxResult<Workbook> {
+        options: &XlsxReadOptions,
+        policy: XlsxPackagePolicy,
+    ) -> XlsxResult<XlsxReadReport> {
+        let password = options.password.as_deref();
         if is_cfb_envelope(bytes) {
             let try_pw = match password {
                 Some(p) => p,
-                None if try_velvet_sweatshop => "VelvetSweatshop",
+                None if options.try_velvet_sweatshop => "VelvetSweatshop",
                 None => {
                     return Err(XlsxError::Encrypted(
                         "workbook is encrypted but no password was supplied".into(),
                     ));
                 }
             };
-            return match decrypt_ooxml_envelope(bytes, try_pw, skip_integrity_check) {
-                Ok(decrypted) => Self::read(std::io::Cursor::new(decrypted)),
+            return match decrypt_ooxml_envelope(bytes, try_pw, options.skip_integrity_check) {
+                Ok(decrypted) => Self::read_with_report(std::io::Cursor::new(decrypted), policy),
                 Err(XlsxError::BadPassword) if password.is_none() => Err(XlsxError::Encrypted(
                     "workbook is encrypted but no password was supplied".into(),
                 )),
                 Err(e) => Err(e),
             };
         }
-        Self::read(std::io::Cursor::new(bytes))
+        Self::read_with_report(std::io::Cursor::new(bytes), policy)
     }
 
     /// Read a workbook from a reader
     pub fn read<R: Read + Seek>(reader: R) -> XlsxResult<Workbook> {
-        let mut archive = zip::ZipArchive::new(reader)?;
+        let report = Self::read_with_report(reader, XlsxPackagePolicy::Compatible)?;
+        log_package_diagnostics(&report.diagnostics);
+        Ok(report.workbook)
+    }
 
-        // Verify this is an XLSX file
-        if archive_by_name(&mut archive, "[Content_Types].xml").is_err() {
-            return Err(XlsxError::InvalidFormat(
-                "Missing [Content_Types].xml".into(),
-            ));
-        }
+    /// Read a workbook and return structured OPC package diagnostics.
+    pub fn read_with_report<R: Read + Seek>(
+        mut reader: R,
+        policy: XlsxPackagePolicy,
+    ) -> XlsxResult<XlsxReadReport> {
+        reader.seek(SeekFrom::Start(0))?;
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes)?;
+        let mut package = OpcPackage::open(std::io::Cursor::new(bytes.as_slice()), policy)?;
+        // Pivot parsing still needs a parallel ZipArchive compatibility view.
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice()))?;
         let content_type_overrides = read_content_type_overrides(&mut archive)?;
-
-        // Read shared strings (if present)
-        let shared_strings = shared_strings::read_shared_strings(&mut archive)?;
-
-        // Read styles (if present)
-        let mut parsed_styles = Self::read_styles(&mut archive)?;
-        let roundtrip_style_data = parsed_styles.roundtrip_data();
-        // Read workbook.xml.rels to get sheet/theme paths
-        let workbook_rels = read_workbook_rels(&mut archive)?;
+        let workbook_path = package.discover_workbook_part()?;
+        let workbook_rels = read_workbook_rels(&mut package, &workbook_path)?;
         let data_connections =
-            read_workbook_connections(&mut archive, workbook_rels.connections_path.as_deref())?;
+            read_workbook_connections(&mut package, workbook_rels.connections_path.as_deref())?;
         let workbook_extension_parts = read_workbook_extension_parts(
-            &mut archive,
+            &mut package,
             &workbook_rels.extension_parts,
             &content_type_overrides,
         )?;
@@ -405,23 +876,46 @@ impl XlsxReader {
             .iter()
             .map(|connection| (connection.id, connection.clone()))
             .collect::<HashMap<_, _>>();
-        // Read workbook theme (if present) and resolve theme colors in styles
-        let (theme_palette, raw_theme_xml) =
-            read_theme_palette(&mut archive, workbook_rels.theme_path.as_deref())?;
-        if let Some(theme) = theme_palette {
-            for style in &mut parsed_styles.cell_styles {
-                resolve_style_theme_colors(style, &theme);
-            }
-            for style in &mut parsed_styles.dxf_styles {
-                resolve_style_theme_colors(style, &theme);
-            }
-        }
+        let shared_strings_path = workbook_resource_path(
+            &mut package,
+            &workbook_path,
+            workbook_rels.shared_strings_path.as_deref(),
+            RelationshipKind::SharedStrings,
+        )?;
+        let styles_path = workbook_resource_path(
+            &mut package,
+            &workbook_path,
+            workbook_rels.styles_path.as_deref(),
+            RelationshipKind::Styles,
+        )?;
+        let theme_path = workbook_resource_path(
+            &mut package,
+            &workbook_path,
+            workbook_rels.theme_path.as_deref(),
+            RelationshipKind::Theme,
+        )?;
+        let shared_strings = match shared_strings_path.as_deref() {
+            Some(path) => shared_strings::parse_shared_strings(package.open_zip_name(path)?)?,
+            None => Vec::new(),
+        };
+        let parsed_styles = match styles_path.as_deref() {
+            Some(path) => read_styles_xml(package.open_zip_name(path)?)?,
+            None => Self::default_styles(),
+        };
+        let roundtrip_style_data = parsed_styles.roundtrip_data();
         let pivot_num_fmts = parsed_styles.num_fmts.clone();
+        let (theme_palette, raw_theme_xml) = match theme_path.as_deref() {
+            Some(path) => {
+                let (palette, bytes) = read_theme_palette(package.open_zip_name(path)?)?;
+                (Some(palette), Some(bytes))
+            }
+            None => (None, None),
+        };
         let cell_styles = parsed_styles.cell_styles;
         let dxf_styles = parsed_styles.dxf_styles;
 
-        // Read workbook.xml to get sheet info, properties, and defined names
-        let wb_props = read_workbook_xml(&mut archive)?;
+        let policy = package.policy();
+        let wb_props = read_workbook_xml(package.open_part(&workbook_path)?, policy)?;
 
         let mut pivot_caches = HashMap::new();
         for cache_entry in &wb_props.pivot_caches {
@@ -439,6 +933,7 @@ impl XlsxReader {
 
         let sheet_paths = workbook_rels.sheet_paths;
         let chartsheet_paths = workbook_rels.chartsheet_paths;
+        let unmodeled_sheet_rels = workbook_rels.unmodeled_sheet_rels;
 
         // Create workbook
         let mut workbook = Workbook::empty();
@@ -452,6 +947,7 @@ impl XlsxReader {
         workbook
             .workbook_extension_parts_mut()
             .extend(workbook_extension_parts);
+        workbook.set_workbook_protection(wb_props.workbook_protection);
 
         // Add named ranges
         for nr in wb_props.named_ranges {
@@ -480,60 +976,126 @@ impl XlsxReader {
                 workbook
                     .sheet_order_mut()
                     .push(SheetSlot::Worksheet(sheet_idx));
-                let sheet_rels = read_sheet_rels(&mut archive, path)?;
-                Self::read_worksheet(
-                    &mut archive,
-                    path,
+                let sheet_rels = read_part_rels(&mut package, path)?;
+                let worksheet_file = package.open_zip_name(path)?;
+                let pending_controls =
+                    form_controls::dedupe_pending_controls(Self::read_worksheet(
+                    worksheet_file,
                     workbook.worksheet_mut(sheet_idx).unwrap(),
                     &shared_strings,
                     &cell_styles,
                     &dxf_styles,
-                    theme_palette.as_ref(),
                     &sheet_rels,
-                )?;
+                )?);
 
                 // Read comments for this worksheet (if present).
                 // Resolve paths via sheet .rels relationships; fall back to
                 // index-based filenames for files that lack .rels entries.
-                let comments_path = sheet_rels
-                    .values()
-                    .find(|r| r.rel_type.ends_with("/comments"))
-                    .map(|r| r.target.clone())
-                    .unwrap_or_else(|| format!("xl/comments{}.xml", ws_count));
-                let vml_path = sheet_rels
-                    .values()
-                    .find(|r| r.rel_type.ends_with("/vmlDrawing"))
-                    .map(|r| r.target.clone())
-                    .unwrap_or_else(|| format!("xl/drawings/vmlDrawing{}.vml", ws_count));
-                read_worksheet_comments(
-                    &mut archive,
-                    &comments_path,
-                    Some(&vml_path),
-                    workbook.worksheet_mut(sheet_idx).unwrap(),
+                let comments_rel = sheet_rels
+                    .iter()
+                    .find(|rel| rel.kind() == Some(RelationshipKind::Comments));
+                let comments_path = comments_rel
+                    .and_then(|rel| rel.internal_path().map(str::to_string))
+                    .or_else(|| {
+                        (package.policy() == XlsxPackagePolicy::Compatible)
+                            .then(|| format!("xl/comments{}.xml", ws_count))
+                    });
+                let vml_rel = sheet_rels
+                    .iter()
+                    .find(|rel| rel.kind() == Some(RelationshipKind::VmlDrawing));
+                let vml_path = vml_rel
+                    .and_then(|rel| rel.internal_path().map(str::to_string))
+                    .or_else(|| {
+                        (package.policy() == XlsxPackagePolicy::Compatible)
+                            .then(|| format!("xl/drawings/vmlDrawing{}.vml", ws_count))
+                    });
+
+                // Assemble the sheet's drawing objects: the drawing
+                // part's document order (with control twins replaced
+                // by their controls), unmatched controls, and comments
+                // spliced by the legacy VML shape order.
+                let vml_bytes = match vml_rel {
+                    Some(rel) => match package.open_related_part(rel)? {
+                        Some(mut file) => {
+                            let mut bytes = Vec::new();
+                            file.read_to_end(&mut bytes)?;
+                            Some(bytes)
+                        }
+                        None => None,
+                    },
+                    None => match vml_path.as_deref() {
+                        Some(path) => match package.open_zip_name(path) {
+                            Ok(mut file) => {
+                                let mut bytes = Vec::new();
+                                file.read_to_end(&mut bytes)?;
+                                Some(bytes)
+                            }
+                            Err(_) => None,
+                        },
+                        None => None,
+                    },
+                };
+                let comments = match comments_rel {
+                    Some(rel) => match package.open_related_part(rel)? {
+                        Some(file) => read_comments_list(file)?,
+                        None => Vec::new(),
+                    },
+                    None => match comments_path.as_deref() {
+                        Some(path) => match package.open_zip_name(path) {
+                            Ok(file) => read_comments_list(file)?,
+                            Err(_) => Vec::new(),
+                        },
+                        None => Vec::new(),
+                    },
+                };
+                let objects = Self::merge_sheet_drawings(
+                    &mut package,
+                    &sheet_rels,
+                    &pending_controls,
+                    vml_bytes.as_deref(),
+                    comments,
                 )?;
+                workbook
+                    .worksheet_mut(sheet_idx)
+                    .unwrap()
+                    .drawings_mut()
+                    .extend(objects);
 
                 // Read tables for this worksheet (if present).
                 // Each relationship with type ending in "/table" points to
                 // an xl/tables/tableN.xml part.
-                let mut table_rels: Vec<String> = sheet_rels
-                    .values()
-                    .filter(|r| r.rel_type.ends_with("/table"))
-                    .map(|r| r.target.clone())
+                let mut table_rels: Vec<(&Relationship, &str)> = sheet_rels
+                    .iter()
+                    .filter_map(|rel| {
+                        (rel.kind() == Some(RelationshipKind::Table))
+                            .then(|| rel.internal_path().map(|path| (rel, path)))
+                            .flatten()
+                    })
                     .collect();
-                table_rels.sort();
-                for table_path in &table_rels {
-                    if let Some(t) = table::read_table(&mut archive, table_path)? {
+                table_rels.sort_by_key(|(_, path)| *path);
+                for (rel, _) in table_rels {
+                    let Some(file) = package.open_related_part(rel)? else {
+                        continue;
+                    };
+                    if let Some(t) = table::parse_table(file)? {
                         workbook.worksheet_mut(sheet_idx).unwrap().add_table(t);
                     }
                 }
 
-                let mut pivot_rels: Vec<String> = sheet_rels
-                    .values()
-                    .filter(|r| r.rel_type.ends_with("/pivotTable"))
-                    .map(|r| r.target.clone())
+                let mut pivot_rels: Vec<(&Relationship, &str)> = sheet_rels
+                    .iter()
+                    .filter(|relationship| relationship.rel_type.ends_with("/pivotTable"))
+                    .filter_map(|relationship| {
+                        relationship
+                            .internal_path()
+                            .map(|path| (relationship, path))
+                    })
                     .collect();
-                pivot_rels.sort();
-                for pivot_path in &pivot_rels {
+                pivot_rels.sort_by_key(|(_, path)| *path);
+                for (relationship, pivot_path) in pivot_rels {
+                    if package.open_related_part(relationship)?.is_none() {
+                        continue;
+                    }
                     if let Some(pivot) = pivot::read_pivot_table(
                         &mut archive,
                         pivot_path,
@@ -544,120 +1106,78 @@ impl XlsxReader {
                             .worksheet_mut(sheet_idx)
                             .unwrap()
                             .add_pivot_table(pivot)
-                            .map_err(|e| XlsxError::InvalidFormat(e.to_string()))?;
-                    }
-                }
-
-                // Read charts for this worksheet (if present).
-                // Sheet → drawing relationship → drawing XML → chart relationships → chart XML.
-                for drawing_rel in sheet_rels
-                    .values()
-                    .filter(|r| r.rel_type.ends_with("/drawing"))
-                {
-                    let drawing_path = &drawing_rel.target;
-                    let drawing_contents =
-                        drawing::read_drawing_contents(&mut archive, drawing_path)?;
-                    for raw in drawing_contents.raw_non_chart_anchors {
-                        workbook
-                            .worksheet_mut(sheet_idx)
-                            .unwrap()
-                            .raw_drawing_objects
-                            .push(raw);
-                    }
-                    let has_charts = !drawing_contents.chart_refs.is_empty();
-                    let has_images = !drawing_contents.images.is_empty();
-                    if !has_charts && !has_images {
-                        continue;
-                    }
-                    let drawing_rels = read_sheet_rels(&mut archive, drawing_path)?;
-                    if has_images {
-                        let mut resolved_images = drawing_contents.images;
-                        for image in &mut resolved_images {
-                            if let Some(rel) = drawing_rels.get(&image.media_path) {
-                                let ext = rel.target.rsplit('.').next().unwrap_or("");
-                                if let Some(fmt) =
-                                    duke_sheets_chart::ImageFormat::from_extension(ext)
-                                {
-                                    image.format = fmt;
-                                }
-                                image.media_path = rel.target.clone();
-                                if let Ok(mut f) = archive_by_name(&mut archive, &rel.target) {
-                                    let mut buf = Vec::new();
-                                    if std::io::Read::read_to_end(&mut f, &mut buf).is_ok() {
-                                        image.data = buf;
-                                    }
-                                }
-                            }
-                            if let Some(svg_rel_id) = &image.svg_media_path {
-                                if let Some(rel) = drawing_rels.get(svg_rel_id.as_str()) {
-                                    image.svg_media_path = Some(rel.target.clone());
-                                    if let Ok(mut f) = archive_by_name(&mut archive, &rel.target) {
-                                        let mut buf = Vec::new();
-                                        if std::io::Read::read_to_end(&mut f, &mut buf).is_ok() {
-                                            image.svg_data = Some(buf);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        let ws = workbook.worksheet_mut(sheet_idx).unwrap();
-                        for img in resolved_images {
-                            ws.add_image(img);
-                        }
-                    }
-                    for chart_ref in drawing_contents.chart_refs {
-                        if let Some(dr) = drawing_rels.get(&chart_ref.rel_id) {
-                            if chart_ref.is_chart_ex {
-                                if let Some(mut cx) = chart_ex::read_chart_ex(
-                                    &mut archive,
-                                    &dr.target,
-                                    chart_ref.anchor,
-                                )? {
-                                    cx.raw_mc_fallback = chart_ref.raw_mc_fallback;
-                                    read_chart_style_color_for_chart_ex(
-                                        &mut archive,
-                                        &dr.target,
-                                        &mut cx,
-                                    );
-                                    workbook.worksheet_mut(sheet_idx).unwrap().add_chart_ex(cx);
-                                }
-                            } else if let Some(mut c) =
-                                chart::read_chart(&mut archive, &dr.target, chart_ref.anchor)?
-                            {
-                                read_chart_style_color(&mut archive, &dr.target, &mut c);
-                                workbook.worksheet_mut(sheet_idx).unwrap().add_chart(c);
-                            }
-                        }
+                            .map_err(|error| XlsxError::InvalidFormat(error.to_string()))?;
                     }
                 }
             } else if let Some(cs_path) = chartsheet_paths.get(&sheet_entry.r_id) {
                 let mut chart_found = false;
-                let drawing_rid = chartsheet::read_chartsheet_drawing_rid(&mut archive, cs_path)?;
+                let drawing_rid =
+                    chartsheet::read_chartsheet_drawing_rid(package.open_zip_name(cs_path)?)?;
                 if let Some(rid) = drawing_rid {
-                    let cs_rels = read_sheet_rels(&mut archive, cs_path)?;
+                    let cs_rels = read_part_rels(&mut package, cs_path)?;
                     if let Some(drawing_rel) = cs_rels.get(&rid) {
-                        let drawing_path = &drawing_rel.target;
-                        let drawing_contents =
-                            drawing::read_drawing_contents(&mut archive, drawing_path)?;
-                        let raw_anchors = drawing_contents.raw_non_chart_anchors;
-                        let drawing_rels = read_sheet_rels(&mut archive, drawing_path)?;
-                        for chart_ref in drawing_contents.chart_refs {
-                            if let Some(dr) = drawing_rels.get(&chart_ref.rel_id) {
-                                if chart_ref.is_chart_ex {
-                                    // ChartEx in a chartsheet - skip for now (chartsheets
-                                    // require a standard Chart). Parse it but don't embed.
-                                    continue;
+                        if let Some(drawing_path) = drawing_rel.internal_path() {
+                            let entries = match package.open_related_part(drawing_rel)? {
+                                Some(file) => drawing::parse_drawing_entries(file, drawing_path)?,
+                                None => Vec::new(),
+                            };
+                            // Chartsheets model only the chart; every other
+                            // anchor is preserved as raw bytes.
+                            let mut raw_anchors: Vec<Vec<u8>> = Vec::new();
+                            let mut chart_refs: Vec<drawing::DrawingChartRef> = Vec::new();
+                            for entry in entries {
+                                match entry.kind {
+                                    drawing::DrawingEntryKind::Chart(chart_ref) => {
+                                        chart_refs.push(chart_ref)
+                                    }
+                                    _ => raw_anchors.push(entry.bytes),
                                 }
-                                if let Some(mut c) =
-                                    chart::read_chart(&mut archive, &dr.target, chart_ref.anchor)?
-                                {
-                                    read_chart_style_color(&mut archive, &dr.target, &mut c);
+                            }
+                            // Capture the relationships the raw anchors
+                            // reference, minus the modeled chart's.
+                            let drawing_rels = read_part_rels(&mut package, drawing_path)?;
+                            let chart_ids: std::collections::HashSet<&str> =
+                                chart_refs.iter().map(|c| c.rel_id.as_str()).collect();
+                            let mut captured_ids: std::collections::HashSet<String> =
+                                std::collections::HashSet::new();
+                            let mut raw_rels: Vec<duke_sheets_core::RawRel> = Vec::new();
+                            for anchor in &raw_anchors {
+                                for rel in capture_raw_rels(
+                                    &mut package,
+                                    drawing_path,
+                                    anchor,
+                                    &drawing_rels,
+                                )? {
+                                    if chart_ids.contains(rel.id.as_str())
+                                        || !captured_ids.insert(rel.id.clone())
+                                    {
+                                        continue;
+                                    }
+                                    raw_rels.push(rel);
+                                }
+                            }
+                            for chart_ref in chart_refs {
+                                if let Some(dr) = drawing_rels.get(&chart_ref.rel_id) {
+                                    if chart_ref.is_chart_ex {
+                                        // ChartEx in a chartsheet - skip for now (chartsheets
+                                        // require a standard Chart). Parse it but don't embed.
+                                        continue;
+                                    }
+                                    let Some(chart_path) = dr.internal_path() else {
+                                        continue;
+                                    };
+                                    let Some(file) = package.open_related_part(dr)? else {
+                                        continue;
+                                    };
+                                    let mut c = chart::parse_chart(file)?;
+                                    read_chart_style_color(&mut package, chart_path, &mut c)?;
                                     let cs_idx = workbook.add_chartsheet_unchecked(
                                         duke_sheets_core::ChartSheet {
                                             name: sheet_entry.name.clone(),
                                             chart: c,
                                             visibility: sheet_entry.visibility,
                                             raw_drawing_objects: raw_anchors.clone(),
+                                            raw_drawing_rels: raw_rels.clone(),
                                         },
                                     );
                                     workbook
@@ -678,45 +1198,317 @@ impl XlsxReader {
                         ),
                         visibility: sheet_entry.visibility,
                         raw_drawing_objects: Vec::new(),
+                        raw_drawing_rels: Vec::new(),
                     });
                     workbook
                         .sheet_order_mut()
                         .push(SheetSlot::ChartSheet(cs_idx));
                 }
+            } else if !unmodeled_sheet_rels.contains(&sheet_entry.r_id)
+                && package.policy() == XlsxPackagePolicy::Strict
+            {
+                return Err(XlsxError::InvalidFormat(format!(
+                    "sheet {} has no resolvable worksheet or chartsheet relationship",
+                    sheet_entry.name
+                )));
             }
         }
 
         // Apply print area and print titles from named ranges to worksheets.
         Self::apply_print_settings(&mut workbook);
 
-        // Ensure at least one sheet exists
+        // Compatible preserves the historical at-least-one-sheet
+        // recovery. Strict does not invent a worksheet when all source
+        // sheets were valid but unmodeled dialog or macro sheets.
         if workbook.sheet_count() == 0 && workbook.chartsheet_count() == 0 {
-            workbook.add_worksheet()?;
+            if package.policy() == XlsxPackagePolicy::Strict {
+                if unmodeled_sheet_rels.is_empty() {
+                    return Err(XlsxError::InvalidFormat(
+                        "Workbook contains no readable sheets".into(),
+                    ));
+                }
+            } else {
+                workbook.add_worksheet()?;
+            }
         }
 
         register_roundtrip_style_data(&workbook, roundtrip_style_data);
+        if let Some(theme) = theme_palette {
+            workbook.set_theme_palette(theme);
+        }
         if let Some(theme_bytes) = raw_theme_xml {
             register_roundtrip_theme_data(&workbook, theme_bytes);
         }
 
-        Ok(workbook)
+        let diagnostics = package.into_diagnostics();
+        Ok(XlsxReadReport {
+            workbook,
+            diagnostics,
+        })
     }
 
-    fn read_styles<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> XlsxResult<ParsedStyles> {
-        let file = match archive_by_name(archive, "xl/styles.xml") {
-            Ok(f) => f,
-            Err(_) => {
-                return Ok(ParsedStyles {
-                    cell_styles: vec![Style::default()],
-                    cell_style_xfs: vec![Style::default()],
-                    named_styles: Vec::new(),
-                    cell_xf_xf_ids: vec![0],
-                    dxf_styles: Vec::new(),
-                    num_fmts: HashMap::new(),
-                })
+    fn default_styles() -> ParsedStyles {
+        ParsedStyles {
+            cell_styles: vec![Style::default()],
+            cell_style_xfs: vec![Style::default()],
+            named_styles: Vec::new(),
+            cell_xf_xf_ids: vec![0],
+            dxf_styles: Vec::new(),
+            num_fmts: HashMap::new(),
+        }
+    }
+
+    /// Assemble a worksheet's drawing list: drawing-part entries in
+    /// document order (control twins replaced by their matched
+    /// controls), unmatched controls appended in `<controls>` block
+    /// order, and comments spliced by the legacy VML shape sequence.
+    fn merge_sheet_drawings<R: Read + Seek>(
+        package: &mut OpcPackage<R>,
+        sheet_rels: &RelationshipSet,
+        pending_controls: &[form_controls::PendingControl],
+        vml_bytes: Option<&[u8]>,
+        comments: Vec<(u32, u16, duke_sheets_core::comment::CellComment)>,
+    ) -> XlsxResult<Vec<duke_sheets_core::DrawingObject>> {
+        use duke_sheets_core::DrawingObject;
+
+        let vml_shapes = vml_bytes
+            .map(duke_sheets_vml::parse_vml_shapes)
+            .unwrap_or_default();
+        let vml_controls: HashMap<u32, &duke_sheets_vml::VmlControl> = vml_shapes
+            .iter()
+            .filter_map(|shape| match &shape.kind {
+                duke_sheets_vml::VmlShapeKind::Control(control) => Some((shape.shape_num, control)),
+                _ => None,
+            })
+            .collect();
+
+        // Resolve form controls in <controls> block order: state from
+        // ctrlProps, caption from VML, anchor precedence controlPr >
+        // VML x:Anchor > (later) twin anchor.
+        let mut controls: Vec<AssembledControl> = Vec::new();
+        for pending in pending_controls {
+            let Some(rel) = sheet_rels.get(&pending.rid) else {
+                continue;
+            };
+            if rel.kind() != Some(RelationshipKind::ControlProperties) {
+                continue;
             }
-        };
-        read_styles_xml(file)
+            let Some(mut f) = package.open_related_part(rel)? else {
+                continue;
+            };
+            let mut bytes = Vec::new();
+            f.read_to_end(&mut bytes)?;
+            let Some(pr) = form_controls::parse_ctrl_prop(&bytes) else {
+                continue;
+            };
+            let vml = vml_controls.get(&pending.shape_id).copied();
+            if let Some(object) = form_controls::assemble_with_vml(pending, &pr, vml) {
+                let anchor_defaulted =
+                    pending.anchor.is_none() && vml.and_then(|shape| shape.anchor_px).is_none();
+                controls.push(AssembledControl {
+                    shape_id: pending.shape_id,
+                    object,
+                    anchor_defaulted,
+                    consumed: false,
+                });
+            }
+        }
+
+        // Older or partially-authored workbooks can carry Forms shapes
+        // only in VML. Surface any shape not represented by a ctrlProps
+        // entry, including unknown legacy Forms controls. Pict/ActiveX and
+        // Note shapes return None and remain outside the form-control model.
+        let mut represented: std::collections::HashSet<u32> =
+            controls.iter().map(|control| control.shape_id).collect();
+        for shape in &vml_shapes {
+            let duke_sheets_vml::VmlShapeKind::Control(vml) = &shape.kind else {
+                continue;
+            };
+            if represented.contains(&shape.shape_num) {
+                continue;
+            }
+            if let Some(object) = vml.to_drawing_object() {
+                represented.insert(shape.shape_num);
+                controls.push(AssembledControl {
+                    shape_id: shape.shape_num,
+                    object,
+                    anchor_defaulted: vml.anchor_px.is_none(),
+                    consumed: false,
+                });
+            }
+        }
+
+        // Drawing part entries in document order.
+        let mut natives: Vec<(DrawingObject, Option<u32>)> = Vec::new();
+        let mut drawing_targets: Vec<(&Relationship, &str)> = sheet_rels
+            .iter()
+            .filter(|rel| rel.kind() == Some(RelationshipKind::Drawing))
+            .filter_map(|rel| rel.internal_path().map(|path| (rel, path)))
+            .collect();
+        // Numeric-aware sort so rId2 precedes rId10.
+        drawing_targets.sort_by_key(|(rel, _)| {
+            (
+                rel.id
+                    .strip_prefix("rId")
+                    .and_then(|n| n.parse::<u64>().ok())
+                    .unwrap_or(u64::MAX),
+                rel.id.clone(),
+            )
+        });
+        for (drawing_rel, drawing_path) in &drawing_targets {
+            let Some(file) = package.open_related_part(drawing_rel)? else {
+                continue;
+            };
+            let entries = drawing::parse_drawing_entries(file, drawing_path)?;
+            if entries.is_empty() {
+                continue;
+            }
+            let drawing_rels = read_part_rels(package, drawing_path)?;
+            for entry in entries {
+                match entry.kind {
+                    drawing::DrawingEntryKind::Image(pic) => {
+                        let pic = *pic;
+                        // Preserve the cNvPr name verbatim (even when
+                        // empty) so the writer re-emits name=""
+                        // byte-identically.
+                        let name = pic.name.clone();
+                        let descr = pic.descr.clone();
+                        let title = pic.title.clone();
+                        let hidden = pic.hidden;
+                        let image = resolve_pic_image(package, &drawing_rels, pic, false)?;
+                        let mut object = DrawingObject::image(image).with_anchor(entry.anchor);
+                        object.meta.name = Some(name);
+                        object.meta.alt_text = descr;
+                        object.meta.title = title;
+                        object.meta.hidden = hidden;
+                        object.meta.locked = entry.locked;
+                        object.meta.printable = entry.printable;
+                        natives.push((object, None));
+                    }
+                    drawing::DrawingEntryKind::Shape(shape) => {
+                        let mut object = DrawingObject::shape(shape_from_parsed(&shape))
+                            .with_anchor(entry.anchor);
+                        object.meta.name = Some(shape.name.clone());
+                        object.meta.alt_text = shape.descr.clone();
+                        object.meta.title = shape.title.clone();
+                        object.meta.hidden = shape.hidden;
+                        object.meta.locked = entry.locked;
+                        object.meta.printable = entry.printable;
+                        natives.push((object, None));
+                    }
+                    drawing::DrawingEntryKind::Chart(chart_ref) => {
+                        let Some(dr) = drawing_rels.get(&chart_ref.rel_id) else {
+                            continue;
+                        };
+                        let Some(chart_path) = dr.internal_path() else {
+                            continue;
+                        };
+                        let Some(file) = package.open_related_part(dr)? else {
+                            continue;
+                        };
+                        if chart_ref.is_chart_ex {
+                            let mut cx = chart_ex::parse_chart_ex(file)?;
+                            cx.raw_mc_fallback = chart_ref.raw_mc_fallback;
+                            read_chart_style_color_for_chart_ex(package, chart_path, &mut cx)?;
+                            let mut object =
+                                DrawingObject::chart_ex(cx).with_anchor(chart_ref.anchor);
+                            object.meta.name = chart_ref.name;
+                            object.meta.alt_text = chart_ref.descr;
+                            object.meta.title = chart_ref.title;
+                            object.meta.hidden = chart_ref.hidden;
+                            object.meta.locked = entry.locked;
+                            object.meta.printable = entry.printable;
+                            natives.push((object, None));
+                        } else {
+                            let mut c = chart::parse_chart(file)?;
+                            read_chart_style_color(package, chart_path, &mut c)?;
+                            let mut object = DrawingObject::chart(c).with_anchor(chart_ref.anchor);
+                            object.meta.name = chart_ref.name;
+                            object.meta.alt_text = chart_ref.descr;
+                            object.meta.title = chart_ref.title;
+                            object.meta.hidden = chart_ref.hidden;
+                            object.meta.locked = entry.locked;
+                            object.meta.printable = entry.printable;
+                            natives.push((object, None));
+                        }
+                    }
+                    drawing::DrawingEntryKind::Group(group) => {
+                        let name = group.name.clone();
+                        let descr = group.descr.clone();
+                        let title = group.title.clone();
+                        let hidden = group.hidden;
+                        let built = build_group(package, &drawing_rels, group, &mut controls)?;
+                        let mut object = DrawingObject::group(built).with_anchor(entry.anchor);
+                        object.meta.name = Some(name);
+                        object.meta.alt_text = descr;
+                        object.meta.title = title;
+                        object.meta.hidden = hidden;
+                        object.meta.locked = entry.locked;
+                        object.meta.printable = entry.printable;
+                        natives.push((object, None));
+                    }
+                    drawing::DrawingEntryKind::ControlTwin(twin) => {
+                        // The twin is a placeholder for the matched
+                        // legacy control; unmatched twins are dropped.
+                        if let Some((shape_id, mut object, anchor_defaulted)) =
+                            take_control(&mut controls, twin.shape_num)
+                        {
+                            if anchor_defaulted {
+                                object.anchor = entry.anchor;
+                            }
+                            if let Some(name) = twin.name {
+                                object.meta.name = Some(name);
+                            }
+                            if twin.descr.is_some() {
+                                object.meta.alt_text = twin.descr;
+                            }
+                            object.meta.title = twin.title;
+                            if let Some(control) = object.kind.as_form_control_mut() {
+                                // Foreign files may put a txBody on
+                                // twins of caption-less kinds; ignore
+                                // the stray text.
+                                if let (Some(text), Some(caption)) =
+                                    (twin.text.as_ref(), control.caption_mut())
+                                {
+                                    *caption = form_controls::control_text_from_twin(text);
+                                }
+                                if control.macro_name.is_none() {
+                                    control.macro_name = twin
+                                        .macro_name
+                                        .as_deref()
+                                        .map(duke_sheets_vml::decode_macro_formula);
+                                }
+                            }
+                            natives.push((object, Some(shape_id)));
+                        }
+                    }
+                    drawing::DrawingEntryKind::Raw => {
+                        let rels =
+                            capture_raw_rels(package, drawing_path, &entry.bytes, &drawing_rels)?;
+                        let object = DrawingObject::raw(duke_sheets_core::RawDrawing {
+                            bytes: entry.bytes,
+                            rels,
+                        })
+                        .with_anchor(entry.anchor);
+                        natives.push((object, None));
+                    }
+                }
+            }
+        }
+
+        // Unmatched controls (no twin; legacy files) append after all
+        // native entries, in <controls> block order.
+        for control in controls {
+            if !control.consumed {
+                natives.push((control.object, Some(control.shape_id)));
+            }
+        }
+
+        Ok(duke_sheets_vml::splice_comments(
+            natives,
+            comments,
+            &vml_shapes,
+        ))
     }
 
     /// Extract _xlnm.Print_Area and _xlnm.Print_Titles from named ranges
@@ -758,24 +1550,17 @@ impl XlsxReader {
         }
     }
 
-    /// Read a worksheet from the archive
+    /// Read a worksheet XML stream.
     #[allow(clippy::too_many_arguments)]
-    fn read_worksheet<R: Read + Seek>(
-        archive: &mut zip::ZipArchive<R>,
-        path: &str,
+    fn read_worksheet<R: Read>(
+        reader: R,
         worksheet: &mut duke_sheets_core::Worksheet,
         shared_strings: &[SharedStringEntry],
         cell_styles: &[Style],
         dxf_styles: &[Style],
-        theme_palette: Option<&ThemePalette>,
-        sheet_rels: &HashMap<String, SheetRelationship>,
-    ) -> XlsxResult<()> {
-        let file = archive
-            .by_name(path)
-            .map_err(|_| XlsxError::MissingPart(path.to_string()))?;
-
-        let reader = BufReader::new(file);
-        let mut xml_reader = Reader::from_reader(reader);
+        sheet_rels: &RelationshipSet,
+    ) -> XlsxResult<Vec<form_controls::PendingControl>> {
+        let mut xml_reader = Reader::from_reader(BufReader::new(reader));
         xml_reader.config_mut().trim_text(false);
 
         let mut buf = Vec::new();
@@ -828,6 +1613,19 @@ impl XlsxReader {
         let mut dv_formula1: Option<String> = None;
         let mut dv_formula2: Option<String> = None;
 
+        // Form control state (<controls> block after legacyDrawing).
+        let mut pending_controls: Vec<form_controls::PendingControl> = Vec::new();
+        let mut in_controls = false;
+        let mut current_control: Option<form_controls::PendingControl> = None;
+        let mut in_control_anchor = false;
+        let mut control_anchor_move = false;
+        let mut control_anchor_size = false;
+        let mut control_anchor_in_from = true;
+        let mut control_anchor_vals = [[0i64; 4]; 2];
+        // (marker 0=from/1=to, field 0=col 1=colOff 2=row 3=rowOff)
+        let mut control_anchor_field: Option<(usize, usize)> = None;
+        let mut control_anchor_text = String::new();
+
         // Conditional formatting state
         let mut in_cond_formatting = false;
         let mut cf_sqref: Option<String> = None;
@@ -872,10 +1670,77 @@ impl XlsxReader {
         let mut in_af_filters = false;
         let mut in_af_custom_filters = false;
 
+        // Protected range state
+        let mut current_protected_range: Option<duke_sheets_core::ProtectedRange> = None;
+        let mut in_protected_range_security_descriptor = false;
+
         loop {
             match xml_reader.read_event_into(&mut buf) {
                 Ok(Event::Start(e)) => {
                     match e.name().local_name().as_ref() {
+                        b"controls" => in_controls = true,
+                        b"control" if in_controls => {
+                            let mut pending = form_controls::PendingControl::new();
+                            for attr in e.attributes().flatten() {
+                                let value = String::from_utf8_lossy(&attr.value).into_owned();
+                                match attr.key.local_name().as_ref() {
+                                    b"shapeId" => pending.shape_id = value.parse().unwrap_or(0),
+                                    b"name" => pending.name = Some(value),
+                                    b"id" => pending.rid = value,
+                                    _ => {}
+                                }
+                            }
+                            current_control = Some(pending);
+                        }
+                        b"controlPr" if current_control.is_some() => {
+                            let pending = current_control.as_mut().unwrap();
+                            for attr in e.attributes().flatten() {
+                                let truthy = matches!(&*attr.value, b"1" | b"true");
+                                match attr.key.local_name().as_ref() {
+                                    b"locked" => pending.locked = truthy,
+                                    b"print" => pending.printable = truthy,
+                                    b"altText" => {
+                                        pending.alt_text =
+                                            Some(String::from_utf8_lossy(&attr.value).into_owned())
+                                    }
+                                    b"macro" => {
+                                        pending.macro_name = Some(
+                                            duke_sheets_vml::decode_macro_formula(
+                                                &String::from_utf8_lossy(&attr.value),
+                                            ),
+                                        )
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        b"anchor" if current_control.is_some() => {
+                            in_control_anchor = true;
+                            control_anchor_move = false;
+                            control_anchor_size = false;
+                            control_anchor_vals = [[0i64; 4]; 2];
+                            for attr in e.attributes().flatten() {
+                                let truthy = matches!(&*attr.value, b"1" | b"true");
+                                match attr.key.local_name().as_ref() {
+                                    b"moveWithCells" => control_anchor_move = truthy,
+                                    b"sizeWithCells" => control_anchor_size = truthy,
+                                    _ => {}
+                                }
+                            }
+                        }
+                        b"from" if in_control_anchor => control_anchor_in_from = true,
+                        b"to" if in_control_anchor => control_anchor_in_from = false,
+                        b"col" | b"colOff" | b"row" | b"rowOff" if in_control_anchor => {
+                            let field = match e.name().local_name().as_ref() {
+                                b"col" => 0,
+                                b"colOff" => 1,
+                                b"row" => 2,
+                                _ => 3,
+                            };
+                            let marker = if control_anchor_in_from { 0 } else { 1 };
+                            control_anchor_field = Some((marker, field));
+                            control_anchor_text.clear();
+                        }
                         b"sheetView" => {
                             for attr in e.attributes().flatten() {
                                 match attr.key.local_name().as_ref() {
@@ -1010,6 +1875,12 @@ impl XlsxReader {
                         }
                         b"sheetProtection" => {
                             Self::parse_sheet_protection_element(worksheet, &e);
+                        }
+                        b"protectedRange" => {
+                            current_protected_range = Self::parse_protected_range_element(&e);
+                        }
+                        b"securityDescriptor" if current_protected_range.is_some() => {
+                            in_protected_range_security_descriptor = true;
                         }
                         b"pageMargins" => {
                             let mut ps = worksheet.page_setup().clone();
@@ -1391,6 +2262,31 @@ impl XlsxReader {
                 }
                 Ok(Event::End(e)) => {
                     match e.name().local_name().as_ref() {
+                        b"controls" => in_controls = false,
+                        b"control" if current_control.is_some() => {
+                            let pending = current_control.take().unwrap();
+                            if !pending.rid.is_empty() {
+                                pending_controls.push(pending);
+                            }
+                        }
+                        b"anchor" if in_control_anchor => {
+                            in_control_anchor = false;
+                            if let Some(pending) = current_control.as_mut() {
+                                pending.anchor = Some(form_controls::anchor_from_markers(
+                                    control_anchor_vals[0],
+                                    control_anchor_vals[1],
+                                    control_anchor_move,
+                                    control_anchor_size,
+                                ));
+                            }
+                        }
+                        b"col" | b"colOff" | b"row" | b"rowOff"
+                            if control_anchor_field.is_some() =>
+                        {
+                            let (marker, field) = control_anchor_field.take().unwrap();
+                            control_anchor_vals[marker][field] =
+                                control_anchor_text.trim().parse().unwrap_or(0);
+                        }
                         b"c" => {
                             // Process the cell
                             if let Some(ref cell_ref) = current_cell_ref {
@@ -1689,10 +2585,24 @@ impl XlsxReader {
                                 auto_filter_columns.clear();
                             }
                         }
+                        b"securityDescriptor" if in_protected_range_security_descriptor => {
+                            in_protected_range_security_descriptor = false;
+                        }
+                        b"protectedRange" => {
+                            if let Some(protected_range) = current_protected_range.take() {
+                                worksheet.add_protected_range(protected_range);
+                            }
+                            in_protected_range_security_descriptor = false;
+                        }
                         _ => {}
                     }
                 }
                 Ok(Event::Text(e)) => {
+                    if control_anchor_field.is_some() {
+                        if let Ok(text) = e.unescape() {
+                            control_anchor_text.push_str(&text);
+                        }
+                    }
                     if in_value {
                         match e.unescape() {
                             Ok(text) => current_value = Some(text.to_string()),
@@ -1789,6 +2699,12 @@ impl XlsxReader {
                             let mut ps = worksheet.page_setup().clone();
                             ps.first_footer = Some(text.to_string());
                             worksheet.set_page_setup(ps);
+                        }
+                    } else if in_protected_range_security_descriptor {
+                        if let (Some(ref mut protected_range), Ok(text)) =
+                            (&mut current_protected_range, e.unescape())
+                        {
+                            protected_range.security_descriptor = Some(text.to_string());
                         }
                     }
                 }
@@ -2001,6 +2917,11 @@ impl XlsxReader {
                         }
                         b"sheetProtection" => {
                             Self::parse_sheet_protection_element(worksheet, &e);
+                        }
+                        b"protectedRange" => {
+                            if let Some(protected_range) = Self::parse_protected_range_element(&e) {
+                                worksheet.add_protected_range(protected_range);
+                            }
                         }
                         b"pane" => Self::parse_pane_attrs(&e, worksheet),
                         b"f" if in_cell => {
@@ -2215,7 +3136,7 @@ impl XlsxReader {
                         }
                         // Parse color elements for colorScale and dataBar
                         b"color" if in_color_scale || in_data_bar => {
-                            let color = parse_color_element(&e, theme_palette);
+                            let color = parse_color_element(&e);
                             if in_color_scale {
                                 cf_colors.push(color);
                             } else if in_data_bar {
@@ -2657,7 +3578,7 @@ impl XlsxReader {
             }
         }
 
-        Ok(())
+        Ok(pending_controls)
     }
 
     fn parse_sheet_selection_attrs(
@@ -2799,9 +3720,10 @@ impl XlsxReader {
 
     /// Parse `<sheetProtection sheet="1" password="HHHH" .../>` into
     /// the sheet's `SheetProtection` model. Per ECMA-376 §18.3.1.85,
-    /// absent attribute or value `"1"` means the action is **not**
-    /// allowed; `"0"` means it **is** allowed. The writer follows the
-    /// same convention.
+    /// value `"1"` means the action is **not** allowed; `"0"` means it
+    /// **is** allowed. The writer follows the same convention. The
+    /// selectLockedCells/selectUnlockedCells attributes default to false
+    /// in OOXML, so absence means selection is allowed.
     fn parse_sheet_protection_element(
         worksheet: &mut duke_sheets_core::Worksheet,
         e: &quick_xml::events::BytesStart<'_>,
@@ -2810,6 +3732,8 @@ impl XlsxReader {
 
         let mut prot = SheetProtection {
             protected: true,
+            select_locked_cells: true,
+            select_unlocked_cells: true,
             ..Default::default()
         };
         let mut explicit_sheet = false;
@@ -2918,10 +3842,55 @@ impl XlsxReader {
         worksheet.set_protection(Some(prot));
     }
 
+    fn parse_protected_range_element(
+        e: &quick_xml::events::BytesStart<'_>,
+    ) -> Option<duke_sheets_core::ProtectedRange> {
+        let mut name = None;
+        let mut ranges = Vec::new();
+        let mut password_hash = None;
+        let mut security_descriptor = None;
+
+        for attr in e.attributes().flatten() {
+            let Ok(value) = attr.unescape_value() else {
+                continue;
+            };
+            match attr.key.local_name().as_ref() {
+                b"name" => name = Some(value.to_string()),
+                b"sqref" => {
+                    for piece in value.split_whitespace() {
+                        match CellRange::parse(piece) {
+                            Ok(range) => ranges.push(range),
+                            Err(err) => log::warn!(
+                                "Invalid protectedRange sqref piece '{}': {}",
+                                piece,
+                                err
+                            ),
+                        }
+                    }
+                }
+                b"password" => {
+                    if let Ok(h) = u16::from_str_radix(value.as_ref(), 16) {
+                        password_hash = Some(h);
+                    }
+                }
+                b"securityDescriptor" => security_descriptor = Some(value.to_string()),
+                _ => {}
+            }
+        }
+
+        let name = name?;
+        Some(duke_sheets_core::ProtectedRange {
+            name,
+            ranges,
+            password_hash,
+            security_descriptor,
+        })
+    }
+
     fn parse_hyperlink_element(
         worksheet: &mut duke_sheets_core::Worksheet,
         e: &quick_xml::events::BytesStart<'_>,
-        sheet_rels: &HashMap<String, SheetRelationship>,
+        sheet_rels: &RelationshipSet,
     ) {
         let mut cell_ref = None;
         let mut rel_id = None;
@@ -2961,8 +3930,8 @@ impl XlsxReader {
         let mut target = String::new();
         if let Some(rel_id) = rel_id {
             if let Some(rel) = sheet_rels.get(&rel_id) {
-                if rel.rel_type.ends_with("/hyperlink") {
-                    target = rel.target.clone();
+                if rel.kind() == Some(RelationshipKind::Hyperlink) {
+                    target = rel.target().to_string();
                 }
             }
         }
@@ -3596,6 +4565,38 @@ mod tests {
         );
     }
 
+    /// A real corpus turns up XLSB packages carrying an .xlsx extension.
+    /// Parsing their binary workbook part as XML used to surface as
+    /// "syntax error: tag not closed", which says nothing about the
+    /// cause, so the reader names the format it actually found.
+    #[test]
+    fn xlsb_package_is_reported_as_xlsb_not_as_broken_xml() {
+        let mut buf = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(Cursor::new(&mut buf));
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("[Content_Types].xml", options).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="bin" ContentType="application/vnd.ms-excel.sheet.binary.macroEnabled.main"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/></Types>"#).unwrap();
+            zip.start_file("_rels/.rels", options).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.bin"/></Relationships>"#).unwrap();
+            // A BIFF12 BrtBeginBook record, not XML.
+            zip.start_file("xl/workbook.bin", options).unwrap();
+            zip.write_all(&[0x83, 0x00, 0x8F, 0x00, 0x00, 0x00]).unwrap();
+            zip.finish().unwrap();
+        }
+
+        let error = XlsxReader::read(Cursor::new(buf)).expect_err("must not be read as XLSX");
+        let message = error.to_string();
+        assert!(
+            message.contains("XLSB"),
+            "the error must name the format found, got: {message}"
+        );
+        assert!(
+            !message.contains("tag not closed"),
+            "the error must not blame XML syntax, got: {message}"
+        );
+    }
+
     #[test]
     fn test_read_empty_xlsx() {
         // Minimal valid XLSX structure
@@ -3680,6 +4681,6 @@ mod tests {
         let sheet = workbook.worksheet(0).unwrap();
         let comment = sheet.comment("A1").unwrap().expect("comment via rels path");
         assert_eq!(comment.author, "Alice");
-        assert_eq!(comment.text, "Custom path comment");
+        assert_eq!(comment.plain_text(), "Custom path comment");
     }
 }

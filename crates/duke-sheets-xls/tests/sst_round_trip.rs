@@ -129,22 +129,14 @@ fn strings_across_multiple_sheets_share_one_sst() {
     wb.rename_worksheet(0, "First").expect("rename");
     wb.add_worksheet_with_name("Second").expect("add");
 
-    wb.worksheet_mut(0)
-        .unwrap()
-        .set_cell_value("A1", "shared")
-        .expect("set sheet1 A1");
-    wb.worksheet_mut(0)
-        .unwrap()
-        .set_cell_value("A2", "first-only")
-        .expect("set sheet1 A2");
-    wb.worksheet_mut(1)
-        .unwrap()
-        .set_cell_value("A1", "shared")
-        .expect("set sheet2 A1");
-    wb.worksheet_mut(1)
-        .unwrap()
-        .set_cell_value("A2", "second-only")
-        .expect("set sheet2 A2");
+    wb.worksheet_mut(0).unwrap()
+        .set_cell_value("A1", "shared").expect("set sheet1 A1");
+    wb.worksheet_mut(0).unwrap()
+        .set_cell_value("A2", "first-only").expect("set sheet1 A2");
+    wb.worksheet_mut(1).unwrap()
+        .set_cell_value("A1", "shared").expect("set sheet2 A1");
+    wb.worksheet_mut(1).unwrap()
+        .set_cell_value("A2", "second-only").expect("set sheet2 A2");
 
     let parsed = write_then_read(&wb);
     let s1 = parsed.worksheet_by_name("First").unwrap();
@@ -156,7 +148,6 @@ fn strings_across_multiple_sheets_share_one_sst() {
 }
 
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_read_strings_we_emit() {
     duke_sheets_test_harness::lo::ensure_lo();
 
@@ -177,26 +168,19 @@ fn lo_can_read_strings_we_emit() {
         .build()
         .unwrap();
     let outcome: Result<(String, String, f64), String> = rt.block_on(async {
-        let mut bridge =
-            duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect("127.0.0.1", 2002)
-                .await
-                .map_err(|e| format!("connect: {e}"))?;
+        let mut bridge = duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect(
+            "127.0.0.1",
+            2002,
+        )
+        .await
+        .map_err(|e| format!("connect: {e}"))?;
         let mut wb = bridge
             .open_workbook(&path)
             .await
             .map_err(|e| format!("open: {e}"))?;
-        let a1 = wb
-            .get_cell_string("A1")
-            .await
-            .map_err(|e| format!("A1: {e}"))?;
-        let b1 = wb
-            .get_cell_string("B1")
-            .await
-            .map_err(|e| format!("B1: {e}"))?;
-        let c1 = wb
-            .get_cell_value("C1")
-            .await
-            .map_err(|e| format!("C1: {e}"))?;
+        let a1 = wb.get_cell_string("A1").await.map_err(|e| format!("A1: {e}"))?;
+        let b1 = wb.get_cell_string("B1").await.map_err(|e| format!("B1: {e}"))?;
+        let c1 = wb.get_cell_value("C1").await.map_err(|e| format!("C1: {e}"))?;
         Ok((a1, b1, c1))
     });
     let _ = std::fs::remove_file(&path);

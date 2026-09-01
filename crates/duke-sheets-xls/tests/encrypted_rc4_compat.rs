@@ -1,48 +1,51 @@
 //! LibreOffice cross-tool compatibility for the XLS FilePass encrypt
-//! path. Each test reads the gitignored
-//! `xls_rc4_cryptoapi.plain.xls` fixture's `/Workbook` stream, encrypts
-//! it with one of our three FilePass variants, wraps the result in a
-//! fresh CFB envelope, writes the file into the URP-shared directory,
-//! and asks LibreOffice to open it with the password and read back
-//! the original cell values.
+//! path. Each test builds a plaintext workbook in memory, encrypts its
+//! `/Workbook` stream with one of our FilePass variants, wraps the result
+//! in a fresh CFB envelope, writes the file into the URP-shared directory,
+//! and asks LibreOffice to open it with the password and read back the
+//! original cell values.
 //!
-//! Tests are `#[ignore]`-gated and panic when prerequisites are
-//! missing rather than silent-skipping. The fixture is auto-generated
-//! on first run by the `duke-sheets-crypto` `fixture_gen` test, and
-//! the LO container is auto-started by the test harness.
+//! The LO container is auto-started by the test harness, so these run
+//! unconditionally and fail loud rather than silent-skipping.
 
 use std::io::Cursor;
 use std::path::PathBuf;
 
+use duke_sheets_core::Workbook;
 use duke_sheets_crypto::xls::{encrypt_workbook_stream, XlsEncryptionVariant};
 use duke_sheets_libreoffice::bridge::LibreOfficeBridge;
 use duke_sheets_test_harness::lo::{ensure_lo, SHARED_DIR};
 use duke_sheets_xls::cfb::{CompoundFile, CompoundFileBuilder};
+use duke_sheets_xls::XlsWriter;
 
-const FIXTURE_NAME: &str = "xls_rc4_cryptoapi.plain.xls";
 const FIXTURE_PASSWORD: &str = "duke-test-pw";
+const FIXTURE_CELL_A1: &str = "hello crypto";
+const FIXTURE_CELL_B1: f64 = 42.0;
 
 fn require_lo() {
     ensure_lo();
 }
 
-fn require_fixture() -> PathBuf {
-    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    p.push("..");
-    p.push("duke-sheets-crypto");
-    p.push("tests/fixtures");
-    p.push(FIXTURE_NAME);
-    p.canonicalize().unwrap_or_else(|_| {
-        panic!(
-            "{FIXTURE_NAME} not present in tests/fixtures. \
-             Regenerate with `mise run crypto:fixtures` (requires LO container)."
-        )
-    })
+/// The plaintext workbook this suite encrypts, built in memory.
+///
+/// The subject under test is the FilePass wrapper, not the BIFF8 body, so
+/// the plaintext only needs to be a valid workbook carrying the two cells
+/// the assertions check. Building it here keeps the suite hermetic: there
+/// is no fixture file to generate, stage, or go stale.
+fn plaintext_workbook_bytes() -> Vec<u8> {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).expect("default worksheet");
+    sheet
+        .set_cell_value("A1", FIXTURE_CELL_A1)
+        .expect("set A1");
+    sheet
+        .set_cell_value("B1", FIXTURE_CELL_B1)
+        .expect("set B1");
+    XlsWriter::write_to_bytes(&wb).expect("serialize plaintext workbook")
 }
 
 fn encrypt_fixture_workbook(variant: XlsEncryptionVariant) -> Vec<u8> {
-    let fixture = require_fixture();
-    let bytes = std::fs::read(&fixture).expect("read fixture bytes");
+    let bytes = plaintext_workbook_bytes();
     let cfb = CompoundFile::open(Cursor::new(&bytes)).expect("open plaintext CFB");
     let plaintext = cfb.read_stream("/Workbook").expect("read /Workbook");
     let encrypted = encrypt_workbook_stream(&plaintext, FIXTURE_PASSWORD, variant)
@@ -90,14 +93,14 @@ fn lo_can_read(variant: XlsEncryptionVariant, suffix: &str) {
         Ok::<(String, f64), String>((a1, b1))
     });
     let _ = std::fs::remove_file(&path);
-    let (a1, b1) =
-        result.unwrap_or_else(|e| panic!("LO must open file we encrypted with {variant:?}: {e}"));
-    assert_eq!(a1, "hello crypto");
-    assert!((b1 - 42.0).abs() < 1e-9, "B1 = {b1}");
+    let (a1, b1) = result.unwrap_or_else(|e| {
+        panic!("LO must open file we encrypted with {variant:?}: {e}")
+    });
+    assert_eq!(a1, FIXTURE_CELL_A1);
+    assert!((b1 - FIXTURE_CELL_B1).abs() < 1e-9, "B1 = {b1}");
 }
 
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002 + crypto fixture"]
 fn lo_can_read_rc4_cryptoapi_128() {
     lo_can_read(
         XlsEncryptionVariant::Rc4CryptoApi { key_bits: 128 },
@@ -106,7 +109,6 @@ fn lo_can_read_rc4_cryptoapi_128() {
 }
 
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002 + crypto fixture"]
 fn lo_can_read_rc4_legacy() {
     lo_can_read(XlsEncryptionVariant::Rc4Legacy, "rc4legacy");
 }

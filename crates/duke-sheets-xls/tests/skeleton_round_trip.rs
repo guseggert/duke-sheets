@@ -1176,6 +1176,24 @@ fn add_manual_page_grouped_pivot_with_filter_items(
     wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
 }
 
+const EXCEL_WORKBOOK_ROOT_CLSID: [u8; 16] = [
+    0x20, 0x08, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x46,
+];
+
+#[test]
+fn writer_emits_excel_workbook_root_clsid() {
+    let bytes = XlsWriter::write_to_bytes(&Workbook::new()).expect("serialize workbook");
+    let first_dir_sector =
+        u32::from_le_bytes(bytes[48..52].try_into().expect("directory sector")) as usize;
+    let root_entry = (1 + first_dir_sector) * 512;
+
+    assert_eq!(
+        &bytes[root_entry + 80..root_entry + 96],
+        &EXCEL_WORKBOOK_ROOT_CLSID
+    );
+}
+
 #[test]
 fn empty_default_workbook_round_trips_via_reader() {
     let wb = Workbook::new();
@@ -6986,9 +7004,8 @@ fn write_to_bytes_then_read_file_round_trips() {
 
 /// Probe whether LibreOffice's loadenv accepts our skeleton output.
 /// Useful for empirical viability checks during writer development.
-/// `#[ignore]`-gated because it needs a running LO container.
+/// The test harness auto-starts the LibreOffice container.
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_open_skeleton_workbook() {
     duke_sheets_test_harness::lo::ensure_lo();
 
@@ -7026,7 +7043,6 @@ fn lo_can_open_skeleton_workbook() {
 }
 
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_open_numeric_grouped_pivot_workbook() {
     duke_sheets_test_harness::lo::ensure_lo();
 
@@ -7064,7 +7080,6 @@ fn lo_can_open_numeric_grouped_pivot_workbook() {
 }
 
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_open_date_grouped_pivot_workbook() {
     duke_sheets_test_harness::lo::ensure_lo();
 
@@ -7102,7 +7117,6 @@ fn lo_can_open_date_grouped_pivot_workbook() {
 }
 
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_open_multi_unit_date_grouped_pivot_workbook() {
     duke_sheets_test_harness::lo::ensure_lo();
 
@@ -7140,7 +7154,6 @@ fn lo_can_open_multi_unit_date_grouped_pivot_workbook() {
 }
 
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_open_manual_grouped_pivot_workbook() {
     duke_sheets_test_harness::lo::ensure_lo();
 
@@ -7178,7 +7191,6 @@ fn lo_can_open_manual_grouped_pivot_workbook() {
 }
 
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_open_numeric_manual_grouped_pivot_workbook() {
     duke_sheets_test_harness::lo::ensure_lo();
 
@@ -7216,7 +7228,6 @@ fn lo_can_open_numeric_manual_grouped_pivot_workbook() {
 }
 
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_open_all_aggregate_pivot_workbook() {
     duke_sheets_test_harness::lo::ensure_lo();
 
@@ -7254,7 +7265,6 @@ fn lo_can_open_all_aggregate_pivot_workbook() {
 }
 
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_open_bool_error_manual_grouped_pivot_workbook() {
     duke_sheets_test_harness::lo::ensure_lo();
 
@@ -7292,7 +7302,6 @@ fn lo_can_open_bool_error_manual_grouped_pivot_workbook() {
 }
 
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_open_manual_column_grouped_pivot_workbook() {
     duke_sheets_test_harness::lo::ensure_lo();
 
@@ -7330,7 +7339,6 @@ fn lo_can_open_manual_column_grouped_pivot_workbook() {
 }
 
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_open_manual_page_grouped_pivot_workbook() {
     duke_sheets_test_harness::lo::ensure_lo();
 
@@ -7368,7 +7376,6 @@ fn lo_can_open_manual_page_grouped_pivot_workbook() {
 }
 
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_read_cell_values_we_emit() {
     duke_sheets_test_harness::lo::ensure_lo();
 

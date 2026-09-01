@@ -71,6 +71,10 @@ export declare class CellValue {
  * ```
  */
 export declare class Workbook {
+  /** Synchronize current form-control state into linked cells. */
+  syncFormControls(): number
+  /** Drive form controls from formula-backed linked cells. */
+  syncFormControlsFromLinkedCells(): number
   /** Whether the workbook has no worksheets. */
   get isEmpty(): boolean
   /** The index of the active (selected) worksheet. */
@@ -79,8 +83,23 @@ export declare class Workbook {
   sheetIndex(name: string): number | null
   /** Workbook-level settings (date system, protection, etc.). */
   get settings(): JsWorkbookSettings
+  /** Workbook structure/window protection settings, or null if unprotected. */
+  get workbookProtection(): JsWorkbookProtection | null
   /** Get all named ranges defined in the workbook. */
   get namedRanges(): Array<JsNamedRange>
+  /**
+   * The workbook theme's 12 clrScheme colors as `RRGGBB` hex, in
+   * theme-index order (background 1, text 1, background 2, text 2,
+   * accent 1-6, hyperlink, followed hyperlink). The Office default
+   * palette when the file carries no theme.
+   */
+  get themePalette(): Array<string>
+  /**
+   * Resolve a drawing color to display RGB (`RRGGBB` hex) against
+   * this workbook's theme palette. `auto` has no fixed RGB and
+   * resolves to `null`.
+   */
+  resolveColor(color: object): string | null
   /** Get all chart sheets. */
   get chartsheets(): Array<JsChartSheet>
   /** Get the number of chart sheets. */
@@ -117,7 +136,11 @@ export declare class Workbook {
    */
   static fromCsvString(csv: string): Workbook
   /**
-   * Save the workbook to a file
+   * Save the workbook to a file.
+   *
+   * Form-control state is synchronized into linked cells in the output,
+   * replacing existing values and formulas there; this workbook is left
+   * unchanged.
    *
    * The format is determined by the file extension:
    * - `.xlsx` for Excel format
@@ -128,7 +151,9 @@ export declare class Workbook {
    */
   save(path: string): void
   /**
-   * Save the workbook to a password-protected file. The encryption
+   * Save the workbook to a password-protected file. Form-control state is
+   * synchronized into linked cells in the serialized file, replacing
+   * existing values and formulas there. The encryption
    * variant is selected via `profile`:
    *
    * - `"default"` (or null) - Agile-256 for .xlsx, RC4 CryptoAPI 128 for .xls
@@ -156,7 +181,10 @@ export declare class Workbook {
    *   Default false.
    */
   static openWithPassword(path: string, password: string, skipIntegrityCheck?: boolean | undefined | null): Workbook
-  /** Save the workbook as a CSV string (first sheet only) */
+  /**
+   * Save the workbook as a CSV string (first sheet only, with
+   * form-control state synchronized into linked cells in the output)
+   */
   saveCsvString(): string
   /** Get the number of worksheets */
   get sheetCount(): number
@@ -176,6 +204,8 @@ export declare class Workbook {
    * @returns Index of the new worksheet
    */
   addSheet(name: string): number
+  /** Set or clear workbook structure/window protection settings. */
+  setWorkbookProtection(protection?: JsWorkbookProtectionInput | undefined | null): void
   /**
    * Remove a worksheet by index
    *
@@ -234,6 +264,8 @@ export declare class Workbook {
   getNamedRange(name: string): string | null
   /**
    * Save the workbook to a file asynchronously (non-blocking).
+   * Form-control state is synchronized into linked cells in the output
+   * without changing this workbook.
    *
    * @param path - Path to save to
    * @returns Promise<void>
@@ -262,6 +294,60 @@ export declare class Workbook {
  * contain a value (number, text, boolean) or a formula.
  */
 export declare class Worksheet {
+  /** Recursive top-level drawings in back-to-front z-order. */
+  get drawings(): object[]
+  /** All form controls in depth-first drawing order. */
+  get formControls(): object[]
+  get formControlCount(): number
+  /** All embedded images in depth-first drawing order, without image bytes. */
+  get images(): object[]
+  get imageCount(): number
+  /** All standard charts in depth-first drawing order. */
+  get charts(): object[]
+  get chartCount(): number
+  /** All ChartEx charts in depth-first drawing order. */
+  get chartsEx(): object[]
+  get chartExCount(): number
+  /** Append a top-level drawing and return its global z-order index. */
+  addDrawing(input: object): number
+  /**
+   * Insert a top-level drawing at a global z-order index. Drawing
+   * paths are positional; mutating the list invalidates previously
+   * returned paths.
+   */
+  insertDrawing(index: number, input: object): void
+  /**
+   * Replace a top-level drawing or nested group child. Drawing
+   * paths are positional; mutating the list invalidates previously
+   * returned paths.
+   */
+  setDrawing(path: number[], input: object): void
+  /**
+   * Remove a top-level drawing or nested group child. Drawing
+   * paths are positional; mutating the list invalidates previously
+   * returned paths.
+   */
+  removeDrawing(path: Array<number>): void
+  /**
+   * Move a top-level drawing to another z-order index. Drawing
+   * paths are positional; mutating the list invalidates previously
+   * returned paths.
+   */
+  moveDrawing(from: number, to: number): void
+  /**
+   * Lazily copy the bytes for an image at a drawing path. Paths are
+   * positional; mutating the drawing list invalidates previously
+   * returned paths.
+   */
+  drawingImageData(path: Array<number>): Buffer
+  /**
+   * Lazily copy an image's SVG companion bytes, when present. Paths
+   * are positional; mutating the drawing list invalidates previously
+   * returned paths.
+   */
+  drawingSvgData(path: Array<number>): Buffer | null
+  /** Apply checkbox/radio semantics and synchronize linked cells immediately. */
+  setFormControlCheckState(path: Array<number>, state: JsCheckState): JsFormControlInteractionResult
   /** Sheet visibility: "visible", "hidden", or "veryHidden". */
   get visibility(): string
   /** Whether the worksheet is selected. */
@@ -355,6 +441,8 @@ export declare class Worksheet {
   get autoFilter(): JsAutoFilter | null
   /** Sheet protection settings, or null if unprotected. */
   get protection(): JsSheetProtection | null
+  /** Protected editable ranges on this worksheet. */
+  get protectedRanges(): Array<JsProtectedRange>
   /** Page setup / print settings. */
   get pageSetup(): JsPageSetup
   /** Print area range string, or null if not set. */
@@ -391,18 +479,6 @@ export declare class Worksheet {
   getMergeSpan(row: number, col: number): JsMergeSpan | null
   /** Whether a cell is a non-origin member of a merged region (should be skipped when rendering). */
   isMergedSecondary(row: number, col: number): boolean
-  /** Get all charts embedded in the worksheet. */
-  get charts(): Array<JsChart>
-  /** Number of charts in the worksheet. */
-  get chartCount(): number
-  /** Get all ChartEx charts (Office 2016+ extended charts) in the worksheet. */
-  get chartsEx(): Array<JsChartEx>
-  /** Number of ChartEx charts in the worksheet. */
-  get chartExCount(): number
-  /** Get all embedded images in the worksheet. */
-  get images(): Array<JsEmbeddedImage>
-  /** Number of embedded images in the worksheet. */
-  get imageCount(): number
   /** Get the worksheet name */
   get name(): string
   /**
@@ -433,6 +509,10 @@ export declare class Worksheet {
   setCellStyleAt(row: number, col: number, style: JsStylePatch): void
   /** Set or update the style for all cells in a range (e.g. "A1:C3"). */
   setRangeStyle(rangeStr: string, style: JsStylePatch): void
+  /** Set or clear sheet protection settings. */
+  setProtection(protection?: JsSheetProtectionInput | undefined | null): void
+  /** Replace the protected editable ranges for this sheet. */
+  setProtectedRanges(ranges: Array<JsProtectedRangeInput>): void
   /** Get the raw cell value (not calculated) */
   getCell(address: string): CellValue
   /** Get the raw cell value by row/col (0-based). */
@@ -526,8 +606,12 @@ export interface JsAxis {
   maximum?: number
   majorUnit?: number
   minorUnit?: number
-  /** One of: `"Bottom"`, `"Top"`, `"Left"`, `"Right"`. */
-  position: string
+  /**
+   * One of: `"Bottom"`, `"Top"`, `"Left"`, `"Right"`.
+   * `bottom`, `top`, `left` or `right`; unset when the source omitted
+   * it and the writer will supply the conventional one.
+   */
+  position?: string
   numberFormat?: JsChartNumberFormat
   majorGridlines: boolean
   minorGridlines: boolean
@@ -631,7 +715,6 @@ export interface JsChart {
   categoryAxis?: JsAxis
   valueAxis?: JsAxis
   legend?: JsLegend
-  anchor: JsDrawingAnchor
   dataLabels?: JsDataLabels
   view3D?: JsView3D
   dataTable?: JsChartDataTable
@@ -659,12 +742,28 @@ export interface JsChart {
   highLowLines?: JsChartLines
   seriesLines?: JsChartLines
   upDownBars?: JsUpDownBars
+  style?: JsChartStyle
+  colorStyle?: JsChartColorStyle
 }
 
 export interface JsChartAxis {
   id: number
   crossId: number
   axis: JsAxis
+}
+
+/**
+ * A chart colour style part. `raw` is set instead when the part could
+ * not be modelled.
+ */
+export interface JsChartColorStyle {
+  /** `cycle`, `withinLinear`, ... */
+  method?: string
+  id?: number
+  /** Each colour as the XML it was read as. */
+  colors: Array<string>
+  variations: Array<string>
+  raw?: string
 }
 
 /** Data table displayed beneath the chart. */
@@ -684,12 +783,13 @@ export interface JsChartEx {
   data: Array<JsChartExData>
   plotArea: JsChartExPlotArea
   legend?: JsChartExLegend
-  anchor: JsDrawingAnchor
   shapeProperties?: JsChartShapeProperties
   formatOverrides: Array<JsChartExFormatOverride>
   printSettings?: JsChartExPrintSettings
   externalDataRelId?: string
   externalDataAutoUpdate?: boolean
+  style?: JsChartStyle
+  colorStyle?: JsChartColorStyle
 }
 
 export interface JsChartExAxis {
@@ -698,8 +798,8 @@ export interface JsChartExAxis {
   scaling: JsChartExScaling
   title?: JsChartExAxisTitle
   units?: JsChartExAxisUnits
-  majorGridlines?: JsChartShapeProperties
-  minorGridlines?: JsChartShapeProperties
+  majorGridlines?: JsChartExGridlines
+  minorGridlines?: JsChartExGridlines
   majorTickMarks?: string
   minorTickMarks?: string
   tickLabels: boolean
@@ -781,6 +881,10 @@ export interface JsChartExGeography {
   attribution?: string
 }
 
+export interface JsChartExGridlines {
+  shapeProperties?: JsChartShapeProperties
+}
+
 export interface JsChartExHeaderFooter {
   alignWithMargins?: boolean
   differentOddEven?: boolean
@@ -801,7 +905,7 @@ export interface JsChartExLayoutPr {
   binning?: JsChartExBinning
   geography?: JsChartExGeography
   statistics?: JsChartExStatistics
-  subtotals: Array<number>
+  subtotals?: Array<number>
 }
 
 export interface JsChartExLegend {
@@ -938,6 +1042,40 @@ export interface JsChartSheet {
   visibility: string
 }
 
+/**
+ * A chart style part. `entries` is keyed by the element name the entry
+ * belongs to (`chartArea`, `dataPoint`, ...); `raw` is set instead when
+ * the part could not be modelled and is being replayed as read.
+ */
+export interface JsChartStyle {
+  id?: number
+  entries: Record<string, JsChartStyleEntry>
+  markerSymbol?: string
+  markerSize?: number
+  raw?: string
+}
+
+export interface JsChartStyleEntry {
+  lineReference: JsChartStyleReference
+  lineWidthScale?: number
+  fillReference: JsChartStyleReference
+  effectReference: JsChartStyleReference
+  /** `major`, `minor` or `none`. */
+  fontCollection: string
+  fontColor?: string
+  /** DrawingML kept as the XML it was read as. */
+  shapeProperties?: string
+  defaultRunProperties?: string
+  bodyProperties?: string
+  mods?: string
+}
+
+export interface JsChartStyleReference {
+  idx: number
+  /** The colour override, as the XML it was read as. */
+  color?: string
+}
+
 export interface JsChartTypeGroup {
   chartType: string
   is3D: boolean
@@ -959,22 +1097,31 @@ export interface JsChartTypeGroup {
   upDownBars?: JsUpDownBars
 }
 
+export type JsCheckState =  'unchecked'|
+'checked'|
+'mixed';
+
 /**
  * Color representation. The `colorType` field indicates the variant:
  * `"auto"`, `"rgb"`, `"argb"`, `"theme"`, or `"indexed"`.
- * The `hex` field always contains the resolved 6- or 8-char hex string.
+ * `hex` carries the context-free hex string; it is absent for
+ * `"auto"` and `"theme"` colors, which have no fixed RGB without the
+ * workbook - resolve those through `Workbook.resolveColor`.
  */
 export interface JsColor {
   colorType: string
-  /** Resolved hex string (6 or 8 chars, no `#` prefix). */
-  hex: string
+  /**
+   * Context-free hex string (6 or 8 chars, no `#` prefix); absent
+   * for auto and theme colors.
+   */
+  hex?: string
   r?: number
   g?: number
   b?: number
   a?: number
-  /** Theme color index (0-9), present when `colorType === "theme"`. */
+  /** Theme color index (0-11), present when `colorType === "theme"`. */
   themeIndex?: number
-  /** Tint percentage (-100 to 100), present when `colorType === "theme"`. */
+  /** OOXML tint fraction (-1.0 to 1.0), present when `colorType === "theme"`. */
   tint?: number
   /** Palette index, present when `colorType === "indexed"`. */
   paletteIndex?: number
@@ -1121,35 +1268,6 @@ export interface JsDataValidation {
   formula?: string
 }
 
-/** Chart anchor position in a worksheet. */
-export interface JsDrawingAnchor {
-  fromCol: number
-  fromRow: number
-  fromColOffset: number
-  fromRowOffset: number
-  toCol: number
-  toRow: number
-  toColOffset: number
-  toRowOffset: number
-}
-
-export interface JsEmbeddedImage {
-  id: number
-  name: string
-  description?: string
-  anchor: JsDrawingAnchor
-  format: string
-  mediaPath: string
-  svgMediaPath?: string
-  widthEmu: number
-  heightEmu: number
-  rotation?: number
-  flipH: boolean
-  flipV: boolean
-  data: Buffer
-  svgData?: Buffer
-}
-
 /** Error bars attached to a data series. */
 export interface JsErrorBars {
   direction: string
@@ -1238,6 +1356,11 @@ export interface JsFontStylePatch {
   scheme?: string
 }
 
+export interface JsFormControlInteractionResult {
+  controlsChanged: number
+  linkedCellsChanged: number
+}
+
 /** A formula cell with address. */
 export interface JsFormulaCell {
   row: number
@@ -1308,6 +1431,10 @@ export interface JsLegend {
   position: string
   overlay: boolean
 }
+
+export type JsListSelection =  'single'|
+'multi'|
+'extend';
 
 /** Manual layout positioning. */
 export interface JsManualLayout {
@@ -1793,6 +1920,23 @@ export interface JsPivotValue {
   error?: string
 }
 
+/** Protected editable range settings. */
+export interface JsProtectedRange {
+  name: string
+  ranges: Array<string>
+  passwordHash?: number
+  securityDescriptor?: string
+}
+
+/** Protected editable range setter input. */
+export interface JsProtectedRangeInput {
+  name: string
+  ranges: Array<string>
+  password?: string
+  passwordHash?: number
+  securityDescriptor?: string
+}
+
 /** A single run of rich text. */
 export interface JsRichTextRun {
   text: string
@@ -1875,6 +2019,7 @@ export interface JsSelection {
 /** Sheet protection settings. */
 export interface JsSheetProtection {
   protected: boolean
+  passwordHash?: number
   selectLockedCells: boolean
   selectUnlockedCells: boolean
   formatCells: boolean
@@ -1888,6 +2033,26 @@ export interface JsSheetProtection {
   sort: boolean
   autoFilter: boolean
   pivotTables: boolean
+}
+
+/** Sheet protection setter input. */
+export interface JsSheetProtectionInput {
+  protected?: boolean
+  password?: string
+  passwordHash?: number
+  selectLockedCells?: boolean
+  selectUnlockedCells?: boolean
+  formatCells?: boolean
+  formatColumns?: boolean
+  formatRows?: boolean
+  insertColumns?: boolean
+  insertRows?: boolean
+  insertHyperlinks?: boolean
+  deleteColumns?: boolean
+  deleteRows?: boolean
+  sort?: boolean
+  autoFilter?: boolean
+  pivotTables?: boolean
 }
 
 /** A slot in the workbook tab bar. */
@@ -2078,6 +2243,21 @@ export interface JsWorkbookExtensionPart {
   relationshipType: string
   relationshipId?: string
   payload: Buffer
+}
+
+/** Workbook protection settings. */
+export interface JsWorkbookProtection {
+  structure: boolean
+  windows: boolean
+  passwordHash?: number
+}
+
+/** Workbook protection setter input. */
+export interface JsWorkbookProtectionInput {
+  structure?: boolean
+  windows?: boolean
+  password?: string
+  passwordHash?: number
 }
 
 /** Workbook-level settings. */

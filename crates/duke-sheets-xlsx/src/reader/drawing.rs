@@ -1,609 +1,59 @@
-use std::io::{BufReader, Cursor, Read, Seek};
+use std::io::Read;
+#[cfg(test)]
+use std::io::Seek;
 
-use quick_xml::events::Event;
-use quick_xml::reader::Reader;
-use quick_xml::Writer;
+use crate::error::XlsxResult;
 
-use super::archive_by_name;
-use crate::error::{XlsxError, XlsxResult};
-use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
+pub(crate) use duke_sheets_chart::drawing_part::read::{
+    DrawingChartRef, DrawingEntry, DrawingEntryKind, ParsedChild, ParsedGroup, ParsedShape,
+    PicShape,
+};
 
-/// A chart reference discovered in a drawing XML, paired with its anchor position.
-pub(crate) struct DrawingChartRef {
-    /// The relationship id (e.g. "rId1") pointing to the chart part.
-    pub(crate) rel_id: String,
-    /// The two-cell anchor positioning the chart in the worksheet.
-    pub(crate) anchor: DrawingAnchor,
-    /// Whether this references a ChartEx part (`cx:chart`) rather than a standard chart.
-    pub(crate) is_chart_ex: bool,
-    /// Raw `mc:Fallback` XML bytes for roundtrip (chartEx only).
-    pub(crate) raw_mc_fallback: Option<Vec<u8>>,
+/// Parse a SpreadsheetML drawing part into its top-level entries in
+/// document order (see [`duke_sheets_chart::drawing_part::read`]).
+/// A missing part yields an empty list; a malformed part is skipped
+/// with a warning (matching the XLSB reader) so the workbook stays
+/// readable.
+pub(crate) fn parse_drawing_entries<R: Read>(
+    mut reader: R,
+    drawing_path: &str,
+) -> XlsxResult<Vec<DrawingEntry>> {
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes)?;
+    match duke_sheets_chart::drawing_part::read::parse_drawing_part(&bytes) {
+        Ok(entries) => Ok(entries),
+        Err(e) => {
+            log::warn!("failed to parse drawing part {drawing_path}: {e}");
+            Ok(Vec::new())
+        }
+    }
 }
 
-/// Chart refs, image refs, and raw non-chart drawing anchors from a drawing XML.
-pub(crate) struct DrawingContents {
-    pub chart_refs: Vec<DrawingChartRef>,
-    pub images: Vec<EmbeddedImage>,
-    pub raw_non_chart_anchors: Vec<Vec<u8>>,
-}
-
-const URI_STANDARD_CHART: &str = "http://schemas.openxmlformats.org/drawingml/2006/chart";
-const URI_CHART_EX: &str = "http://schemas.microsoft.com/office/drawing/2014/chartex";
-
-/// Parse a SpreadsheetML drawing and return chart refs plus raw non-chart anchors.
-///
-/// For each anchor (twoCellAnchor, oneCellAnchor, absoluteAnchor):
-/// - If it contains a graphicFrame with a chart URI → extract a `DrawingChartRef`
-/// - Otherwise → capture the entire anchor element as raw XML bytes
-pub(crate) fn read_drawing_contents<R: Read + Seek>(
+#[cfg(test)]
+pub(crate) fn read_drawing_entries<R: Read + std::io::Seek>(
     archive: &mut zip::ZipArchive<R>,
     drawing_path: &str,
-) -> XlsxResult<DrawingContents> {
-    let file = match archive_by_name(archive, drawing_path) {
-        Ok(f) => f,
-        Err(_) => {
-            return Ok(DrawingContents {
-                chart_refs: Vec::new(),
-                images: Vec::new(),
-                raw_non_chart_anchors: Vec::new(),
-            })
-        }
+) -> XlsxResult<Vec<DrawingEntry>> {
+    let file = match archive.by_name(drawing_path) {
+        Ok(file) => file,
+        Err(_) => return Ok(Vec::new()),
     };
-
-    let reader = BufReader::new(file);
-    let mut xml_reader = Reader::from_reader(reader);
-    xml_reader.config_mut().trim_text(true);
-
-    let mut buf = Vec::new();
-    let mut chart_refs = Vec::new();
-    let mut images: Vec<EmbeddedImage> = Vec::new();
-    let mut raw_non_chart_anchors: Vec<Vec<u8>> = Vec::new();
-
-    let mut in_two_cell_anchor = false;
-    let mut in_one_cell_anchor = false;
-    let mut in_absolute_anchor = false;
-    let mut from = CellMarker::default();
-    let mut to = CellMarker::default();
-    let mut in_from = false;
-    let mut in_to = false;
-    let mut in_col = false;
-    let mut in_col_off = false;
-    let mut in_row = false;
-    let mut in_row_off = false;
-    let mut in_graphic_data = false;
-    let mut graphic_data_uri: Option<String> = None;
-    let mut chart_rel_id: Option<String> = None;
-    let mut is_chart_ex = false;
-    let mut capture: Option<Writer<Cursor<Vec<u8>>>> = None;
-    let mut fallback_capture: Option<Writer<Cursor<Vec<u8>>>> = None;
-    let mut fallback_depth: u32 = 0;
-    let mut raw_mc_fallback: Option<Vec<u8>> = None;
-
-    // Image (pic) parsing state
-    let mut in_pic = false;
-    let mut _in_grp_sp = false;
-    let mut pic_id: u32 = 0;
-    let mut pic_name = String::new();
-    let mut pic_descr: Option<String> = None;
-    let mut blip_rel_id: Option<String> = None;
-    let mut svg_blip_rel_id: Option<String> = None;
-    let mut pic_width_emu: i64 = 0;
-    let mut pic_height_emu: i64 = 0;
-    let mut pic_rotation: Option<i32> = None;
-    let mut pic_flip_h = false;
-    let mut pic_flip_v = false;
-    let mut in_sp_pr = false;
-    let mut sp_pr_depth: u32 = 0;
-
-    // Anchor-variant-specific state. For OneCell, the anchor's
-    // <xdr:ext> carries the picture extent (width × height in EMU).
-    // For Absolute, the anchor's <xdr:pos> carries x/y and
-    // <xdr:ext> carries width × height. The xfrm-level ext inside
-    // spPr is captured separately in pic_width_emu/pic_height_emu.
-    let mut anchor_ext_cx: i64 = 0;
-    let mut anchor_ext_cy: i64 = 0;
-    let mut anchor_pos_x: i64 = 0;
-    let mut anchor_pos_y: i64 = 0;
-    let mut twocell_edit_as: Option<duke_sheets_chart::EditAs> = None;
-
-    loop {
-        match xml_reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) => {
-                let in_any_anchor = in_two_cell_anchor || in_one_cell_anchor || in_absolute_anchor;
-
-                // Capture mc:Fallback content
-                if let Some(ref mut w) = fallback_capture {
-                    let _ = w.write_event(Event::Start(e.clone().into_owned()));
-                    fallback_depth += 1;
-                } else if in_any_anchor {
-                    if let Some(ref mut w) = capture {
-                        let _ = w.write_event(Event::Start(e.clone().into_owned()));
-                    }
-                }
-
-                match e.name().local_name().as_ref() {
-                    b"twoCellAnchor" => {
-                        in_two_cell_anchor = true;
-                        from = CellMarker::default();
-                        to = CellMarker::default();
-                        chart_rel_id = None;
-                        is_chart_ex = false;
-                        raw_mc_fallback = None;
-                        twocell_edit_as = None;
-                        // Parse the optional editAs="..." attribute.
-                        for attr in e.attributes().flatten() {
-                            if attr.key.local_name().as_ref() == b"editAs" {
-                                if let Ok(s) = attr.unescape_value() {
-                                    twocell_edit_as = match s.as_ref() {
-                                        "twoCell" => Some(duke_sheets_chart::EditAs::TwoCell),
-                                        "oneCell" => Some(duke_sheets_chart::EditAs::OneCell),
-                                        "absolute" => Some(duke_sheets_chart::EditAs::Absolute),
-                                        _ => None,
-                                    };
-                                }
-                            }
-                        }
-                        let mut w = Writer::new(Cursor::new(Vec::new()));
-                        let _ = w.write_event(Event::Start(e.clone().into_owned()));
-                        capture = Some(w);
-                    }
-                    b"oneCellAnchor" => {
-                        in_one_cell_anchor = true;
-                        from = CellMarker::default();
-                        to = CellMarker::default();
-                        chart_rel_id = None;
-                        is_chart_ex = false;
-                        raw_mc_fallback = None;
-                        anchor_ext_cx = 0;
-                        anchor_ext_cy = 0;
-                        let mut w = Writer::new(Cursor::new(Vec::new()));
-                        let _ = w.write_event(Event::Start(e.clone().into_owned()));
-                        capture = Some(w);
-                    }
-                    b"absoluteAnchor" => {
-                        in_absolute_anchor = true;
-                        from = CellMarker::default();
-                        to = CellMarker::default();
-                        chart_rel_id = None;
-                        is_chart_ex = false;
-                        raw_mc_fallback = None;
-                        anchor_ext_cx = 0;
-                        anchor_ext_cy = 0;
-                        anchor_pos_x = 0;
-                        anchor_pos_y = 0;
-                        let mut w = Writer::new(Cursor::new(Vec::new()));
-                        let _ = w.write_event(Event::Start(e.clone().into_owned()));
-                        capture = Some(w);
-                    }
-                    b"from" if in_two_cell_anchor || in_one_cell_anchor => in_from = true,
-                    b"to" if in_two_cell_anchor => in_to = true,
-                    b"col" if in_from || in_to => in_col = true,
-                    b"colOff" if in_from || in_to => in_col_off = true,
-                    b"row" if in_from || in_to => in_row = true,
-                    b"rowOff" if in_from || in_to => in_row_off = true,
-                    b"graphicData" if in_any_anchor => {
-                        in_graphic_data = true;
-                        graphic_data_uri = None;
-                        for attr in e.attributes().flatten() {
-                            if attr.key.local_name().as_ref() == b"uri" {
-                                graphic_data_uri =
-                                    attr.unescape_value().ok().map(|s| s.to_string());
-                            }
-                        }
-                    }
-                    b"Fallback" if in_any_anchor && fallback_capture.is_none() && is_chart_ex => {
-                        let mut w = Writer::new(Cursor::new(Vec::new()));
-                        let _ = w.write_event(Event::Start(e.clone().into_owned()));
-                        fallback_depth = 1;
-                        fallback_capture = Some(w);
-                    }
-                    b"pic" if in_any_anchor => {
-                        in_pic = true;
-                        pic_id = 0;
-                        pic_name = String::new();
-                        pic_descr = None;
-                        blip_rel_id = None;
-                        svg_blip_rel_id = None;
-                        pic_width_emu = 0;
-                        pic_height_emu = 0;
-                        pic_rotation = None;
-                        pic_flip_h = false;
-                        pic_flip_v = false;
-                        in_sp_pr = false;
-                        sp_pr_depth = 0;
-                    }
-                    b"grpSp" if in_any_anchor => _in_grp_sp = true,
-                    b"cNvPr" if in_pic => {
-                        for attr in e.attributes().flatten() {
-                            match attr.key.local_name().as_ref() {
-                                b"id" => {
-                                    pic_id = attr
-                                        .unescape_value()
-                                        .ok()
-                                        .and_then(|s| s.parse().ok())
-                                        .unwrap_or(0);
-                                }
-                                b"name" => {
-                                    pic_name = attr
-                                        .unescape_value()
-                                        .map(|s| s.to_string())
-                                        .unwrap_or_default();
-                                }
-                                b"descr" => {
-                                    pic_descr = attr.unescape_value().ok().map(|s| s.to_string());
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    b"blip" if in_pic => {
-                        for attr in e.attributes().flatten() {
-                            if attr.key.local_name().as_ref() == b"embed" {
-                                blip_rel_id = attr.unescape_value().ok().map(|s| s.to_string());
-                            }
-                        }
-                    }
-                    b"spPr" if in_pic => {
-                        in_sp_pr = true;
-                        sp_pr_depth = 1;
-                    }
-                    b"xfrm" if in_sp_pr => {
-                        for attr in e.attributes().flatten() {
-                            match attr.key.local_name().as_ref() {
-                                b"rot" => {
-                                    pic_rotation =
-                                        attr.unescape_value().ok().and_then(|s| s.parse().ok());
-                                }
-                                b"flipH" => {
-                                    pic_flip_h = attr
-                                        .unescape_value()
-                                        .ok()
-                                        .map(|s| s == "1" || s == "true")
-                                        .unwrap_or(false);
-                                }
-                                b"flipV" => {
-                                    pic_flip_v = attr
-                                        .unescape_value()
-                                        .ok()
-                                        .map(|s| s == "1" || s == "true")
-                                        .unwrap_or(false);
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    _ if in_sp_pr => sp_pr_depth += 1,
-                    _ => {}
-                }
-            }
-            Ok(Event::Empty(ref e)) => {
-                if let Some(ref mut w) = fallback_capture {
-                    let _ = w.write_event(Event::Empty(e.clone().into_owned()));
-                } else if let Some(ref mut w) = capture {
-                    let _ = w.write_event(Event::Empty(e.clone().into_owned()));
-                }
-                let local = e.name().local_name();
-                if in_graphic_data && local.as_ref() == b"chart" {
-                    let uri = graphic_data_uri.as_deref().unwrap_or("");
-                    match uri {
-                        URI_CHART_EX => is_chart_ex = true,
-                        URI_STANDARD_CHART | _ => is_chart_ex = uri == URI_CHART_EX,
-                    }
-                    for attr in e.attributes().flatten() {
-                        if attr.key.local_name().as_ref() == b"id" {
-                            chart_rel_id = attr.unescape_value().ok().map(|s| s.to_string());
-                        }
-                    }
-                }
-                // Anchor-level <xdr:ext> and <xdr:pos> live OUTSIDE
-                // the <xdr:pic>/<xdr:spPr> nesting. They carry the
-                // picture extent (OneCell / Absolute) and origin
-                // (Absolute only). Both are self-closing tags.
-                let in_any_anchor = in_two_cell_anchor || in_one_cell_anchor || in_absolute_anchor;
-                if in_any_anchor && !in_pic {
-                    match local.as_ref() {
-                        b"ext" => {
-                            for attr in e.attributes().flatten() {
-                                match attr.key.local_name().as_ref() {
-                                    b"cx" => {
-                                        anchor_ext_cx = attr
-                                            .unescape_value()
-                                            .ok()
-                                            .and_then(|s| s.parse().ok())
-                                            .unwrap_or(0);
-                                    }
-                                    b"cy" => {
-                                        anchor_ext_cy = attr
-                                            .unescape_value()
-                                            .ok()
-                                            .and_then(|s| s.parse().ok())
-                                            .unwrap_or(0);
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                        b"pos" => {
-                            for attr in e.attributes().flatten() {
-                                match attr.key.local_name().as_ref() {
-                                    b"x" => {
-                                        anchor_pos_x = attr
-                                            .unescape_value()
-                                            .ok()
-                                            .and_then(|s| s.parse().ok())
-                                            .unwrap_or(0);
-                                    }
-                                    b"y" => {
-                                        anchor_pos_y = attr
-                                            .unescape_value()
-                                            .ok()
-                                            .and_then(|s| s.parse().ok())
-                                            .unwrap_or(0);
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                if in_pic {
-                    match local.as_ref() {
-                        b"cNvPr" => {
-                            for attr in e.attributes().flatten() {
-                                match attr.key.local_name().as_ref() {
-                                    b"id" => {
-                                        pic_id = attr
-                                            .unescape_value()
-                                            .ok()
-                                            .and_then(|s| s.parse().ok())
-                                            .unwrap_or(0);
-                                    }
-                                    b"name" => {
-                                        pic_name = attr
-                                            .unescape_value()
-                                            .map(|s| s.to_string())
-                                            .unwrap_or_default();
-                                    }
-                                    b"descr" => {
-                                        pic_descr =
-                                            attr.unescape_value().ok().map(|s| s.to_string());
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                        b"blip" => {
-                            for attr in e.attributes().flatten() {
-                                if attr.key.local_name().as_ref() == b"embed" {
-                                    blip_rel_id = attr.unescape_value().ok().map(|s| s.to_string());
-                                }
-                            }
-                        }
-                        b"svgBlip" => {
-                            for attr in e.attributes().flatten() {
-                                if attr.key.local_name().as_ref() == b"embed" {
-                                    svg_blip_rel_id =
-                                        attr.unescape_value().ok().map(|s| s.to_string());
-                                }
-                            }
-                        }
-                        b"ext" if in_sp_pr => {
-                            for attr in e.attributes().flatten() {
-                                match attr.key.local_name().as_ref() {
-                                    b"cx" => {
-                                        pic_width_emu = attr
-                                            .unescape_value()
-                                            .ok()
-                                            .and_then(|s| s.parse().ok())
-                                            .unwrap_or(0);
-                                    }
-                                    b"cy" => {
-                                        pic_height_emu = attr
-                                            .unescape_value()
-                                            .ok()
-                                            .and_then(|s| s.parse().ok())
-                                            .unwrap_or(0);
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                        b"xfrm" if in_sp_pr => {
-                            for attr in e.attributes().flatten() {
-                                match attr.key.local_name().as_ref() {
-                                    b"rot" => {
-                                        pic_rotation =
-                                            attr.unescape_value().ok().and_then(|s| s.parse().ok());
-                                    }
-                                    b"flipH" => {
-                                        pic_flip_h = attr
-                                            .unescape_value()
-                                            .ok()
-                                            .map(|s| s == "1" || s == "true")
-                                            .unwrap_or(false);
-                                    }
-                                    b"flipV" => {
-                                        pic_flip_v = attr
-                                            .unescape_value()
-                                            .ok()
-                                            .map(|s| s == "1" || s == "true")
-                                            .unwrap_or(false);
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            Ok(Event::Text(ref e)) => {
-                if let Some(ref mut w) = fallback_capture {
-                    let _ = w.write_event(Event::Text(e.clone().into_owned()));
-                } else if let Some(ref mut w) = capture {
-                    let _ = w.write_event(Event::Text(e.clone().into_owned()));
-                }
-                if let Ok(text) = e.unescape() {
-                    let text = text.trim();
-                    if in_col {
-                        if in_from {
-                            from.col = text.parse().unwrap_or(0);
-                        } else if in_to {
-                            to.col = text.parse().unwrap_or(0);
-                        }
-                    } else if in_col_off {
-                        if in_from {
-                            from.col_offset_emu = text.parse().unwrap_or(0);
-                        } else if in_to {
-                            to.col_offset_emu = text.parse().unwrap_or(0);
-                        }
-                    } else if in_row {
-                        if in_from {
-                            from.row = text.parse().unwrap_or(0);
-                        } else if in_to {
-                            to.row = text.parse().unwrap_or(0);
-                        }
-                    } else if in_row_off {
-                        if in_from {
-                            from.row_offset_emu = text.parse().unwrap_or(0);
-                        } else if in_to {
-                            to.row_offset_emu = text.parse().unwrap_or(0);
-                        }
-                    }
-                }
-            }
-            Ok(Event::End(ref e)) => {
-                if let Some(ref mut w) = fallback_capture {
-                    fallback_depth -= 1;
-                    let _ = w.write_event(Event::End(e.clone().into_owned()));
-                    if fallback_depth == 0 {
-                        if let Some(w) = fallback_capture.take() {
-                            raw_mc_fallback = Some(w.into_inner().into_inner());
-                        }
-                    }
-                } else if let Some(ref mut w) = capture {
-                    let _ = w.write_event(Event::End(e.clone().into_owned()));
-                }
-                match e.name().local_name().as_ref() {
-                    b"pic" => {
-                        if in_pic {
-                            if let Some(rel_id) = blip_rel_id.take() {
-                                // Build the appropriate DrawingAnchor
-                                // variant based on which anchor element
-                                // wraps this <xdr:pic>.
-                                let anchor = if in_one_cell_anchor {
-                                    DrawingAnchor::OneCell {
-                                        from: from.clone(),
-                                        width_emu: anchor_ext_cx,
-                                        height_emu: anchor_ext_cy,
-                                    }
-                                } else if in_absolute_anchor {
-                                    DrawingAnchor::Absolute {
-                                        x_emu: anchor_pos_x,
-                                        y_emu: anchor_pos_y,
-                                        width_emu: anchor_ext_cx,
-                                        height_emu: anchor_ext_cy,
-                                    }
-                                } else {
-                                    DrawingAnchor::TwoCell {
-                                        from: from.clone(),
-                                        to: to.clone(),
-                                        edit_as: twocell_edit_as.clone(),
-                                    }
-                                };
-                                images.push(EmbeddedImage {
-                                    id: pic_id,
-                                    name: std::mem::take(&mut pic_name),
-                                    description: pic_descr.take(),
-                                    anchor,
-                                    format: ImageFormat::Png, // placeholder, resolved later from media path
-                                    media_path: rel_id,
-                                    svg_media_path: svg_blip_rel_id.take(),
-                                    width_emu: pic_width_emu,
-                                    height_emu: pic_height_emu,
-                                    rotation: pic_rotation,
-                                    flip_h: pic_flip_h,
-                                    flip_v: pic_flip_v,
-                                    data: Vec::new(), // populated later from archive
-                                    svg_data: None,   // populated later from archive
-                                });
-                            }
-                            in_pic = false;
-                        }
-                    }
-                    b"grpSp" => _in_grp_sp = false,
-                    b"spPr" if in_pic && in_sp_pr => {
-                        in_sp_pr = false;
-                        sp_pr_depth = 0;
-                    }
-                    _ if in_sp_pr && in_pic => {
-                        sp_pr_depth = sp_pr_depth.saturating_sub(1);
-                    }
-                    b"twoCellAnchor" | b"oneCellAnchor" | b"absoluteAnchor" => {
-                        if let Some(rel_id) = chart_rel_id.take() {
-                            chart_refs.push(DrawingChartRef {
-                                rel_id,
-                                anchor: DrawingAnchor::TwoCell {
-                                    from: from.clone(),
-                                    to: to.clone(),
-                                    edit_as: None,
-                                },
-                                is_chart_ex,
-                                raw_mc_fallback: raw_mc_fallback.take(),
-                            });
-                        } else if let Some(w) = capture.take() {
-                            raw_non_chart_anchors.push(w.into_inner().into_inner());
-                        }
-                        capture = None;
-                        in_two_cell_anchor = false;
-                        in_one_cell_anchor = false;
-                        in_absolute_anchor = false;
-                        in_from = false;
-                        in_to = false;
-                        is_chart_ex = false;
-                        raw_mc_fallback = None;
-                        in_pic = false;
-                        _in_grp_sp = false;
-                    }
-                    b"from" => in_from = false,
-                    b"to" => in_to = false,
-                    b"col" => in_col = false,
-                    b"colOff" => in_col_off = false,
-                    b"row" => in_row = false,
-                    b"rowOff" => in_row_off = false,
-                    b"graphicData" => in_graphic_data = false,
-                    _ => {}
-                }
-            }
-            Ok(Event::Eof) => break,
-            Err(e) => return Err(XlsxError::Xml(e)),
-            _ => {
-                if let Some(ref mut _w) = fallback_capture {
-                    // Forward other events (CData, PI, etc.) into fallback capture
-                    // We can't easily clone arbitrary events, so just skip.
-                } else if let Some(ref mut _w) = capture {
-                    // same
-                }
-            }
-        }
-        buf.clear();
-    }
-
-    Ok(DrawingContents {
-        chart_refs,
-        images,
-        raw_non_chart_anchors,
-    })
+    parse_drawing_entries(file, drawing_path)
 }
 
-/// Backward-compatible wrapper that returns only chart refs.
+/// Backward-compatible view returning only chart refs.
 #[cfg(test)]
 pub(crate) fn read_drawing_chart_refs<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     drawing_path: &str,
 ) -> XlsxResult<Vec<DrawingChartRef>> {
-    Ok(read_drawing_contents(archive, drawing_path)?.chart_refs)
+    Ok(read_drawing_entries(archive, drawing_path)?
+        .into_iter()
+        .filter_map(|entry| match entry.kind {
+            DrawingEntryKind::Chart(chart_ref) => Some(chart_ref),
+            _ => None,
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -611,6 +61,7 @@ mod tests {
     use std::io::{Cursor, Write};
 
     use super::*;
+    use duke_sheets_chart::{DrawingAnchor, EditAs};
 
     fn zip_with_entry(path: &str, xml: &str) -> zip::ZipArchive<Cursor<Vec<u8>>> {
         let buf = Vec::new();
@@ -703,15 +154,20 @@ mod tests {
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].rel_id, "rId2");
         assert!(!refs[0].is_chart_ex);
-        if let DrawingAnchor::TwoCell { from, to, .. } = &refs[0].anchor {
+        if let DrawingAnchor::OneCell {
+            from,
+            width_emu,
+            height_emu,
+        } = &refs[0].anchor
+        {
             assert_eq!(from.col, 1);
             assert_eq!(from.col_offset_emu, 100);
             assert_eq!(from.row, 2);
             assert_eq!(from.row_offset_emu, 200);
-            assert_eq!(to.col, 0);
-            assert_eq!(to.row, 0);
+            assert_eq!(*width_emu, 5000000);
+            assert_eq!(*height_emu, 3000000);
         } else {
-            panic!("expected TwoCell anchor");
+            panic!("expected OneCell anchor, got {:?}", refs[0].anchor);
         }
     }
 
@@ -772,15 +228,16 @@ mod tests {
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].rel_id, "rId1");
         assert!(!refs[0].is_chart_ex);
-        // absoluteAnchor defaults all anchor values to zero
-        if let DrawingAnchor::TwoCell { from, to, .. } = &refs[0].anchor {
-            assert_eq!(from.col, 0);
-            assert_eq!(from.row, 0);
-            assert_eq!(to.col, 0);
-            assert_eq!(to.row, 0);
-        } else {
-            panic!("expected TwoCell anchor");
-        }
+        assert_eq!(
+            refs[0].anchor,
+            DrawingAnchor::Absolute {
+                x_emu: 0,
+                y_emu: 0,
+                width_emu: 9144000,
+                height_emu: 6858000,
+            },
+            "absoluteAnchor keeps its position and extent"
+        );
     }
 
     #[test]
@@ -821,7 +278,12 @@ mod tests {
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].rel_id, "rId3");
         assert!(refs[0].is_chart_ex);
-        assert!(refs[0].raw_mc_fallback.is_some());
+        // Fallback inner content is captured without the wrapper tags
+        // (surrounding whitespace is preserved verbatim).
+        let fallback = refs[0].raw_mc_fallback.as_deref().expect("fallback");
+        let fallback = std::str::from_utf8(fallback).unwrap();
+        assert!(fallback.trim_start().starts_with("<xdr:sp>"), "{fallback}");
+        assert!(!fallback.contains("mc:Fallback"), "{fallback}");
     }
 
     #[test]
@@ -852,25 +314,27 @@ mod tests {
 </xdr:wsDr>"#;
 
         let mut archive = zip_with_entry("xl/drawings/drawing1.xml", xml);
-        let contents = read_drawing_contents(&mut archive, "xl/drawings/drawing1.xml").unwrap();
+        let entries = read_drawing_entries(&mut archive, "xl/drawings/drawing1.xml").unwrap();
 
-        assert_eq!(contents.images.len(), 1);
-        assert!(contents.chart_refs.is_empty());
-        assert_eq!(contents.raw_non_chart_anchors.len(), 1);
+        // Single ownership: exactly one entry, classified as an image.
+        assert_eq!(entries.len(), 1);
+        let entry = &entries[0];
+        let DrawingEntryKind::Image(pic) = &entry.kind else {
+            panic!("expected image entry");
+        };
+        assert_eq!(pic.name, "Picture 1");
+        assert_eq!(pic.descr.as_deref(), Some("A test image"));
+        assert_eq!(pic.blip_rel.as_deref(), Some("rId1"));
+        assert_eq!(pic.ext_cx, 1000000);
+        assert_eq!(pic.ext_cy, 2000000);
+        assert_eq!(pic.rotation, Some(5400000));
+        assert!(pic.flip_h);
+        assert!(!pic.flip_v);
+        assert!(pic.svg_rel.is_none());
+        assert!(entry.locked);
+        assert!(entry.printable);
 
-        let img = &contents.images[0];
-        assert_eq!(img.id, 2);
-        assert_eq!(img.name, "Picture 1");
-        assert_eq!(img.description, Some("A test image".to_string()));
-        assert_eq!(img.media_path, "rId1");
-        assert_eq!(img.width_emu, 1000000);
-        assert_eq!(img.height_emu, 2000000);
-        assert_eq!(img.rotation, Some(5400000));
-        assert!(img.flip_h);
-        assert!(!img.flip_v);
-        assert!(img.svg_media_path.is_none());
-
-        if let DrawingAnchor::TwoCell { from, to, .. } = &img.anchor {
+        if let DrawingAnchor::TwoCell { from, to, .. } = &entry.anchor {
             assert_eq!(from.col, 1);
             assert_eq!(from.col_offset_emu, 100);
             assert_eq!(from.row, 2);
@@ -910,17 +374,181 @@ mod tests {
 </xdr:wsDr>"#;
 
         let mut archive = zip_with_entry("xl/drawings/drawing1.xml", xml);
-        let contents = read_drawing_contents(&mut archive, "xl/drawings/drawing1.xml").unwrap();
+        let entries = read_drawing_entries(&mut archive, "xl/drawings/drawing1.xml").unwrap();
 
-        assert_eq!(contents.images.len(), 1);
-        assert!(contents.chart_refs.is_empty());
+        assert_eq!(entries.len(), 1);
+        let DrawingEntryKind::Image(pic) = &entries[0].kind else {
+            panic!("expected image entry");
+        };
+        assert_eq!(pic.name, "SVG Pic");
+        assert_eq!(pic.blip_rel.as_deref(), Some("rId2"));
+        assert_eq!(pic.svg_rel.as_deref(), Some("rId3"));
+        assert_eq!(pic.ext_cx, 500000);
+        assert_eq!(pic.ext_cy, 500000);
+    }
 
-        let img = &contents.images[0];
-        assert_eq!(img.id, 3);
-        assert_eq!(img.name, "SVG Pic");
-        assert_eq!(img.media_path, "rId2");
-        assert_eq!(img.svg_media_path, Some("rId3".to_string()));
-        assert_eq!(img.width_emu, 500000);
-        assert_eq!(img.height_emu, 500000);
+    #[test]
+    fn test_parse_control_twin_and_client_data() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+          xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">
+    <mc:Choice xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main" Requires="a14">
+      <xdr:twoCellAnchor editAs="oneCell">
+        <xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+        <xdr:to><xdr:col>3</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>3</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
+        <xdr:sp macro="" textlink="">
+          <xdr:nvSpPr>
+            <xdr:cNvPr id="3" name="Check Box 1" hidden="1">
+              <a:extLst><a:ext uri="{63B3BB69-23CF-44E3-9099-C40C66FF867C}"><a14:compatExt spid="_x0000_s1026"/></a:ext></a:extLst>
+            </xdr:cNvPr>
+            <xdr:cNvSpPr/>
+          </xdr:nvSpPr>
+          <xdr:spPr bwMode="auto">
+            <a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></a:xfrm>
+            <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+          </xdr:spPr>
+        </xdr:sp>
+        <xdr:clientData fLocksWithSheet="0" fPrintsWithSheet="0"/>
+      </xdr:twoCellAnchor>
+    </mc:Choice>
+    <mc:Fallback/>
+  </mc:AlternateContent>
+</xdr:wsDr>"#;
+
+        let mut archive = zip_with_entry("xl/drawings/drawing1.xml", xml);
+        let entries = read_drawing_entries(&mut archive, "xl/drawings/drawing1.xml").unwrap();
+
+        assert_eq!(entries.len(), 1);
+        let entry = &entries[0];
+        let DrawingEntryKind::ControlTwin(twin) = &entry.kind else {
+            panic!("expected control twin entry");
+        };
+        assert_eq!(twin.spid, "_x0000_s1026");
+        assert_eq!(twin.shape_num, Some(1026));
+        assert!(!entry.locked);
+        assert!(!entry.printable);
+        if let DrawingAnchor::TwoCell { edit_as, .. } = &entry.anchor {
+            assert_eq!(edit_as, &Some(EditAs::OneCell));
+        } else {
+            panic!("expected TwoCell anchor");
+        }
+    }
+
+    #[test]
+    fn test_parse_control_twin_inside_anchor_alternate_content() {
+        // The other Excel emission shape: a bare anchor whose content
+        // is mc:AlternateContent wrapping the a14 twin sp.
+        let xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+          xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <xdr:twoCellAnchor>
+    <xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+    <xdr:to><xdr:col>3</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>3</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
+    <mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">
+      <mc:Choice xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main" Requires="a14">
+        <xdr:sp macro="" textlink="">
+          <xdr:nvSpPr>
+            <xdr:cNvPr id="3" name="Check Box 7" hidden="1">
+              <a:extLst><a:ext uri="{63B3BB69-23CF-44E3-9099-C40C66FF867C}"><a14:compatExt spid="_x0000_s1031"/></a:ext></a:extLst>
+            </xdr:cNvPr>
+            <xdr:cNvSpPr/>
+          </xdr:nvSpPr>
+          <xdr:spPr bwMode="auto"><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></a:xfrm></xdr:spPr>
+        </xdr:sp>
+      </mc:Choice>
+      <mc:Fallback/>
+    </mc:AlternateContent>
+    <xdr:clientData/>
+  </xdr:twoCellAnchor>
+</xdr:wsDr>"#;
+
+        let mut archive = zip_with_entry("xl/drawings/drawing1.xml", xml);
+        let entries = read_drawing_entries(&mut archive, "xl/drawings/drawing1.xml").unwrap();
+        assert_eq!(entries.len(), 1);
+        let DrawingEntryKind::ControlTwin(twin) = &entries[0].kind else {
+            panic!("expected control twin entry");
+        };
+        assert_eq!(twin.shape_num, Some(1031));
+    }
+
+    #[test]
+    fn test_parse_group_of_pics() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+          xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <xdr:twoCellAnchor>
+    <xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+    <xdr:to><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>2</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
+    <xdr:grpSp>
+      <xdr:nvGrpSpPr><xdr:cNvPr id="4" name="Group 1"/><xdr:cNvGrpSpPr/></xdr:nvGrpSpPr>
+      <xdr:grpSpPr>
+        <a:xfrm>
+          <a:off x="609600" y="190500"/><a:ext cx="1219200" cy="190500"/>
+          <a:chOff x="0" y="0"/><a:chExt cx="1219200" cy="190500"/>
+        </a:xfrm>
+      </xdr:grpSpPr>
+      <xdr:pic>
+        <xdr:nvPicPr><xdr:cNvPr id="5" name="Left"/><xdr:cNvPicPr/></xdr:nvPicPr>
+        <xdr:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="rId1"/></xdr:blipFill>
+        <xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="190500" cy="190500"/></a:xfrm></xdr:spPr>
+      </xdr:pic>
+      <xdr:pic>
+        <xdr:nvPicPr><xdr:cNvPr id="6" name="Right"/><xdr:cNvPicPr/></xdr:nvPicPr>
+        <xdr:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="rId2"/></xdr:blipFill>
+        <xdr:spPr><a:xfrm><a:off x="609600" y="0"/><a:ext cx="190500" cy="190500"/></a:xfrm></xdr:spPr>
+      </xdr:pic>
+    </xdr:grpSp>
+    <xdr:clientData/>
+  </xdr:twoCellAnchor>
+</xdr:wsDr>"#;
+
+        let mut archive = zip_with_entry("xl/drawings/drawing1.xml", xml);
+        let entries = read_drawing_entries(&mut archive, "xl/drawings/drawing1.xml").unwrap();
+
+        assert_eq!(entries.len(), 1);
+        let DrawingEntryKind::Group(group) = &entries[0].kind else {
+            panic!("expected group entry");
+        };
+        assert_eq!(group.name, "Group 1");
+        assert_eq!(group.transform.x_emu, 609600);
+        assert_eq!(group.transform.child_cx_emu, 1219200);
+        assert_eq!(group.children.len(), 2);
+        let ParsedChild::Pic(right) = &group.children[1] else {
+            panic!("expected pic child");
+        };
+        assert_eq!(right.name, "Right");
+        assert_eq!(right.off_x, 609600);
+        assert_eq!(right.blip_rel.as_deref(), Some("rId2"));
+    }
+
+    #[test]
+    fn test_group_with_unmodeled_child_degrades_to_raw() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+          xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <xdr:twoCellAnchor>
+    <xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+    <xdr:to><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>2</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
+    <xdr:grpSp>
+      <xdr:nvGrpSpPr><xdr:cNvPr id="4" name="Group 1"/><xdr:cNvGrpSpPr/></xdr:nvGrpSpPr>
+      <xdr:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1" cy="1"/><a:chOff x="0" y="0"/><a:chExt cx="1" cy="1"/></a:xfrm></xdr:grpSpPr>
+      <xdr:cxnSp><xdr:nvCxnSpPr><xdr:cNvPr id="5" name="Connector 1"/><xdr:cNvCxnSpPr/></xdr:nvCxnSpPr>
+        <xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1" cy="1"/></a:xfrm><a:prstGeom prst="line"><a:avLst/></a:prstGeom></xdr:spPr>
+      </xdr:cxnSp>
+    </xdr:grpSp>
+    <xdr:clientData/>
+  </xdr:twoCellAnchor>
+</xdr:wsDr>"#;
+
+        let mut archive = zip_with_entry("xl/drawings/drawing1.xml", xml);
+        let entries = read_drawing_entries(&mut archive, "xl/drawings/drawing1.xml").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(matches!(entries[0].kind, DrawingEntryKind::Raw));
+        let raw = std::str::from_utf8(&entries[0].bytes).unwrap();
+        assert!(
+            raw.contains("Connector 1"),
+            "raw bytes keep the group: {raw}"
+        );
     }
 }

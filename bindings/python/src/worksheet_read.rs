@@ -6,11 +6,11 @@ use pyo3::exceptions::PyIndexError;
 use pyo3::prelude::*;
 
 use crate::{
-    image_sizing_to_python, to_py_err, PyAutoFilter, PyCalculationImage, PyChart, PyChartEx,
-    PyColor, PyComment, PyCommentEntry, PyConditionalFormatRule, PyDataValidation, PyEmbeddedImage,
-    PyFormulaCell, PyFreezePanes, PyHyperlink, PyHyperlinkEntry, PyMergeSpan, PyMergedRegion,
-    PyPageBreak, PyPageSetup, PyRow, PyRowCell, PySelection, PySheetProtection, PySpillSource,
-    PySplitPanes, PyStyle, PyTable, PyWorksheet,
+    image_sizing_to_python, to_py_err, PyAutoFilter, PyCalculationImage, PyColor, PyComment,
+    PyCommentEntry, PyConditionalFormatRule, PyDataValidation, PyFormulaCell, PyFreezePanes,
+    PyHyperlink, PyHyperlinkEntry, PyMergeSpan, PyMergedRegion, PyPageBreak, PyPageSetup,
+    PyProtectedRange, PyRow, PyRowCell, PySelection, PySheetProtection, PySpillSource, PySplitPanes,
+    PyStyle, PyTable, PyWorksheet,
 };
 
 const ROW_ITER_BATCH_SIZE: u32 = 1000;
@@ -774,6 +774,19 @@ impl PyWorksheet {
     }
 
     #[getter]
+    fn protected_ranges(&self) -> PyResult<Vec<PyProtectedRange>> {
+        let wb = self.workbook.read().map_err(to_py_err)?;
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
+        Ok(ws
+            .protected_ranges()
+            .iter()
+            .map(PyProtectedRange::from)
+            .collect())
+    }
+
+    #[getter]
     fn page_setup(&self) -> PyResult<PyPageSetup> {
         let wb = self.workbook.read().map_err(to_py_err)?;
         let ws = wb
@@ -940,58 +953,5 @@ impl PyWorksheet {
             .worksheet(self.sheet_index)
             .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
         Ok(ws.is_merged_secondary(row, col as u16))
-    }
-    #[getter]
-    fn charts(&self) -> PyResult<Vec<PyChart>> {
-        let wb = self.workbook.read().map_err(to_py_err)?;
-        let ws = wb
-            .worksheet(self.sheet_index)
-            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
-        Ok(ws.charts().iter().map(PyChart::from).collect())
-    }
-
-    #[getter]
-    fn chart_count(&self) -> PyResult<u32> {
-        let wb = self.workbook.read().map_err(to_py_err)?;
-        let ws = wb
-            .worksheet(self.sheet_index)
-            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
-        Ok(ws.chart_count() as u32)
-    }
-
-    #[getter]
-    fn charts_ex(&self) -> PyResult<Vec<PyChartEx>> {
-        let wb = self.workbook.read().map_err(to_py_err)?;
-        let ws = wb
-            .worksheet(self.sheet_index)
-            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
-        Ok(ws.charts_ex().iter().map(PyChartEx::from).collect())
-    }
-
-    #[getter]
-    fn chart_ex_count(&self) -> PyResult<u32> {
-        let wb = self.workbook.read().map_err(to_py_err)?;
-        let ws = wb
-            .worksheet(self.sheet_index)
-            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
-        Ok(ws.chart_ex_count() as u32)
-    }
-
-    #[getter]
-    fn images(&self) -> PyResult<Vec<PyEmbeddedImage>> {
-        let wb = self.workbook.read().map_err(to_py_err)?;
-        let ws = wb
-            .worksheet(self.sheet_index)
-            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
-        Ok(ws.images().iter().map(PyEmbeddedImage::from).collect())
-    }
-
-    #[getter]
-    fn image_count(&self) -> PyResult<u32> {
-        let wb = self.workbook.read().map_err(to_py_err)?;
-        let ws = wb
-            .worksheet(self.sheet_index)
-            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
-        Ok(ws.image_count() as u32)
     }
 }

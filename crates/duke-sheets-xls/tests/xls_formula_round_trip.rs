@@ -61,10 +61,7 @@ fn only_formula_tokens_at(wb: &Workbook, row: u16, col: u16) -> Vec<u8> {
     };
     let stream = cfb.read_stream(stream_path).expect("read workbook stream");
     let records = biff::read_all_records(&mut Cursor::new(stream)).expect("read BIFF records");
-    for rec in records
-        .iter()
-        .filter(|r| r.record_type == biff::records::FORMULA)
-    {
+    for rec in records.iter().filter(|r| r.record_type == biff::records::FORMULA) {
         assert!(rec.data.len() >= 22, "FORMULA record too short");
         let rw = u16::from_le_bytes([rec.data[0], rec.data[1]]);
         let cl = u16::from_le_bytes([rec.data[2], rec.data[3]]);
@@ -338,8 +335,7 @@ fn union_parens_survive_outside_sum() {
         "=COUNT((A1,B1))",
     );
     assert_eq!(
-        s.get_formula_at(1, 3)
-            .expect("bare union formula must survive"),
+        s.get_formula_at(1, 3).expect("bare union formula must survive"),
         "=(A1,B1)",
     );
 }
@@ -354,30 +350,21 @@ fn many_arg_function_respects_biff8_cparams_limit() {
     let ws = wb.worksheet_mut(0).unwrap();
     let f100 = format!(
         "=SUM({})",
-        (1..=100)
-            .map(|i| i.to_string())
-            .collect::<Vec<_>>()
-            .join(",")
+        (1..=100).map(|i| i.to_string()).collect::<Vec<_>>().join(",")
     );
     ws.set_cell_formula("A1", &f100).unwrap();
-    ws.set_formula_result(0, 0, CellValue::Number(5050.0))
-        .unwrap();
+    ws.set_formula_result(0, 0, CellValue::Number(5050.0)).unwrap();
     let f200 = format!(
         "=SUM({})",
-        (1..=200)
-            .map(|i| i.to_string())
-            .collect::<Vec<_>>()
-            .join(",")
+        (1..=200).map(|i| i.to_string()).collect::<Vec<_>>().join(",")
     );
     ws.set_cell_formula("A2", &f200).unwrap();
-    ws.set_formula_result(1, 0, CellValue::Number(20100.0))
-        .unwrap();
+    ws.set_formula_result(1, 0, CellValue::Number(20100.0)).unwrap();
 
     let parsed = write_then_read(&wb);
     let s = parsed.worksheet(0).unwrap();
     assert_eq!(
-        s.get_formula_at(0, 0)
-            .expect("100-arg formula must survive"),
+        s.get_formula_at(0, 0).expect("100-arg formula must survive"),
         f100,
     );
     assert!(
@@ -622,8 +609,7 @@ fn nested_if_in_if_emits_r_class_inner_func() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", 4.0).unwrap();
-    ws.set_cell_formula("B1", "=IF(A1>0,IF(A1>10,1,2),3)")
-        .unwrap();
+    ws.set_cell_formula("B1", "=IF(A1>0,IF(A1>10,1,2),3)").unwrap();
     ws.set_formula_result(0, 1, CellValue::Number(2.0)).unwrap();
 
     let tokens = only_formula_tokens(&wb);
@@ -632,9 +618,7 @@ fn nested_if_in_if_emits_r_class_inner_func() {
     let if_var_positions: Vec<usize> = tokens
         .windows(4)
         .enumerate()
-        .filter(|(_, w)| {
-            (w[0] == 0x22 || w[0] == 0x42) && w[1] == 0x03 && w[2] == 0x01 && w[3] == 0x00
-        })
+        .filter(|(_, w)| (w[0] == 0x22 || w[0] == 0x42) && w[1] == 0x03 && w[2] == 0x01 && w[3] == 0x00)
         .map(|(i, _)| i)
         .collect();
     assert_eq!(
@@ -720,11 +704,7 @@ fn array_constant_in_sum_emits_ptg_array_and_rgcb() {
     assert_eq!(rgce[0], 0x60, "PtgArray A-class; rgce={rgce:02X?}");
     assert_eq!(&rgce[8..10], &[0x19, 0x10], "PtgAttrSum; rgce={rgce:02X?}");
     // rgcb header: cols-1=2, rows-1=0.
-    assert_eq!(
-        &rgcb[0..3],
-        &[0x02, 0x00, 0x00],
-        "rgcb header; rgcb={rgcb:02X?}"
-    );
+    assert_eq!(&rgcb[0..3], &[0x02, 0x00, 0x00], "rgcb header; rgcb={rgcb:02X?}");
     // three numbers: 0x01 + f64
     assert_eq!(rgcb[3], 0x01);
     assert_eq!(f64::from_le_bytes(rgcb[4..12].try_into().unwrap()), 1.0);
@@ -740,8 +720,7 @@ fn array_constant_round_trips_text() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_formula("A1", "=SUM({1,2;3,4})").unwrap();
-    ws.set_formula_result(0, 0, CellValue::Number(10.0))
-        .unwrap();
+    ws.set_formula_result(0, 0, CellValue::Number(10.0)).unwrap();
 
     let parsed = write_then_read(&wb);
     let f = parsed
@@ -763,11 +742,7 @@ fn unary_plus_emits_ptg_uplus() {
 
     let tokens = only_formula_tokens(&wb);
     assert_eq!(tokens[0], 0x44, "operand A1 V-class; {tokens:02X?}");
-    assert_eq!(
-        tokens.last().copied(),
-        Some(0x12),
-        "trailing PtgUplus; {tokens:02X?}"
-    );
+    assert_eq!(tokens.last().copied(), Some(0x12), "trailing PtgUplus; {tokens:02X?}");
     assert_eq!(tokens.len(), 6);
 }
 
@@ -780,8 +755,7 @@ fn parentheses_emit_ptg_paren() {
     ws.set_cell_value("A1", 2.0).unwrap();
     ws.set_cell_value("A2", 3.0).unwrap();
     ws.set_cell_formula("B1", "=(A1+A2)*2").unwrap();
-    ws.set_formula_result(0, 1, CellValue::Number(10.0))
-        .unwrap();
+    ws.set_formula_result(0, 1, CellValue::Number(10.0)).unwrap();
 
     let tokens = only_formula_tokens(&wb);
     // 5(ref) + 5(ref) + 1(add) + 1(paren) + 3(int) + 1(mul) = 16
@@ -821,10 +795,7 @@ fn vlookup_table_array_emits_r_class() {
 
     let tokens = only_formula_tokens(&wb);
     // lookup_value A1 → V-class PtgRef (0x44).
-    assert_eq!(
-        tokens[0], 0x44,
-        "lookup_value must be V-class; {tokens:02X?}"
-    );
+    assert_eq!(tokens[0], 0x44, "lookup_value must be V-class; {tokens:02X?}");
     // table_array A1:A3 → R-class PtgArea (0x25) at byte 5.
     assert_eq!(
         tokens[5], 0x25,
@@ -853,23 +824,14 @@ fn index_emits_r_class_array_arg() {
 
     let top = only_formula_tokens_at(&wb, 0, 1);
     // First token: PtgArea R-class (0x25) for the array arg.
-    assert_eq!(
-        top[0], 0x25,
-        "INDEX arg0 must be R-class PtgArea; {top:02X?}"
-    );
+    assert_eq!(top[0], 0x25, "INDEX arg0 must be R-class PtgArea; {top:02X?}");
     // Ends with PtgFuncVar V-class (0x42) argc=2 iftab=29.
     assert_eq!(&top[top.len() - 4..], &[0x42, 0x02, 0x1D, 0x00]);
 
     let in_sum = only_formula_tokens_at(&wb, 1, 1);
-    assert_eq!(
-        in_sum[0], 0x25,
-        "INDEX arg0 R-class in SUM too; {in_sum:02X?}"
-    );
+    assert_eq!(in_sum[0], 0x25, "INDEX arg0 R-class in SUM too; {in_sum:02X?}");
     // INDEX token R-class (0x22) inside SUM, then PtgAttrSum.
-    assert_eq!(
-        &in_sum[in_sum.len() - 8..],
-        &[0x22, 0x02, 0x1D, 0x00, 0x19, 0x10, 0x00, 0x00]
-    );
+    assert_eq!(&in_sum[in_sum.len() - 8..], &[0x22, 0x02, 0x1D, 0x00, 0x19, 0x10, 0x00, 0x00]);
 }
 
 #[test]
@@ -963,8 +925,7 @@ fn choose_formula_text_survives_round_trip() {
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", 2.0).unwrap();
     ws.set_cell_formula("B1", "=CHOOSE(A1,10,20,30)").unwrap();
-    ws.set_formula_result(0, 1, CellValue::Number(20.0))
-        .unwrap();
+    ws.set_formula_result(0, 1, CellValue::Number(20.0)).unwrap();
 
     let parsed = write_then_read(&wb);
     let s = parsed.worksheet(0).unwrap();
@@ -1045,8 +1006,7 @@ fn atp_function_emits_namex_funcvar_udf() {
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", 40000.0).unwrap();
     ws.set_cell_formula("B1", "=EDATE(A1,12)").unwrap();
-    ws.set_formula_result(0, 1, CellValue::Number(40000.0))
-        .unwrap();
+    ws.set_formula_result(0, 1, CellValue::Number(40000.0)).unwrap();
 
     let tokens = only_formula_tokens_at(&wb, 0, 1);
     assert_eq!(
@@ -1089,10 +1049,7 @@ fn atp_functions_get_alphabetical_nameindex() {
 
     let nameindex_of = |row: u16| -> u16 {
         let t = only_formula_tokens_at(&wb, row, 2);
-        assert_eq!(
-            t[0], 0x39,
-            "row {row} must start with PtgNameX; got {t:02X?}"
-        );
+        assert_eq!(t[0], 0x39, "row {row} must start with PtgNameX; got {t:02X?}");
         u16::from_le_bytes([t[3], t[4]])
     };
     assert_eq!(nameindex_of(1), 1, "EDATE should be nameindex 1");
@@ -1109,8 +1066,7 @@ fn atp_function_round_trips_text_via_externname() {
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", 40000.0).unwrap();
     ws.set_cell_formula("B1", "=EDATE(A1,12)").unwrap();
-    ws.set_formula_result(0, 1, CellValue::Number(40000.0))
-        .unwrap();
+    ws.set_formula_result(0, 1, CellValue::Number(40000.0)).unwrap();
 
     let parsed = write_then_read(&wb);
     let s = parsed.worksheet(0).unwrap();
@@ -1130,8 +1086,7 @@ fn external_udf_emits_namex_funcvar_udf() {
     ws.set_cell_value("A1", 7.0).unwrap();
     ws.set_cell_formula("B1", r#"=[1]!TBLink("acct",A1)"#)
         .unwrap();
-    ws.set_formula_result(0, 1, CellValue::Number(42.0))
-        .unwrap();
+    ws.set_formula_result(0, 1, CellValue::Number(42.0)).unwrap();
 
     let tokens = only_formula_tokens_at(&wb, 0, 1);
     let base = if tokens.starts_with(&[0x19, 0x01, 0x00, 0x00]) {
@@ -1144,16 +1099,8 @@ fn external_udf_emits_namex_funcvar_udf() {
         &[0x39, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00],
         "expected external UDF PtgNameX; got {tokens:02X?}"
     );
-    assert_eq!(
-        tokens[base + 7],
-        0x17,
-        "first arg should be string; got {tokens:02X?}"
-    );
-    assert_eq!(
-        tokens[base + 14],
-        0x24,
-        "A1 arg must be R-class PtgRef; got {tokens:02X?}"
-    );
+    assert_eq!(tokens[base + 7], 0x17, "first arg should be string; got {tokens:02X?}");
+    assert_eq!(tokens[base + 14], 0x24, "A1 arg must be R-class PtgRef; got {tokens:02X?}");
     assert_eq!(
         &tokens[base + 19..base + 23],
         &[0x42, 0x03, 0xFF, 0x00],
@@ -1166,8 +1113,7 @@ fn external_udf_round_trips_text_via_externname() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_formula("A1", r#"=[1]!TBLink("acct")"#).unwrap();
-    ws.set_formula_result(0, 0, CellValue::Number(42.0))
-        .unwrap();
+    ws.set_formula_result(0, 0, CellValue::Number(42.0)).unwrap();
 
     let parsed = write_then_read(&wb);
     let s = parsed.worksheet(0).unwrap();

@@ -1331,6 +1331,8 @@ mod tests {
         build_record(records::BRT_BEGIN_CF_RULE, &payload)
     }
 
+    /// Comments part with the MS-XLSB 2.4.33 record sequence
+    /// (0x0274-based ids, 36-byte BrtBeginComment).
     fn build_comments_bin(comments: &[(&str, u32, u16, &str)]) -> Vec<u8> {
         let mut data = Vec::new();
 
@@ -1342,21 +1344,24 @@ mod tests {
             }
         }
 
-        // BrtBeginCommentAuthors
+        data.extend_from_slice(&build_record(records::BRT_BEGIN_COMMENTS, &[]));
         data.extend_from_slice(&build_record(records::BRT_BEGIN_COMMENT_AUTHORS, &[]));
         for author in &authors {
             data.extend_from_slice(&build_record(records::BRT_COMMENT_AUTHOR, &xlwide(author)));
         }
         data.extend_from_slice(&build_record(records::BRT_END_COMMENT_AUTHORS, &[]));
 
-        // BrtBeginCommentList
         data.extend_from_slice(&build_record(records::BRT_BEGIN_COMMENT_LIST, &[]));
         for &(author, row, col, text) in comments {
             let author_id = authors.iter().position(|a| a == author).unwrap_or(0) as u32;
+            // iauthor + UncheckedRfX + GUID
             let mut comment_payload = Vec::new();
             comment_payload.extend_from_slice(&author_id.to_le_bytes());
             comment_payload.extend_from_slice(&row.to_le_bytes());
+            comment_payload.extend_from_slice(&row.to_le_bytes());
             comment_payload.extend_from_slice(&(col as u32).to_le_bytes());
+            comment_payload.extend_from_slice(&(col as u32).to_le_bytes());
+            comment_payload.extend_from_slice(&[0u8; 16]);
             data.extend_from_slice(&build_record(records::BRT_BEGIN_COMMENT, &comment_payload));
 
             // BrtCommentText: RichStr = flags(1) + XLWideString
@@ -1367,6 +1372,59 @@ mod tests {
             data.extend_from_slice(&build_record(records::BRT_END_COMMENT, &[]));
         }
         data.extend_from_slice(&build_record(records::BRT_END_COMMENT_LIST, &[]));
+        data.extend_from_slice(&build_record(records::BRT_END_COMMENTS, &[]));
+
+        data
+    }
+
+    /// Comments part with the off-spec 0x0278-based ids and 12-byte
+    /// BrtBeginComment body our old writer emitted.
+    fn build_legacy_comments_bin(comments: &[(&str, u32, u16, &str)]) -> Vec<u8> {
+        let mut data = Vec::new();
+
+        let mut authors: Vec<String> = Vec::new();
+        for &(author, _, _, _) in comments {
+            if !authors.contains(&author.to_string()) {
+                authors.push(author.to_string());
+            }
+        }
+
+        data.extend_from_slice(&build_record(
+            records::BRT_LEGACY_BEGIN_COMMENT_AUTHORS,
+            &[],
+        ));
+        for author in &authors {
+            data.extend_from_slice(&build_record(
+                records::BRT_LEGACY_COMMENT_AUTHOR,
+                &xlwide(author),
+            ));
+        }
+        // Legacy end-authors (0x0279)
+        data.extend_from_slice(&build_record(0x0279, &[]));
+
+        // Legacy begin-list (0x027B)
+        data.extend_from_slice(&build_record(0x027B, &[]));
+        for &(author, row, col, text) in comments {
+            let author_id = authors.iter().position(|a| a == author).unwrap_or(0) as u32;
+            let mut comment_payload = Vec::new();
+            comment_payload.extend_from_slice(&author_id.to_le_bytes());
+            comment_payload.extend_from_slice(&row.to_le_bytes());
+            comment_payload.extend_from_slice(&(col as u32).to_le_bytes());
+            data.extend_from_slice(&build_record(
+                records::BRT_LEGACY_BEGIN_COMMENT,
+                &comment_payload,
+            ));
+
+            let mut text_payload = vec![0u8];
+            text_payload.extend_from_slice(&xlwide(text));
+            data.extend_from_slice(&build_record(
+                records::BRT_LEGACY_COMMENT_TEXT,
+                &text_payload,
+            ));
+
+            data.extend_from_slice(&build_record(records::BRT_LEGACY_END_COMMENT, &[]));
+        }
+        data.extend_from_slice(&build_record(records::BRT_LEGACY_END_COMMENT_LIST, &[]));
 
         data
     }
@@ -1515,13 +1573,54 @@ mod tests {
 
         let c1 = ws.comment_at(0, 0).expect("comment at A1");
         assert_eq!(c1.author, "Alice");
-        assert_eq!(c1.text, "First comment");
+        assert_eq!(c1.plain_text(), "First comment");
 
         let c2 = ws.comment_at(1, 2).expect("comment at C2");
         assert_eq!(c2.author, "Bob");
-        assert_eq!(c2.text, "Second comment");
+        assert_eq!(c2.plain_text(), "Second comment");
 
         assert!(ws.comment_at(0, 1).is_none());
+    }
+
+    /// Files our old writer produced used off-spec 0x0278-based
+    /// comment record ids with a 12-byte BrtBeginComment; they must
+    /// keep reading.
+    #[test]
+    fn read_comments_bin_legacy_ids() {
+        let comments_data = build_legacy_comments_bin(&[
+            ("Alice", 0, 0, "First comment"),
+            ("Bob", 1, 2, "Second comment"),
+        ]);
+
+        let ws_data = build_worksheet_bin(&[(0, 0, WorksheetCell::Real(1.0))]);
+        let wb_data = build_workbook_bin(&[("Sheet1", "rId1")], false);
+        let wb_rels = rels_xml(&[("rId1", "worksheets/sheet1.bin")]);
+
+        let sr = sheet_rels_xml_full(&[(
+            "rId10",
+            "../comments1.bin",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments",
+        )]);
+
+        let zip = build_xlsb_zip_with_extras(
+            &wb_data,
+            &wb_rels,
+            None,
+            &[("xl/worksheets/sheet1.bin", &ws_data)],
+            &[("xl/worksheets/_rels/sheet1.bin.rels", &sr)],
+            &[("xl/comments1.bin", &comments_data)],
+        );
+
+        let wb = XlsbReader::read(Cursor::new(zip)).unwrap();
+        let ws = wb.worksheet(0).unwrap();
+
+        let c1 = ws.comment_at(0, 0).expect("comment at A1");
+        assert_eq!(c1.author, "Alice");
+        assert_eq!(c1.plain_text(), "First comment");
+
+        let c2 = ws.comment_at(1, 2).expect("comment at C2");
+        assert_eq!(c2.author, "Bob");
+        assert_eq!(c2.plain_text(), "Second comment");
     }
 
     #[test]
@@ -1563,7 +1662,7 @@ mod tests {
 
         let c = ws.comment_at(2, 1).expect("comment at B3");
         assert_eq!(c.author, "TestUser");
-        assert_eq!(c.text, "XML comment");
+        assert_eq!(c.plain_text(), "XML comment");
     }
 
     #[test]
@@ -1852,5 +1951,67 @@ mod tests {
             }
             other => panic!("expected Values filter, got {other:?}"),
         }
+    }
+
+    /// A drawing-part control twin (either flavor) is matched to its
+    /// VML control by spid and never duplicated as a raw entry; the
+    /// twin's cNvPr name rides onto the control.
+    #[test]
+    fn drawing_part_control_twin_dedupes_against_vml_control() {
+        let drawing_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main" Requires="a14"><xdr:twoCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>3</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>3</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="1025" name="Check Box 1"/><xdr:cNvGraphicFramePr><a:graphicFrameLocks/></xdr:cNvGraphicFramePr></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/drawing/2010/compatibility"><com14:compatSp xmlns:com14="http://schemas.microsoft.com/office/drawing/2010/compatibility" spid="_x0000_s1025"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor></mc:Choice><mc:Fallback/></mc:AlternateContent></xdr:wsDr>"#;
+        let vml = r##"<xml xmlns:v="urn:schemas-microsoft-com:vml"
+ xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:x="urn:schemas-microsoft-com:office:excel">
+ <v:shape id="_x0000_s1025" type="#_x0000_t201">
+  <v:textbox><div style='text-align:left'>tick</div></v:textbox>
+  <x:ClientData ObjectType="Checkbox">
+   <x:Anchor>1, 0, 1, 0, 3, 0, 3, 0</x:Anchor>
+   <x:Checked>1</x:Checked>
+  </x:ClientData>
+ </v:shape>
+</xml>"##;
+
+        let ws_data = build_worksheet_bin(&[(0, 0, WorksheetCell::Real(1.0))]);
+        let wb_data = build_workbook_bin(&[("Sheet1", "rId1")], false);
+        let wb_rels = rels_xml(&[("rId1", "worksheets/sheet1.bin")]);
+        let sr = sheet_rels_xml_full(&[
+            (
+                "rId1",
+                "../drawings/drawing1.xml",
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing",
+            ),
+            (
+                "rId2",
+                "../drawings/vmlDrawing1.vml",
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing",
+            ),
+        ]);
+
+        let zip = build_xlsb_zip_with_extras(
+            &wb_data,
+            &wb_rels,
+            None,
+            &[("xl/worksheets/sheet1.bin", &ws_data)],
+            &[
+                ("xl/worksheets/_rels/sheet1.bin.rels", &sr),
+                ("xl/drawings/drawing1.xml", drawing_xml),
+                ("xl/drawings/vmlDrawing1.vml", vml),
+            ],
+            &[],
+        );
+
+        let wb = XlsbReader::read(Cursor::new(zip)).unwrap();
+        let ws = wb.worksheet(0).unwrap();
+        assert_eq!(
+            ws.drawings().len(),
+            1,
+            "twin must not duplicate: {:?}",
+            ws.drawings()
+        );
+        assert_eq!(ws.form_control_count(), 1);
+        let control = ws.form_controls().next().unwrap();
+        assert_eq!(control.payload.caption_text().as_deref(), Some("tick"));
+        assert_eq!(control.object.unwrap().meta.name.as_deref(), Some("Check Box 1"));
     }
 }

@@ -1,6 +1,6 @@
 {
   "name": "@dukelib/sheets-darwin-x64",
-  "version": "0.1.24",
+  "version": "0.1.30",
   "cpu": [
     "x64"
   ],

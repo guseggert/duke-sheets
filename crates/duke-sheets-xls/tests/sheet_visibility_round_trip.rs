@@ -96,7 +96,6 @@ fn mixed_visibility_states_in_one_workbook_round_trip() {
 
 /// LibreOffice must accept BoundSheet8.hsState = Hidden / VeryHidden.
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_read_sheet_visibility_we_emit() {
     duke_sheets_test_harness::lo::ensure_lo();
 
@@ -104,10 +103,7 @@ fn lo_can_read_sheet_visibility_we_emit() {
     wb.rename_worksheet(0, "Public").expect("rename");
     wb.add_worksheet_with_name("Hidden").expect("add hidden");
     wb.add_worksheet_with_name("VeryHidden").expect("add vh");
-    wb.worksheet_mut(0)
-        .unwrap()
-        .set_cell_value("A1", "public")
-        .expect("A1");
+    wb.worksheet_mut(0).unwrap().set_cell_value("A1", "public").expect("A1");
     wb.worksheet_mut(1)
         .unwrap()
         .set_visibility(SheetVisibility::Hidden);
@@ -126,10 +122,12 @@ fn lo_can_read_sheet_visibility_we_emit() {
         .build()
         .unwrap();
     let outcome: Result<String, String> = rt.block_on(async {
-        let mut bridge =
-            duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect("127.0.0.1", 2002)
-                .await
-                .map_err(|e| format!("connect: {e}"))?;
+        let mut bridge = duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect(
+            "127.0.0.1",
+            2002,
+        )
+        .await
+        .map_err(|e| format!("connect: {e}"))?;
         let mut wb = bridge
             .open_workbook(&path)
             .await

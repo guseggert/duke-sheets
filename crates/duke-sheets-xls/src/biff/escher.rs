@@ -88,6 +88,9 @@ pub mod rec_type {
     /// Property table atom — shape properties (fill, line, text, etc).
     pub const FOPT: u16 = 0xF00B;
 
+    /// Child anchor atom inside a grouped shape's `SP_CONTAINER` —
+    /// the shape's rectangle in its group's coordinate space.
+    pub const CHILD_ANCHOR: u16 = 0xF00F;
     /// Client (Excel) anchor atom inside `SP_CONTAINER` — which cell
     /// the shape is anchored to.
     pub const CLIENT_ANCHOR: u16 = 0xF010;
@@ -130,11 +133,22 @@ pub mod shape_type {
     pub const NOT_PRIMITIVE: u16 = 0x0000;
     /// `msosptRectangle` — used by some picture wrappers.
     pub const RECTANGLE: u16 = 0x0001;
+    /// `msosptRoundRectangle` ([MS-ODRAW] 2.4.24).
+    pub const ROUND_RECTANGLE: u16 = 0x0002;
+    /// `msosptEllipse` ([MS-ODRAW] 2.4.24).
+    pub const ELLIPSE: u16 = 0x0003;
+    /// `msosptIsocelesTriangle` ([MS-ODRAW] 2.4.24).
+    pub const ISOSCELES_TRIANGLE: u16 = 0x0005;
+    /// `msosptLine` ([MS-ODRAW] 2.4.24).
+    pub const LINE: u16 = 0x0014;
     /// `msosptTextBox` — comments are textbox shapes anchored to a
     /// cell.
     pub const TEXT_BOX: u16 = 0x00CA;
     /// `msosptPictureFrame` — used by embedded pictures.
     pub const PICTURE_FRAME: u16 = 0x004B;
+    /// `msosptHostControl` — used by Forms toolbar controls
+    /// (checkboxes, buttons, list boxes, ...).
+    pub const HOST_CONTROL: u16 = 0x00C9;
 }
 
 /// MS-ODRAW §2.2.32 OfficeArtFBSE blip-type codes (`btWin32`,
@@ -317,7 +331,7 @@ impl OfficeArtRecordHeader {
 
     /// Total on-disk size of this record (8-byte header + payload).
     pub fn total_len(&self) -> usize {
-        HEADER_LEN + self.rec_len as usize
+        HEADER_LEN.saturating_add(self.rec_len as usize)
     }
 
     /// Serialise to the 8-byte on-disk header. Panics if `rec_ver`
@@ -409,6 +423,8 @@ pub mod fopt_id {
     pub const LINE_COLOR: u16 = 0x01C0;
     /// `lineWidth` (0x01CB) — line width in EMUs.
     pub const LINE_WIDTH: u16 = 0x01CB;
+    /// `lineDashing` (0x01CE) — an MSOLINEDASHING value.
+    pub const LINE_DASHING: u16 = 0x01CE;
     /// Boolean-bag of line flags (§2.3.8.44 `LineStyleBooleanProperties`).
     pub const LINE_BOOLEAN_PROPS: u16 = 0x01FF;
 
@@ -416,9 +432,33 @@ pub mod fopt_id {
     /// Boolean-bag of shadow flags.
     pub const SHADOW_BOOLEAN_PROPS: u16 = 0x023F;
 
-    // ── Shape properties (§2.3.4, ids 0x0300–0x033F) ─────────────────
-    /// Boolean-bag of group-shape flags (`fHidden`, `fPrint`, etc).
+    // Shape properties
+    /// Boolean-bag of shape flags (§2.3.2.12 `Shape Boolean
+    /// Properties`: `fBackground`, `fLockShapeType`, …).
     pub const GROUP_SHAPE_PROPS: u16 = 0x033F;
+
+    // Group-shape properties
+    /// Boolean-bag of group-shape flags (MS-ODRAW v20241112
+    /// §2.3.4.44 `Group Shape Boolean Properties`). Low word carries
+    /// the values, high word the matching use-bits: `fPrint` =
+    /// 0x00000001 (use 0x00010000), `fHidden` = 0x00000002 (use
+    /// 0x00020000). Hidden shapes carry 0x00020002; absent entry (or
+    /// clear use-bit) means the defaults: visible, printed.
+    pub const GROUP_SHAPE_BOOLEAN_PROPS: u16 = 0x03BF;
+}
+
+/// The `0x03BF` op value marking a shape hidden: `fUsefHidden |
+/// fHidden` per MS-ODRAW §2.3.4.44.
+pub const GROUP_SHAPE_HIDDEN: u32 = 0x0002_0002;
+/// The `0x03BF` op value Excel writes on visible pictures:
+/// `fUsefHidden` with `fHidden` clear (explicitly visible).
+pub const GROUP_SHAPE_VISIBLE: u32 = 0x0002_0000;
+
+/// Whether a `0x03BF` op value marks the shape hidden: the fHidden
+/// value bit only counts when its use-bit is set (MS-ODRAW
+/// §2.3.4.44).
+pub fn group_shape_props_hidden(op: u32) -> bool {
+    op & GROUP_SHAPE_HIDDEN == GROUP_SHAPE_HIDDEN
 }
 
 /// MS-ODRAW §2.2.40 `OfficeArtFSP` — shape descriptor atom.
@@ -566,19 +606,19 @@ pub struct OfficeArtClientAnchor {
     /// Left column.
     pub col_l: u16,
     /// X offset within left cell (1024ths of cell width).
-    pub dx_l: u16,
+    pub dx_l: i16,
     /// Top row.
     pub row_t: u16,
     /// Y offset within top cell (256ths of cell height).
-    pub dy_t: u16,
+    pub dy_t: i16,
     /// Right column (inclusive).
     pub col_r: u16,
     /// X offset within right cell.
-    pub dx_r: u16,
+    pub dx_r: i16,
     /// Bottom row (inclusive).
     pub row_b: u16,
     /// Y offset within bottom cell.
-    pub dy_b: u16,
+    pub dy_b: i16,
 }
 
 impl OfficeArtClientAnchor {
@@ -638,19 +678,71 @@ impl OfficeArtClientAnchor {
             return Err(XlsError::InvalidFormat("ClientAnchor truncated".into()));
         }
         let read_u16 = |off: usize| u16::from_le_bytes([bytes[off], bytes[off + 1]]);
+        let read_i16 = |off: usize| i16::from_le_bytes([bytes[off], bytes[off + 1]]);
         Ok((
             Self {
                 flag: read_u16(HEADER_LEN),
                 col_l: read_u16(HEADER_LEN + 2),
-                dx_l: read_u16(HEADER_LEN + 4),
+                dx_l: read_i16(HEADER_LEN + 4),
                 row_t: read_u16(HEADER_LEN + 6),
-                dy_t: read_u16(HEADER_LEN + 8),
+                dy_t: read_i16(HEADER_LEN + 8),
                 col_r: read_u16(HEADER_LEN + 10),
-                dx_r: read_u16(HEADER_LEN + 12),
+                dx_r: read_i16(HEADER_LEN + 12),
                 row_b: read_u16(HEADER_LEN + 14),
-                dy_b: read_u16(HEADER_LEN + 16),
+                dy_b: read_i16(HEADER_LEN + 16),
             },
             HEADER_LEN + 18,
+        ))
+    }
+}
+
+/// MS-ODRAW §2.2.39 `OfficeArtChildAnchor` — anchors a grouped shape
+/// within its group's coordinate space (the rectangle the enclosing
+/// group's `OfficeArtFSPGR` defines). 16-byte body after the header:
+/// four signed 32-bit integers (xLeft, yTop, xRight, yBottom).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct OfficeArtChildAnchor {
+    pub x_left: i32,
+    pub y_top: i32,
+    pub x_right: i32,
+    pub y_bottom: i32,
+}
+
+impl OfficeArtChildAnchor {
+    /// Serialise the full child-anchor atom (header + 16-byte body).
+    pub fn write_to(&self, out: &mut Vec<u8>) {
+        let header = OfficeArtRecordHeader::atom(0, 0, rec_type::CHILD_ANCHOR, 16);
+        header.write_to(out);
+        out.extend_from_slice(&self.x_left.to_le_bytes());
+        out.extend_from_slice(&self.y_top.to_le_bytes());
+        out.extend_from_slice(&self.x_right.to_le_bytes());
+        out.extend_from_slice(&self.y_bottom.to_le_bytes());
+    }
+
+    /// Parse a full child-anchor atom. Returns `(anchor, bytes_consumed)`.
+    pub fn read_from(bytes: &[u8]) -> XlsResult<(Self, usize)> {
+        let header = OfficeArtRecordHeader::read_from(bytes)?;
+        if header.rec_type != rec_type::CHILD_ANCHOR {
+            return Err(XlsError::InvalidFormat(format!(
+                "expected ChildAnchor (0x{:04X}), found 0x{:04X}",
+                rec_type::CHILD_ANCHOR,
+                header.rec_type
+            )));
+        }
+        if header.rec_len != 16 || bytes.len() < HEADER_LEN + 16 {
+            return Err(XlsError::InvalidFormat("ChildAnchor truncated".into()));
+        }
+        let read_i32 = |off: usize| -> i32 {
+            i32::from_le_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]])
+        };
+        Ok((
+            Self {
+                x_left: read_i32(HEADER_LEN),
+                y_top: read_i32(HEADER_LEN + 4),
+                x_right: read_i32(HEADER_LEN + 8),
+                y_bottom: read_i32(HEADER_LEN + 12),
+            },
+            HEADER_LEN + 16,
         ))
     }
 }
@@ -1175,25 +1267,47 @@ pub fn write_bstore_container(fbses: &[OfficeArtFbse], out: &mut Vec<u8>) {
 /// `shape_name` is the user-visible name (e.g. "Picture 1") stored
 /// in the `wzName` complex property.
 pub fn picture_fopt(blip_id: u32, shape_name: &str) -> FoptTable {
-    picture_fopt_with(blip_id, shape_name, None)
+    picture_fopt_with(blip_id, shape_name, None, None, false)
 }
 
-/// Picture FOPT with an optional rotation. `rotation` is in 60,000ths
-/// of a degree (the OOXML / OfficeArt unit). `None` omits the
-/// `0x0004` rotation property entirely (matching Excel's emit for
-/// pictures with no rotation).
+/// Build a complex FOPT entry carrying a UTF-16LE + trailing-null
+/// string (`wzName` 0x0380, `wzDescription` 0x0381, …). Excel sets
+/// BOTH the fBid and fComplex bits on these opids; we mirror that
+/// exactly so the bytes match.
+pub fn complex_string_entry(id: u16, value: &str) -> FoptEntry {
+    let mut bytes: Vec<u8> = value.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    bytes.extend_from_slice(&[0, 0]); // null terminator
+    FoptEntry {
+        id,
+        is_blip_id: true,
+        value: FoptValue::Complex(bytes),
+    }
+}
+
+/// Picture FOPT with an optional rotation and alt text. `rotation`
+/// is the raw FOPT 0x0004 wire value: FixedPoint 16.16 degrees
+/// ([MS-ODRAW] 2.3.18.5); callers convert from model units. `None`
+/// omits the `0x0004` rotation property entirely (matching Excel's
+/// emit for pictures with no rotation). `alt_text` fills the
+/// `wzDescription` (0x0381) complex property when set.
 ///
 /// FOPT entries must appear in ascending `id` order; the rotation
 /// property is inserted before the existing `0x007F` protection
 /// entry when present.
-pub fn picture_fopt_with(blip_id: u32, shape_name: &str, rotation: Option<i32>) -> FoptTable {
+pub fn picture_fopt_with(
+    blip_id: u32,
+    shape_name: &str,
+    rotation: Option<u32>,
+    alt_text: Option<&str>,
+    hidden: bool,
+) -> FoptTable {
     let mut t = FoptTable::new();
 
-    // 0x0004: rotation (60,000ths of a degree). Goes first because
-    // FOPT requires ascending opid order. We only emit this entry
-    // if rotation is set; absence means "no rotation".
+    // 0x0004: rotation, FixedPoint 16.16 degrees (MS-ODRAW 2.3.18.5).
+    // Goes first because FOPT requires ascending opid order. We only
+    // emit this entry if rotation is set; absence means "no rotation".
     if let Some(rot) = rotation {
-        t.push(FoptEntry::simple(0x0004, rot as u32));
+        t.push(FoptEntry::simple(0x0004, rot));
     }
 
     // 0x007F: protection booleans (lockAspectRatio etc.).
@@ -1209,23 +1323,23 @@ pub fn picture_fopt_with(blip_id: u32, shape_name: &str, rotation: Option<i32>) 
     // 0x033F: shape booleans (fPrint, fHidden, …).
     t.push(FoptEntry::simple(0x033F, 0x0018_0010));
 
-    // 0x0380: wzName (shape name) — complex property with UTF-16LE
-    // payload + trailing null. Excel sets BOTH the fBid and
-    // fComplex bits on this opid; we mirror that exactly so the
-    // bytes match.
-    let mut name_bytes: Vec<u8> = shape_name
-        .encode_utf16()
-        .flat_map(|u| u.to_le_bytes())
-        .collect();
-    name_bytes.extend_from_slice(&[0, 0]); // null terminator
-    t.push(FoptEntry {
-        id: 0x0380,
-        is_blip_id: true, // Excel sets fBid on the wzName entry
-        value: FoptValue::Complex(name_bytes),
-    });
+    // 0x0380: wzName (shape name).
+    t.push(complex_string_entry(0x0380, shape_name));
+    // 0x0381: wzDescription (alternative text), only when present.
+    if let Some(descr) = alt_text {
+        t.push(complex_string_entry(0x0381, descr));
+    }
 
-    // 0x03BF: group/shape booleans.
-    t.push(FoptEntry::simple(0x03BF, 0x0002_0000));
+    // 0x03BF: group-shape booleans; Excel writes the fHidden use-bit
+    // on every picture, value bit only when hidden.
+    t.push(FoptEntry::simple(
+        fopt_id::GROUP_SHAPE_BOOLEAN_PROPS,
+        if hidden {
+            GROUP_SHAPE_HIDDEN
+        } else {
+            GROUP_SHAPE_VISIBLE
+        },
+    ));
     t
 }
 
@@ -1888,6 +2002,25 @@ mod tests {
         let (parsed, consumed) = OfficeArtClientAnchor::read_from(&out).unwrap();
         assert_eq!(parsed, anchor);
         assert_eq!(consumed, 26); // 8 header + 18 body
+    }
+
+    #[test]
+    fn client_anchor_preserves_signed_offsets() {
+        let anchor = OfficeArtClientAnchor {
+            flag: 3,
+            col_l: 1,
+            dx_l: -12,
+            row_t: 2,
+            dy_t: -3,
+            col_r: 4,
+            dx_r: -1,
+            row_b: 5,
+            dy_b: -7,
+        };
+        let mut out = Vec::new();
+        anchor.write_to(&mut out);
+        let (parsed, _) = OfficeArtClientAnchor::read_from(&out).unwrap();
+        assert_eq!(parsed, anchor);
     }
 
     #[test]

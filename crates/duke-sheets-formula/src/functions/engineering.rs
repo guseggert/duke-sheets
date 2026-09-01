@@ -2772,6 +2772,7 @@ mod tests {
             );
         }
 
+
         #[test]
         fn test_bin2dec_docs() {
             assert_eq!(eval("=BIN2DEC(1100100)").unwrap(), n(100.0));
@@ -2854,6 +2855,7 @@ mod tests {
             assert_eq!(eval("=OCT2HEX(7777777533)").unwrap(), s("FFFFFFFF5B"));
         }
 
+
         #[test]
         fn test_bitand_docs() {
             assert_eq!(eval("=BITAND(1,5)").unwrap(), n(1.0));
@@ -2918,6 +2920,7 @@ mod tests {
         fn test_erfc_precise_docs() {
             assert_close_num(eval("=ERFC.PRECISE(1)").unwrap(), 0.15729921);
         }
+
 
         #[test]
         fn test_complex_docs() {
@@ -3115,6 +3118,7 @@ mod tests {
             );
         }
 
+
         #[test]
         fn test_besseli_docs() {
             assert_close_num(eval("=BESSELI(1.5, 1)").unwrap(), 0.981666428);
@@ -3136,6 +3140,7 @@ mod tests {
             // Y₁(2.5) = 0.145918138 (MS docs)
             assert_close_num(eval("=BESSELY(2.5, 1)").unwrap(), 0.145918138);
         }
+
 
         #[test]
         fn test_convert_docs() {

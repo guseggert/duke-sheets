@@ -1102,20 +1102,23 @@ fn pivot_overwrite_policy_to_string(policy: core::PivotOverwritePolicy) -> &'sta
 
 /// Color representation. The `colorType` field indicates the variant:
 /// `"auto"`, `"rgb"`, `"argb"`, `"theme"`, or `"indexed"`.
-/// The `hex` field always contains the resolved 6- or 8-char hex string.
+/// `hex` carries the context-free hex string; it is absent for
+/// `"auto"` and `"theme"` colors, which have no fixed RGB without the
+/// workbook - resolve those through `Workbook.resolveColor`.
 #[napi(object)]
 pub struct JsColor {
     pub color_type: String,
-    /// Resolved hex string (6 or 8 chars, no `#` prefix).
-    pub hex: String,
+    /// Context-free hex string (6 or 8 chars, no `#` prefix); absent
+    /// for auto and theme colors.
+    pub hex: Option<String>,
     pub r: Option<u32>,
     pub g: Option<u32>,
     pub b: Option<u32>,
     pub a: Option<u32>,
-    /// Theme color index (0-9), present when `colorType === "theme"`.
+    /// Theme color index (0-11), present when `colorType === "theme"`.
     pub theme_index: Option<u32>,
-    /// Tint percentage (-100 to 100), present when `colorType === "theme"`.
-    pub tint: Option<i32>,
+    /// OOXML tint fraction (-1.0 to 1.0), present when `colorType === "theme"`.
+    pub tint: Option<f64>,
     /// Palette index, present when `colorType === "indexed"`.
     pub palette_index: Option<u32>,
 }
@@ -1165,7 +1168,7 @@ impl From<&CoreColor> for JsColor {
                 b: None,
                 a: None,
                 theme_index: Some(*index as u32),
-                tint: Some(*tint as i32),
+                tint: Some(*tint),
                 palette_index: None,
             },
             CoreColor::Indexed(i) => JsColor {
@@ -1563,7 +1566,7 @@ pub struct JsColorInput {
     pub b: Option<u32>,
     pub a: Option<u32>,
     pub theme_index: Option<u32>,
-    pub tint: Option<i32>,
+    pub tint: Option<f64>,
     pub palette_index: Option<u32>,
 }
 
@@ -1668,9 +1671,12 @@ fn u32_to_u8(value: u32, field: &str) -> NapiResult<u8> {
     u8::try_from(value).map_err(|_| style_input_error(format!("{field} must be between 0 and 255")))
 }
 
-fn i32_to_i8(value: i32, field: &str) -> NapiResult<i8> {
-    i8::try_from(value)
-        .map_err(|_| style_input_error(format!("{field} must be between -128 and 127")))
+fn tint_fraction(value: Option<f64>) -> NapiResult<f64> {
+    let tint = value.unwrap_or(0.0);
+    if !tint.is_finite() || !(-1.0..=1.0).contains(&tint) {
+        return Err(style_input_error("tint must be between -1.0 and 1.0"));
+    }
+    Ok(tint)
 }
 
 fn parse_color_hex(hex: &str) -> NapiResult<CoreColor> {
@@ -1752,7 +1758,7 @@ impl JsColorInput {
                         .ok_or_else(|| style_input_error("theme color requires themeIndex"))?,
                     "themeIndex",
                 )?,
-                tint: i32_to_i8(self.tint.unwrap_or(0), "tint")?,
+                tint: tint_fraction(self.tint)?,
             }),
             Some("indexed") => Ok(CoreColor::Indexed(u32_to_u8(
                 self.palette_index
@@ -1784,7 +1790,7 @@ impl JsColorInput {
                 } else if let Some(theme_index) = self.theme_index {
                     Ok(CoreColor::Theme {
                         index: u32_to_u8(theme_index, "themeIndex")?,
-                        tint: i32_to_i8(self.tint.unwrap_or(0), "tint")?,
+                        tint: tint_fraction(self.tint)?,
                     })
                 } else if let Some(palette_index) = self.palette_index {
                     Ok(CoreColor::Indexed(u32_to_u8(
@@ -2244,10 +2250,16 @@ pub struct JsComment {
 
 impl From<&core::CellComment> for JsComment {
     fn from(c: &core::CellComment) -> Self {
+        Self::from_with_visibility(c, false)
+    }
+}
+
+impl JsComment {
+    pub(crate) fn from_with_visibility(c: &core::CellComment, visible: bool) -> Self {
         JsComment {
             author: c.author.clone(),
-            text: c.text.clone(),
-            visible: c.visible,
+            text: c.plain_text(),
+            visible,
         }
     }
 }
@@ -2322,6 +2334,7 @@ impl From<&core::Selection> for JsSelection {
 #[napi(object)]
 pub struct JsSheetProtection {
     pub protected: bool,
+    pub password_hash: Option<u32>,
     pub select_locked_cells: bool,
     pub select_unlocked_cells: bool,
     pub format_cells: bool,
@@ -2341,6 +2354,7 @@ impl From<&core::SheetProtection> for JsSheetProtection {
     fn from(p: &core::SheetProtection) -> Self {
         JsSheetProtection {
             protected: p.protected,
+            password_hash: p.password_hash.map(|h| h as u32),
             select_locked_cells: p.select_locked_cells,
             select_unlocked_cells: p.select_unlocked_cells,
             format_cells: p.format_cells,
@@ -2355,6 +2369,150 @@ impl From<&core::SheetProtection> for JsSheetProtection {
             auto_filter: p.auto_filter,
             pivot_tables: p.pivot_tables,
         }
+    }
+}
+
+/// Sheet protection setter input.
+#[napi(object)]
+pub struct JsSheetProtectionInput {
+    pub protected: Option<bool>,
+    pub password: Option<String>,
+    pub password_hash: Option<u32>,
+    pub select_locked_cells: Option<bool>,
+    pub select_unlocked_cells: Option<bool>,
+    pub format_cells: Option<bool>,
+    pub format_columns: Option<bool>,
+    pub format_rows: Option<bool>,
+    pub insert_columns: Option<bool>,
+    pub insert_rows: Option<bool>,
+    pub insert_hyperlinks: Option<bool>,
+    pub delete_columns: Option<bool>,
+    pub delete_rows: Option<bool>,
+    pub sort: Option<bool>,
+    pub auto_filter: Option<bool>,
+    pub pivot_tables: Option<bool>,
+}
+
+impl JsSheetProtectionInput {
+    pub(crate) fn into_core(self) -> NapiResult<core::SheetProtection> {
+        let password_hash = protection_password_hash(self.password, self.password_hash)?;
+        Ok(core::SheetProtection {
+            protected: self.protected.unwrap_or(true),
+            password_hash,
+            select_locked_cells: self.select_locked_cells.unwrap_or(true),
+            select_unlocked_cells: self.select_unlocked_cells.unwrap_or(true),
+            format_cells: self.format_cells.unwrap_or(false),
+            format_columns: self.format_columns.unwrap_or(false),
+            format_rows: self.format_rows.unwrap_or(false),
+            insert_columns: self.insert_columns.unwrap_or(false),
+            insert_rows: self.insert_rows.unwrap_or(false),
+            insert_hyperlinks: self.insert_hyperlinks.unwrap_or(false),
+            delete_columns: self.delete_columns.unwrap_or(false),
+            delete_rows: self.delete_rows.unwrap_or(false),
+            sort: self.sort.unwrap_or(false),
+            auto_filter: self.auto_filter.unwrap_or(false),
+            pivot_tables: self.pivot_tables.unwrap_or(false),
+        })
+    }
+}
+
+/// Workbook protection settings.
+#[napi(object)]
+pub struct JsWorkbookProtection {
+    pub structure: bool,
+    pub windows: bool,
+    pub password_hash: Option<u32>,
+}
+
+impl From<&core::WorkbookProtection> for JsWorkbookProtection {
+    fn from(p: &core::WorkbookProtection) -> Self {
+        Self {
+            structure: p.structure,
+            windows: p.windows,
+            password_hash: p.password_hash.map(|h| h as u32),
+        }
+    }
+}
+
+/// Workbook protection setter input.
+#[napi(object)]
+pub struct JsWorkbookProtectionInput {
+    pub structure: Option<bool>,
+    pub windows: Option<bool>,
+    pub password: Option<String>,
+    pub password_hash: Option<u32>,
+}
+
+impl JsWorkbookProtectionInput {
+    pub(crate) fn into_core(self) -> NapiResult<core::WorkbookProtection> {
+        Ok(core::WorkbookProtection {
+            structure: self.structure.unwrap_or(true),
+            windows: self.windows.unwrap_or(false),
+            password_hash: protection_password_hash(self.password, self.password_hash)?,
+        })
+    }
+}
+
+/// Protected editable range settings.
+#[napi(object)]
+pub struct JsProtectedRange {
+    pub name: String,
+    pub ranges: Vec<String>,
+    pub password_hash: Option<u32>,
+    pub security_descriptor: Option<String>,
+}
+
+impl From<&core::ProtectedRange> for JsProtectedRange {
+    fn from(p: &core::ProtectedRange) -> Self {
+        Self {
+            name: p.name.clone(),
+            ranges: p.ranges.iter().map(ToString::to_string).collect(),
+            password_hash: p.password_hash.map(|h| h as u32),
+            security_descriptor: p.security_descriptor.clone(),
+        }
+    }
+}
+
+/// Protected editable range setter input.
+#[napi(object)]
+pub struct JsProtectedRangeInput {
+    pub name: String,
+    pub ranges: Vec<String>,
+    pub password: Option<String>,
+    pub password_hash: Option<u32>,
+    pub security_descriptor: Option<String>,
+}
+
+impl JsProtectedRangeInput {
+    pub(crate) fn into_core(self) -> NapiResult<core::ProtectedRange> {
+        let mut ranges = Vec::with_capacity(self.ranges.len());
+        for range in self.ranges {
+            ranges.push(core::CellRange::parse(&range).map_err(|e| {
+                NapiError::from_reason(format!("Invalid protected range '{}': {}", range, e))
+            })?);
+        }
+        Ok(core::ProtectedRange {
+            name: self.name,
+            ranges,
+            password_hash: protection_password_hash(self.password, self.password_hash)?,
+            security_descriptor: self.security_descriptor,
+        })
+    }
+}
+
+fn protection_password_hash(
+    password: Option<String>,
+    password_hash: Option<u32>,
+) -> NapiResult<Option<u16>> {
+    match (password, password_hash) {
+        (Some(_), Some(_)) => Err(NapiError::from_reason(
+            "Specify either password or passwordHash, not both",
+        )),
+        (Some(password), None) => Ok(Some(core::hash_legacy_protection_password(&password))),
+        (None, Some(hash)) => u16::try_from(hash)
+            .map(Some)
+            .map_err(|_| NapiError::from_reason("passwordHash must be between 0 and 65535")),
+        (None, None) => Ok(None),
     }
 }
 
@@ -3034,44 +3192,19 @@ pub struct JsImageInfo {
     pub height: Option<f64>,
 }
 
-/// Chart anchor position in a worksheet.
-#[napi(object)]
-pub struct JsDrawingAnchor {
-    pub from_col: u32,
-    pub from_row: u32,
-    pub from_col_offset: i64,
-    pub from_row_offset: i64,
-    pub to_col: u32,
-    pub to_row: u32,
-    pub to_col_offset: i64,
-    pub to_row_offset: i64,
+#[napi(string_enum = "lowercase")]
+#[derive(Clone, Copy)]
+pub enum JsCheckState {
+    Unchecked,
+    Checked,
+    Mixed,
 }
 
-impl From<&duke_sheets_chart::DrawingAnchor> for JsDrawingAnchor {
-    fn from(a: &duke_sheets_chart::DrawingAnchor) -> Self {
-        match a {
-            duke_sheets_chart::DrawingAnchor::TwoCell { from, to, .. } => JsDrawingAnchor {
-                from_col: from.col as u32,
-                from_row: from.row,
-                from_col_offset: from.col_offset_emu,
-                from_row_offset: from.row_offset_emu,
-                to_col: to.col as u32,
-                to_row: to.row,
-                to_col_offset: to.col_offset_emu,
-                to_row_offset: to.row_offset_emu,
-            },
-            _ => JsDrawingAnchor {
-                from_col: 0,
-                from_row: 0,
-                from_col_offset: 0,
-                from_row_offset: 0,
-                to_col: 0,
-                to_row: 0,
-                to_col_offset: 0,
-                to_row_offset: 0,
-            },
-        }
-    }
+#[napi(string_enum = "lowercase")]
+pub enum JsListSelection {
+    Single,
+    Multi,
+    Extend,
 }
 
 /// Reference to chart data.
@@ -3323,7 +3456,9 @@ pub struct JsAxis {
     pub major_unit: Option<f64>,
     pub minor_unit: Option<f64>,
     /// One of: `"Bottom"`, `"Top"`, `"Left"`, `"Right"`.
-    pub position: String,
+    /// `bottom`, `top`, `left` or `right`; unset when the source omitted
+    /// it and the writer will supply the conventional one.
+    pub position: Option<String>,
     pub number_format: Option<JsChartNumberFormat>,
     pub major_gridlines: bool,
     pub minor_gridlines: bool,
@@ -3346,7 +3481,15 @@ impl From<&duke_sheets_chart::Axis> for JsAxis {
             maximum: a.maximum,
             major_unit: a.major_unit,
             minor_unit: a.minor_unit,
-            position: format!("{:?}", a.position),
+            position: a.position.map(|position| {
+                match position {
+                    duke_sheets_chart::AxisPosition::Bottom => "bottom",
+                    duke_sheets_chart::AxisPosition::Top => "top",
+                    duke_sheets_chart::AxisPosition::Left => "left",
+                    duke_sheets_chart::AxisPosition::Right => "right",
+                }
+                .to_string()
+            }),
             number_format: a.number_format.as_ref().map(JsChartNumberFormat::from),
             major_gridlines: a.major_gridlines,
             minor_gridlines: a.minor_gridlines,
@@ -3556,7 +3699,6 @@ pub struct JsChart {
     pub category_axis: Option<JsAxis>,
     pub value_axis: Option<JsAxis>,
     pub legend: Option<JsLegend>,
-    pub anchor: JsDrawingAnchor,
     pub data_labels: Option<JsDataLabels>,
     pub view_3d: Option<JsView3D>,
     pub data_table: Option<JsChartDataTable>,
@@ -3584,6 +3726,8 @@ pub struct JsChart {
     pub high_low_lines: Option<JsChartLines>,
     pub series_lines: Option<JsChartLines>,
     pub up_down_bars: Option<JsUpDownBars>,
+    pub style: Option<JsChartStyle>,
+    pub color_style: Option<JsChartColorStyle>,
 }
 
 impl From<&duke_sheets_chart::Chart> for JsChart {
@@ -3599,7 +3743,6 @@ impl From<&duke_sheets_chart::Chart> for JsChart {
             category_axis: c.category_axis.as_ref().map(JsAxis::from),
             value_axis: c.value_axis.as_ref().map(JsAxis::from),
             legend: c.legend.as_ref().map(JsLegend::from),
-            anchor: JsDrawingAnchor::from(&c.anchor),
             data_labels: c.data_labels.as_ref().map(JsDataLabels::from),
             view_3d: c.view_3d.as_ref().map(JsView3D::from),
             data_table: c.data_table.as_ref().map(JsChartDataTable::from),
@@ -3630,6 +3773,8 @@ impl From<&duke_sheets_chart::Chart> for JsChart {
             high_low_lines: c.high_low_lines.as_ref().map(JsChartLines::from),
             series_lines: c.series_lines.as_ref().map(JsChartLines::from),
             up_down_bars: c.up_down_bars.as_ref().map(JsUpDownBars::from),
+            style: c.style.as_ref().map(JsChartStyle::from),
+            color_style: c.color_style.as_ref().map(JsChartColorStyle::from),
         }
     }
 }
@@ -4290,7 +4435,7 @@ pub struct JsChartExLayoutPr {
     pub binning: Option<JsChartExBinning>,
     pub geography: Option<JsChartExGeography>,
     pub statistics: Option<JsChartExStatistics>,
-    pub subtotals: Vec<u32>,
+    pub subtotals: Option<Vec<u32>>,
 }
 
 impl From<&duke_sheets_chart::ChartExLayoutPr> for JsChartExLayoutPr {
@@ -4309,14 +4454,30 @@ impl From<&duke_sheets_chart::ChartExLayoutPr> for JsChartExLayoutPr {
 }
 
 #[napi(object)]
+pub struct JsChartExGridlines {
+    pub shape_properties: Option<JsChartShapeProperties>,
+}
+
+impl From<&duke_sheets_chart::ChartExGridlines> for JsChartExGridlines {
+    fn from(g: &duke_sheets_chart::ChartExGridlines) -> Self {
+        Self {
+            shape_properties: g
+                .shape_properties
+                .as_ref()
+                .map(JsChartShapeProperties::from),
+        }
+    }
+}
+
+#[napi(object)]
 pub struct JsChartExAxis {
     pub id: u32,
     pub hidden: Option<bool>,
     pub scaling: JsChartExScaling,
     pub title: Option<JsChartExAxisTitle>,
     pub units: Option<JsChartExAxisUnits>,
-    pub major_gridlines: Option<JsChartShapeProperties>,
-    pub minor_gridlines: Option<JsChartShapeProperties>,
+    pub major_gridlines: Option<JsChartExGridlines>,
+    pub minor_gridlines: Option<JsChartExGridlines>,
     pub major_tick_marks: Option<String>,
     pub minor_tick_marks: Option<String>,
     pub tick_labels: bool,
@@ -4332,8 +4493,8 @@ impl From<&duke_sheets_chart::ChartExAxis> for JsChartExAxis {
             scaling: JsChartExScaling::from(&a.scaling),
             title: a.title.as_ref().map(JsChartExAxisTitle::from),
             units: a.units.as_ref().map(JsChartExAxisUnits::from),
-            major_gridlines: a.major_gridlines.as_ref().map(JsChartShapeProperties::from),
-            minor_gridlines: a.minor_gridlines.as_ref().map(JsChartShapeProperties::from),
+            major_gridlines: a.major_gridlines.as_ref().map(JsChartExGridlines::from),
+            minor_gridlines: a.minor_gridlines.as_ref().map(JsChartExGridlines::from),
             major_tick_marks: a.major_tick_marks.clone(),
             minor_tick_marks: a.minor_tick_marks.clone(),
             tick_labels: a.tick_labels,
@@ -4392,6 +4553,142 @@ impl From<&duke_sheets_chart::ChartExSeries> for JsChartExSeries {
 }
 
 #[napi(object)]
+pub struct JsChartStyleReference {
+    pub idx: u32,
+    /// The colour override, as the XML it was read as.
+    pub color: Option<String>,
+}
+
+impl From<&duke_sheets_chart::StyleReference> for JsChartStyleReference {
+    fn from(r: &duke_sheets_chart::StyleReference) -> Self {
+        Self {
+            idx: r.idx,
+            color: r.color.as_ref().map(|b| String::from_utf8_lossy(b).into_owned()),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsChartStyleEntry {
+    pub line_reference: JsChartStyleReference,
+    pub line_width_scale: Option<f64>,
+    pub fill_reference: JsChartStyleReference,
+    pub effect_reference: JsChartStyleReference,
+    /// `major`, `minor` or `none`.
+    pub font_collection: String,
+    pub font_color: Option<String>,
+    /// DrawingML kept as the XML it was read as.
+    pub shape_properties: Option<String>,
+    pub default_run_properties: Option<String>,
+    pub body_properties: Option<String>,
+    pub mods: Option<String>,
+}
+
+impl From<&duke_sheets_chart::StyleEntry> for JsChartStyleEntry {
+    fn from(e: &duke_sheets_chart::StyleEntry) -> Self {
+        let text = |b: &Option<Vec<u8>>| {
+            b.as_ref().map(|b| String::from_utf8_lossy(b).into_owned())
+        };
+        Self {
+            line_reference: (&e.line_reference).into(),
+            line_width_scale: e.line_width_scale,
+            fill_reference: (&e.fill_reference).into(),
+            effect_reference: (&e.effect_reference).into(),
+            font_collection: e.font_reference.collection.as_str().to_string(),
+            font_color: text(&e.font_reference.color),
+            shape_properties: text(&e.shape_properties),
+            default_run_properties: text(&e.default_run_properties),
+            body_properties: text(&e.body_properties),
+            mods: e.mods.clone(),
+        }
+    }
+}
+
+/// A chart style part. `entries` is keyed by the element name the entry
+/// belongs to (`chartArea`, `dataPoint`, ...); `raw` is set instead when
+/// the part could not be modelled and is being replayed as read.
+#[napi(object)]
+pub struct JsChartStyle {
+    pub id: Option<u32>,
+    pub entries: std::collections::HashMap<String, JsChartStyleEntry>,
+    pub marker_symbol: Option<String>,
+    pub marker_size: Option<u32>,
+    pub raw: Option<String>,
+}
+
+impl From<&duke_sheets_chart::ChartStylePart> for JsChartStyle {
+    fn from(part: &duke_sheets_chart::ChartStylePart) -> Self {
+        match part {
+            duke_sheets_chart::ChartStylePart::Raw(bytes) => Self {
+                id: None,
+                entries: std::collections::HashMap::new(),
+                marker_symbol: None,
+                marker_size: None,
+                raw: Some(String::from_utf8_lossy(bytes).into_owned()),
+            },
+            duke_sheets_chart::ChartStylePart::Typed(style) => {
+                let mut entries = std::collections::HashMap::new();
+                for (name, entry) in duke_sheets_chart::chart_style::entries_by_name(style) {
+                    entries.insert(name.to_string(), entry.into());
+                }
+                Self {
+                    id: Some(style.id),
+                    entries,
+                    marker_symbol: style
+                        .data_point_marker_layout
+                        .as_ref()
+                        .and_then(|m| m.symbol.clone()),
+                    marker_size: style.data_point_marker_layout.as_ref().and_then(|m| m.size),
+                    raw: None,
+                }
+            }
+        }
+    }
+}
+
+/// A chart colour style part. `raw` is set instead when the part could
+/// not be modelled.
+#[napi(object)]
+pub struct JsChartColorStyle {
+    /// `cycle`, `withinLinear`, ...
+    pub method: Option<String>,
+    pub id: Option<u32>,
+    /// Each colour as the XML it was read as.
+    pub colors: Vec<String>,
+    pub variations: Vec<String>,
+    pub raw: Option<String>,
+}
+
+impl From<&duke_sheets_chart::ChartColorStylePart> for JsChartColorStyle {
+    fn from(part: &duke_sheets_chart::ChartColorStylePart) -> Self {
+        match part {
+            duke_sheets_chart::ChartColorStylePart::Raw(bytes) => Self {
+                method: None,
+                id: None,
+                colors: Vec::new(),
+                variations: Vec::new(),
+                raw: Some(String::from_utf8_lossy(bytes).into_owned()),
+            },
+            duke_sheets_chart::ChartColorStylePart::Typed(style) => Self {
+                method: Some(style.method.as_str().to_string()),
+                id: style.id,
+                colors: style
+                    .colors
+                    .iter()
+                    .map(|b| String::from_utf8_lossy(b).into_owned())
+                    .collect(),
+                variations: style
+                    .variations
+                    .iter()
+                    .map(|b| String::from_utf8_lossy(b).into_owned())
+                    .collect(),
+                raw: None,
+            },
+        }
+    }
+}
+
+#[napi(object)]
 pub struct JsChartEx {
     pub layout: String,
     pub version: Option<String>,
@@ -4401,12 +4698,13 @@ pub struct JsChartEx {
     pub data: Vec<JsChartExData>,
     pub plot_area: JsChartExPlotArea,
     pub legend: Option<JsChartExLegend>,
-    pub anchor: JsDrawingAnchor,
     pub shape_properties: Option<JsChartShapeProperties>,
     pub format_overrides: Vec<JsChartExFormatOverride>,
     pub print_settings: Option<JsChartExPrintSettings>,
     pub external_data_rel_id: Option<String>,
     pub external_data_auto_update: Option<bool>,
+    pub style: Option<JsChartStyle>,
+    pub color_style: Option<JsChartColorStyle>,
 }
 
 impl From<&duke_sheets_chart::ChartEx> for JsChartEx {
@@ -4426,7 +4724,6 @@ impl From<&duke_sheets_chart::ChartEx> for JsChartEx {
             data: c.data.iter().map(JsChartExData::from).collect(),
             plot_area: JsChartExPlotArea::from(&c.plot_area),
             legend: c.legend.as_ref().map(JsChartExLegend::from),
-            anchor: JsDrawingAnchor::from(&c.anchor),
             shape_properties: c
                 .shape_properties
                 .as_ref()
@@ -4439,45 +4736,8 @@ impl From<&duke_sheets_chart::ChartEx> for JsChartEx {
             print_settings: c.print_settings.as_ref().map(JsChartExPrintSettings::from),
             external_data_rel_id: c.external_data.as_ref().map(|e| e.rel_id.clone()),
             external_data_auto_update: c.external_data.as_ref().and_then(|e| e.auto_update),
-        }
-    }
-}
-
-#[napi(object)]
-pub struct JsEmbeddedImage {
-    pub id: u32,
-    pub name: String,
-    pub description: Option<String>,
-    pub anchor: JsDrawingAnchor,
-    pub format: String,
-    pub media_path: String,
-    pub svg_media_path: Option<String>,
-    pub width_emu: i64,
-    pub height_emu: i64,
-    pub rotation: Option<i32>,
-    pub flip_h: bool,
-    pub flip_v: bool,
-    pub data: napi::bindgen_prelude::Buffer,
-    pub svg_data: Option<napi::bindgen_prelude::Buffer>,
-}
-
-impl From<&duke_sheets_chart::EmbeddedImage> for JsEmbeddedImage {
-    fn from(img: &duke_sheets_chart::EmbeddedImage) -> Self {
-        JsEmbeddedImage {
-            id: img.id,
-            name: img.name.clone(),
-            description: img.description.clone(),
-            anchor: JsDrawingAnchor::from(&img.anchor),
-            format: img.format.as_str().to_string(),
-            media_path: img.media_path.clone(),
-            svg_media_path: img.svg_media_path.clone(),
-            width_emu: img.width_emu,
-            height_emu: img.height_emu,
-            rotation: img.rotation,
-            flip_h: img.flip_h,
-            flip_v: img.flip_v,
-            data: img.data().to_vec().into(),
-            svg_data: img.svg_data().map(|b| b.to_vec().into()),
+            style: c.style.as_ref().map(JsChartStyle::from),
+            color_style: c.color_style.as_ref().map(JsChartColorStyle::from),
         }
     }
 }

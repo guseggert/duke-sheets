@@ -13,10 +13,15 @@ use std::io::Cursor;
 
 use duke_sheets_core::{CellValue, Workbook};
 
+#[path = "common/form_controls.rs"]
+mod form_controls;
+use form_controls::FuzzFormControl;
+
 #[derive(Arbitrary, Debug)]
 struct FuzzWorkbook {
     cells: Vec<FuzzCell>,
     named_range: Option<bool>,
+    controls: Vec<FuzzFormControl>,
 }
 
 #[derive(Arbitrary, Debug)]
@@ -135,12 +140,22 @@ fuzz_target!(|data: &[u8]| {
         }
     }
 
+    for control in fwb.controls.iter().take(6) {
+        sheet.add_form_control(control.to_control(), control.anchor());
+    }
+    let control_count = sheet.form_control_count();
+
     let mut output = Cursor::new(Vec::new());
     if duke_sheets_xlsb::XlsbWriter::write(&workbook, &mut output).is_err() {
         return;
     }
     let written = output.into_inner();
     // Read-back must not panic; our own output must also be readable.
-    let _ = duke_sheets_xlsb::XlsbReader::read(Cursor::new(&written))
+    let rt = duke_sheets_xlsb::XlsbReader::read(Cursor::new(&written))
         .expect("our own XLSB output must read back");
+    assert_eq!(
+        rt.worksheet(0).unwrap().form_control_count(),
+        control_count,
+        "form control count mismatch"
+    );
 });

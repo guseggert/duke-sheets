@@ -2,23 +2,27 @@
 
 use std::collections::HashMap;
 use std::io::{BufReader, Cursor, Read, Seek};
+use std::sync::Arc;
 
 use quick_xml::events::{BytesStart, Event};
-use quick_xml::reader::Reader;
+use quick_xml::name::ResolveResult;
+use quick_xml::reader::{NsReader, Reader};
 use quick_xml::Writer;
 
-use super::archive_by_name;
 use crate::error::{XlsxError, XlsxResult};
+use crate::opc::{OpcPackage, PartName, RelationshipKind, RelationshipSet, RelationshipSource};
+use crate::XlsxPackagePolicy;
 use duke_sheets_core::{
     SheetVisibility, WorkbookConnection, WorkbookConnectionCredentials, WorkbookConnectionKind,
     WorkbookConnectionParameter, WorkbookConnectionParameterType, WorkbookConnectionParameterValue,
-    WorkbookExtension,
+    WorkbookExtension, WorkbookProtection,
 };
 
 /// Parsed workbook properties from workbook.xml
 pub(super) struct WorkbookProps {
     pub(super) sheets: Vec<SheetEntry>,
     pub(super) date_1904: bool,
+    pub(super) workbook_protection: Option<WorkbookProtection>,
     pub(super) named_ranges: Vec<duke_sheets_core::named_range::NamedRange>,
     pub(super) pivot_caches: Vec<PivotCacheEntry>,
     pub(super) workbook_extensions: Vec<WorkbookExtension>,
@@ -28,19 +32,17 @@ pub(super) struct WorkbookRels {
     pub(super) sheet_paths: HashMap<String, String>,
     pub(super) chartsheet_paths: HashMap<String, String>,
     pub(super) theme_path: Option<String>,
+    pub(super) styles_path: Option<String>,
+    pub(super) shared_strings_path: Option<String>,
     pub(super) pivot_cache_paths: HashMap<String, String>,
     pub(super) connections_path: Option<String>,
     pub(super) extension_parts: Vec<WorkbookExtensionRelationship>,
+    /// Relationship ids of valid but unmodeled sheet kinds
+    /// (dialog/macro sheets); their sheet entries are skipped.
+    pub(super) unmodeled_sheet_rels: std::collections::HashSet<String>,
 }
-
 pub(super) struct WorkbookExtensionRelationship {
     pub(super) r_id: String,
-    pub(super) rel_type: String,
-    pub(super) target: String,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct SheetRelationship {
     pub(super) rel_type: String,
     pub(super) target: String,
 }
@@ -58,21 +60,52 @@ pub(super) struct PivotCacheEntry {
 
 /// Read workbook.xml to get sheet names, rIds, workbook properties,
 /// and defined names.
-pub(super) fn read_workbook_xml<R: Read + Seek>(
-    archive: &mut zip::ZipArchive<R>,
+pub(super) fn read_workbook_xml<R: Read>(
+    reader: R,
+    policy: XlsxPackagePolicy,
 ) -> XlsxResult<WorkbookProps> {
     use duke_sheets_core::named_range::{NameScope, NamedRange};
 
-    let file = archive_by_name(archive, "xl/workbook.xml")
-        .map_err(|_| XlsxError::MissingPart("xl/workbook.xml".into()))?;
-
-    let reader = BufReader::new(file);
-    let mut xml_reader = Reader::from_reader(reader);
+    let mut xml_reader = NsReader::from_reader(BufReader::new(reader));
     xml_reader.config_mut().trim_text(true);
 
     let mut buf = Vec::new();
+    // Compatible mode keeps the historical namespace-agnostic parse.
+    if policy == XlsxPackagePolicy::Strict {
+        loop {
+            match xml_reader.read_resolved_event_into(&mut buf) {
+                Ok((ResolveResult::Bound(namespace), Event::Start(element)))
+                    if element.name().local_name().as_ref() == b"workbook"
+                        && matches!(
+                            namespace.as_ref(),
+                            b"http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+                                | b"http://purl.oclc.org/ooxml/spreadsheetml/main"
+                        ) =>
+                {
+                    break;
+                }
+                Ok((_, Event::Decl(_) | Event::Comment(_) | Event::PI(_))) => {}
+                Ok((_, Event::Text(text)))
+                    if text.unescape().is_ok_and(|value| value.trim().is_empty()) => {}
+                Ok((_, Event::Eof)) => {
+                    return Err(XlsxError::InvalidFormat(
+                        "Workbook part has no workbook root element".into(),
+                    ));
+                }
+                Ok(_) => {
+                    return Err(XlsxError::InvalidFormat(
+                        "Workbook part has an invalid root element or namespace".into(),
+                    ));
+                }
+                Err(error) => return Err(XlsxError::Xml(error)),
+            }
+            buf.clear();
+        }
+    }
+    buf.clear();
     let mut sheets = Vec::new();
     let mut date_1904 = false;
+    let mut workbook_protection = None;
     let mut named_ranges = Vec::new();
     let mut pivot_caches = Vec::new();
     let mut workbook_extensions = Vec::new();
@@ -81,16 +114,31 @@ pub(super) fn read_workbook_xml<R: Read + Seek>(
     loop {
         match xml_reader.read_event_into(&mut buf) {
             Ok(Event::Empty(ref e)) => match e.name().local_name().as_ref() {
-                b"sheet" => parse_sheet_element(e, &mut sheets),
+                b"sheet" => {
+                    if !parse_sheet_element(e, &mut sheets) && policy == XlsxPackagePolicy::Strict {
+                        return Err(XlsxError::InvalidFormat(
+                            "Workbook sheet is missing name or relationship id".into(),
+                        ));
+                    }
+                }
                 b"workbookPr" => parse_workbook_pr(e, &mut date_1904),
                 b"pivotCache" => parse_pivot_cache_element(e, &mut pivot_caches),
                 b"ext" if in_ext_list => {
                     workbook_extensions.push(empty_workbook_extension(e)?);
                 }
+                b"workbookProtection" => {
+                    workbook_protection = parse_workbook_protection(e);
+                }
                 _ => {}
             },
             Ok(Event::Start(ref e)) => match e.name().local_name().as_ref() {
-                b"sheet" => parse_sheet_element(e, &mut sheets),
+                b"sheet" => {
+                    if !parse_sheet_element(e, &mut sheets) && policy == XlsxPackagePolicy::Strict {
+                        return Err(XlsxError::InvalidFormat(
+                            "Workbook sheet is missing name or relationship id".into(),
+                        ));
+                    }
+                }
                 b"workbookPr" => parse_workbook_pr(e, &mut date_1904),
                 b"pivotCache" => parse_pivot_cache_element(e, &mut pivot_caches),
                 b"extLst" => in_ext_list = true,
@@ -98,6 +146,9 @@ pub(super) fn read_workbook_xml<R: Read + Seek>(
                     let extension =
                         read_workbook_extension(&mut xml_reader, e.clone().into_owned(), &mut buf)?;
                     workbook_extensions.push(extension);
+                }
+                b"workbookProtection" => {
+                    workbook_protection = parse_workbook_protection(e);
                 }
                 b"definedName" => {
                     let mut dn_name = None;
@@ -159,13 +210,17 @@ pub(super) fn read_workbook_xml<R: Read + Seek>(
     Ok(WorkbookProps {
         sheets,
         date_1904,
+        workbook_protection,
         named_ranges,
         pivot_caches,
         workbook_extensions,
     })
 }
 
-fn parse_sheet_element(e: &quick_xml::events::BytesStart<'_>, sheets: &mut Vec<SheetEntry>) {
+fn parse_sheet_element(
+    e: &quick_xml::events::BytesStart<'_>,
+    sheets: &mut Vec<SheetEntry>,
+) -> bool {
     let mut name = None;
     let mut r_id = None;
     let mut visibility = SheetVisibility::Visible;
@@ -193,6 +248,9 @@ fn parse_sheet_element(e: &quick_xml::events::BytesStart<'_>, sheets: &mut Vec<S
             r_id,
             visibility,
         });
+        true
+    } else {
+        false
     }
 }
 
@@ -232,7 +290,7 @@ fn parse_pivot_cache_element(
 }
 
 fn read_workbook_extension<B: std::io::BufRead>(
-    xml_reader: &mut Reader<B>,
+    xml_reader: &mut NsReader<B>,
     start: BytesStart<'static>,
     buf: &mut Vec<u8>,
 ) -> XlsxResult<WorkbookExtension> {
@@ -287,112 +345,139 @@ fn empty_workbook_extension(ext: &BytesStart<'_>) -> XlsxResult<WorkbookExtensio
     })
 }
 
+fn parse_workbook_protection(e: &quick_xml::events::BytesStart<'_>) -> Option<WorkbookProtection> {
+    let mut protection = WorkbookProtection::default();
+
+    for attr in e.attributes().flatten() {
+        let Ok(value) = attr.unescape_value() else {
+            continue;
+        };
+        match attr.key.local_name().as_ref() {
+            b"lockStructure" => {
+                protection.structure =
+                    value.as_ref() == "1" || value.as_ref().eq_ignore_ascii_case("true");
+            }
+            b"lockWindows" => {
+                protection.windows =
+                    value.as_ref() == "1" || value.as_ref().eq_ignore_ascii_case("true");
+            }
+            b"workbookPassword" => {
+                if let Ok(h) = u16::from_str_radix(value.as_ref(), 16) {
+                    protection.password_hash = Some(h);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if protection.structure || protection.windows || protection.password_hash.is_some() {
+        Some(protection)
+    } else {
+        None
+    }
+}
+
 /// Read workbook.xml.rels to get sheet file paths and theme path.
 pub(super) fn read_workbook_rels<R: Read + Seek>(
-    archive: &mut zip::ZipArchive<R>,
+    package: &mut OpcPackage<R>,
+    workbook_path: &PartName,
 ) -> XlsxResult<WorkbookRels> {
-    let file = archive_by_name(archive, "xl/_rels/workbook.xml.rels")
-        .map_err(|_| XlsxError::MissingPart("xl/_rels/workbook.xml.rels".into()))?;
-
-    let reader = BufReader::new(file);
-    let mut xml_reader = Reader::from_reader(reader);
-    xml_reader.config_mut().trim_text(true);
-
-    let mut buf = Vec::new();
+    let source = RelationshipSource::Part(workbook_path.clone());
+    let relationships = package.relationships(&source, true)?;
     let mut rels = HashMap::new();
     let mut chartsheet_rels = HashMap::new();
-    let mut theme_path: Option<String> = None;
+    let mut theme_path = None;
+    let mut styles_path = None;
+    let mut shared_strings_path = None;
     let mut pivot_cache_paths = HashMap::new();
     let mut connections_path = None;
     let mut extension_parts = Vec::new();
-    loop {
-        match xml_reader.read_event_into(&mut buf) {
-            Ok(Event::Empty(e)) | Ok(Event::Start(e))
-                if e.name().local_name().as_ref() == b"Relationship" =>
-            {
-                let mut id = None;
-                let mut target = None;
-                let mut rel_type = None;
+    let mut unmodeled_sheet_rels = std::collections::HashSet::new();
 
-                for attr in e.attributes().flatten() {
-                    match attr.key.local_name().as_ref() {
-                        b"Id" => id = attr.unescape_value().ok().map(|s| s.to_string()),
-                        b"Target" => {
-                            target = attr.unescape_value().ok().map(|s| s.to_string());
-                        }
-                        b"Type" => {
-                            rel_type = attr.unescape_value().ok().map(|s| s.to_string());
-                        }
-                        _ => {}
-                    }
-                }
-
-                // Include worksheet relationships and theme relationship
-                if let (Some(id), Some(target), Some(rel_type)) = (id, target, rel_type) {
-                    if rel_type.ends_with("/worksheet") {
-                        // Target is relative to xl/ folder
-                        let full_path = if let Some(stripped) = target.strip_prefix('/') {
-                            stripped.to_string()
-                        } else {
-                            format!("xl/{}", target)
-                        };
-                        rels.insert(id, full_path);
-                    } else if rel_type.ends_with("/chartsheet") {
-                        let full_path = if let Some(stripped) = target.strip_prefix('/') {
-                            stripped.to_string()
-                        } else {
-                            format!("xl/{}", target)
-                        };
-                        chartsheet_rels.insert(id, full_path);
-                    } else if rel_type.ends_with("/theme") {
-                        let full_path = if let Some(stripped) = target.strip_prefix('/') {
-                            stripped.to_string()
-                        } else {
-                            format!("xl/{}", target)
-                        };
-                        theme_path = Some(full_path);
-                    } else if rel_type.ends_with("/pivotCacheDefinition") {
-                        let full_path = if let Some(stripped) = target.strip_prefix('/') {
-                            stripped.to_string()
-                        } else {
-                            format!("xl/{}", target)
-                        };
-                        pivot_cache_paths.insert(id, full_path);
-                    } else if rel_type.ends_with("/connections") {
-                        let full_path = if let Some(stripped) = target.strip_prefix('/') {
-                            stripped.to_string()
-                        } else {
-                            format!("xl/{}", target)
-                        };
-                        connections_path = Some(full_path);
-                    } else if is_workbook_extension_relationship(&rel_type) {
-                        let full_path = if let Some(stripped) = target.strip_prefix('/') {
-                            stripped.to_string()
-                        } else {
-                            format!("xl/{}", target)
-                        };
-                        extension_parts.push(WorkbookExtensionRelationship {
-                            r_id: id,
-                            rel_type,
-                            target: full_path,
-                        });
-                    }
-                }
+    for relationship in relationships.iter() {
+        let rel_type = relationship.rel_type.as_str();
+        if rel_type.ends_with("/pivotCacheDefinition")
+            || rel_type.ends_with("/connections")
+            || is_workbook_extension_relationship(rel_type)
+        {
+            let Some(path) = relationship.internal_path() else {
+                continue;
+            };
+            if package.open_related_part(relationship)?.is_none() {
+                continue;
             }
-            Ok(Event::Eof) => break,
-            Err(e) => return Err(XlsxError::Xml(e)),
-            _ => {}
+            if rel_type.ends_with("/pivotCacheDefinition") {
+                pivot_cache_paths.insert(relationship.id.clone(), path.to_string());
+            } else if rel_type.ends_with("/connections") {
+                connections_path = Some(path.to_string());
+            } else {
+                extension_parts.push(WorkbookExtensionRelationship {
+                    r_id: relationship.id.clone(),
+                    rel_type: relationship.rel_type.clone(),
+                    target: path.to_string(),
+                });
+            }
+            continue;
         }
-        buf.clear();
+
+        let Some(kind) = relationship.kind() else {
+            continue;
+        };
+        // Valid OOXML sheet kinds this library does not model yet; a
+        // capability limitation, never a conformance violation.
+        if let Some(label) = kind.unmodeled_sheet_label() {
+            if package.open_related_part(relationship)?.is_none() {
+                continue;
+            }
+            package.diagnostics_mut().warning(
+                crate::opc::XlsxDiagnosticCode::UnsupportedSheetType,
+                format!("{label} sheets are not supported by the workbook model"),
+                Some(workbook_path.as_str()),
+                Some(&relationship.id),
+                Some(&relationship.raw_target),
+            );
+            unmodeled_sheet_rels.insert(relationship.id.clone());
+            continue;
+        }
+        if !matches!(
+            kind,
+            RelationshipKind::Worksheet
+                | RelationshipKind::Chartsheet
+                | RelationshipKind::Theme
+                | RelationshipKind::Styles
+                | RelationshipKind::SharedStrings
+        ) {
+            continue;
+        }
+        let Some(path) = relationship.internal_path() else {
+            continue;
+        };
+        if package.open_related_part(relationship)?.is_none() {
+            continue;
+        }
+        if kind == RelationshipKind::Worksheet {
+            rels.insert(relationship.id.clone(), path.to_string());
+        } else if kind == RelationshipKind::Chartsheet {
+            chartsheet_rels.insert(relationship.id.clone(), path.to_string());
+        } else if kind == RelationshipKind::Theme {
+            theme_path = Some(path.to_string());
+        } else if kind == RelationshipKind::Styles {
+            styles_path = Some(path.to_string());
+        } else if kind == RelationshipKind::SharedStrings {
+            shared_strings_path = Some(path.to_string());
+        }
     }
 
     Ok(WorkbookRels {
         sheet_paths: rels,
         chartsheet_paths: chartsheet_rels,
         theme_path,
+        styles_path,
+        shared_strings_path,
         pivot_cache_paths,
         connections_path,
         extension_parts,
+        unmodeled_sheet_rels,
     })
 }
 
@@ -401,13 +486,13 @@ fn is_workbook_extension_relationship(rel_type: &str) -> bool {
 }
 
 pub(super) fn read_workbook_connections<R: Read + Seek>(
-    archive: &mut zip::ZipArchive<R>,
+    package: &mut OpcPackage<R>,
     path: Option<&str>,
 ) -> XlsxResult<Vec<WorkbookConnection>> {
     let Some(path) = path else {
         return Ok(Vec::new());
     };
-    let file = match archive_by_name(archive, path) {
+    let file = match package.open_zip_name(path) {
         Ok(file) => file,
         Err(_) => return Ok(Vec::new()),
     };
@@ -783,82 +868,11 @@ fn attr_bool(e: &quick_xml::events::BytesStart<'_>, key: &[u8]) -> Option<bool> 
     attr_string(e, key).map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
 }
 
-/// Read per-sheet .rels to get hyperlinks, comments, tables, etc.
-pub(super) fn read_sheet_rels<R: Read + Seek>(
-    archive: &mut zip::ZipArchive<R>,
-    sheet_path: &str,
-) -> XlsxResult<HashMap<String, SheetRelationship>> {
-    let (base_dir, file_name) = match sheet_path.rsplit_once('/') {
-        Some((dir, file)) => (dir, file),
-        None => return Ok(HashMap::new()),
-    };
-    let rels_path = format!("{}/_rels/{}.rels", base_dir, file_name);
-
-    let file = match archive_by_name(archive, &rels_path) {
-        Ok(f) => f,
-        Err(_) => return Ok(HashMap::new()),
-    };
-
-    let reader = BufReader::new(file);
-    let mut xml_reader = Reader::from_reader(reader);
-    xml_reader.config_mut().trim_text(true);
-
-    let mut buf = Vec::new();
-    let mut rels = HashMap::new();
-
-    loop {
-        match xml_reader.read_event_into(&mut buf) {
-            Ok(Event::Empty(e)) | Ok(Event::Start(e))
-                if e.name().local_name().as_ref() == b"Relationship" =>
-            {
-                let mut id = None;
-                let mut target = None;
-                let mut rel_type = None;
-                let mut target_mode = None;
-
-                for attr in e.attributes().flatten() {
-                    match attr.key.local_name().as_ref() {
-                        b"Id" => id = attr.unescape_value().ok().map(|s| s.to_string()),
-                        b"Target" => target = attr.unescape_value().ok().map(|s| s.to_string()),
-                        b"Type" => rel_type = attr.unescape_value().ok().map(|s| s.to_string()),
-                        b"TargetMode" => {
-                            target_mode = attr.unescape_value().ok().map(|s| s.to_string())
-                        }
-                        _ => {}
-                    }
-                }
-
-                if let (Some(id), Some(target), Some(rel_type)) = (id, target, rel_type) {
-                    let resolved_target =
-                        if target.starts_with('/') || target_mode.as_deref() == Some("External") {
-                            target
-                        } else {
-                            let mut parts: Vec<&str> = base_dir.split('/').collect();
-                            for part in target.split('/') {
-                                if part == ".." {
-                                    parts.pop();
-                                } else if part != "." && !part.is_empty() {
-                                    parts.push(part);
-                                }
-                            }
-                            parts.join("/")
-                        };
-
-                    rels.insert(
-                        id,
-                        SheetRelationship {
-                            rel_type,
-                            target: resolved_target,
-                        },
-                    );
-                }
-            }
-            Ok(Event::Eof) => break,
-            Err(e) => return Err(XlsxError::Xml(e)),
-            _ => {}
-        }
-        buf.clear();
-    }
-
-    Ok(rels)
+/// Read relationships owned by any package part.
+pub(super) fn read_part_rels<R: Read + Seek>(
+    package: &mut OpcPackage<R>,
+    part_path: &str,
+) -> XlsxResult<Arc<RelationshipSet>> {
+    let source = RelationshipSource::Part(PartName::from_zip_name(part_path)?);
+    package.relationships(&source, false)
 }

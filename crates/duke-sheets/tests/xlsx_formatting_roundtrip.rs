@@ -248,7 +248,7 @@ fn test_roundtrip_cell_comments() {
     assert!(comment_a1.is_some(), "A1 should have a comment");
     if let Some(c) = comment_a1 {
         assert_eq!(c.author, "John Doe");
-        assert_eq!(c.text, "This is a note");
+        assert_eq!(c.plain_text(), "This is a note");
     }
 
     // Check B2 comment
@@ -256,8 +256,66 @@ fn test_roundtrip_cell_comments() {
     assert!(comment_b2.is_some(), "B2 should have a comment");
     if let Some(c) = comment_b2 {
         assert_eq!(c.author, "Jane Smith");
-        assert_eq!(c.text, "Review this value");
+        assert_eq!(c.plain_text(), "Review this value");
     }
+}
+
+// features: Rich text in comments
+#[test]
+fn rich_comment_runs_round_trip_xlsx() {
+    use duke_sheets::{DrawingText, RichTextRun, RunFont};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    let text = DrawingText {
+        runs: vec![
+            RichTextRun {
+                text: "Bold lead".to_string(),
+                font: Some(RunFont {
+                    bold: Some(true),
+                    ..RunFont::default()
+                }),
+            },
+            RichTextRun {
+                text: " then plain".to_string(),
+                font: None,
+            },
+        ],
+        ..DrawingText::default()
+    };
+    sheet
+        .set_comment(
+            "A1",
+            CellComment {
+                author: "Reviewer".to_string(),
+                text,
+            },
+        )
+        .unwrap();
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let comment = wb2
+        .worksheet(0)
+        .unwrap()
+        .comment("A1")
+        .unwrap()
+        .expect("comment survives");
+
+    assert_eq!(comment.plain_text(), "Bold lead then plain");
+    assert_eq!(comment.text.runs.len(), 2, "run boundaries survive");
+    assert_eq!(comment.text.runs[0].text, "Bold lead");
+    assert_eq!(
+        comment.text.runs[0]
+            .font
+            .as_ref()
+            .and_then(|font| font.bold),
+        Some(true),
+        "bold run formatting survives"
+    );
+    assert_eq!(comment.text.runs[1].text, " then plain");
+    assert!(comment.text.runs[1].font.is_none());
 }
 
 #[test]
@@ -291,7 +349,7 @@ fn test_comments_emit_vml_and_legacy_drawing() {
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
     let sheet2 = wb2.worksheet(0).unwrap();
     let comment = sheet2.comment("B2").unwrap().unwrap();
-    assert_eq!(comment.text, "VML-backed comment");
+    assert_eq!(comment.plain_text(), "VML-backed comment");
 }
 
 /// Test cell comments without author
@@ -320,7 +378,7 @@ fn test_roundtrip_cell_comments_no_author() {
     assert!(comment.is_some(), "A1 should have a comment");
     if let Some(c) = comment {
         assert!(c.author.is_empty(), "Author should be empty");
-        assert_eq!(c.text, "Anonymous note");
+        assert_eq!(c.plain_text(), "Anonymous note");
     }
 }
 
@@ -356,14 +414,14 @@ fn test_roundtrip_comments_multiple_sheets() {
     assert_eq!(sheet1.comment_count(), 1);
     let c1 = sheet1.comment("A1").unwrap().unwrap();
     assert_eq!(c1.author, "Author1");
-    assert_eq!(c1.text, "Comment on sheet 1");
+    assert_eq!(c1.plain_text(), "Comment on sheet 1");
 
     // Verify sheet 2 comments
     let sheet2 = wb2.worksheet(1).unwrap();
     assert_eq!(sheet2.comment_count(), 1);
     let c2 = sheet2.comment("B2").unwrap().unwrap();
     assert_eq!(c2.author, "Author2");
-    assert_eq!(c2.text, "Comment on sheet 2");
+    assert_eq!(c2.plain_text(), "Comment on sheet 2");
 }
 
 /// Test color scale conditional formatting roundtrip
@@ -808,4 +866,81 @@ fn test_roundtrip_dxf_alignment() {
         assert!(format.alignment.wrap_text, "Wrap text should be true");
         assert_eq!(format.alignment.rotation, 45, "Text rotation should be 45");
     }
+}
+
+/// A currency format holds literal quotes, and quick-xml escapes attribute
+/// values itself, so escaping before handing it over produced `&amp;quot;`
+/// where `&quot;` belonged. The format then gained another `amp;` on every
+/// save, growing without bound while displaying the wrong thing.
+#[test]
+fn number_formats_and_font_names_are_escaped_exactly_once() {
+    let format_code = r##""$"#,##0.00_);[Red]\("$"#,##0.00\)"##;
+
+    let mut wb = Workbook::new();
+    {
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", 1234.5).unwrap();
+        // An ampersand and angle brackets in a font name exercise the
+        // same attribute path.
+        let font = duke_sheets::FontStyle {
+            name: "Ampersand & <Co>".to_string(),
+            ..duke_sheets::FontStyle::default()
+        };
+        let style = Style {
+            number_format: NumberFormat::Custom(format_code.to_string()),
+            font,
+            ..Style::default()
+        };
+        sheet.set_cell_style("A1", &style).unwrap();
+    }
+
+    let write = |wb: &Workbook| {
+        let mut buf = Vec::new();
+        XlsxWriter::write(wb, Cursor::new(&mut buf)).expect("write");
+        buf
+    };
+    let part = |bytes: &[u8], name: &str| {
+        let mut zip = zip::ZipArchive::new(Cursor::new(bytes.to_vec())).expect("zip");
+        let mut xml = String::new();
+        zip.by_name(name)
+            .expect("part")
+            .read_to_string(&mut xml)
+            .expect("read part");
+        xml
+    };
+
+    let first = write(&wb);
+    let styles = part(&first, "xl/styles.xml");
+    assert!(
+        !styles.contains("&amp;quot;") && !styles.contains("&amp;amp;"),
+        "attribute values were escaped twice: {}",
+        &styles[..styles.len().min(700)]
+    );
+    assert!(
+        styles.contains("Ampersand &amp; &lt;Co&gt;"),
+        "the font name must be escaped exactly once: {}",
+        &styles[..styles.len().min(700)]
+    );
+
+    // The value must survive, and a second save must not change it again.
+    let reread = XlsxReader::read(Cursor::new(first.clone())).expect("read");
+    let style = reread
+        .worksheet(0)
+        .unwrap()
+        .cell_style("A1")
+        .expect("cell style lookup")
+        .expect("cell style");
+    assert_eq!(
+        style.number_format,
+        NumberFormat::Custom(format_code.to_string()),
+        "the format code must come back exactly as written"
+    );
+    assert_eq!(style.font.name, "Ampersand & <Co>");
+
+    let second = write(&reread);
+    assert_eq!(
+        part(&second, "xl/styles.xml"),
+        styles,
+        "a second save must not re-escape anything"
+    );
 }

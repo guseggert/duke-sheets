@@ -28,4 +28,4 @@ tempfile.workspace = true
 pretty_assertions.workspace = true
 duke-sheets-libreoffice = { path = "../duke-sheets-libreoffice" }
 duke-sheets-test-harness.workspace = true
-tokio = { version = "1", features = ["rt", "sync", "net"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "net"] }

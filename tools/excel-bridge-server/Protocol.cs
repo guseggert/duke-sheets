@@ -2,8 +2,8 @@
 //
 // Wire format: newline-delimited JSON (NDJSON), one object per line.
 //
-// The protocol has only a small set of commands: Ping, Init, Get, Set,
-// Invoke, Navigate, Release, Shutdown.
+// Commands: Ping, Init, Get, Set, Invoke, Navigate, Release, Shutdown, plus the
+// VM file primitives PutFile, GetFile, DeleteFile, CreateDir.
 // All Excel-specific knowledge lives in the client - the server is a thin
 // COM object navigator.
 

@@ -60,6 +60,7 @@ fn parse_xls_variant(
 }
 
 mod types;
+pub(crate) mod drawings;
 mod workbook_read;
 mod worksheet_read;
 
@@ -777,6 +778,502 @@ export interface Workbook {
   refreshPivots(options?: PivotRefreshOptions): PivotRefreshStats;
 }
 
+export interface DrawingMeta {
+  name?: string;
+  hidden: boolean;
+  locked: boolean;
+  printable: boolean;
+  altText?: string;
+  title?: string;
+}
+
+export interface DrawingMetaInput {
+  name?: string;
+  hidden?: boolean;
+  locked?: boolean;
+  printable?: boolean;
+  altText?: string;
+  title?: string;
+}
+
+export interface DrawingCellMarker {
+  col: number;
+  row: number;
+  colOffsetEmu?: number;
+  rowOffsetEmu?: number;
+}
+
+export type DrawingAnchor =
+  | { type: "twoCell"; from: DrawingCellMarker; to: DrawingCellMarker; editAs?: "twoCell" | "oneCell" | "absolute" }
+  | { type: "oneCell"; from: DrawingCellMarker; widthEmu: number; heightEmu: number }
+  | { type: "absolute"; xEmu: number; yEmu: number; widthEmu: number; heightEmu: number };
+
+export interface DrawingChildTransform {
+  xEmu?: number;
+  yEmu?: number;
+  cxEmu?: number;
+  cyEmu?: number;
+  rotation?: number;
+  flipH?: boolean;
+  flipV?: boolean;
+}
+
+export interface DrawingGroupTransform extends DrawingChildTransform {
+  childXEmu?: number;
+  childYEmu?: number;
+  childCxEmu?: number;
+  childCyEmu?: number;
+}
+
+export type DrawingPlacement =
+  | { anchor: DrawingAnchor; transform?: never }
+  | { anchor?: never; transform: DrawingChildTransform };
+
+export type DrawingColor =
+  | { colorType: "auto" }
+  | { colorType: "rgb"; r: number; g: number; b: number }
+  | { colorType: "argb"; a: number; r: number; g: number; b: number }
+  | { colorType: "theme"; index: number; tint: number }
+  | { colorType: "indexed"; index: number };
+
+export interface DrawingRunFont {
+  bold?: boolean;
+  italic?: boolean;
+  size?: number;
+  color?: DrawingColor;
+  name?: string;
+  underline?: "none" | "single" | "double" | "singleAccounting" | "doubleAccounting";
+  strikethrough?: boolean;
+  verticalAlign?: "baseline" | "superscript" | "subscript";
+  family?: number;
+  charset?: number;
+  scheme?: string;
+}
+
+export interface DrawingText {
+  runs: Array<{ text: string; font?: DrawingRunFont }>;
+  horizontalAlignment?: "general" | "left" | "center" | "right" | "fill" | "justify" | "centerContinuous" | "distributed";
+  verticalAlignment?: "top" | "center" | "bottom" | "justify" | "distributed";
+}
+
+export type FormControlKind =
+  | { kind: "button"; caption: DrawingText }
+  | { kind: "checkbox"; caption: DrawingText; state: "unchecked" | "checked" | "mixed"; cellLink?: string; no3D: boolean }
+  /**
+   * `firstInGroup` reports whether this radio heads its group; writers
+   * recompute it from group-box containment, so it is read-side
+   * information. `"mixed"` never validates on write but can surface
+   * when reading hostile files.
+   */
+  | { kind: "optionButton"; caption: DrawingText; state: "unchecked" | "checked" | "mixed"; cellLink?: string; firstInGroup: boolean; no3D: boolean }
+  | { kind: "label"; caption: DrawingText }
+  | { kind: "groupBox"; caption: DrawingText; no3D: boolean }
+  | { kind: "listBox"; inputRange?: string; cellLink?: string; selection: "single" | "multi" | "extend"; selected: number[]; no3D: boolean }
+  | { kind: "dropdown"; inputRange?: string; cellLink?: string; selected?: number; lines: number; no3D: boolean }
+  | { kind: "scrollbar"; value: number; min: number; max: number; increment: number; page: number; horizontal: boolean; cellLink?: string }
+  | { kind: "spinner"; value: number; min: number; max: number; increment: number; cellLink?: string }
+  /** Unsupported legacy control, preserved for passthrough. */
+  | { kind: "unknown"; objectType: string; legacyObjectType?: number; caption: DrawingText };
+
+export type FormControlKindInput =
+  | { kind: "button"; caption: DrawingText }
+  | { kind: "checkbox"; caption: DrawingText; state: "unchecked" | "checked" | "mixed"; cellLink?: string; no3D?: boolean }
+  /** `firstInGroup` is ignored on input; writers recompute it from group-box containment. */
+  | { kind: "optionButton"; caption: DrawingText; state: "unchecked" | "checked"; cellLink?: string; firstInGroup?: boolean; no3D?: boolean }
+  | { kind: "label"; caption: DrawingText }
+  | { kind: "groupBox"; caption: DrawingText; no3D?: boolean }
+  | { kind: "listBox"; inputRange?: string; cellLink?: string; selection: "single" | "multi" | "extend"; selected?: number[]; no3D?: boolean }
+  | { kind: "dropdown"; inputRange?: string; cellLink?: string; selected?: number; lines: number; no3D?: boolean }
+  | { kind: "scrollbar"; value: number; min: number; max: number; increment: number; page: number; horizontal?: boolean; cellLink?: string }
+  | { kind: "spinner"; value: number; min: number; max: number; increment: number; cellLink?: string }
+  | { kind: "unknown"; objectType: string; legacyObjectType?: number; caption?: DrawingText };
+
+export interface FormControlPayload {
+  kind: FormControlKind;
+  macroName?: string;
+  /**
+   * Unmodeled VML ClientData child fragments preserved on any control
+   * kind; opaque internal passthrough echoed back unchanged on write.
+   */
+  rawClientData: number[][];
+  /**
+   * Unmodeled XLSX formControlPr attributes preserved on any control
+   * kind; opaque internal passthrough echoed back unchanged on write.
+   */
+  rawProperties: Array<[string, string]>;
+  /** Original BIFF OBJ body for XLS passthrough of unknown controls. */
+  rawObj?: number[];
+}
+
+export interface FormControlInputPayload {
+  kind: FormControlKindInput;
+  macroName?: string;
+  /** Echo back the raw* fields unchanged when rewriting a control read from a file. */
+  rawClientData?: Array<Uint8Array | number[]>;
+  rawProperties?: Array<[string, string]>;
+  rawObj?: Uint8Array | number[];
+}
+
+export interface DrawingImage {
+  format: "png" | "jpeg" | "gif" | "bmp" | "emf" | "wmf" | "tiff" | "svg";
+  mediaPath: string;
+  svgMediaPath?: string;
+  widthEmu: number;
+  heightEmu: number;
+  rotation?: number;
+  flipH: boolean;
+  flipV: boolean;
+}
+
+export interface DrawingImageInput extends Partial<Omit<DrawingImage, "format" | "widthEmu" | "heightEmu">> {
+  format: DrawingImage["format"];
+  widthEmu: number;
+  heightEmu: number;
+  data: Uint8Array | number[];
+  svgData?: Uint8Array | number[];
+}
+
+export type DrawingShapeFill =
+  | { kind: "none" }
+  | { kind: "solid"; color: DrawingColor };
+
+export interface DrawingShape {
+  geometry: string;
+  fill: DrawingShapeFill;
+  line: { color?: DrawingColor; widthEmu?: number; dashStyle?: string; noFill: boolean };
+  text?: DrawingText;
+  rotation: number;
+  flipH: boolean;
+  flipV: boolean;
+}
+
+export interface DrawingShapeInput extends Partial<DrawingShape> {
+  geometry?: string;
+}
+
+export interface DrawingComment {
+  row: number;
+  col: number;
+  author: string;
+  /** Plain text (runs concatenated). */
+  text: string;
+  /**
+   * Rich runs; present on output when any run is formatted, and wins
+   * over `text` on input when supplied.
+   */
+  richText?: DrawingText;
+}
+
+export type ChartDataReference =
+  | { refType: "formula"; formula: string }
+  | { refType: "numbers"; numbers: number[] }
+  | { refType: "strings"; strings: string[] };
+
+export interface ChartShapeProperties {
+  solidFillHex?: string;
+  noFill: boolean;
+  lineWidth?: number;
+  lineColorHex?: string;
+  lineNoFill: boolean;
+  lineDashStyle?: string;
+}
+
+export interface ChartNumberFormat {
+  formatCode: string;
+  sourceLinked?: boolean;
+}
+
+export interface ChartDataLabels {
+  showLegendKey?: boolean;
+  showValue?: boolean;
+  showCategoryName?: boolean;
+  showSeriesName?: boolean;
+  showPercent?: boolean;
+  showBubbleSize?: boolean;
+  separator?: string;
+  position?: string;
+  numberFormat?: ChartNumberFormat;
+  showLeaderLines?: boolean;
+}
+
+export interface ChartDataSeries {
+  name?: string;
+  values: ChartDataReference;
+  categories?: ChartDataReference;
+  dataLabels?: ChartDataLabels;
+  trendline?: { trendlineType: string; name?: string; order?: number; period?: number; forward?: number; backward?: number; intercept?: number; displayRSquared?: boolean; displayEquation?: boolean };
+  errorBars?: { direction: string; barType: string; valueType: string; value?: number; noEndCap?: boolean };
+  marker?: { symbol?: string; size?: number };
+  dataPoints: Array<{ index: number; marker?: { symbol?: string; size?: number }; explosion?: number; shapeProperties?: ChartShapeProperties }>;
+  smooth?: boolean;
+  explosion?: number;
+  invertIfNegative?: boolean;
+  shapeProperties?: ChartShapeProperties;
+}
+
+export interface ChartAxis {
+  title?: string;
+  minimum?: number;
+  maximum?: number;
+  majorUnit?: number;
+  minorUnit?: number;
+  position: "bottom" | "top" | "left" | "right";
+  numberFormat?: ChartNumberFormat;
+  majorGridlines: boolean;
+  minorGridlines: boolean;
+  majorGridlinesShapeProperties?: ChartShapeProperties;
+  minorGridlinesShapeProperties?: ChartShapeProperties;
+  majorTickMark?: string;
+  minorTickMark?: string;
+  labelPosition?: string;
+  delete?: boolean;
+  crosses?: string;
+  crossBetween?: string;
+  shapeProperties?: ChartShapeProperties;
+}
+
+export interface Chart {
+  chartType: string;
+  title?: string;
+  series: ChartDataSeries[];
+  categoryAxis?: ChartAxis;
+  valueAxis?: ChartAxis;
+  legend?: { position: string; overlay: boolean };
+  dataLabels?: ChartDataLabels;
+  view3D?: { rotateX?: number; rotateY?: number; depthPercent?: number; heightPercent?: number; perspective?: number; rightAngleAxes?: boolean };
+  dataTable?: { showHorizontalBorder?: boolean; showVerticalBorder?: boolean; showOutline?: boolean; showKeys?: boolean };
+  displayBlanksAs?: "gap" | "span" | "zero";
+  plotVisibleOnly?: boolean;
+  layout?: { manualLayout?: { x?: number; y?: number; width?: number; height?: number } };
+  shapeProperties?: ChartShapeProperties;
+  is3D: boolean;
+  varyColors?: boolean;
+  gapWidth?: number;
+  overlap?: number;
+  firstSliceAngle?: number;
+  holeSize?: number;
+  bubbleScale?: number;
+  showNegativeBubbles?: boolean;
+  autoTitleDeleted?: boolean;
+  roundedCorners?: boolean;
+  pivotSource?: { name: string; formatId: number };
+  showDlblsOverMax?: boolean;
+  wireframe?: boolean;
+  radarStyle?: string;
+  typeGroups: Array<{ chartType: string; is3D: boolean; series: ChartDataSeries[]; dataLabels?: ChartDataLabels; varyColors?: boolean; gapWidth?: number; overlap?: number; firstSliceAngle?: number; holeSize?: number; bubbleScale?: number; showNegativeBubbles?: boolean; radarStyle?: string; wireframe?: boolean; axisIds: number[] }>;
+  axes: Array<{ id: number; crossId: number; axis: ChartAxis }>;
+}
+
+export interface ChartSeriesInput {
+  name?: string;
+  values: ChartDataReference;
+  categories?: ChartDataReference;
+}
+
+/** Exactly the chart fields accepted when authoring; all other Chart fields are read-only. */
+export interface ChartInput {
+  chartType: string;
+  title?: string;
+  series?: ChartSeriesInput[];
+  is3D?: boolean;
+  varyColors?: boolean;
+  gapWidth?: number;
+  overlap?: number;
+}
+
+export interface ChartExTitle {
+  text?: string;
+  position?: string;
+  align?: string;
+  overlay?: boolean;
+  offset?: { top?: number; left?: number };
+  shapeProperties?: ChartShapeProperties;
+}
+
+export interface ChartStyleReference {
+  idx: number
+  /** The colour override, as the XML it was read as. */
+  color?: string
+}
+
+export interface ChartStyleEntry {
+  lineReference: ChartStyleReference
+  lineWidthScale?: number
+  fillReference: ChartStyleReference
+  effectReference: ChartStyleReference
+  /** `major`, `minor` or `none`. */
+  fontCollection: string
+  fontColor?: string
+  /** DrawingML kept as the XML it was read as. */
+  shapeProperties?: string
+  defaultRunProperties?: string
+  bodyProperties?: string
+  mods?: string
+}
+
+/**
+ * A chart style part. `entries` is keyed by the element name the entry
+ * belongs to (`chartArea`, `dataPoint`, ...); `raw` is set instead when
+ * the part could not be modelled and is replayed as read.
+ */
+export interface ChartStyle {
+  id?: number
+  entries: Record<string, ChartStyleEntry>
+  markerSymbol?: string
+  markerSize?: number
+  raw?: string
+}
+
+/** A chart colour style part. `raw` is set when it could not be modelled. */
+export interface ChartColorStyle {
+  method?: string
+  id?: number
+  colors: string[]
+  variations: string[]
+  raw?: string
+}
+
+export interface ChartExGridlines {
+  shapeProperties?: ChartShapeProperties;
+}
+
+export interface ChartExDataLabelOverride {
+  idx: number;
+  position?: string;
+  visibilitySeriesName?: boolean;
+  visibilityCategoryName?: boolean;
+  visibilityValue?: boolean;
+  numberFormat?: ChartNumberFormat;
+  separator?: string;
+  shapeProperties?: ChartShapeProperties;
+}
+
+export interface ChartExColorPosition {
+  positionType: 'extremeValue' | 'number' | 'percent';
+  value?: number;
+}
+
+export interface ChartExSeriesLayoutProperties {
+  parentLabelLayout?: string;
+  regionLabelLayout?: string;
+  visibility?: { connectorLines?: boolean; meanLine?: boolean; meanMarker?: boolean; nonoutliers?: boolean; outliers?: boolean };
+  aggregation: boolean;
+  binning?: { intervalClosed?: string; underflow?: string; overflow?: string; binSize?: number; binCount?: number };
+  geography?: { projectionType?: string; viewedRegionType?: string; cultureLanguage?: string; cultureRegion?: string; attribution?: string };
+  statistics?: { quartileMethod?: string };
+  /** Absent when the cx:subtotals element is absent; [] when it is present but empty. */
+  subtotals?: number[];
+}
+
+export interface ChartExSeries {
+  layout: string;
+  dataId: number;
+  uniqueId?: string;
+  hidden?: boolean;
+  ownerIdx?: number;
+  formatIdx?: number;
+  text?: { formula?: string; value?: string };
+  dataLabels?: { position?: string; visibilitySeriesName?: boolean; visibilityCategoryName?: boolean; visibilityValue?: boolean; numberFormat?: ChartNumberFormat; separator?: string; shapeProperties?: ChartShapeProperties; overrides: ChartExDataLabelOverride[]; hiddenLabels: number[] };
+  dataPoints: Array<{ idx: number; shapeProperties?: ChartShapeProperties }>;
+  layoutProperties?: ChartExSeriesLayoutProperties;
+  axisIds: number[];
+  valueColors: boolean;
+  valueColorPositions?: { count?: number; min?: ChartExColorPosition; mid?: ChartExColorPosition; max?: ChartExColorPosition };
+  shapeProperties?: ChartShapeProperties;
+}
+
+export interface ChartExAxis {
+  id: number;
+  hidden?: boolean;
+  scaling: { scalingType: string; gapWidth?: number; min?: number; max?: number; majorUnit?: number; minorUnit?: number };
+  title?: { text?: string; shapeProperties?: ChartShapeProperties };
+  units?: { unit?: string };
+  majorGridlines?: ChartExGridlines;
+  minorGridlines?: ChartExGridlines;
+  majorTickMarks?: string;
+  minorTickMarks?: string;
+  tickLabels: boolean;
+  numberFormat?: ChartNumberFormat;
+  shapeProperties?: ChartShapeProperties;
+}
+
+export interface ChartEx {
+  layout: string;
+  version?: string;
+  featureList?: string;
+  fallbackImg?: string;
+  title?: ChartExTitle;
+  data: Array<{ id: number; dimensions: Array<{ dimType: string; formula?: string; nfFormula?: string }> }>;
+  plotArea: { plotSurface?: ChartShapeProperties; series: ChartExSeries[]; axes: ChartExAxis[]; shapeProperties?: ChartShapeProperties };
+  legend?: { position?: string; align?: string; overlay?: boolean; offset?: { top?: number; left?: number }; shapeProperties?: ChartShapeProperties };
+  shapeProperties?: ChartShapeProperties;
+  formatOverrides: Array<{ idx: number; shapeProperties?: ChartShapeProperties }>;
+  externalDataRelId?: string;
+  externalDataAutoUpdate?: boolean;
+  style?: ChartStyle;
+  colorStyle?: ChartColorStyle;
+}
+
+export interface ChartExTitleInput {
+  text?: string;
+  position?: string;
+  align?: string;
+  overlay?: boolean;
+}
+
+/** Exactly the ChartEx fields accepted when authoring; all other ChartEx fields are read-only. */
+export interface ChartExInput {
+  layout: string;
+  version?: string;
+  featureList?: string;
+  fallbackImg?: string;
+  title?: ChartExTitleInput;
+}
+
+export interface RawDrawingMetadata {
+  byteLength: number;
+  relationships: Array<{ id: string; relType: string; target: string; external: boolean; hasPart: boolean }>;
+}
+
+/**
+ * Resolved on-sheet placement in EMU: the anchor rectangle for
+ * top-level drawings, the group-mapped (rotation/flip aware)
+ * rectangle for group children.
+ */
+export type RectEmu = { xEmu: number; yEmu: number; widthEmu: number; heightEmu: number };
+
+type DrawingNode = DrawingMeta & DrawingPlacement & { drawingPath: number[]; absoluteRectEmu: RectEmu };
+
+export type ImageDrawing = DrawingNode & { kind: "image"; image: DrawingImage };
+export type ChartDrawing = DrawingNode & { kind: "chart"; chart: Chart };
+export type ChartExDrawing = DrawingNode & { kind: "chartEx"; chartEx: ChartEx };
+export type FormControlDrawing = DrawingNode & { kind: "formControl"; formControl: FormControlPayload };
+export type CommentDrawing = DrawingNode & { kind: "comment"; comment: DrawingComment };
+export type ShapeDrawing = DrawingNode & { kind: "shape"; shape: DrawingShape };
+export type GroupDrawing = DrawingNode & { kind: "group"; group: { groupTransform: DrawingGroupTransform; children: Drawing[] } };
+export type RawDrawing = DrawingNode & { kind: "raw"; raw: RawDrawingMetadata };
+
+export type Drawing = ImageDrawing | ChartDrawing | ChartExDrawing | FormControlDrawing | CommentDrawing | ShapeDrawing | GroupDrawing | RawDrawing;
+
+type DrawingInputPlacement =
+  | { anchor: DrawingAnchor; transform?: never }
+  | { anchor?: never; transform: DrawingChildTransform };
+
+export type DrawingInput = DrawingMetaInput & DrawingInputPlacement & (
+  | { kind: "image"; image: DrawingImageInput }
+  | { kind: "chart"; chart: ChartInput }
+  | { kind: "chartEx"; chartEx: ChartExInput }
+  | { kind: "formControl"; formControl: FormControlInputPayload }
+  | { kind: "comment"; comment: DrawingComment }
+  | { kind: "shape"; shape: DrawingShapeInput }
+  | { kind: "group"; group: { groupTransform?: DrawingGroupTransform; children?: DrawingInput[] } }
+);
+
+export interface FormControlInteractionResult {
+  controlsChanged: number;
+  linkedCellsChanged: number;
+}
+
 export interface Worksheet {
   iterateRows(opts?: JsRowsOptions): RowIterator;
   setCellStyle(address: string, style: StyleInput): void;
@@ -787,6 +1284,38 @@ export interface Worksheet {
   readonly pivotTables: PivotTableDefinition[];
   getPivotTable(name: string): PivotTableDefinition | null;
   addPivotTable(options: PivotTableOptions): void;
+  addPivotChart(options: PivotChartOptions): Chart;
+  readonly drawings: Drawing[];
+  readonly formControls: FormControlDrawing[];
+  readonly formControlCount: number;
+  readonly images: ImageDrawing[];
+  readonly imageCount: number;
+  readonly charts: ChartDrawing[];
+  readonly chartCount: number;
+  readonly chartsEx: ChartExDrawing[];
+  readonly chartExCount: number;
+  addDrawing(drawing: DrawingInput & { anchor: DrawingAnchor }): number;
+  /** Drawing paths are positional; mutating the list invalidates previously returned paths. */
+  insertDrawing(index: number, drawing: DrawingInput & { anchor: DrawingAnchor }): void;
+  /** Drawing paths are positional; mutating the list invalidates previously returned paths. */
+  setDrawing(path: number[], drawing: DrawingInput): void;
+  /** Drawing paths are positional; mutating the list invalidates previously returned paths. */
+  removeDrawing(path: number[]): void;
+  /** Drawing paths are positional; mutating the list invalidates previously returned paths. */
+  moveDrawing(from: number, to: number): void;
+  /** Paths are positional; mutating the drawing list invalidates previously returned paths. */
+  drawingImageData(path: number[]): Uint8Array;
+  /** Paths are positional; mutating the drawing list invalidates previously returned paths. */
+  drawingSvgData(path: number[]): Uint8Array | undefined;
+  setFormControlCheckState(path: number[], state: "unchecked" | "checked" | "mixed"): FormControlInteractionResult;
+}
+
+export interface Workbook {
+  /**
+   * Resolve a drawing color to display RGB ("RRGGBB" hex) against
+   * this workbook's theme palette; `auto` resolves to undefined.
+   */
+  resolveColor(color: DrawingColor): string | undefined;
 }
 "#;
 
@@ -840,7 +1369,12 @@ pub(crate) fn to_js_error(e: impl std::fmt::Display) -> JsError {
 }
 
 pub(crate) fn to_js_value<T: Serialize>(value: &T) -> Result<JsValue, JsError> {
-    serde_wasm_bindgen::to_value(value).map_err(to_js_error)
+    // Emit plain objects rather than ES2015 Maps for map-shaped output
+    // (serde flattens structs, e.g. drawing nodes, through serialize_map),
+    // matching the declared TypeScript types.
+    value
+        .serialize(&serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true))
+        .map_err(to_js_error)
 }
 
 fn build_pivot_table_from_wasm(options: WasmPivotTableOptions) -> Result<PivotTable, JsError> {
@@ -1997,6 +2531,40 @@ impl Worksheet {
         Ok(())
     }
 
+    #[wasm_bindgen(js_name = setProtection)]
+    pub fn set_protection(&self, protection: JsValue) -> Result<(), JsError> {
+        let protection = if protection.is_null() || protection.is_undefined() {
+            None
+        } else {
+            let input: WasmSheetProtectionInput =
+                serde_wasm_bindgen::from_value(protection).map_err(to_js_error)?;
+            Some(input.into_core().map_err(to_js_error)?)
+        };
+        let mut wb = self.workbook.borrow_mut();
+        let ws = wb
+            .worksheet_mut(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        ws.set_protection(protection);
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setProtectedRanges)]
+    pub fn set_protected_ranges(&self, ranges: JsValue) -> Result<(), JsError> {
+        let inputs: Vec<WasmProtectedRangeInput> =
+            serde_wasm_bindgen::from_value(ranges).map_err(to_js_error)?;
+        let ranges = inputs
+            .into_iter()
+            .map(WasmProtectedRangeInput::into_core)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(to_js_error)?;
+        let mut wb = self.workbook.borrow_mut();
+        let ws = wb
+            .worksheet_mut(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        ws.set_protected_ranges(ranges);
+        Ok(())
+    }
+
     #[wasm_bindgen(js_name = getCell)]
     pub fn get_cell(&self, address: &str) -> Result<CellValue, JsError> {
         let wb = self.workbook.borrow();
@@ -2287,15 +2855,20 @@ impl Workbook {
         })
     }
 
+    /// Save XLSX bytes with form-control state synchronized into linked cells,
+    /// replacing existing values and formulas in the output.
     #[wasm_bindgen(js_name = saveXlsxBytes)]
     pub fn save_xlsx_bytes(&self) -> Result<Vec<u8>, JsError> {
         let wb = self.inner.borrow();
+        let snapshot = wb.synchronized_for_save();
+        let wb = snapshot.as_ref().unwrap_or_else(|| &*wb);
         let mut buf = Vec::new();
-        XlsxWriter::write(&wb, Cursor::new(&mut buf)).map_err(to_js_error)?;
+        XlsxWriter::write(wb, Cursor::new(&mut buf)).map_err(to_js_error)?;
         Ok(buf)
     }
 
-    /// Save the workbook as encrypted XLSX bytes. `profile` selects
+    /// Save the workbook as encrypted XLSX bytes after synchronizing
+    /// form-control state into linked cells. `profile` selects
     /// the encryption variant; passing `null`/`undefined` uses the
     /// Agile-256 default. Valid values: `"agile"`, `"standard"`.
     /// `keyBits` and `spinCount` override the defaults where the
@@ -2308,13 +2881,16 @@ impl Workbook {
         key_bits: Option<u32>,
         spin_count: Option<u32>,
     ) -> Result<Vec<u8>, JsError> {
-        let wb = self.inner.borrow();
         let xlsx_profile = parse_xlsx_profile(profile.as_deref(), key_bits, spin_count)
             .map_err(|e| JsError::new(&e))?;
-        XlsxWriter::write_to_bytes_encrypted(&wb, password, &xlsx_profile).map_err(to_js_error)
+        let wb = self.inner.borrow();
+        let snapshot = wb.synchronized_for_save();
+        let wb = snapshot.as_ref().unwrap_or_else(|| &*wb);
+        XlsxWriter::write_to_bytes_encrypted(wb, password, &xlsx_profile).map_err(to_js_error)
     }
 
-    /// Save the workbook as encrypted XLS bytes. `profile` selects
+    /// Save the workbook as encrypted XLS bytes after synchronizing
+    /// form-control state into linked cells. `profile` selects
     /// the FilePass variant; `null` defaults to RC4 CryptoAPI 128.
     /// Valid values: `"rc4-cryptoapi"`, `"rc4-legacy"`, `"xor"`.
     /// `keyBits` controls RC4 CryptoAPI key size (40 or 128). XOR is
@@ -2326,24 +2902,34 @@ impl Workbook {
         profile: Option<String>,
         key_bits: Option<u32>,
     ) -> Result<Vec<u8>, JsError> {
-        let wb = self.inner.borrow();
         let variant =
             parse_xls_variant(profile.as_deref(), key_bits).map_err(|e| JsError::new(&e))?;
-        duke_sheets_xls::XlsWriter::write_to_bytes_encrypted(&wb, password, variant)
+        let wb = self.inner.borrow();
+        let snapshot = wb.synchronized_for_save();
+        let wb = snapshot.as_ref().unwrap_or_else(|| &*wb);
+        duke_sheets_xls::XlsWriter::write_to_bytes_encrypted(wb, password, variant)
             .map_err(to_js_error)
     }
 
+    /// Save XLSB bytes with form-control state synchronized into linked cells,
+    /// replacing existing values and formulas in the output.
     #[wasm_bindgen(js_name = saveXlsbBytes)]
     pub fn save_xlsb_bytes(&self) -> Result<Vec<u8>, JsError> {
         let wb = self.inner.borrow();
+        let snapshot = wb.synchronized_for_save();
+        let wb = snapshot.as_ref().unwrap_or_else(|| &*wb);
         let mut buf = Vec::new();
-        XlsbWriter::write(&wb, Cursor::new(&mut buf)).map_err(to_js_error)?;
+        XlsbWriter::write(wb, Cursor::new(&mut buf)).map_err(to_js_error)?;
         Ok(buf)
     }
 
+    /// Save the first sheet as a CSV string, with form-control state
+    /// synchronized into linked cells in the output.
     #[wasm_bindgen(js_name = saveCsvString)]
     pub fn save_csv_string(&self) -> Result<String, JsError> {
         let wb = self.inner.borrow();
+        let snapshot = wb.synchronized_for_save();
+        let wb = snapshot.as_ref().unwrap_or_else(|| &*wb);
         let ws = wb
             .worksheet(0)
             .ok_or_else(|| JsError::new("No worksheets to save"))?;
@@ -2401,6 +2987,20 @@ impl Workbook {
     pub fn add_sheet(&self, name: &str) -> Result<usize, JsError> {
         let mut wb = self.inner.borrow_mut();
         wb.add_worksheet_with_name(name).map_err(to_js_error)
+    }
+
+    #[wasm_bindgen(js_name = setWorkbookProtection)]
+    pub fn set_workbook_protection(&self, protection: JsValue) -> Result<(), JsError> {
+        let protection = if protection.is_null() || protection.is_undefined() {
+            None
+        } else {
+            let input: WasmWorkbookProtectionInput =
+                serde_wasm_bindgen::from_value(protection).map_err(to_js_error)?;
+            Some(input.into_core().map_err(to_js_error)?)
+        };
+        let mut wb = self.inner.borrow_mut();
+        wb.set_workbook_protection(protection);
+        Ok(())
     }
 
     #[wasm_bindgen(js_name = removeSheet)]

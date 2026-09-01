@@ -1637,13 +1637,16 @@ impl From<core::ImageInfo> for WasmImageInfo {
 #[serde(rename_all = "camelCase")]
 pub struct WasmColor {
     pub color_type: String,
-    pub hex: String,
+    /// Context-free hex string; omitted for auto and theme colors,
+    /// which resolve through `Workbook.resolveColor`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hex: Option<String>,
     pub r: Option<u32>,
     pub g: Option<u32>,
     pub b: Option<u32>,
     pub a: Option<u32>,
     pub theme_index: Option<u32>,
-    pub tint: Option<i32>,
+    pub tint: Option<f64>,
     pub palette_index: Option<u32>,
 }
 
@@ -1692,7 +1695,7 @@ impl From<&CoreColor> for WasmColor {
                 b: None,
                 a: None,
                 theme_index: Some(*index as u32),
-                tint: Some(*tint as i32),
+                tint: Some(*tint),
                 palette_index: None,
             },
             CoreColor::Indexed(i) => Self {
@@ -2069,7 +2072,7 @@ pub struct WasmColorInput {
     pub b: Option<u32>,
     pub a: Option<u32>,
     pub theme_index: Option<u32>,
-    pub tint: Option<i32>,
+    pub tint: Option<f64>,
     pub palette_index: Option<u32>,
 }
 
@@ -2169,8 +2172,12 @@ fn u32_to_u8(value: u32, field: &str) -> Result<u8, String> {
     u8::try_from(value).map_err(|_| format!("{field} must be between 0 and 255"))
 }
 
-fn i32_to_i8(value: i32, field: &str) -> Result<i8, String> {
-    i8::try_from(value).map_err(|_| format!("{field} must be between -128 and 127"))
+fn tint_fraction(value: Option<f64>) -> Result<f64, String> {
+    let tint = value.unwrap_or(0.0);
+    if !tint.is_finite() || !(-1.0..=1.0).contains(&tint) {
+        return Err("tint must be between -1.0 and 1.0".to_string());
+    }
+    Ok(tint)
 }
 
 fn parse_color_hex(hex: &str) -> Result<CoreColor, String> {
@@ -2246,7 +2253,7 @@ impl WasmColorInput {
                         .ok_or_else(|| "theme color requires themeIndex".to_string())?,
                     "themeIndex",
                 )?,
-                tint: i32_to_i8(self.tint.unwrap_or(0), "tint")?,
+                tint: tint_fraction(self.tint)?,
             }),
             Some("indexed") => Ok(CoreColor::Indexed(u32_to_u8(
                 self.palette_index
@@ -2275,7 +2282,7 @@ impl WasmColorInput {
                 } else if let Some(theme_index) = self.theme_index {
                     Ok(CoreColor::Theme {
                         index: u32_to_u8(theme_index, "themeIndex")?,
-                        tint: i32_to_i8(self.tint.unwrap_or(0), "tint")?,
+                        tint: tint_fraction(self.tint)?,
                     })
                 } else if let Some(palette_index) = self.palette_index {
                     Ok(CoreColor::Indexed(u32_to_u8(
@@ -2715,12 +2722,12 @@ pub struct WasmComment {
     pub visible: bool,
 }
 
-impl From<&core::CellComment> for WasmComment {
-    fn from(c: &core::CellComment) -> Self {
+impl WasmComment {
+    pub fn from_comment(comment: &core::CellComment, visible: bool) -> Self {
         Self {
-            author: c.author.clone(),
-            text: c.text.clone(),
-            visible: c.visible,
+            author: comment.author.clone(),
+            text: comment.plain_text(),
+            visible,
         }
     }
 }
@@ -2793,6 +2800,7 @@ impl From<&core::Selection> for WasmSelection {
 #[serde(rename_all = "camelCase")]
 pub struct WasmSheetProtection {
     pub protected: bool,
+    pub password_hash: Option<u16>,
     pub select_locked_cells: bool,
     pub select_unlocked_cells: bool,
     pub format_cells: bool,
@@ -2812,6 +2820,7 @@ impl From<&core::SheetProtection> for WasmSheetProtection {
     fn from(p: &core::SheetProtection) -> Self {
         Self {
             protected: p.protected,
+            password_hash: p.password_hash,
             select_locked_cells: p.select_locked_cells,
             select_unlocked_cells: p.select_unlocked_cells,
             format_cells: p.format_cells,
@@ -2826,6 +2835,148 @@ impl From<&core::SheetProtection> for WasmSheetProtection {
             auto_filter: p.auto_filter,
             pivot_tables: p.pivot_tables,
         }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmSheetProtectionInput {
+    pub protected: Option<bool>,
+    pub password: Option<String>,
+    pub password_hash: Option<u32>,
+    pub select_locked_cells: Option<bool>,
+    pub select_unlocked_cells: Option<bool>,
+    pub format_cells: Option<bool>,
+    pub format_columns: Option<bool>,
+    pub format_rows: Option<bool>,
+    pub insert_columns: Option<bool>,
+    pub insert_rows: Option<bool>,
+    pub insert_hyperlinks: Option<bool>,
+    pub delete_columns: Option<bool>,
+    pub delete_rows: Option<bool>,
+    pub sort: Option<bool>,
+    pub auto_filter: Option<bool>,
+    pub pivot_tables: Option<bool>,
+}
+
+impl WasmSheetProtectionInput {
+    pub fn into_core(self) -> Result<core::SheetProtection, String> {
+        Ok(core::SheetProtection {
+            protected: self.protected.unwrap_or(true),
+            password_hash: protection_password_hash(self.password, self.password_hash)?,
+            select_locked_cells: self.select_locked_cells.unwrap_or(true),
+            select_unlocked_cells: self.select_unlocked_cells.unwrap_or(true),
+            format_cells: self.format_cells.unwrap_or(false),
+            format_columns: self.format_columns.unwrap_or(false),
+            format_rows: self.format_rows.unwrap_or(false),
+            insert_columns: self.insert_columns.unwrap_or(false),
+            insert_rows: self.insert_rows.unwrap_or(false),
+            insert_hyperlinks: self.insert_hyperlinks.unwrap_or(false),
+            delete_columns: self.delete_columns.unwrap_or(false),
+            delete_rows: self.delete_rows.unwrap_or(false),
+            sort: self.sort.unwrap_or(false),
+            auto_filter: self.auto_filter.unwrap_or(false),
+            pivot_tables: self.pivot_tables.unwrap_or(false),
+        })
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmWorkbookProtection {
+    pub structure: bool,
+    pub windows: bool,
+    pub password_hash: Option<u16>,
+}
+
+impl From<&core::WorkbookProtection> for WasmWorkbookProtection {
+    fn from(p: &core::WorkbookProtection) -> Self {
+        Self {
+            structure: p.structure,
+            windows: p.windows,
+            password_hash: p.password_hash,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmWorkbookProtectionInput {
+    pub structure: Option<bool>,
+    pub windows: Option<bool>,
+    pub password: Option<String>,
+    pub password_hash: Option<u32>,
+}
+
+impl WasmWorkbookProtectionInput {
+    pub fn into_core(self) -> Result<core::WorkbookProtection, String> {
+        Ok(core::WorkbookProtection {
+            structure: self.structure.unwrap_or(true),
+            windows: self.windows.unwrap_or(false),
+            password_hash: protection_password_hash(self.password, self.password_hash)?,
+        })
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmProtectedRange {
+    pub name: String,
+    pub ranges: Vec<String>,
+    pub password_hash: Option<u16>,
+    pub security_descriptor: Option<String>,
+}
+
+impl From<&core::ProtectedRange> for WasmProtectedRange {
+    fn from(p: &core::ProtectedRange) -> Self {
+        Self {
+            name: p.name.clone(),
+            ranges: p.ranges.iter().map(ToString::to_string).collect(),
+            password_hash: p.password_hash,
+            security_descriptor: p.security_descriptor.clone(),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmProtectedRangeInput {
+    pub name: String,
+    pub ranges: Vec<String>,
+    pub password: Option<String>,
+    pub password_hash: Option<u32>,
+    pub security_descriptor: Option<String>,
+}
+
+impl WasmProtectedRangeInput {
+    pub fn into_core(self) -> Result<core::ProtectedRange, String> {
+        let mut ranges = Vec::with_capacity(self.ranges.len());
+        for range in self.ranges {
+            ranges.push(
+                core::CellRange::parse(&range)
+                    .map_err(|e| format!("Invalid protected range '{}': {}", range, e))?,
+            );
+        }
+        Ok(core::ProtectedRange {
+            name: self.name,
+            ranges,
+            password_hash: protection_password_hash(self.password, self.password_hash)?,
+            security_descriptor: self.security_descriptor,
+        })
+    }
+}
+
+fn protection_password_hash(
+    password: Option<String>,
+    password_hash: Option<u32>,
+) -> Result<Option<u16>, String> {
+    match (password, password_hash) {
+        (Some(_), Some(_)) => Err("Specify either password or passwordHash, not both".to_string()),
+        (Some(password), None) => Ok(Some(core::hash_legacy_protection_password(&password))),
+        (None, Some(hash)) => u16::try_from(hash)
+            .map(Some)
+            .map_err(|_| "passwordHash must be between 0 and 65535".to_string()),
+        (None, None) => Ok(None),
     }
 }
 
@@ -3474,46 +3625,6 @@ pub struct WasmMergeSpan {
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct WasmDrawingAnchor {
-    pub from_col: u16,
-    pub from_row: u32,
-    pub from_col_offset: i64,
-    pub from_row_offset: i64,
-    pub to_col: u16,
-    pub to_row: u32,
-    pub to_col_offset: i64,
-    pub to_row_offset: i64,
-}
-
-impl From<&duke_sheets_chart::DrawingAnchor> for WasmDrawingAnchor {
-    fn from(a: &duke_sheets_chart::DrawingAnchor) -> Self {
-        match a {
-            duke_sheets_chart::DrawingAnchor::TwoCell { from, to, .. } => Self {
-                from_col: from.col,
-                from_row: from.row,
-                from_col_offset: from.col_offset_emu,
-                from_row_offset: from.row_offset_emu,
-                to_col: to.col,
-                to_row: to.row,
-                to_col_offset: to.col_offset_emu,
-                to_row_offset: to.row_offset_emu,
-            },
-            _ => Self {
-                from_col: 0,
-                from_row: 0,
-                from_col_offset: 0,
-                from_row_offset: 0,
-                to_col: 0,
-                to_row: 0,
-                to_col_offset: 0,
-                to_row_offset: 0,
-            },
-        }
-    }
-}
-
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
 pub struct WasmDataReference {
     pub ref_type: String,
     pub formula: Option<String>,
@@ -3894,7 +4005,9 @@ pub struct WasmAxis {
     pub maximum: Option<f64>,
     pub major_unit: Option<f64>,
     pub minor_unit: Option<f64>,
-    pub position: String,
+    /// `bottom`, `top`, `left` or `right`; unset when the source
+    /// omitted it and the writer will supply the conventional one.
+    pub position: Option<String>,
     pub number_format: Option<WasmChartNumberFormat>,
     pub major_gridlines: bool,
     pub minor_gridlines: bool,
@@ -3918,13 +4031,15 @@ impl From<&duke_sheets_chart::Axis> for WasmAxis {
             maximum: a.maximum,
             major_unit: a.major_unit,
             minor_unit: a.minor_unit,
-            position: match a.position {
-                duke_sheets_chart::AxisPosition::Bottom => "bottom",
-                duke_sheets_chart::AxisPosition::Top => "top",
-                duke_sheets_chart::AxisPosition::Left => "left",
-                duke_sheets_chart::AxisPosition::Right => "right",
-            }
-            .into(),
+            position: a.position.map(|position| {
+                match position {
+                    duke_sheets_chart::AxisPosition::Bottom => "bottom",
+                    duke_sheets_chart::AxisPosition::Top => "top",
+                    duke_sheets_chart::AxisPosition::Left => "left",
+                    duke_sheets_chart::AxisPosition::Right => "right",
+                }
+                .to_string()
+            }),
             number_format: a.number_format.as_ref().map(WasmChartNumberFormat::from),
             major_gridlines: a.major_gridlines,
             minor_gridlines: a.minor_gridlines,
@@ -4101,7 +4216,6 @@ pub struct WasmChart {
     pub category_axis: Option<WasmAxis>,
     pub value_axis: Option<WasmAxis>,
     pub legend: Option<WasmLegend>,
-    pub anchor: WasmDrawingAnchor,
     pub data_labels: Option<WasmDataLabels>,
     pub view_3d: Option<WasmView3D>,
     pub data_table: Option<WasmChartDataTable>,
@@ -4129,6 +4243,8 @@ pub struct WasmChart {
     pub high_low_lines: Option<WasmChartLines>,
     pub series_lines: Option<WasmChartLines>,
     pub up_down_bars: Option<WasmUpDownBars>,
+    pub style: Option<WasmChartStyle>,
+    pub color_style: Option<WasmChartColorStyle>,
 }
 
 impl From<&duke_sheets_chart::Chart> for WasmChart {
@@ -4144,7 +4260,6 @@ impl From<&duke_sheets_chart::Chart> for WasmChart {
             category_axis: c.category_axis.as_ref().map(WasmAxis::from),
             value_axis: c.value_axis.as_ref().map(WasmAxis::from),
             legend: c.legend.as_ref().map(WasmLegend::from),
-            anchor: WasmDrawingAnchor::from(&c.anchor),
             data_labels: c.data_labels.as_ref().map(WasmDataLabels::from),
             view_3d: c.view_3d.as_ref().map(WasmView3D::from),
             data_table: c.data_table.as_ref().map(WasmChartDataTable::from),
@@ -4183,6 +4298,8 @@ impl From<&duke_sheets_chart::Chart> for WasmChart {
             high_low_lines: c.high_low_lines.as_ref().map(WasmChartLines::from),
             series_lines: c.series_lines.as_ref().map(WasmChartLines::from),
             up_down_bars: c.up_down_bars.as_ref().map(WasmUpDownBars::from),
+            style: c.style.as_ref().map(WasmChartStyle::from),
+            color_style: c.color_style.as_ref().map(WasmChartColorStyle::from),
         }
     }
 }
@@ -4870,7 +4987,7 @@ pub struct WasmChartExLayoutPr {
     pub binning: Option<WasmChartExBinning>,
     pub geography: Option<WasmChartExGeography>,
     pub statistics: Option<WasmChartExStatistics>,
-    pub subtotals: Vec<u32>,
+    pub subtotals: Option<Vec<u32>>,
 }
 
 impl From<&duke_sheets_chart::ChartExLayoutPr> for WasmChartExLayoutPr {
@@ -4890,14 +5007,31 @@ impl From<&duke_sheets_chart::ChartExLayoutPr> for WasmChartExLayoutPr {
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
+pub struct WasmChartExGridlines {
+    pub shape_properties: Option<WasmChartShapeProperties>,
+}
+
+impl From<&duke_sheets_chart::ChartExGridlines> for WasmChartExGridlines {
+    fn from(g: &duke_sheets_chart::ChartExGridlines) -> Self {
+        Self {
+            shape_properties: g
+                .shape_properties
+                .as_ref()
+                .map(WasmChartShapeProperties::from),
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct WasmChartExAxis {
     pub id: u32,
     pub hidden: Option<bool>,
     pub scaling: WasmChartExScaling,
     pub title: Option<WasmChartExAxisTitle>,
     pub units: Option<WasmChartExAxisUnits>,
-    pub major_gridlines: Option<WasmChartShapeProperties>,
-    pub minor_gridlines: Option<WasmChartShapeProperties>,
+    pub major_gridlines: Option<WasmChartExGridlines>,
+    pub minor_gridlines: Option<WasmChartExGridlines>,
     pub major_tick_marks: Option<String>,
     pub minor_tick_marks: Option<String>,
     pub tick_labels: bool,
@@ -4913,14 +5047,8 @@ impl From<&duke_sheets_chart::ChartExAxis> for WasmChartExAxis {
             scaling: WasmChartExScaling::from(&a.scaling),
             title: a.title.as_ref().map(WasmChartExAxisTitle::from),
             units: a.units.as_ref().map(WasmChartExAxisUnits::from),
-            major_gridlines: a
-                .major_gridlines
-                .as_ref()
-                .map(WasmChartShapeProperties::from),
-            minor_gridlines: a
-                .minor_gridlines
-                .as_ref()
-                .map(WasmChartShapeProperties::from),
+            major_gridlines: a.major_gridlines.as_ref().map(WasmChartExGridlines::from),
+            minor_gridlines: a.minor_gridlines.as_ref().map(WasmChartExGridlines::from),
             major_tick_marks: a.major_tick_marks.clone(),
             minor_tick_marks: a.minor_tick_marks.clone(),
             tick_labels: a.tick_labels,
@@ -4985,6 +5113,133 @@ impl From<&duke_sheets_chart::ChartExSeries> for WasmChartExSeries {
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
+pub struct WasmChartStyleReference {
+    pub idx: u32,
+    pub color: Option<String>,
+}
+
+impl From<&duke_sheets_chart::StyleReference> for WasmChartStyleReference {
+    fn from(r: &duke_sheets_chart::StyleReference) -> Self {
+        Self {
+            idx: r.idx,
+            color: r.color.as_ref().map(|b| String::from_utf8_lossy(b).into_owned()),
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmChartStyleEntry {
+    pub line_reference: WasmChartStyleReference,
+    pub line_width_scale: Option<f64>,
+    pub fill_reference: WasmChartStyleReference,
+    pub effect_reference: WasmChartStyleReference,
+    pub font_collection: String,
+    pub font_color: Option<String>,
+    pub shape_properties: Option<String>,
+    pub default_run_properties: Option<String>,
+    pub body_properties: Option<String>,
+    pub mods: Option<String>,
+}
+
+impl From<&duke_sheets_chart::StyleEntry> for WasmChartStyleEntry {
+    fn from(e: &duke_sheets_chart::StyleEntry) -> Self {
+        let text = |b: &Option<Vec<u8>>| {
+            b.as_ref().map(|b| String::from_utf8_lossy(b).into_owned())
+        };
+        Self {
+            line_reference: (&e.line_reference).into(),
+            line_width_scale: e.line_width_scale,
+            fill_reference: (&e.fill_reference).into(),
+            effect_reference: (&e.effect_reference).into(),
+            font_collection: e.font_reference.collection.as_str().to_string(),
+            font_color: text(&e.font_reference.color),
+            shape_properties: text(&e.shape_properties),
+            default_run_properties: text(&e.default_run_properties),
+            body_properties: text(&e.body_properties),
+            mods: e.mods.clone(),
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmChartStyle {
+    pub id: Option<u32>,
+    pub entries: std::collections::BTreeMap<String, WasmChartStyleEntry>,
+    pub marker_symbol: Option<String>,
+    pub marker_size: Option<u32>,
+    pub raw: Option<String>,
+}
+
+impl From<&duke_sheets_chart::ChartStylePart> for WasmChartStyle {
+    fn from(part: &duke_sheets_chart::ChartStylePart) -> Self {
+        match part {
+            duke_sheets_chart::ChartStylePart::Raw(bytes) => Self {
+                id: None,
+                entries: std::collections::BTreeMap::new(),
+                marker_symbol: None,
+                marker_size: None,
+                raw: Some(String::from_utf8_lossy(bytes).into_owned()),
+            },
+            duke_sheets_chart::ChartStylePart::Typed(style) => Self {
+                id: Some(style.id),
+                entries: duke_sheets_chart::chart_style::entries_by_name(style)
+                    .into_iter()
+                    .map(|(name, entry)| (name.to_string(), entry.into()))
+                    .collect(),
+                marker_symbol: style
+                    .data_point_marker_layout
+                    .as_ref()
+                    .and_then(|m| m.symbol.clone()),
+                marker_size: style.data_point_marker_layout.as_ref().and_then(|m| m.size),
+                raw: None,
+            },
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmChartColorStyle {
+    pub method: Option<String>,
+    pub id: Option<u32>,
+    pub colors: Vec<String>,
+    pub variations: Vec<String>,
+    pub raw: Option<String>,
+}
+
+impl From<&duke_sheets_chart::ChartColorStylePart> for WasmChartColorStyle {
+    fn from(part: &duke_sheets_chart::ChartColorStylePart) -> Self {
+        match part {
+            duke_sheets_chart::ChartColorStylePart::Raw(bytes) => Self {
+                method: None,
+                id: None,
+                colors: Vec::new(),
+                variations: Vec::new(),
+                raw: Some(String::from_utf8_lossy(bytes).into_owned()),
+            },
+            duke_sheets_chart::ChartColorStylePart::Typed(style) => Self {
+                method: Some(style.method.as_str().to_string()),
+                id: style.id,
+                colors: style
+                    .colors
+                    .iter()
+                    .map(|b| String::from_utf8_lossy(b).into_owned())
+                    .collect(),
+                variations: style
+                    .variations
+                    .iter()
+                    .map(|b| String::from_utf8_lossy(b).into_owned())
+                    .collect(),
+                raw: None,
+            },
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct WasmChartEx {
     pub layout: String,
     pub version: Option<String>,
@@ -4994,12 +5249,13 @@ pub struct WasmChartEx {
     pub data: Vec<WasmChartExData>,
     pub plot_area: WasmChartExPlotArea,
     pub legend: Option<WasmChartExLegend>,
-    pub anchor: WasmDrawingAnchor,
     pub shape_properties: Option<WasmChartShapeProperties>,
     pub format_overrides: Vec<WasmChartExFormatOverride>,
     pub print_settings: Option<WasmChartExPrintSettings>,
     pub external_data_rel_id: Option<String>,
     pub external_data_auto_update: Option<bool>,
+    pub style: Option<WasmChartStyle>,
+    pub color_style: Option<WasmChartColorStyle>,
 }
 
 impl From<&duke_sheets_chart::ChartEx> for WasmChartEx {
@@ -5019,7 +5275,6 @@ impl From<&duke_sheets_chart::ChartEx> for WasmChartEx {
             data: c.data.iter().map(WasmChartExData::from).collect(),
             plot_area: WasmChartExPlotArea::from(&c.plot_area),
             legend: c.legend.as_ref().map(WasmChartExLegend::from),
-            anchor: WasmDrawingAnchor::from(&c.anchor),
             shape_properties: c
                 .shape_properties
                 .as_ref()
@@ -5035,50 +5290,8 @@ impl From<&duke_sheets_chart::ChartEx> for WasmChartEx {
                 .map(WasmChartExPrintSettings::from),
             external_data_rel_id: c.external_data.as_ref().map(|e| e.rel_id.clone()),
             external_data_auto_update: c.external_data.as_ref().and_then(|e| e.auto_update),
-        }
-    }
-}
-
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct WasmEmbeddedImage {
-    pub id: u32,
-    pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    pub anchor: WasmDrawingAnchor,
-    pub format: String,
-    pub media_path: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub svg_media_path: Option<String>,
-    pub width_emu: i64,
-    pub height_emu: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rotation: Option<i32>,
-    pub flip_h: bool,
-    pub flip_v: bool,
-    pub data: Vec<u8>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub svg_data: Option<Vec<u8>>,
-}
-
-impl From<&duke_sheets_chart::EmbeddedImage> for WasmEmbeddedImage {
-    fn from(img: &duke_sheets_chart::EmbeddedImage) -> Self {
-        WasmEmbeddedImage {
-            id: img.id,
-            name: img.name.clone(),
-            description: img.description.clone(),
-            anchor: WasmDrawingAnchor::from(&img.anchor),
-            format: img.format.as_str().to_string(),
-            media_path: img.media_path.clone(),
-            svg_media_path: img.svg_media_path.clone(),
-            width_emu: img.width_emu,
-            height_emu: img.height_emu,
-            rotation: img.rotation,
-            flip_h: img.flip_h,
-            flip_v: img.flip_v,
-            data: img.data().to_vec(),
-            svg_data: img.svg_data().map(|b| b.to_vec()),
+            style: c.style.as_ref().map(WasmChartStyle::from),
+            color_style: c.color_style.as_ref().map(WasmChartColorStyle::from),
         }
     }
 }

@@ -10,6 +10,11 @@ use libfuzzer_sys::fuzz_target;
 use std::io::Cursor;
 
 use duke_sheets_core::{CellValue, Style, Workbook};
+
+#[path = "common/form_controls.rs"]
+mod form_controls;
+use form_controls::FuzzFormControl;
+
 use duke_sheets_chart::{
     CellMarker, Chart, ChartType, DataLabels, DataReference, DataSeries, DrawingAnchor, Legend,
     LegendPosition, Marker, MarkerSymbol, Trendline, TrendlineType,
@@ -26,6 +31,7 @@ struct FuzzSheet {
     name: String,
     cells: Vec<FuzzCell>,
     charts: Vec<FuzzChart>,
+    controls: Vec<FuzzFormControl>,
 }
 impl<'a> Arbitrary<'a> for FuzzSheet {
     fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
@@ -48,7 +54,18 @@ impl<'a> Arbitrary<'a> for FuzzSheet {
             charts.push(FuzzChart::arbitrary(u)?);
         }
 
-        Ok(FuzzSheet { name, cells, charts })
+        let ncontrols = u.int_in_range(0..=4)?;
+        let mut controls = Vec::with_capacity(ncontrols);
+        for _ in 0..ncontrols {
+            controls.push(FuzzFormControl::arbitrary(u)?);
+        }
+
+        Ok(FuzzSheet {
+            name,
+            cells,
+            charts,
+            controls,
+        })
     }
 }
 
@@ -449,7 +466,7 @@ fuzz_target!(|data: &[u8]| {
             if let Some(lp) = fchart.legend_pos {
                 chart.legend = Some(Legend::new(lp.into()));
             }
-            chart.anchor = DrawingAnchor::TwoCell {
+            let chart_anchor = DrawingAnchor::TwoCell {
                 from: CellMarker {
                     col: fchart.anchor.from_col,
                     col_offset_emu: 0,
@@ -498,7 +515,11 @@ fuzz_target!(|data: &[u8]| {
                 }
                 chart.add_series(series);
             }
-            sheet.add_chart(chart);
+            sheet.add_chart(chart, chart_anchor);
+        }
+
+        for control in &fsheet.controls {
+            sheet.add_form_control(control.to_control(), control.anchor());
         }
     }
 
@@ -516,14 +537,20 @@ fuzz_target!(|data: &[u8]| {
         Err(_) => return,
     };
 
-    // Compare images
+    // Compare images and form controls
     for i in 0..orig_wb.sheet_count() {
         let orig_ws = orig_wb.worksheet(i).unwrap();
         let rt_ws = rt_wb.worksheet(i).unwrap();
         assert_eq!(
-            orig_ws.images().len(),
-            rt_ws.images().len(),
+            orig_ws.image_count(),
+            rt_ws.image_count(),
             "image count mismatch on sheet {}",
+            i
+        );
+        assert_eq!(
+            orig_ws.form_control_count(),
+            rt_ws.form_control_count(),
+            "form control count mismatch on sheet {}",
             i
         );
     }

@@ -351,8 +351,8 @@ pub fn read_value_cached(
                     if idx < oid_cache.len() {
                         oid_cache[idx] = Some(context_oid_str);
                     }
+                    }
                 }
-            }
             Ok(UnoValue::Exception(UnoException {
                 type_name: ty.name.clone(),
                 message,

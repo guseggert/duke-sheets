@@ -1,5 +1,5 @@
 use duke_sheets_core::{CellValue, Workbook};
-use duke_sheets_xlsx::{EncryptionProfile, XlsxError, XlsxReader, XlsxWriter};
+use duke_sheets_xlsx::{EncryptionProfile, XlsxError, XlsxReadOptions, XlsxReader, XlsxWriter};
 
 const PASSWORD: &str = "standard-rt-pw";
 
@@ -34,7 +34,7 @@ fn write_then_read_standard_round_trips_workbook_contents() {
         "Standard envelope must be CFB"
     );
     let opened =
-        XlsxReader::read_bytes_with_password(&bytes, Some(PASSWORD), false).expect("decrypt");
+        XlsxReader::read_bytes_with(&bytes, &XlsxReadOptions { password: Some(PASSWORD.to_string()), ..Default::default() }).expect("decrypt");
     assert_workbook_contents(&opened);
 }
 
@@ -44,7 +44,7 @@ fn write_then_read_standard_with_wrong_password_yields_bad_password() {
     let bytes =
         XlsxWriter::write_to_bytes_encrypted(&wb, PASSWORD, &EncryptionProfile::standard_default())
             .unwrap();
-    let err = XlsxReader::read_bytes_with_password(&bytes, Some("wrong"), false)
+    let err = XlsxReader::read_bytes_with(&bytes, &XlsxReadOptions { password: Some("wrong".to_string()), ..Default::default() })
         .expect_err("wrong password");
     assert!(matches!(err, XlsxError::BadPassword));
 }
@@ -55,7 +55,7 @@ fn write_then_read_standard_aes256_round_trip() {
     let profile = EncryptionProfile::Standard { key_bits: 256 };
     let bytes = XlsxWriter::write_to_bytes_encrypted(&wb, PASSWORD, &profile).unwrap();
     let opened =
-        XlsxReader::read_bytes_with_password(&bytes, Some(PASSWORD), false).expect("decrypt");
+        XlsxReader::read_bytes_with(&bytes, &XlsxReadOptions { password: Some(PASSWORD.to_string()), ..Default::default() }).expect("decrypt");
     assert_workbook_contents(&opened);
 }
 
@@ -65,6 +65,6 @@ fn write_then_read_standard_aes192_round_trip() {
     let profile = EncryptionProfile::Standard { key_bits: 192 };
     let bytes = XlsxWriter::write_to_bytes_encrypted(&wb, PASSWORD, &profile).unwrap();
     let opened =
-        XlsxReader::read_bytes_with_password(&bytes, Some(PASSWORD), false).expect("decrypt");
+        XlsxReader::read_bytes_with(&bytes, &XlsxReadOptions { password: Some(PASSWORD.to_string()), ..Default::default() }).expect("decrypt");
     assert_workbook_contents(&opened);
 }

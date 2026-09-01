@@ -4,7 +4,9 @@
 use std::io::Cursor;
 
 use duke_sheets_core::worksheet::SheetProtection;
-use duke_sheets_core::Workbook;
+use duke_sheets_core::{
+    hash_legacy_protection_password, CellRange, ProtectedRange, Workbook, WorkbookProtection,
+};
 use duke_sheets_xls::{XlsReader, XlsWriter};
 
 const SHARED_DIR: &str = "/tmp/duke-sheets-urp";
@@ -51,6 +53,27 @@ fn protected_sheet_with_password_hash_round_trips() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", 1.0).expect("A1");
+    ws.set_protection(Some(SheetProtection::protected().with_password("password")));
+
+    let parsed = write_then_read(&wb);
+    let protection = parsed
+        .worksheet(0)
+        .unwrap()
+        .protection()
+        .expect("protection present")
+        .clone();
+    assert!(protection.protected);
+    assert_eq!(
+        protection.password_hash,
+        Some(hash_legacy_protection_password("password"))
+    );
+}
+
+#[test]
+fn protected_sheet_with_raw_password_hash_round_trips() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 1.0).expect("A1");
     ws.set_protection(Some(SheetProtection {
         protected: true,
         password_hash: Some(0xCAFE),
@@ -64,8 +87,66 @@ fn protected_sheet_with_password_hash_round_trips() {
         .protection()
         .expect("protection present")
         .clone();
-    assert!(protection.protected);
     assert_eq!(protection.password_hash, Some(0xCAFE));
+}
+
+#[test]
+fn workbook_protection_round_trips() {
+    let mut wb = Workbook::new();
+    wb.set_workbook_protection(Some(WorkbookProtection {
+        structure: true,
+        windows: true,
+        password_hash: Some(0xCAFE),
+    }));
+    wb.worksheet_mut(0)
+        .unwrap()
+        .set_cell_value("A1", 1.0)
+        .expect("A1");
+
+    let parsed = write_then_read(&wb);
+    let protection = parsed
+        .workbook_protection()
+        .expect("workbook protection present");
+    assert!(protection.structure);
+    assert!(protection.windows);
+    assert_eq!(protection.password_hash, Some(0xCAFE));
+}
+
+#[test]
+fn protected_ranges_round_trip() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "editable").expect("A1");
+    ws.set_protected_ranges(vec![
+        ProtectedRange::new(
+            "MainEdit",
+            vec![
+                CellRange::parse("A1:B2").unwrap(),
+                CellRange::parse("D4:D5").unwrap(),
+            ],
+        )
+        .with_password("range"),
+        ProtectedRange {
+            name: "RawHash".to_string(),
+            ranges: vec![CellRange::parse("F1:F3").unwrap()],
+            password_hash: Some(0xCAFE),
+            security_descriptor: None,
+        },
+    ]);
+
+    let parsed = write_then_read(&wb);
+    let ranges = parsed.worksheet(0).unwrap().protected_ranges();
+    assert_eq!(ranges.len(), 2);
+    assert_eq!(ranges[0].name, "MainEdit");
+    assert_eq!(ranges[0].ranges[0].to_string(), "A1:B2");
+    assert_eq!(ranges[0].ranges[1].to_string(), "D4:D5");
+    assert_eq!(
+        ranges[0].password_hash,
+        Some(hash_legacy_protection_password("range"))
+    );
+    assert_eq!(ranges[1].name, "RawHash");
+    assert_eq!(ranges[1].ranges[0].to_string(), "F1:F3");
+    assert_eq!(ranges[1].password_hash, Some(0xCAFE));
 }
 
 #[test]
@@ -96,7 +177,6 @@ fn protection_persists_per_sheet() {
 
 /// LibreOffice must accept PROTECT + PASSWORD records.
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_read_sheet_protection_we_emit() {
     duke_sheets_test_harness::lo::ensure_lo();
 

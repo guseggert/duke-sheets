@@ -73,6 +73,26 @@ describe("Workbook", () => {
     });
   });
 
+  describe("protection", () => {
+    it("sets and gets workbook protection", () => {
+      const wb = new Workbook();
+      wb.setWorkbookProtection({
+        structure: true,
+        windows: true,
+        password: "password",
+      });
+
+      expect(wb.workbookProtection).toEqual({
+        structure: true,
+        windows: true,
+        passwordHash: 0x83af,
+      });
+
+      wb.setWorkbookProtection(null);
+      expect(wb.workbookProtection).toBeNull();
+    });
+  });
+
   describe("file operations", () => {
     it("saves and opens XLSX", () => {
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "duke-"));
@@ -676,6 +696,72 @@ describe("PivotTables", () => {
 // Worksheet Tests
 
 describe("Worksheet", () => {
+  describe("protection", () => {
+    it("allows cell selection by default when protecting a sheet", () => {
+      const wb = new Workbook();
+      const sheet = wb.getSheet(0);
+
+      sheet.setProtection({ password: "password" });
+
+      expect(sheet.protection).toMatchObject({
+        protected: true,
+        passwordHash: 0x83af,
+        selectLockedCells: true,
+        selectUnlockedCells: true,
+      });
+    });
+
+    it("sets sheet protection and protected ranges", () => {
+      const wb = new Workbook();
+      const sheet = wb.getSheet(0);
+
+      sheet.setProtection({
+        protected: true,
+        password: "password",
+        selectLockedCells: true,
+        selectUnlockedCells: true,
+        formatCells: true,
+        sort: true,
+      });
+      expect(sheet.protection).toMatchObject({
+        protected: true,
+        passwordHash: 0x83af,
+        selectLockedCells: true,
+        selectUnlockedCells: true,
+        formatCells: true,
+        sort: true,
+      });
+
+      sheet.setProtectedRanges([
+        {
+          name: "Editable",
+          ranges: ["A1:B2", "D4:D5"],
+          passwordHash: 0xcafe,
+          securityDescriptor: "S-1-5-21",
+        },
+      ]);
+      expect(sheet.protectedRanges).toEqual([
+        {
+          name: "Editable",
+          ranges: ["A1:B2", "D4:D5"],
+          passwordHash: 0xcafe,
+          securityDescriptor: "S-1-5-21",
+        },
+      ]);
+    });
+
+    it("rejects plaintext and raw password hashes together", () => {
+      const wb = new Workbook();
+      const sheet = wb.getSheet(0);
+      expect(() =>
+        sheet.setProtection({ password: "password", passwordHash: 0x83af }),
+      ).toThrow(/password/i);
+      expect(() =>
+        wb.setWorkbookProtection({ password: "password", passwordHash: 0x83af }),
+      ).toThrow(/password/i);
+    });
+  });
+
   describe("cell values", () => {
     it("sets and gets a number", () => {
       const wb = new Workbook();

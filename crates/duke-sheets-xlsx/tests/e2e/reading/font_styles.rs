@@ -169,7 +169,7 @@ fn test_font_color() {
     let workbook = XlsxReader::read_file(&path).unwrap();
     let sheet = workbook.worksheet(0).unwrap();
     let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
-    let (r, g, b) = style.font.color.to_rgb();
+    let (r, g, b) = style.font.color.to_rgb().unwrap();
     assert!(
         r > 200 && g < 50 && b < 50,
         "Expected red font, got ({r}, {g}, {b})"
@@ -265,7 +265,7 @@ fn test_font_style_combination() {
     assert!(style.font.bold, "Should be bold");
     assert!(style.font.italic, "Should be italic");
     assert_eq!(style.font.underline, Underline::Single);
-    let (r, g, b) = style.font.color.to_rgb();
+    let (r, g, b) = style.font.color.to_rgb().unwrap();
     assert!(b > 200 && r < 50, "Should be blue, got ({r}, {g}, {b})");
     assert!(
         (style.font.size - 14.0).abs() < 0.5,

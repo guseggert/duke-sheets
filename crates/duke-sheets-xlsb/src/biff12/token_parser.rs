@@ -933,11 +933,6 @@ mod tests {
         let mut data = vec![0x43u8]; // PtgName V-class
         data.extend_from_slice(&0x0001_2345u32.to_le_bytes());
         let tokens = parse_tokens_with_extra(&data, &[]);
-        assert_eq!(
-            tokens,
-            vec![ParsedToken::Name {
-                name_idx: 0x0001_2345
-            }]
-        );
+        assert_eq!(tokens, vec![ParsedToken::Name { name_idx: 0x0001_2345 }]);
     }
 }

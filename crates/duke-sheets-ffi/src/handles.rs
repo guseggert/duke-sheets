@@ -8,6 +8,7 @@ use std::sync::Mutex;
 /// Opaque handle type
 pub type Handle = u64;
 
+
 /// Global context for managing FFI objects
 pub struct FfiContext {
     workbooks: HashMap<Handle, Workbook>,

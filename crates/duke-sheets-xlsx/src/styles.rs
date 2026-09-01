@@ -1,12 +1,11 @@
 //! XLSX styles (styles.xml) read/write helpers
 
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::hash::{Hash, Hasher};
 use std::io::{BufReader, Cursor, Read};
 use std::sync::{Mutex, OnceLock};
 
-use quick_xml::escape::escape;
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::reader::Reader;
 use quick_xml::Writer;
@@ -69,15 +68,18 @@ fn workbook_style_fingerprint(workbook: &Workbook) -> u64 {
     for (sheet_idx, sheet) in workbook.worksheets().enumerate() {
         sheet_idx.hash(&mut hasher);
         sheet.name().hash(&mut hasher);
-        sheet.cell_count().hash(&mut hasher);
-        for (row, col, cell) in sheet.iter_cells() {
-            row.hash(&mut hasher);
-            col.hash(&mut hasher);
-            cell.style_index.hash(&mut hasher);
-            if let Some(style) = sheet.style_by_index(cell.style_index) {
-                style.hash(&mut hasher);
+        let mut style_hashes = BTreeSet::new();
+        for style_index in std::iter::once(0)
+            .chain(sheet.iter_cells().map(|(_, _, cell)| cell.style_index))
+        {
+            let mut style_hasher = DefaultHasher::new();
+            style_index.hash(&mut style_hasher);
+            if let Some(style) = sheet.style_by_index(style_index) {
+                style.hash(&mut style_hasher);
             }
+            style_hashes.insert(style_hasher.finish());
         }
+        style_hashes.hash(&mut hasher);
     }
     hasher.finish()
 }
@@ -355,10 +357,9 @@ impl XlsxStyleTable {
             w.write_event(Event::Start(tag))?;
             for (id, code) in &numfmts {
                 let id_s = id.to_string();
-                let code_esc = escape(code.as_str());
                 w.create_element("numFmt")
                     .with_attribute(("numFmtId", id_s.as_str()))
-                    .with_attribute(("formatCode", &*code_esc))
+                    .with_attribute(("formatCode", code.as_str()))
                     .write_empty()?;
             }
             w.write_event(Event::End(BytesEnd::new("numFmts")))?;
@@ -426,10 +427,10 @@ impl XlsxStyleTable {
         tag.push_attribute(("count", count.as_str()));
         w.write_event(Event::Start(tag))?;
         for named_style in &self.named_styles {
-            let name_esc = escape(named_style.name.as_str());
+
             let xf_id = named_style.xf_id.to_string();
             let mut cell_style = BytesStart::new("cellStyle");
-            cell_style.push_attribute(("name", &*name_esc));
+            cell_style.push_attribute(("name", named_style.name.as_str()));
             cell_style.push_attribute(("xfId", xf_id.as_str()));
             let builtin_id = named_style.builtin_id.map(|v| v.to_string());
             if let Some(builtin_id) = builtin_id.as_deref() {
@@ -539,8 +540,8 @@ fn write_color_xml(w: &mut XmlWriter, tag: &str, color: &Color) -> std::io::Resu
         Color::Theme { index, tint } => {
             let v = index.to_string();
             el.push_attribute(("theme", v.as_str()));
-            if *tint != 0 {
-                let t = ((*tint as f64) / 100.0).to_string();
+            if *tint != 0.0 {
+                let t = tint.to_string();
                 el.push_attribute(("tint", t.as_str()));
             }
         }
@@ -602,9 +603,9 @@ fn write_font_xml(w: &mut XmlWriter, font: &FontStyle) -> std::io::Result<()> {
         write_color_xml(w, "color", &font.color)?;
     }
 
-    let name_esc = escape(&font.name);
+
     w.create_element("name")
-        .with_attribute(("val", &*name_esc))
+        .with_attribute(("val", font.name.as_str()))
         .write_empty()?;
 
     if let Some(family) = font.family {
@@ -958,10 +959,10 @@ fn write_dxf_xml(w: &mut XmlWriter, style: &Style) -> std::io::Result<()> {
             NumberFormat::Custom(code) => (164, code.clone()),
         };
         let id_s = id.to_string();
-        let code_esc = escape(&code);
+
         w.create_element("numFmt")
             .with_attribute(("numFmtId", id_s.as_str()))
-            .with_attribute(("formatCode", &*code_esc))
+            .with_attribute(("formatCode", code.as_str()))
             .write_empty()?;
     }
 
@@ -2204,10 +2205,9 @@ fn parse_color_attrs(e: &quick_xml::events::BytesStart<'_>) -> Color {
     }
 
     if let Some(index) = theme {
-        let tint_i8 = tint.map(|t| (t * 100.0).round() as i8).unwrap_or(0);
         return Color::Theme {
             index,
-            tint: tint_i8,
+            tint: tint.unwrap_or(0.0),
         };
     }
 

@@ -2,6 +2,13 @@
 //!
 //! This module provides support for cell comments in worksheets.
 //!
+//! A comment is a drawing object: its popup placement and visibility
+//! live on the wrapping [`crate::DrawingObject`] in the worksheet's
+//! z-ordered drawing list (`hidden = true`, the default, shows the
+//! note only on hover). [`CellComment`] carries the content, and the
+//! keyed accessors on [`crate::Worksheet`] provide `(row, col)`
+//! lookup over the list.
+//!
 //! ## Example
 //!
 //! ```rust
@@ -18,22 +25,23 @@
 //! assert!(comment.is_some());
 //! ```
 
+use crate::drawing::DrawingText;
+
 /// A cell comment/note
 ///
 /// Comments are annotations attached to cells that can contain
-/// author information and text content.
+/// author information and text content. The text carries rich runs;
+/// use [`Self::plain_text`] for the concatenated string.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct CellComment {
     /// Author of the comment
     pub author: String,
-    /// Comment text content
-    pub text: String,
-    /// Whether the comment box is visible by default
-    pub visible: bool,
+    /// Comment text content (rich runs).
+    pub text: DrawingText,
 }
 
 impl CellComment {
-    /// Create a new comment with the given author and text
+    /// Create a new comment with the given author and plain text
     ///
     /// # Example
     ///
@@ -42,30 +50,26 @@ impl CellComment {
     ///
     /// let comment = CellComment::new("John Doe", "Review this value");
     /// assert_eq!(comment.author, "John Doe");
-    /// assert_eq!(comment.text, "Review this value");
-    /// assert!(!comment.visible);
+    /// assert_eq!(comment.plain_text(), "Review this value");
     /// ```
     pub fn new(author: impl Into<String>, text: impl Into<String>) -> Self {
         Self {
             author: author.into(),
-            text: text.into(),
-            visible: false,
+            text: DrawingText::plain(text.into()),
         }
     }
 
-    /// Create a comment with just text (empty author)
+    /// Create a comment with just plain text (empty author)
     pub fn text_only(text: impl Into<String>) -> Self {
         Self {
             author: String::new(),
-            text: text.into(),
-            visible: false,
+            text: DrawingText::plain(text.into()),
         }
     }
 
-    /// Set whether the comment is visible by default
-    pub fn with_visible(mut self, visible: bool) -> Self {
-        self.visible = visible;
-        self
+    /// The comment text as a plain string (runs concatenated).
+    pub fn plain_text(&self) -> String {
+        self.text.plain_text()
     }
 
     /// Check if this comment has an author
@@ -74,12 +78,13 @@ impl CellComment {
     }
 }
 
+
 impl std::fmt::Display for CellComment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.has_author() {
-            write!(f, "[{}]: {}", self.author, self.text)
+            write!(f, "[{}]: {}", self.author, self.plain_text())
         } else {
-            write!(f, "{}", self.text)
+            write!(f, "{}", self.plain_text())
         }
     }
 }
@@ -92,22 +97,15 @@ mod tests {
     fn test_new_comment() {
         let comment = CellComment::new("Author", "Text");
         assert_eq!(comment.author, "Author");
-        assert_eq!(comment.text, "Text");
-        assert!(!comment.visible);
+        assert_eq!(comment.plain_text(), "Text");
     }
 
     #[test]
     fn test_text_only() {
         let comment = CellComment::text_only("Just text");
         assert_eq!(comment.author, "");
-        assert_eq!(comment.text, "Just text");
+        assert_eq!(comment.plain_text(), "Just text");
         assert!(!comment.has_author());
-    }
-
-    #[test]
-    fn test_with_visible() {
-        let comment = CellComment::new("A", "B").with_visible(true);
-        assert!(comment.visible);
     }
 
     #[test]

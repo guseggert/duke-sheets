@@ -44,6 +44,29 @@ fn test_roundtrip_font_styles() {
     assert_eq!(read_style_b1.font.size, 14.0, "B1 font size should be 14");
 }
 
+/// Theme tints carry Excel's full f64 precision through a round trip;
+/// Excel emits values like 0.3499862666707358 that a percentage
+/// quantization would corrupt.
+#[test]
+fn test_roundtrip_theme_tint_precision() {
+    const EXCEL_TINT: f64 = 0.349_986_266_670_735_8;
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    let style = Style::new().font_color(Color::theme(4, EXCEL_TINT));
+    sheet.set_cell_value("A1", "tinted").unwrap();
+    sheet.set_cell_style("A1", &style).unwrap();
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let style2 = wb2.worksheet(0).unwrap().cell_style("A1").unwrap().unwrap();
+    assert_eq!(
+        style2.font.color,
+        Color::theme(4, EXCEL_TINT),
+        "theme tint must survive with full f64 precision"
+    );
+}
+
 /// Test border styling roundtrip
 #[test]
 fn test_roundtrip_border_styles() {
@@ -176,7 +199,7 @@ fn test_roundtrip_fill_styles() {
     match &read_style_a1.fill {
         FillStyle::Solid { color } => {
             // Yellow: RGB(255, 255, 0)
-            let (r, g, b) = color.to_rgb();
+            let (r, g, b) = color.to_rgb().unwrap();
             assert_eq!(r, 255, "A1 fill red component should be 255");
             assert_eq!(g, 255, "A1 fill green component should be 255");
             assert_eq!(b, 0, "A1 fill blue component should be 0");
@@ -191,7 +214,7 @@ fn test_roundtrip_fill_styles() {
     match &read_style_b1.fill {
         FillStyle::Solid { color } => {
             // Blue: RGB(0, 0, 255)
-            let (r, g, b) = color.to_rgb();
+            let (r, g, b) = color.to_rgb().unwrap();
             assert_eq!(r, 0, "B1 fill red component should be 0");
             assert_eq!(g, 0, "B1 fill green component should be 0");
             assert_eq!(b, 255, "B1 fill blue component should be 255");
@@ -377,7 +400,7 @@ fn test_roundtrip_style_only_cells() {
     assert!(read_style_d4.font.bold, "D4 should be bold");
     match &read_style_d4.fill {
         FillStyle::Solid { color } => {
-            let (r, g, b) = color.to_rgb();
+            let (r, g, b) = color.to_rgb().unwrap();
             assert_eq!(r, 200, "D4 fill should be gray (r=200)");
             assert_eq!(g, 200, "D4 fill should be gray (g=200)");
             assert_eq!(b, 200, "D4 fill should be gray (b=200)");
@@ -542,9 +565,9 @@ fn test_roundtrip_gradient_fill() {
             assert_eq!(stops.len(), 2);
             assert!((stops[0].position - 0.0).abs() < f64::EPSILON);
             assert!((stops[1].position - 1.0).abs() < f64::EPSILON);
-            let (r, _, b) = stops[0].color.to_rgb();
+            let (r, _, b) = stops[0].color.to_rgb().unwrap();
             assert_eq!((r, b), (255, 0), "First stop should be red");
-            let (r, _, b) = stops[1].color.to_rgb();
+            let (r, _, b) = stops[1].color.to_rgb().unwrap();
             assert_eq!((r, b), (0, 255), "Second stop should be blue");
         }
         other => panic!("Expected Gradient fill for A1, got {other:?}"),

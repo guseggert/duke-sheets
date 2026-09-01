@@ -679,6 +679,7 @@ pub fn fn_dbcs(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
     fn_jis(args, _ctx)
 }
 
+
 /// Thai digit words.
 const THAI_DIGITS: [&str; 10] = [
     "ศูนย์", // 0
@@ -1039,6 +1040,7 @@ mod tests {
         );
     }
 
+
     #[test]
     fn test_asc_fullwidth_ascii() {
         // Full-width A (U+FF21) -> ASCII A
@@ -1085,6 +1087,7 @@ mod tests {
         assert_eq!(eval("=ASC(\"\u{FF21}B\u{FF23}\")").unwrap(), s("ABC"));
     }
 
+
     #[test]
     fn test_jis_halfwidth_ascii() {
         // ASCII A -> full-width Ａ (U+FF21)
@@ -1127,6 +1130,7 @@ mod tests {
         assert_eq!(eval("=JIS(\"\")").unwrap(), s(""));
     }
 
+
     #[test]
     fn test_dbcs_same_as_jis() {
         // DBCS should behave identically to JIS
@@ -1149,6 +1153,7 @@ mod tests {
         let jis_result = eval("=JIS(\"ABC\")").unwrap();
         assert_eq!(jis_result, s(original));
     }
+
 
     #[test]
     fn test_bahttext_zero() {
@@ -1224,6 +1229,7 @@ mod tests {
             s("ห้าพันหกร้อยเจ็ดสิบแปดบาทถ้วน")
         );
     }
+
 
     #[test]
     fn test_phonetic_stub_returns_empty() {

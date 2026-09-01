@@ -113,7 +113,10 @@ fn test_xls_formula_if_and_comparison() {
     let sheet = workbook.worksheet(0).unwrap();
 
     assert_eq!(formula_text(sheet, 0, 1), "=IF(A1>5,1,0)");
-    assert_eq!(formula_text(sheet, 0, 2), "=IF(A1<>0,\"yes\",\"no\")");
+    assert_eq!(
+        formula_text(sheet, 0, 2),
+        "=IF(A1<>0,\"yes\",\"no\")"
+    );
 
     cleanup_fixture(&path);
 }
@@ -139,7 +142,10 @@ fn test_xls_formula_string_concat() {
     let workbook = XlsReader::read_file(&path).unwrap();
     let sheet = workbook.worksheet(0).unwrap();
 
-    assert_eq!(formula_text(sheet, 0, 1), "=CONCATENATE(A1,\" world\")");
+    assert_eq!(
+        formula_text(sheet, 0, 1),
+        "=CONCATENATE(A1,\" world\")"
+    );
 
     cleanup_fixture(&path);
 }

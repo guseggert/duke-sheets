@@ -5,7 +5,10 @@ use duke_sheets_core::{named_range::NameScope, Workbook};
 use pyo3::exceptions::{PyIndexError, PyValueError};
 use pyo3::prelude::*;
 
-use crate::{to_py_err, PyChartSheet, PyNamedRange, PySheetSlot, PyWorkbook, PyWorkbookSettings};
+use crate::{
+    to_py_err, PyChartSheet, PyNamedRange, PySheetSlot, PyWorkbook, PyWorkbookProtection,
+    PyWorkbookSettings,
+};
 
 #[pymethods]
 impl PyWorkbook {
@@ -38,8 +41,12 @@ impl PyWorkbook {
         })
     }
 
+    /// Save the workbook as a CSV string (first sheet only, with
+    /// form-control state synchronized into linked cells in the output).
     fn save_csv_string(&self) -> PyResult<String> {
         let wb = self.inner.read().map_err(to_py_err)?;
+        let snapshot = wb.synchronized_for_save();
+        let wb = snapshot.as_ref().unwrap_or_else(|| &*wb);
         let ws = wb
             .worksheet(0)
             .ok_or_else(|| PyIndexError::new_err("No worksheets to save"))?;
@@ -79,6 +86,14 @@ impl PyWorkbook {
     }
 
     #[getter]
+    fn workbook_protection(&self) -> PyResult<Option<PyWorkbookProtection>> {
+        let wb = self.inner.read().map_err(to_py_err)?;
+        Ok(wb
+            .workbook_protection()
+            .map(|protection| PyWorkbookProtection::from(&protection)))
+    }
+
+    #[getter]
     fn named_ranges(&self) -> PyResult<Vec<PyNamedRange>> {
         let wb = self.inner.read().map_err(to_py_err)?;
         Ok(wb
@@ -99,6 +114,32 @@ impl PyWorkbook {
                 hidden: nr.hidden,
             })
             .collect())
+    }
+
+    /// The workbook theme's 12 clrScheme colors as ``RRGGBB`` hex, in
+    /// theme-index order (background 1, text 1, background 2, text 2,
+    /// accent 1-6, hyperlink, followed hyperlink). The Office default
+    /// palette when the file carries no theme.
+    #[getter]
+    fn theme_palette(&self) -> PyResult<Vec<String>> {
+        let wb = self.inner.read().map_err(to_py_err)?;
+        Ok(wb
+            .theme_palette()
+            .colors
+            .iter()
+            .map(|(r, g, b)| format!("{r:02X}{g:02X}{b:02X}"))
+            .collect())
+    }
+
+    /// Resolve a :class:`Color` to display RGB (``RRGGBB`` hex)
+    /// against this workbook's theme palette. ``auto`` has no fixed
+    /// RGB and resolves to ``None``.
+    fn resolve_color(&self, color: &crate::PyColor) -> PyResult<Option<String>> {
+        let core = color.to_core()?;
+        let wb = self.inner.read().map_err(to_py_err)?;
+        Ok(wb
+            .resolve_color(&core)
+            .map(|(r, g, b)| format!("{r:02X}{g:02X}{b:02X}")))
     }
 }
 

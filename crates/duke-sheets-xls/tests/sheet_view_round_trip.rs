@@ -116,7 +116,6 @@ fn no_zoom_means_no_scl_record() {
 
 /// LibreOffice must accept SELECTION + SCL records.
 #[test]
-#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_read_sheet_view_we_emit() {
     duke_sheets_test_harness::lo::ensure_lo();
 
@@ -141,10 +140,12 @@ fn lo_can_read_sheet_view_we_emit() {
         .build()
         .unwrap();
     let outcome: Result<String, String> = rt.block_on(async {
-        let mut bridge =
-            duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect("127.0.0.1", 2002)
-                .await
-                .map_err(|e| format!("connect: {e}"))?;
+        let mut bridge = duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect(
+            "127.0.0.1",
+            2002,
+        )
+        .await
+        .map_err(|e| format!("connect: {e}"))?;
         let mut wb = bridge
             .open_workbook(&path)
             .await

@@ -113,6 +113,10 @@ pub struct NamedRangeCollection {
     /// - "" for workbook scope
     /// - "sheet:{index}" for sheet scope
     ranges: HashMap<String, NamedRange>,
+    /// Keys in the order they were defined. Excel lists defined names in
+    /// document order and a file's order has to survive a round trip, so
+    /// iteration follows this rather than the map.
+    order: Vec<String>,
 }
 
 impl NamedRangeCollection {
@@ -143,6 +147,7 @@ impl NamedRangeCollection {
             ));
         }
 
+        self.order.push(key.clone());
         self.ranges.insert(key, range);
         Ok(())
     }
@@ -150,7 +155,9 @@ impl NamedRangeCollection {
     /// Define or update a named range
     pub fn define_or_update(&mut self, range: NamedRange) {
         let key = Self::make_key(&range.name, &range.scope);
-        self.ranges.insert(key, range);
+        if self.ranges.insert(key.clone(), range).is_none() {
+            self.order.push(key);
+        }
     }
 
     /// Get a named range by name and current sheet context
@@ -179,7 +186,11 @@ impl NamedRangeCollection {
     /// Remove a named range
     pub fn remove(&mut self, name: &str, scope: &NameScope) -> Option<NamedRange> {
         let key = Self::make_key(name, scope);
-        self.ranges.remove(&key)
+        let removed = self.ranges.remove(&key);
+        if removed.is_some() {
+            self.order.retain(|k| k != &key);
+        }
+        removed
     }
 
     /// Check if a name exists in the given scope
@@ -190,7 +201,7 @@ impl NamedRangeCollection {
 
     /// Iterate over all named ranges
     pub fn iter(&self) -> impl Iterator<Item = &NamedRange> {
-        self.ranges.values()
+        self.order.iter().filter_map(|key| self.ranges.get(key))
     }
 
     /// Get the number of named ranges
@@ -205,15 +216,13 @@ impl NamedRangeCollection {
 
     /// Get all workbook-scoped names
     pub fn workbook_names(&self) -> impl Iterator<Item = &NamedRange> {
-        self.ranges
-            .values()
+        self.iter()
             .filter(|r| matches!(r.scope, NameScope::Workbook))
     }
 
     /// Get all names scoped to a specific sheet
     pub fn sheet_names(&self, sheet_index: usize) -> impl Iterator<Item = &NamedRange> {
-        self.ranges
-            .values()
+        self.iter()
             .filter(move |r| matches!(r.scope, NameScope::Sheet(idx) if idx == sheet_index))
     }
 }

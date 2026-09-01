@@ -178,14 +178,20 @@ run = "docker build -t duke-sheets-pyuno tests/fixtures/pyuno"
 # E2E Test Tasks
 #
 # `test:lo` and `test:excel` are thin passthrough wrappers around
-# `cargo test`. The LibreOffice container and Windows Excel VM are
-# auto-started lazily by the test code itself (via the
-# duke-sheets-test-harness crate), so the wrappers only need to ensure
-# the shared host directories exist and serialize tests with
-# `RUST_TEST_THREADS=1`.
+# `cargo test` for targeted, single-backend runs. The LibreOffice
+# container and Windows Excel VM are auto-started lazily by the test code
+# itself (via the duke-sheets-test-harness crate), so the wrappers only
+# need to ensure the shared host directories exist and serialize tests
+# with `RUST_TEST_THREADS=1`.
 #
 # Filters and any other `cargo test` arguments are passed through after
 # `--`, e.g. `mise run test:lo -- --test e2e -- --ignored`.
+#
+# For whole-suite runs prefer `test:fast` / `test:all`, which drive
+# `tools/run-tests.py` instead. `RUST_TEST_THREADS=1` here applies to
+# every binary in the invocation, so using it for the whole workspace
+# serializes the ~2800 tests that never touch a backend along with the
+# ones that do.
 
 [tasks."test:lo"]
 description = "Run cargo tests with LibreOffice auto-start. Args after -- pass through to cargo test."
@@ -216,15 +222,15 @@ RUST_TEST_THREADS=1 cargo test "$@"
 #   mise run test:lo -- --test chart_parity -- --ignored
 #   mise run test:lo -- --test chart_corpus -- --ignored   # needs DUKE_CORPUS_DIR
 
+[tasks."test:fast"]
+alias = "tf"
+description = "Run every test that needs no backend, fully parallel. Args pass through to tools/run-tests.py."
+run = "python3 tools/run-tests.py --groups pure \"$@\""
+
 [tasks."test:all"]
 alias = "ta"
-description = "Run the full cargo test suite. LibreOffice and Excel COM bridges auto-start on demand."
-run = """
-#!/bin/bash
-set -e
-mkdir -p /tmp/duke-sheets-urp /tmp/duke-sheets-excel
-RUST_TEST_THREADS=1 cargo test "$@"
-"""
+description = "Run the full test suite: pure tests in parallel, LibreOffice and Excel groups serial and concurrent with them."
+run = "python3 tools/run-tests.py \"$@\""
 
 # Windows VM Tasks (Excel COM bridge via QEMU/KVM)
 
@@ -339,7 +345,7 @@ $WINRM -ps 'Start-ScheduledTask -TaskName "ExcelBridgeServer"; Start-Sleep 2; (G
 echo "Verifying bridge is reachable..."
 ready=0
 for attempt in {1..30}; do
-    if echo '{"id":1,"cmd":"Ping"}' | nc -w1 localhost 9876 2>/dev/null | grep -q '"ok"'; then
+    if echo '{"id":1,"cmd":"Ping"}' | ncat -w 1 localhost 9876 2>/dev/null | grep -q '"ok"'; then
         ready=1
         break
     fi

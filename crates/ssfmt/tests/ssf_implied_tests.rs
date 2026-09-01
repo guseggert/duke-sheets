@@ -16,8 +16,8 @@ struct ImpliedTestCase {
 
 fn load_test_cases() -> Vec<ImpliedTestCase> {
     let json_data = include_str!("fixtures/ssf_implied.json");
-    let tests: Vec<Value> =
-        serde_json::from_str(json_data).expect("Failed to parse ssf_implied.json");
+    let tests: Vec<Value> = serde_json::from_str(json_data)
+        .expect("Failed to parse ssf_implied.json");
 
     let mut test_cases = Vec::new();
 
@@ -106,26 +106,11 @@ fn test_ssf_implied_formats() {
 
     println!("\n=== SSF Implied Formats Test Results ===");
     println!("Total:   {}", total);
-    println!(
-        "Passed:  {} ({:.1}%)",
-        passed,
-        100.0 * passed as f64 / total as f64
-    );
-    println!(
-        "Failed:  {} ({:.1}%)",
-        failed,
-        100.0 * failed as f64 / total as f64
-    );
-    println!(
-        "Skipped: {} ({:.1}%)",
-        skipped,
-        100.0 * skipped as f64 / total as f64
-    );
+    println!("Passed:  {} ({:.1}%)", passed, 100.0 * passed as f64 / total as f64);
+    println!("Failed:  {} ({:.1}%)", failed, 100.0 * failed as f64 / total as f64);
+    println!("Skipped: {} ({:.1}%)", skipped, 100.0 * skipped as f64 / total as f64);
 
     if failed > 0 {
-        println!(
-            "\nNote: {} tests failed. Working on improving compatibility.",
-            failed
-        );
+        println!("\nNote: {} tests failed. Working on improving compatibility.", failed);
     }
 }

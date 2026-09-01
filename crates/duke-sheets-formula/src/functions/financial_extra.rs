@@ -2579,6 +2579,7 @@ mod tests {
         assert_finite("=YIELDMAT(45474,45658,45292,0.08,98,0)");
     }
 
+
     #[test]
     fn test_euroconvert_same_currency() {
         // Same currency returns unchanged

@@ -41,11 +41,7 @@ fn build(with_image: bool) -> Workbook {
 
     ws.set_comment(
         "A1",
-        CellComment {
-            author: "Tester".to_string(),
-            text: "fixture comment".to_string(),
-            visible: false,
-        },
+        CellComment::new("Tester", "fixture comment"),
     )
     .unwrap();
 
@@ -67,25 +63,7 @@ fn build(with_image: bool) -> Workbook {
     ws.add_data_validation(dv);
 
     if with_image {
-        ws.add_image(duke_sheets_chart::EmbeddedImage {
-            id: 1,
-            name: "FixturePic".to_string(),
-            description: None,
-            anchor: duke_sheets_chart::DrawingAnchor::TwoCell {
-                from: duke_sheets_chart::CellMarker {
-                    col: 4,
-                    col_offset_emu: 0,
-                    row: 1,
-                    row_offset_emu: 0,
-                },
-                to: duke_sheets_chart::CellMarker {
-                    col: 6,
-                    col_offset_emu: 0,
-                    row: 4,
-                    row_offset_emu: 0,
-                },
-                edit_as: None,
-            },
+        let image = duke_sheets_chart::EmbeddedImage {
             format: duke_sheets_chart::ImageFormat::Png,
             media_path: String::new(),
             svg_media_path: None,
@@ -96,7 +74,27 @@ fn build(with_image: bool) -> Workbook {
             flip_v: false,
             data: TEST_PNG_1X1.to_vec(),
             svg_data: None,
-        });
+        };
+        let anchor = duke_sheets_chart::DrawingAnchor::TwoCell {
+            from: duke_sheets_chart::CellMarker {
+                col: 4,
+                col_offset_emu: 0,
+                row: 1,
+                row_offset_emu: 0,
+            },
+            to: duke_sheets_chart::CellMarker {
+                col: 6,
+                col_offset_emu: 0,
+                row: 4,
+                row_offset_emu: 0,
+            },
+            edit_as: None,
+        };
+        ws.add_drawing(
+            duke_sheets_core::DrawingObject::image(image)
+                .with_anchor(anchor)
+                .with_name("FixturePic"),
+        ).unwrap();
     }
 
     wb

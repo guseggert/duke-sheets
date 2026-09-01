@@ -4,70 +4,19 @@ use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
 use crate::error::{XlsbError, XlsbResult};
-use duke_sheets_core::style::{Color, FillStyle, Style};
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct ThemePalette {
-    pub(crate) colors: [(u8, u8, u8); 12],
-}
+pub(crate) use duke_sheets_core::style::ThemePalette;
 
-impl Default for ThemePalette {
-    fn default() -> Self {
-        Self {
-            colors: [
-                (255, 255, 255),
-                (0, 0, 0),
-                (238, 236, 225),
-                (31, 73, 125),
-                (79, 129, 189),
-                (192, 80, 77),
-                (155, 187, 89),
-                (128, 100, 162),
-                (75, 172, 198),
-                (247, 150, 70),
-                (0, 0, 255),
-                (128, 0, 128),
-            ],
-        }
+fn parse_ooxml_hex(hex: &str) -> Option<(u8, u8, u8)> {
+    let hex = hex.trim_start_matches('#');
+    if hex.len() < 6 {
+        return None;
     }
-}
-
-impl ThemePalette {
-    pub(crate) fn resolve_theme_color(&self, index: u8, tint: i8) -> (u8, u8, u8) {
-        let base = match index {
-            0..=9 => self.colors[index as usize],
-            _ => (0, 0, 0),
-        };
-        Self::apply_tint(base, tint)
-    }
-
-    fn apply_tint(color: (u8, u8, u8), tint: i8) -> (u8, u8, u8) {
-        let tint_float = tint as f64 / 100.0;
-
-        let apply = |c: u8| -> u8 {
-            let c = c as f64;
-            let result = if tint_float < 0.0 {
-                c * (1.0 + tint_float)
-            } else {
-                c + (255.0 - c) * tint_float
-            };
-            result.clamp(0.0, 255.0) as u8
-        };
-
-        (apply(color.0), apply(color.1), apply(color.2))
-    }
-
-    fn parse_ooxml_hex(hex: &str) -> Option<(u8, u8, u8)> {
-        let hex = hex.trim_start_matches('#');
-        if hex.len() < 6 {
-            return None;
-        }
-        let hex = if hex.len() == 8 { &hex[2..] } else { hex };
-        let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-        let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-        let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-        Some((r, g, b))
-    }
+    let hex = if hex.len() == 8 { &hex[2..] } else { hex };
+    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+    Some((r, g, b))
 }
 
 pub(crate) fn parse_theme_palette<R: Read>(reader: R) -> XlsbResult<ThemePalette> {
@@ -148,63 +97,16 @@ fn extract_theme_rgb_from_attrs(e: &quick_xml::events::BytesStart<'_>) -> Option
     }
 
     if let Some(v) = val {
-        if let Some(rgb) = ThemePalette::parse_ooxml_hex(&v) {
+        if let Some(rgb) = parse_ooxml_hex(&v) {
             return Some(rgb);
         }
     }
     if let Some(v) = last_clr {
-        if let Some(rgb) = ThemePalette::parse_ooxml_hex(&v) {
+        if let Some(rgb) = parse_ooxml_hex(&v) {
             return Some(rgb);
         }
     }
     None
-}
-
-pub(crate) fn resolve_style_theme_colors(style: &mut Style, theme: &ThemePalette) {
-    style.font.color = resolve_color_theme(style.font.color, theme);
-
-    match &mut style.fill {
-        FillStyle::None => {}
-        FillStyle::Solid { color } => {
-            *color = resolve_color_theme(*color, theme);
-        }
-        FillStyle::Pattern {
-            foreground,
-            background,
-            ..
-        } => {
-            *foreground = resolve_color_theme(*foreground, theme);
-            *background = resolve_color_theme(*background, theme);
-        }
-        FillStyle::Gradient { stops, .. } => {
-            for stop in stops {
-                stop.color = resolve_color_theme(stop.color, theme);
-            }
-        }
-    }
-
-    for edge in [
-        &mut style.border.left,
-        &mut style.border.right,
-        &mut style.border.top,
-        &mut style.border.bottom,
-        &mut style.border.diagonal,
-    ]
-    .into_iter()
-    .flatten()
-    {
-        edge.color = resolve_color_theme(edge.color, theme);
-    }
-}
-
-pub(crate) fn resolve_color_theme(color: Color, theme: &ThemePalette) -> Color {
-    match color {
-        Color::Theme { index, tint } => {
-            let (r, g, b) = theme.resolve_theme_color(index, tint);
-            Color::Rgb { r, g, b }
-        }
-        other => other,
-    }
 }
 
 #[cfg(test)]
@@ -237,89 +139,6 @@ mod tests {
 
         let palette = parse_theme_palette(Cursor::new(xml.as_bytes())).unwrap();
         assert_eq!(palette.colors[4], (0x11, 0x22, 0x33));
-        assert_eq!(palette.resolve_theme_color(4, 0), (0x11, 0x22, 0x33));
-    }
-
-    #[test]
-    fn resolve_color_theme_converts_to_rgb() {
-        let palette = ThemePalette::default();
-        let color = Color::Theme { index: 4, tint: 0 };
-        let resolved = resolve_color_theme(color, &palette);
-        assert_eq!(
-            resolved,
-            Color::Rgb {
-                r: 79,
-                g: 129,
-                b: 189
-            }
-        );
-    }
-
-    #[test]
-    fn resolve_color_theme_with_positive_tint() {
-        let palette = ThemePalette::default();
-        let color = Color::Theme { index: 4, tint: 50 };
-        let resolved = resolve_color_theme(color, &palette);
-        assert_eq!(
-            resolved,
-            Color::Rgb {
-                r: 167,
-                g: 192,
-                b: 222
-            }
-        );
-    }
-
-    #[test]
-    fn resolve_color_theme_with_negative_tint() {
-        let palette = ThemePalette::default();
-        let color = Color::Theme {
-            index: 4,
-            tint: -25,
-        };
-        let resolved = resolve_color_theme(color, &palette);
-        assert_eq!(
-            resolved,
-            Color::Rgb {
-                r: 59,
-                g: 96,
-                b: 141
-            }
-        );
-    }
-
-    #[test]
-    fn resolve_color_theme_passthrough_rgb() {
-        let palette = ThemePalette::default();
-        let color = Color::Rgb {
-            r: 10,
-            g: 20,
-            b: 30,
-        };
-        let resolved = resolve_color_theme(color, &palette);
-        assert_eq!(
-            resolved,
-            Color::Rgb {
-                r: 10,
-                g: 20,
-                b: 30
-            }
-        );
-    }
-
-    #[test]
-    fn resolve_style_theme_colors_font() {
-        let palette = ThemePalette::default();
-        let mut style = Style::default();
-        style.font.color = Color::Theme { index: 4, tint: 0 };
-        resolve_style_theme_colors(&mut style, &palette);
-        assert_eq!(
-            style.font.color,
-            Color::Rgb {
-                r: 79,
-                g: 129,
-                b: 189
-            }
-        );
+        assert_eq!(palette.resolve_theme(4, 0.0), (0x11, 0x22, 0x33));
     }
 }

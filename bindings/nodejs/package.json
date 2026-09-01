@@ -1,6 +1,6 @@
 {
   "name": "@dukelib/sheets",
-  "version": "0.1.24",
+  "version": "0.1.30",
   "description": "High-performance Excel file library for Node.js, powered by Rust",
   "main": "lib.js",
   "types": "index.d.ts",
@@ -42,8 +42,8 @@
   },
   "scripts": {
     "artifacts": "napi artifacts",
-    "build": "napi build --platform --release --js index.js --dts generated.d.ts",
-    "build:debug": "napi build --platform --js index.js --dts generated.d.ts",
+    "build": "napi build --platform --release --js index.js --dts generated.d.ts --no-const-enum",
+    "build:debug": "napi build --platform --js index.js --dts generated.d.ts --no-const-enum",
     "test": "vitest run",
     "version": "napi version"
   },

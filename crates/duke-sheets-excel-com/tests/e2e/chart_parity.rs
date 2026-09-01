@@ -159,7 +159,6 @@ fn build_chart_parity_workbook() -> Workbook {
     // 1. ColumnClustered
     let mut c = Chart::new(ChartType::ColumnClustered);
     c.title = Some("ColumnClustered".into());
-    c.anchor = default_anchor(row_cursor, row_cursor + row_step - 1);
     c.shape_properties = Some(fill_and_line("FAFBFC", "D9D9D9"));
     let mut revenue = sample_series("Data", "B");
     revenue.shape_properties = Some(solid_fill("112233"));
@@ -176,80 +175,72 @@ fn build_chart_parity_workbook() -> Workbook {
     val_axis.shape_properties = Some(line_fill("878787"));
     c.value_axis = Some(val_axis);
     c.legend = Some(Legend::new(LegendPosition::Bottom));
-    sheet.add_chart(c);
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 2. ColumnStacked
     let mut c = Chart::new(ChartType::ColumnStacked);
     c.title = Some("ColumnStacked".into());
-    c.anchor = default_anchor(row_cursor, row_cursor + row_step - 1);
     c.add_series(sample_series("Data", "B"));
     c.add_series(sample_series("Data", "C"));
     c.add_series(sample_series("Data", "D"));
-    sheet.add_chart(c);
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 3. ColumnPercentStacked
     let mut c = Chart::new(ChartType::ColumnPercentStacked);
     c.title = Some("ColumnPercentStacked".into());
-    c.anchor = default_anchor(row_cursor, row_cursor + row_step - 1);
     c.add_series(sample_series("Data", "B"));
     c.add_series(sample_series("Data", "C"));
-    sheet.add_chart(c);
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 4. BarClustered
     let mut c = Chart::new(ChartType::BarClustered);
     c.title = Some("BarClustered".into());
-    c.anchor = default_anchor(row_cursor, row_cursor + row_step - 1);
     c.add_series(sample_series("Data", "B"));
     c.add_series(sample_series("Data", "C"));
     c.legend = Some(Legend::new(LegendPosition::Right));
-    sheet.add_chart(c);
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 5. BarStacked
     let mut c = Chart::new(ChartType::BarStacked);
     c.title = Some("BarStacked".into());
-    c.anchor = default_anchor(row_cursor, row_cursor + row_step - 1);
     c.add_series(sample_series("Data", "B"));
     c.add_series(sample_series("Data", "C"));
-    sheet.add_chart(c);
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 6. BarPercentStacked
     let mut c = Chart::new(ChartType::BarPercentStacked);
     c.title = Some("BarPercentStacked".into());
-    c.anchor = default_anchor(row_cursor, row_cursor + row_step - 1);
     c.add_series(sample_series("Data", "B"));
     c.add_series(sample_series("Data", "C"));
-    sheet.add_chart(c);
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 7. Line
     let mut c = Chart::new(ChartType::Line);
     c.title = Some("Line".into());
-    c.anchor = default_anchor(row_cursor, row_cursor + row_step - 1);
     c.add_series(sample_series("Data", "B"));
     c.add_series(sample_series("Data", "C"));
     c.category_axis = Some(Axis::new());
     c.value_axis = Some(Axis::new());
-    sheet.add_chart(c);
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 8. LineStacked
     let mut c = Chart::new(ChartType::LineStacked);
     c.title = Some("LineStacked".into());
-    c.anchor = default_anchor(row_cursor, row_cursor + row_step - 1);
     c.add_series(sample_series("Data", "B"));
     c.add_series(sample_series("Data", "C"));
-    sheet.add_chart(c);
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 9. Pie
     let mut c = Chart::new(ChartType::Pie);
     c.title = Some("Pie".into());
-    c.anchor = default_anchor(row_cursor, row_cursor + row_step - 1);
     let mut s = sample_series("Data", "B");
     s.shape_properties = Some(solid_fill("112233"));
     s.data_points = vec![
@@ -274,81 +265,73 @@ fn build_chart_parity_workbook() -> Workbook {
     ];
     c.add_series(s);
     c.legend = Some(Legend::new(LegendPosition::Right));
-    sheet.add_chart(c);
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 10. PieExploded
     let mut c = Chart::new(ChartType::PieExploded);
     c.title = Some("PieExploded".into());
-    c.anchor = default_anchor(row_cursor, row_cursor + row_step - 1);
     let mut s = sample_series("Data", "B");
     s.explosion = Some(25); // must have explosion for Excel to preserve PieExploded
     c.add_series(s);
-    sheet.add_chart(c);
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 11. Doughnut
     let mut c = Chart::new(ChartType::Doughnut);
     c.title = Some("Doughnut".into());
-    c.anchor = default_anchor(row_cursor, row_cursor + row_step - 1);
     c.add_series(sample_series("Data", "B"));
     c.hole_size = Some(50);
-    sheet.add_chart(c);
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 12. Area
     let mut c = Chart::new(ChartType::Area);
     c.title = Some("Area".into());
-    c.anchor = default_anchor(row_cursor, row_cursor + row_step - 1);
     c.add_series(sample_series("Data", "B"));
     c.add_series(sample_series("Data", "C"));
-    sheet.add_chart(c);
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 13. AreaStacked
     let mut c = Chart::new(ChartType::AreaStacked);
     c.title = Some("AreaStacked".into());
-    c.anchor = default_anchor(row_cursor, row_cursor + row_step - 1);
     c.add_series(sample_series("Data", "B"));
     c.add_series(sample_series("Data", "C"));
-    sheet.add_chart(c);
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 14. AreaPercentStacked
     let mut c = Chart::new(ChartType::AreaPercentStacked);
     c.title = Some("AreaPercentStacked".into());
-    c.anchor = default_anchor(row_cursor, row_cursor + row_step - 1);
     c.add_series(sample_series("Data", "B"));
     c.add_series(sample_series("Data", "C"));
-    sheet.add_chart(c);
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 15. ScatterLines
     let mut c = Chart::new(ChartType::ScatterLines);
     c.title = Some("ScatterLines".into());
-    c.anchor = default_anchor(row_cursor, row_cursor + row_step - 1);
     let s = DataSeries::new(DataReference::formula("Data!$F$2:$F$7"))
         .with_name("Data!$F$1")
         .with_categories(DataReference::formula("Data!$E$2:$E$7"));
     c.add_series(s);
-    sheet.add_chart(c);
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 16. ScatterSmooth
     let mut c = Chart::new(ChartType::ScatterSmooth);
     c.title = Some("ScatterSmooth".into());
-    c.anchor = default_anchor(row_cursor, row_cursor + row_step - 1);
     let s = DataSeries::new(DataReference::formula("Data!$F$2:$F$7"))
         .with_name("Data!$F$1")
         .with_categories(DataReference::formula("Data!$E$2:$E$7"));
     c.add_series(s);
-    sheet.add_chart(c);
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 17. ScatterMarkers
     let mut c = Chart::new(ChartType::ScatterMarkers);
     c.title = Some("ScatterMarkers".into());
-    c.anchor = default_anchor(row_cursor, row_cursor + row_step - 1);
     let mut s = DataSeries::new(DataReference::formula("Data!$F$2:$F$7"))
         .with_name("Data!$F$1")
         .with_categories(DataReference::formula("Data!$E$2:$E$7"));
@@ -358,32 +341,29 @@ fn build_chart_parity_workbook() -> Workbook {
         ..Default::default()
     });
     c.add_series(s);
-    sheet.add_chart(c);
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 18. Bubble
     let mut c = Chart::new(ChartType::Bubble);
     c.title = Some("Bubble".into());
-    c.anchor = default_anchor(row_cursor, row_cursor + row_step - 1);
     let s = DataSeries::new(DataReference::formula("Data!$F$2:$F$7"))
         .with_categories(DataReference::formula("Data!$E$2:$E$7"));
     c.add_series(s);
-    sheet.add_chart(c);
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 19. Radar
     let mut c = Chart::new(ChartType::Radar);
     c.title = Some("Radar".into());
-    c.anchor = default_anchor(row_cursor, row_cursor + row_step - 1);
     c.add_series(sample_series("Data", "B"));
     c.add_series(sample_series("Data", "C"));
-    sheet.add_chart(c);
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 20. Stock (HLC)
     let mut c = Chart::new(ChartType::Stock);
     c.title = Some("Stock".into());
-    c.anchor = default_anchor(row_cursor, row_cursor + row_step - 1);
     for col in ["I", "J", "K"] {
         c.add_series(
             DataSeries::new(DataReference::formula(format!("Data!${col}$2:${col}$7")))
@@ -391,13 +371,12 @@ fn build_chart_parity_workbook() -> Workbook {
                 .with_categories(DataReference::formula("Data!$A$2:$A$7".to_string())),
         );
     }
-    sheet.add_chart(c);
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 21. Line with trendline + data labels
     let mut c = Chart::new(ChartType::Line);
     c.title = Some("Line+Trendline+Labels".into());
-    c.anchor = default_anchor(row_cursor, row_cursor + row_step - 1);
     let mut s = sample_series("Data", "B");
     s.trendline = Some(Trendline {
         trendline_type: TrendlineType::Linear,
@@ -416,21 +395,19 @@ fn build_chart_parity_workbook() -> Workbook {
         show_value: Some(true),
         ..Default::default()
     });
-    sheet.add_chart(c);
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
     row_cursor += row_step;
 
     // 22. Surface
     let mut c = Chart::new(ChartType::Surface);
     c.title = Some("Surface".into());
-    c.anchor = default_anchor(row_cursor, row_cursor + row_step - 1);
     c.add_series(sample_series("Data", "B"));
     c.add_series(sample_series("Data", "C"));
     c.add_series(sample_series("Data", "D"));
-    sheet.add_chart(c);
+    sheet.add_chart(c, default_anchor(row_cursor, row_cursor + row_step - 1)).unwrap();
 
     let mut cs_chart = Chart::new(ChartType::ColumnClustered);
     cs_chart.title = Some("ChartSheet: Column".into());
-    cs_chart.anchor = DrawingAnchor::default();
     cs_chart.add_series(sample_series("Data", "B"));
     cs_chart.add_series(sample_series("Data", "C"));
     cs_chart.legend = Some(Legend::new(LegendPosition::Bottom));
@@ -439,6 +416,7 @@ fn build_chart_parity_workbook() -> Workbook {
         chart: cs_chart,
         visibility: SheetVisibility::Visible,
         raw_drawing_objects: Vec::new(),
+        raw_drawing_rels: Vec::new(),
     })
     .unwrap();
 
@@ -464,8 +442,7 @@ fn chart_roundtrip_through_excel() {
     // Collect chart types and titles before roundtrip
     let types_before: Vec<(ChartType, Option<String>)> = ws
         .charts()
-        .iter()
-        .map(|c| (c.chart_type.clone(), c.title.clone()))
+        .map(|c| (c.payload.chart_type.clone(), c.payload.title.clone()))
         .collect();
 
     // Roundtrip through real Excel
@@ -541,11 +518,12 @@ fn chart_roundtrip_through_excel() {
         assert_solid_fill(&point.shape_properties, expected, ctx);
     }
 
-    let charts = ws2.charts();
-    let orig_charts = wb.worksheet(0).unwrap().charts();
+    let charts: Vec<_> = ws2.charts().collect();
+    let orig_charts: Vec<_> = wb.worksheet(0).unwrap().charts().collect();
 
-    for (i, c) in charts.iter().enumerate() {
-        let orig = &orig_charts[i];
+    for (i, drawn) in charts.iter().enumerate() {
+        let c = drawn.payload;
+        let orig = orig_charts[i].payload;
         let label = orig.title.as_deref().unwrap_or("?");
 
         // Chart type (ScatterMarkers↔ScatterLines equivalence)
@@ -598,7 +576,7 @@ fn chart_roundtrip_through_excel() {
                 to: orig_to,
                 ..
             },
-        ) = (&c.anchor, &orig.anchor)
+        ) = (&drawn.object.unwrap().anchor, &orig_charts[i].object.unwrap().anchor)
         {
             assert_eq!(
                 from.col, orig_from.col,
@@ -612,8 +590,8 @@ fn chart_roundtrip_through_excel() {
             assert_eq!(to.row, orig_to.row, "chart {i} ({label}) anchor to_row");
         } else {
             assert_eq!(
-                std::mem::discriminant(&c.anchor),
-                std::mem::discriminant(&orig.anchor),
+                std::mem::discriminant(&drawn.object.unwrap().anchor),
+                std::mem::discriminant(&orig_charts[i].object.unwrap().anchor),
                 "chart {i} ({label}) anchor type mismatch"
             );
         }
@@ -621,7 +599,7 @@ fn chart_roundtrip_through_excel() {
 
     // 0: ColumnClustered - axis titles + legend
     {
-        let c = &charts[0];
+        let c = charts[0].payload;
         let cat_ax = c
             .category_axis
             .as_ref()
@@ -672,11 +650,15 @@ fn chart_roundtrip_through_excel() {
     }
 
     // 3: BarClustered - legend position
-    assert_legend_pos(&charts[3], LegendPosition::Right, "chart 3 (BarClustered)");
+    assert_legend_pos(
+        charts[3].payload,
+        LegendPosition::Right,
+        "chart 3 (BarClustered)",
+    );
 
     // 6: Line - axes present (no titles, just existence)
     {
-        let c = &charts[6];
+        let c = charts[6].payload;
         assert!(
             c.category_axis.is_some(),
             "chart 6 (Line) missing category_axis"
@@ -686,7 +668,7 @@ fn chart_roundtrip_through_excel() {
 
     // 8: Pie - legend=Right, no axes
     {
-        let c = &charts[8];
+        let c = charts[8].payload;
         assert_legend_pos(c, LegendPosition::Right, "chart 8 (Pie)");
         assert!(
             c.category_axis.is_none(),
@@ -708,7 +690,7 @@ fn chart_roundtrip_through_excel() {
 
     // 9: PieExploded - explosion=25
     {
-        let explosion = charts[9].series[0]
+        let explosion = charts[9].payload.series[0]
             .explosion
             .expect("chart 9 (PieExploded) series[0] missing explosion");
         assert_eq!(explosion, 25, "chart 9 explosion");
@@ -717,6 +699,7 @@ fn chart_roundtrip_through_excel() {
     // 10: Doughnut - hole_size=50
     {
         let hole = charts[10]
+            .payload
             .hole_size
             .expect("chart 10 (Doughnut) missing hole_size");
         assert_eq!(hole, 50, "chart 10 hole_size");
@@ -724,7 +707,7 @@ fn chart_roundtrip_through_excel() {
 
     // 14-16: Scatter variants - series[0].name = "Data!$F$1"
     for i in [14, 15, 16] {
-        let c = &charts[i];
+        let c = charts[i].payload;
         assert_eq!(
             c.series[0].name.as_deref(),
             Some("Data!$F$1"),
@@ -735,7 +718,7 @@ fn chart_roundtrip_through_excel() {
 
     // 16: ScatterMarkers - marker symbol + size
     {
-        let marker = charts[16].series[0]
+        let marker = charts[16].payload.series[0]
             .marker
             .as_ref()
             .expect("chart 16 (ScatterMarkers) series[0] missing marker");
@@ -749,7 +732,7 @@ fn chart_roundtrip_through_excel() {
 
     // 19: Stock - 3 series with specific names
     {
-        let c = &charts[19];
+        let c = charts[19].payload;
         let expected_names = ["Data!$I$1", "Data!$J$1", "Data!$K$1"];
         for (si, expected) in expected_names.iter().enumerate() {
             assert_eq!(
@@ -762,7 +745,7 @@ fn chart_roundtrip_through_excel() {
 
     // 20: Line+Trendline+Labels - trendline type + data_labels.show_value
     {
-        let c = &charts[20];
+        let c = charts[20].payload;
         let trendline = c.series[0]
             .trendline
             .as_ref()
@@ -823,11 +806,30 @@ fn chart_roundtrip_through_excel() {
     );
 }
 
+/// Path to `data/chart-parity.xlsx`, driving Excel to build it if it isn't
+/// there yet. Generated once per process; `data/` is gitignored, so the
+/// file is a local build artifact rather than a checked-in fixture.
+pub fn chart_parity_fixture() -> PathBuf {
+    static PATH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    PATH.get_or_init(|| {
+        let path = repo_fixture_path();
+        if !path.exists() {
+            generate_chart_parity_spreadsheet();
+        }
+        assert!(
+            path.exists(),
+            "chart parity fixture still missing after generation: {}",
+            path.display()
+        );
+        path
+    })
+    .clone()
+}
+
 /// Generate a chart parity fixture via Excel COM.
 ///
 /// Excel creates charts from scratch, giving us ground-truth chart XML.
 /// Saved to `data/chart-parity.xlsx` for offline verification.
-#[test]
 fn generate_chart_parity_spreadsheet() {
     let bridge = excel_bridge();
     let fixture = temp_fixture();
@@ -974,13 +976,20 @@ fn chart_type_equivalent(a: &ChartType, b: &ChartType) -> bool {
     )
 }
 
+fn repo_fixture_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(REPO_DATA_DIR)
+        .join("chart-parity.xlsx")
+}
+
 fn copy_fixture_into_repo(
     host_path: &std::path::Path,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()?;
-    let dest = repo_root.join(REPO_DATA_DIR).join("chart-parity.xlsx");
+    let dest = repo_fixture_path();
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     std::fs::copy(host_path, &dest)?;
     println!("Copied chart parity fixture to {}", dest.display());
     Ok(())
@@ -1000,26 +1009,28 @@ fn chart_minimal_excel_open() {
 
     let mut chart = Chart::new(ChartType::ColumnClustered);
     chart.title = Some("Test".into());
-    chart.anchor = DrawingAnchor::TwoCell {
-        from: CellMarker {
-            col: 3,
-            col_offset_emu: 0,
-            row: 0,
-            row_offset_emu: 0,
-        },
-        to: CellMarker {
-            col: 10,
-            col_offset_emu: 0,
-            row: 15,
-            row_offset_emu: 0,
-        },
-        edit_as: None,
-    };
     chart.add_series(
         DataSeries::new(DataReference::formula("Sheet1!$B$2:$B$3".to_string()))
             .with_categories(DataReference::formula("Sheet1!$A$2:$A$3".to_string())),
     );
-    sheet.add_chart(chart);
+    sheet.add_chart(
+        chart,
+        DrawingAnchor::TwoCell {
+            from: CellMarker {
+                col: 3,
+                col_offset_emu: 0,
+                row: 0,
+                row_offset_emu: 0,
+            },
+            to: CellMarker {
+                col: 10,
+                col_offset_emu: 0,
+                row: 15,
+                row_offset_emu: 0,
+            },
+            edit_as: None,
+        },
+    ).unwrap();
 
     let fixture = temp_fixture();
     let mut buf = Vec::new();
@@ -1147,13 +1158,12 @@ fn chart_types_bisect() {
                 let sheet = wb.worksheet_mut(0).unwrap();
                 let mut c = Chart::new(ChartType::ColumnClustered);
                 c.title = Some("ColumnClustered".into());
-                c.anchor = default_anchor(0, 15);
                 c.add_series(sample_series("Data", "B"));
                 c.add_series(sample_series("Data", "C"));
                 c.category_axis = Some(Axis::new().with_title("Month"));
                 c.value_axis = Some(Axis::new().with_title("Value"));
                 c.legend = Some(Legend::new(LegendPosition::Bottom));
-                sheet.add_chart(c);
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1162,11 +1172,10 @@ fn chart_types_bisect() {
                 let sheet = wb.worksheet_mut(0).unwrap();
                 let mut c = Chart::new(ChartType::ColumnStacked);
                 c.title = Some("ColumnStacked".into());
-                c.anchor = default_anchor(0, 15);
                 c.add_series(sample_series("Data", "B"));
                 c.add_series(sample_series("Data", "C"));
                 c.add_series(sample_series("Data", "D"));
-                sheet.add_chart(c);
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1175,10 +1184,9 @@ fn chart_types_bisect() {
                 let sheet = wb.worksheet_mut(0).unwrap();
                 let mut c = Chart::new(ChartType::ColumnPercentStacked);
                 c.title = Some("ColumnPercentStacked".into());
-                c.anchor = default_anchor(0, 15);
                 c.add_series(sample_series("Data", "B"));
                 c.add_series(sample_series("Data", "C"));
-                sheet.add_chart(c);
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1187,11 +1195,10 @@ fn chart_types_bisect() {
                 let sheet = wb.worksheet_mut(0).unwrap();
                 let mut c = Chart::new(ChartType::BarClustered);
                 c.title = Some("BarClustered".into());
-                c.anchor = default_anchor(0, 15);
                 c.add_series(sample_series("Data", "B"));
                 c.add_series(sample_series("Data", "C"));
                 c.legend = Some(Legend::new(LegendPosition::Right));
-                sheet.add_chart(c);
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1200,10 +1207,9 @@ fn chart_types_bisect() {
                 let sheet = wb.worksheet_mut(0).unwrap();
                 let mut c = Chart::new(ChartType::BarStacked);
                 c.title = Some("BarStacked".into());
-                c.anchor = default_anchor(0, 15);
                 c.add_series(sample_series("Data", "B"));
                 c.add_series(sample_series("Data", "C"));
-                sheet.add_chart(c);
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1212,10 +1218,9 @@ fn chart_types_bisect() {
                 let sheet = wb.worksheet_mut(0).unwrap();
                 let mut c = Chart::new(ChartType::BarPercentStacked);
                 c.title = Some("BarPercentStacked".into());
-                c.anchor = default_anchor(0, 15);
                 c.add_series(sample_series("Data", "B"));
                 c.add_series(sample_series("Data", "C"));
-                sheet.add_chart(c);
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1224,12 +1229,11 @@ fn chart_types_bisect() {
                 let sheet = wb.worksheet_mut(0).unwrap();
                 let mut c = Chart::new(ChartType::Line);
                 c.title = Some("Line".into());
-                c.anchor = default_anchor(0, 15);
                 c.add_series(sample_series("Data", "B"));
                 c.add_series(sample_series("Data", "C"));
                 c.category_axis = Some(Axis::new());
                 c.value_axis = Some(Axis::new());
-                sheet.add_chart(c);
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1238,10 +1242,9 @@ fn chart_types_bisect() {
                 let sheet = wb.worksheet_mut(0).unwrap();
                 let mut c = Chart::new(ChartType::LineStacked);
                 c.title = Some("LineStacked".into());
-                c.anchor = default_anchor(0, 15);
                 c.add_series(sample_series("Data", "B"));
                 c.add_series(sample_series("Data", "C"));
-                sheet.add_chart(c);
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1250,10 +1253,9 @@ fn chart_types_bisect() {
                 let sheet = wb.worksheet_mut(0).unwrap();
                 let mut c = Chart::new(ChartType::Pie);
                 c.title = Some("Pie".into());
-                c.anchor = default_anchor(0, 15);
                 c.add_series(sample_series("Data", "B"));
                 c.legend = Some(Legend::new(LegendPosition::Right));
-                sheet.add_chart(c);
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1262,9 +1264,8 @@ fn chart_types_bisect() {
                 let sheet = wb.worksheet_mut(0).unwrap();
                 let mut c = Chart::new(ChartType::PieExploded);
                 c.title = Some("PieExploded".into());
-                c.anchor = default_anchor(0, 15);
                 c.add_series(sample_series("Data", "B"));
-                sheet.add_chart(c);
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1273,10 +1274,9 @@ fn chart_types_bisect() {
                 let sheet = wb.worksheet_mut(0).unwrap();
                 let mut c = Chart::new(ChartType::Doughnut);
                 c.title = Some("Doughnut".into());
-                c.anchor = default_anchor(0, 15);
                 c.add_series(sample_series("Data", "B"));
                 c.hole_size = Some(50);
-                sheet.add_chart(c);
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1285,10 +1285,9 @@ fn chart_types_bisect() {
                 let sheet = wb.worksheet_mut(0).unwrap();
                 let mut c = Chart::new(ChartType::Area);
                 c.title = Some("Area".into());
-                c.anchor = default_anchor(0, 15);
                 c.add_series(sample_series("Data", "B"));
                 c.add_series(sample_series("Data", "C"));
-                sheet.add_chart(c);
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1297,10 +1296,9 @@ fn chart_types_bisect() {
                 let sheet = wb.worksheet_mut(0).unwrap();
                 let mut c = Chart::new(ChartType::AreaStacked);
                 c.title = Some("AreaStacked".into());
-                c.anchor = default_anchor(0, 15);
                 c.add_series(sample_series("Data", "B"));
                 c.add_series(sample_series("Data", "C"));
-                sheet.add_chart(c);
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1309,10 +1307,9 @@ fn chart_types_bisect() {
                 let sheet = wb.worksheet_mut(0).unwrap();
                 let mut c = Chart::new(ChartType::AreaPercentStacked);
                 c.title = Some("AreaPercentStacked".into());
-                c.anchor = default_anchor(0, 15);
                 c.add_series(sample_series("Data", "B"));
                 c.add_series(sample_series("Data", "C"));
-                sheet.add_chart(c);
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1321,12 +1318,11 @@ fn chart_types_bisect() {
                 let sheet = wb.worksheet_mut(0).unwrap();
                 let mut c = Chart::new(ChartType::ScatterLines);
                 c.title = Some("ScatterLines".into());
-                c.anchor = default_anchor(0, 15);
                 let s = DataSeries::new(DataReference::formula("Data!$F$2:$F$7"))
                     .with_name("Data!$F$1")
                     .with_categories(DataReference::formula("Data!$E$2:$E$7"));
                 c.add_series(s);
-                sheet.add_chart(c);
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1335,12 +1331,11 @@ fn chart_types_bisect() {
                 let sheet = wb.worksheet_mut(0).unwrap();
                 let mut c = Chart::new(ChartType::ScatterSmooth);
                 c.title = Some("ScatterSmooth".into());
-                c.anchor = default_anchor(0, 15);
                 let s = DataSeries::new(DataReference::formula("Data!$F$2:$F$7"))
                     .with_name("Data!$F$1")
                     .with_categories(DataReference::formula("Data!$E$2:$E$7"));
                 c.add_series(s);
-                sheet.add_chart(c);
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1349,7 +1344,6 @@ fn chart_types_bisect() {
                 let sheet = wb.worksheet_mut(0).unwrap();
                 let mut c = Chart::new(ChartType::ScatterMarkers);
                 c.title = Some("ScatterMarkers".into());
-                c.anchor = default_anchor(0, 15);
                 let mut s = DataSeries::new(DataReference::formula("Data!$F$2:$F$7"))
                     .with_name("Data!$F$1")
                     .with_categories(DataReference::formula("Data!$E$2:$E$7"));
@@ -1359,7 +1353,7 @@ fn chart_types_bisect() {
                     ..Default::default()
                 });
                 c.add_series(s);
-                sheet.add_chart(c);
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1368,11 +1362,10 @@ fn chart_types_bisect() {
                 let sheet = wb.worksheet_mut(0).unwrap();
                 let mut c = Chart::new(ChartType::Bubble);
                 c.title = Some("Bubble".into());
-                c.anchor = default_anchor(0, 15);
                 let s = DataSeries::new(DataReference::formula("Data!$F$2:$F$7"))
                     .with_categories(DataReference::formula("Data!$E$2:$E$7"));
                 c.add_series(s);
-                sheet.add_chart(c);
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1381,10 +1374,9 @@ fn chart_types_bisect() {
                 let sheet = wb.worksheet_mut(0).unwrap();
                 let mut c = Chart::new(ChartType::Radar);
                 c.title = Some("Radar".into());
-                c.anchor = default_anchor(0, 15);
                 c.add_series(sample_series("Data", "B"));
                 c.add_series(sample_series("Data", "C"));
-                sheet.add_chart(c);
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1393,7 +1385,6 @@ fn chart_types_bisect() {
                 let sheet = wb.worksheet_mut(0).unwrap();
                 let mut c = Chart::new(ChartType::Stock);
                 c.title = Some("Stock".into());
-                c.anchor = default_anchor(0, 15);
                 for col in ["I", "J", "K"] {
                     c.add_series(
                         DataSeries::new(DataReference::formula(format!("Data!${col}$2:${col}$7")))
@@ -1401,7 +1392,7 @@ fn chart_types_bisect() {
                             .with_categories(DataReference::formula("Data!$A$2:$A$7")),
                     );
                 }
-                sheet.add_chart(c);
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1410,7 +1401,6 @@ fn chart_types_bisect() {
                 let sheet = wb.worksheet_mut(0).unwrap();
                 let mut c = Chart::new(ChartType::Line);
                 c.title = Some("Line+Trendline+Labels".into());
-                c.anchor = default_anchor(0, 15);
                 let mut s = sample_series("Data", "B");
                 s.trendline = Some(Trendline {
                     trendline_type: TrendlineType::Linear,
@@ -1429,7 +1419,7 @@ fn chart_types_bisect() {
                     show_value: Some(true),
                     ..Default::default()
                 });
-                sheet.add_chart(c);
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
         ChartSpec {
@@ -1438,11 +1428,10 @@ fn chart_types_bisect() {
                 let sheet = wb.worksheet_mut(0).unwrap();
                 let mut c = Chart::new(ChartType::Surface);
                 c.title = Some("Surface".into());
-                c.anchor = default_anchor(0, 15);
                 c.add_series(sample_series("Data", "B"));
                 c.add_series(sample_series("Data", "C"));
                 c.add_series(sample_series("Data", "D"));
-                sheet.add_chart(c);
+                sheet.add_chart(c, default_anchor(0, 15)).unwrap();
             },
         },
     ];
@@ -1477,7 +1466,6 @@ fn chart_types_bisect() {
             }
             Err(e) => (false, format!("open_workbook error: {e}")),
         };
-        drop(excel);
 
         results.push((spec.name, pass, detail));
         cleanup_fixture(&fixture);
@@ -1517,6 +1505,158 @@ fn chart_types_bisect() {
             failed.join(", ")
         );
     }
+}
+
+/// Excel authors a waterfall chartEx itself; our reader must model it.
+///
+/// The other chartEx coverage reads files from a corpus that is absent
+/// on most machines, so it silently returns and proves nothing. Excel
+/// building the chart makes the ground truth available anywhere the VM
+/// runs, and pins the layout id, dimensions and axes we parse.
+// features: ChartEx: Waterfall
+#[test]
+fn chart_ex_waterfall_authored_by_excel_reads_back() {
+    let bridge = excel_bridge();
+    let fixture = temp_fixture();
+    ensure_vm_temp_dir();
+
+    {
+        let excel = bridge.lock().unwrap();
+        let wb = excel.create_workbook().expect("create workbook");
+        wb.set_cell_value("A1", "Cat").unwrap();
+        wb.set_cell_value("B1", "Val").unwrap();
+        for (i, (cat, val)) in [("a", 1.0), ("b", 2.0), ("c", 3.0)].iter().enumerate() {
+            let row = i as u32 + 2;
+            wb.set_cell_value(&cell_addr(row - 1, 0), *cat).unwrap();
+            wb.set_cell_value(&cell_addr(row - 1, 1), *val).unwrap();
+        }
+
+        let ws = excel
+            .navigate(
+                wb.handle(),
+                vec![excel_com_protocol::SheetRef::Index(0).to_chain_step()],
+            )
+            .expect("navigate sheet");
+
+        // xlWaterfall
+        let shape = excel
+            .invoke(
+                ws,
+                vec![duke_sheets_excel_com::ChainStep::Property("Shapes".into())],
+                "AddChart2",
+                vec![
+                    serde_json::Value::from(-1),
+                    serde_json::Value::from(119),
+                    serde_json::Value::from(300.0),
+                    serde_json::Value::from(20.0),
+                    serde_json::Value::from(400.0),
+                    serde_json::Value::from(300.0),
+                ],
+            )
+            .expect("AddChart2 waterfall");
+
+        let Some(excel_com_protocol::ResponseData::Handle { handle }) = shape else {
+            panic!("AddChart2 did not return a shape handle");
+        };
+        let chart = excel
+            .navigate(
+                handle,
+                vec![duke_sheets_excel_com::ChainStep::Property("Chart".into())],
+            )
+            .expect("navigate Chart");
+        let rng = excel
+            .navigate(
+                wb.handle(),
+                vec![
+                    excel_com_protocol::SheetRef::Index(0).to_chain_step(),
+                    duke_sheets_excel_com::ChainStep::Indexed(
+                        "Range".into(),
+                        serde_json::Value::from("A1:B4"),
+                    ),
+                ],
+            )
+            .expect("navigate Range");
+        excel
+            .invoke(
+                chart,
+                vec![],
+                "SetSourceData",
+                vec![serde_json::json!({"$ref": rng})],
+            )
+            .expect("SetSourceData");
+        let _ = excel.release(rng);
+        let _ = excel.release(chart);
+        let _ = excel.release(handle);
+        let _ = excel.release(ws);
+
+        wb.save(&fixture.vm_path).expect("save");
+        wb.close().expect("close");
+    }
+
+    pull_file_from_vm(&fixture);
+    let wb = duke_sheets_core::Workbook::from(
+        duke_sheets_xlsx::XlsxReader::read_file(&fixture.host_path).expect("read"),
+    );
+
+    let chart = wb
+        .worksheet(0)
+        .expect("sheet")
+        .charts_ex()
+        .next()
+        .expect("Excel's waterfall must be read as a chartEx")
+        .payload;
+
+    let series = chart.plot_area.series.first().expect("one series");
+    assert_eq!(series.layout, duke_sheets_chart::ChartExLayout::Waterfall);
+    assert_eq!(
+        chart.data.len(),
+        1,
+        "waterfall has a single cx:data block, got {:?}",
+        chart.data.len()
+    );
+    assert_eq!(
+        chart.plot_area.axes.len(),
+        2,
+        "waterfall has a category and a value axis"
+    );
+    // Excel writes the wrapper empty for a waterfall with no subtotal
+    // bars; an absent wrapper is a different document.
+    assert_eq!(
+        series
+            .layout_properties
+            .as_ref()
+            .and_then(|l| l.subtotals.clone()),
+        Some(Vec::new()),
+        "Excel emits a present but empty cx:subtotals"
+    );
+
+    // Excel's own chartEx carries subtrees we keep as bytes rather than
+    // interpret - txPr, extLst, rich text. Writing the model back and
+    // having Excel reopen it is the only check that our replay of those
+    // is something Excel still accepts, so the round trip runs here
+    // rather than asserting on our own reader alone.
+    let mut out = Vec::new();
+    duke_sheets_xlsx::XlsxWriter::write(&wb, std::io::Cursor::new(&mut out))
+        .expect("write the chart Excel authored back out");
+
+    let reopened = temp_fixture();
+    std::fs::write(&reopened.host_path, &out).unwrap();
+    push_file_to_vm(&reopened);
+    {
+        let excel = bridge.lock().unwrap();
+        let opened = excel
+            .open_workbook(&reopened.vm_path)
+            .expect("Excel must reopen the chart it authored after a round trip");
+        let name = opened.name().unwrap_or_default();
+        assert!(
+            !name.contains("Repaired"),
+            "Excel repaired our replay of its own chartEx: {name}"
+        );
+        opened.close().expect("close");
+    }
+    cleanup_fixture(&reopened);
+
+    cleanup_fixture(&fixture);
 }
 
 /// Read a corpus chartEx file, write it back through duke-sheets, push to

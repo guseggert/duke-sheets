@@ -25,8 +25,11 @@ use crate::error::{XlsbError, XlsbResult};
 
 #[derive(Debug, Clone)]
 pub(crate) struct SheetRel {
+    /// Target exactly as in the rels XML (relative or absolute).
     pub target: String,
     pub rel_type: String,
+    /// TargetMode="External".
+    pub external: bool,
 }
 
 pub struct XlsbReader;
@@ -42,7 +45,7 @@ impl XlsbReader {
             .map_err(|e| XlsbError::InvalidFormat(format!("not a valid ZIP: {e}")))?;
 
         let styles_data = styles::read_styles(&mut archive)?;
-        let mut cell_styles = styles_data.styles;
+        let cell_styles = styles_data.styles;
         let dxf_styles = styles_data.dxf_styles;
         let shared_strings = shared_strings::read_shared_strings(&mut archive, &styles_data.fonts)?;
         let relationships = workbook::read_relationships(&mut archive)?;
@@ -62,16 +65,21 @@ impl XlsbReader {
             .theme_path
             .as_deref()
             .unwrap_or("xl/theme/theme1.xml");
+        // Style colors keep their Color::Theme form; consumers
+        // resolve display RGB through Workbook::resolve_color.
+        let mut theme_palette = None;
         if let Ok(file) = archive.by_name(theme_path) {
             if let Ok(palette) = theme::parse_theme_palette(file) {
-                for style in &mut cell_styles {
-                    theme::resolve_style_theme_colors(style, &palette);
-                }
+                theme_palette = Some(palette);
             }
         }
 
         let mut wb = Workbook::empty();
+        if let Some(palette) = theme_palette {
+            wb.set_theme_palette(palette);
+        }
         wb.settings_mut().date_1904 = props.date_1904;
+        wb.set_workbook_protection(props.workbook_protection.clone());
         for connection in data_connections {
             wb.add_data_connection(connection)?;
         }
@@ -139,23 +147,26 @@ impl XlsbReader {
                 )?;
             }
 
-            if let Ok(Some(dr)) =
-                drawing::read_drawing_charts(&mut archive, &entry.path, &sheet_rels)
-            {
-                if !dr.bundle.is_empty() {
-                    wb.worksheet_mut(i)
-                        .unwrap()
-                        .raw_drawing_objects
-                        .push(dr.bundle.encode());
-                }
-                let ws = wb.worksheet_mut(i).unwrap();
-                for c in dr.charts {
-                    ws.add_chart(c);
-                }
-                for cx in dr.charts_ex {
-                    ws.add_chart_ex(cx);
-                }
-            }
+            // Legacy VML part: control state plus the comment/control
+            // z-order sequence.
+            let vml_path = sheet_rels
+                .values()
+                .find(|r| r.rel_type.ends_with("/vmlDrawing"))
+                .map(|r| resolve_rel_path(&entry.path, &r.target));
+            let vml_shapes = vml_path
+                .and_then(|vml_path| {
+                    let mut f = archive.by_name(&vml_path).ok()?;
+                    let mut bytes = Vec::new();
+                    std::io::Read::read_to_end(&mut f, &mut bytes).ok()?;
+                    Some(duke_sheets_vml::parse_vml_shapes(&bytes))
+                })
+                .unwrap_or_default();
+
+            // Drawing-part entries in document order (twins matched
+            // to their VML controls), then comments spliced by the
+            // VML shape sequence.
+            let natives =
+                drawing::merge_sheet_drawings(&mut archive, &entry.path, &sheet_rels, &vml_shapes)?;
 
             let ws_num = i + 1;
 
@@ -164,7 +175,9 @@ impl XlsbReader {
                 .find(|r| r.rel_type.ends_with("/comments"))
                 .map(|r| resolve_rel_path(&entry.path, &r.target))
                 .unwrap_or_else(|| format!("xl/comments{}.bin", ws_num));
-            comments::read_comments(&mut archive, &comments_path, wb.worksheet_mut(i).unwrap())?;
+            let comments = comments::read_comments_list(&mut archive, &comments_path)?;
+            let objects = duke_sheets_vml::splice_comments(natives, comments, &vml_shapes);
+            wb.worksheet_mut(i).unwrap().drawings_mut().extend(objects);
 
             let mut table_paths: Vec<String> = sheet_rels
                 .values()
@@ -355,16 +368,27 @@ fn read_sheet_rels<R: Read + Seek>(
                 let mut id = String::new();
                 let mut target = String::new();
                 let mut rel_type = String::new();
+                let mut target_mode = String::new();
                 for attr in e.attributes().flatten() {
                     match attr.key.as_ref() {
                         b"Id" => id = String::from_utf8_lossy(&attr.value).into_owned(),
                         b"Target" => target = String::from_utf8_lossy(&attr.value).into_owned(),
                         b"Type" => rel_type = String::from_utf8_lossy(&attr.value).into_owned(),
+                        b"TargetMode" => {
+                            target_mode = String::from_utf8_lossy(&attr.value).into_owned()
+                        }
                         _ => {}
                     }
                 }
                 if !id.is_empty() && !target.is_empty() {
-                    rels.insert(id, SheetRel { target, rel_type });
+                    rels.insert(
+                        id,
+                        SheetRel {
+                            target,
+                            rel_type,
+                            external: target_mode == "External",
+                        },
+                    );
                 }
             }
             Ok(Event::Eof) => break,
