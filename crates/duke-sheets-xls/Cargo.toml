@@ -12,7 +12,7 @@ duke-sheets-core.workspace = true
 duke-sheets-formula.workspace = true
 duke-sheets-chart.workspace = true
 duke-sheets-crypto.workspace = true
-duke-sheets-pivot = { workspace = true, features = ["format-plan"] }
+duke-sheets-pivot.workspace = true
 ssfmt.workspace = true
 thiserror.workspace = true
 chrono.workspace = true

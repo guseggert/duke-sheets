@@ -13,8 +13,6 @@ use crate::transform::*;
 /// This is not an authoring API. It exposes an immutable, format-neutral view
 /// of resolved pivot cache data while keeping the mutable runtime caches inside
 /// this crate.
-#[cfg(any(feature = "format-plan", test))]
-#[doc(hidden)]
 #[derive(Debug, Clone)]
 pub struct FormatPivotPlan {
     /// Planned cache parts, numbered from 1 in package/write order.
@@ -24,8 +22,6 @@ pub struct FormatPivotPlan {
 }
 
 /// A resolved pivot cache for file-format writers.
-#[cfg(any(feature = "format-plan", test))]
-#[doc(hidden)]
 #[derive(Debug, Clone)]
 pub struct FormatPivotCache {
     /// One-based cache number used for part names.
@@ -38,8 +34,8 @@ pub struct FormatPivotCache {
     ///
     /// Excel stores consolidation caches with generated field names such as
     /// `Row`, `Column`, and `Value`, while callers may author against source
-    /// headers. This hidden mapping keeps that translation out of the public
-    /// pivot API.
+    /// headers. This mapping keeps that translation out of the semantic pivot
+    /// model.
     pub field_aliases: Vec<(String, String)>,
     /// Calculated items registered in this transformed cache.
     pub calculated_items: Vec<PivotCalculatedItem>,
@@ -55,7 +51,6 @@ pub struct FormatPivotCache {
     pub missing_items_limit: Option<u32>,
 }
 
-#[cfg(any(feature = "format-plan", test))]
 impl FormatPivotCache {
     /// Find a field index by case-insensitive cache field name.
     pub fn field_index(&self, name: &str) -> Option<usize> {
@@ -76,8 +71,6 @@ impl FormatPivotCache {
 }
 
 /// Source descriptor for a planned pivot cache.
-#[cfg(any(feature = "format-plan", test))]
-#[doc(hidden)]
 #[derive(Debug, Clone)]
 pub enum FormatPivotSource {
     /// Worksheet range or table source.
@@ -120,8 +113,6 @@ pub enum FormatPivotSource {
 }
 
 /// A resolved cache field for file-format writers.
-#[cfg(any(feature = "format-plan", test))]
-#[doc(hidden)]
 #[derive(Debug, Clone)]
 pub struct FormatPivotCacheField {
     /// Cache field name.
@@ -137,8 +128,6 @@ pub struct FormatPivotCacheField {
 }
 
 /// A planned pivot table part for file-format writers.
-#[cfg(any(feature = "format-plan", test))]
-#[doc(hidden)]
 #[derive(Debug, Clone)]
 pub struct FormatPivotTable {
     /// Zero-based worksheet index containing the pivot table.
@@ -151,8 +140,8 @@ pub struct FormatPivotTable {
     pub cache_num: usize,
     /// Source row indexes visible after pivot item filters.
     ///
-    /// `None` means every source row is visible. This remains a hidden
-    /// file-format planning detail, not a public cache-authoring API.
+    /// `None` means every source row is visible. This is a file-format planning
+    /// detail, not a cache-authoring API.
     pub visible_rows: Option<Vec<usize>>,
     /// Precomputed axis item tuples in planned cache item-id space.
     ///
@@ -162,8 +151,6 @@ pub struct FormatPivotTable {
 }
 
 /// Precomputed row/column axis item tuples for file-format writers.
-#[cfg(any(feature = "format-plan", test))]
-#[doc(hidden)]
 #[derive(Debug, Clone, Default)]
 pub struct FormatPivotAxisTuples {
     /// Row-axis item tuples when they are format-neutral.
@@ -172,14 +159,48 @@ pub struct FormatPivotAxisTuples {
     pub columns: Option<Vec<Vec<u32>>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum FormatPivotCacheKey {
+    Transformed(TransformedSnapshotCacheKey),
+    MetadataOnly(MetadataOnlyFormatCacheKey),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct MetadataOnlyFormatCacheKey {
+    source: MetadataOnlyFormatSourceCacheKey,
+    fields: Vec<String>,
+    calculated_fields: Vec<PivotCalculatedField>,
+    calculated_items: Vec<PivotCalculatedItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum MetadataOnlyFormatSourceCacheKey {
+    Consolidation(Vec<duke_sheets_core::PivotSourceRange>),
+    External {
+        connection_name: String,
+        command_text: Option<String>,
+    },
+    Scenario {
+        name: String,
+    },
+    Olap {
+        connection_name: String,
+        cube: Option<String>,
+        command_text: Option<String>,
+    },
+}
+
 /// Build immutable file-format pivot plans from a workbook.
-#[cfg(any(feature = "format-plan", test))]
-#[doc(hidden)]
 pub fn plan_format_pivots(workbook: &Workbook) -> Result<FormatPivotPlan> {
-    let mut cache = PivotRuntimeCache::for_workbook(workbook);
+    plan_format_pivots_with_stats(workbook).map(|(plan, _)| plan)
+}
+
+pub(crate) fn plan_format_pivots_with_stats(
+    workbook: &Workbook,
+) -> Result<(FormatPivotPlan, PivotRefreshStats)> {
+    let mut cache = PivotRuntimeCache::clone_from_workbook(workbook);
     let mut stats = PivotRefreshStats::default();
-    let mut cache_by_key: AHashMap<TransformedSnapshotCacheKey, usize> = AHashMap::new();
-    let mut metadata_cache_by_key: AHashMap<String, usize> = AHashMap::new();
+    let mut cache_by_key: AHashMap<FormatPivotCacheKey, usize> = AHashMap::new();
     let mut caches: Vec<FormatPivotCache> = Vec::new();
     let mut tables = Vec::new();
 
@@ -187,8 +208,12 @@ pub fn plan_format_pivots(workbook: &Workbook) -> Result<FormatPivotPlan> {
         for (pivot_index, pivot) in worksheet.pivot_tables().iter().enumerate() {
             validate_format_pivot(pivot)?;
             if metadata_only_format_source(&pivot.source).is_some() {
-                let key = metadata_only_format_cache_key(pivot);
-                let cache_num = if let Some(cache_num) = metadata_cache_by_key.get(&key).copied() {
+                let key = FormatPivotCacheKey::MetadataOnly(
+                    metadata_only_format_cache_key(pivot).ok_or_else(|| {
+                        Error::other("metadata-only pivot source has no cache key")
+                    })?,
+                );
+                let cache_num = if let Some(cache_num) = cache_by_key.get(&key).copied() {
                     if let Some(existing) = caches.get_mut(cache_num - 1) {
                         existing.refresh_on_load |= pivot.refresh_policy.refresh_on_open;
                         existing.background_query |= pivot.refresh_policy.background_query;
@@ -197,7 +222,7 @@ pub fn plan_format_pivots(workbook: &Workbook) -> Result<FormatPivotPlan> {
                 } else {
                     let cache_num = caches.len() + 1;
                     let planned_cache = build_metadata_only_format_pivot_cache(cache_num, pivot)?;
-                    metadata_cache_by_key.insert(key, cache_num);
+                    cache_by_key.insert(key, cache_num);
                     caches.push(planned_cache);
                     cache_num
                 };
@@ -217,13 +242,13 @@ pub fn plan_format_pivots(workbook: &Workbook) -> Result<FormatPivotPlan> {
             let source = format_pivot_source(workbook, &resolved, &pivot.source)?;
             let source_snapshot =
                 cache.snapshot_for_resolved_source(workbook, resolved, &mut stats)?;
-            let key = TransformedSnapshotCacheKey::new(
+            let key = FormatPivotCacheKey::Transformed(TransformedSnapshotCacheKey::new(
                 source_snapshot.key.clone(),
                 &pivot.calculated_fields,
                 &pivot.groupings,
                 &pivot.calculated_items,
                 workbook.settings().date_1904,
-            );
+            ));
             let snapshot = transformed_snapshot_for_pivot(
                 workbook,
                 sheet_index,
@@ -262,7 +287,7 @@ pub fn plan_format_pivots(workbook: &Workbook) -> Result<FormatPivotPlan> {
         }
     }
 
-    Ok(FormatPivotPlan { caches, tables })
+    Ok((FormatPivotPlan { caches, tables }, stats))
 }
 
 pub(crate) fn validate_format_pivot(pivot: &PivotTable) -> Result<()> {
@@ -275,7 +300,6 @@ pub(crate) fn validate_format_pivot(pivot: &PivotTable) -> Result<()> {
     Ok(())
 }
 
-#[cfg(any(feature = "format-plan", test))]
 pub(crate) fn format_pivot_source(
     workbook: &Workbook,
     resolved: &ResolvedPivotSource,
@@ -308,7 +332,6 @@ pub(crate) fn format_pivot_source(
     }
 }
 
-#[cfg(any(feature = "format-plan", test))]
 pub(crate) fn build_format_pivot_cache(
     cache_num: usize,
     source: FormatPivotSource,
@@ -355,7 +378,6 @@ pub(crate) fn build_format_pivot_cache(
     })
 }
 
-#[cfg(any(feature = "format-plan", test))]
 pub(crate) fn build_consolidation_format_pivot_cache(
     cache_num: usize,
     source: FormatPivotSource,
@@ -455,7 +477,6 @@ pub(crate) fn build_consolidation_format_pivot_cache(
     })
 }
 
-#[cfg(any(feature = "format-plan", test))]
 pub(crate) fn consolidation_page_count(
     ranges: &[duke_sheets_core::PivotSourceRange],
 ) -> Result<usize> {
@@ -481,7 +502,6 @@ pub(crate) fn consolidation_page_count(
     Ok(page_count)
 }
 
-#[cfg(any(feature = "format-plan", test))]
 pub(crate) fn consolidation_snapshot_row_sources(
     ranges: &[duke_sheets_core::PivotSourceRange],
     snapshot_row_count: usize,
@@ -504,7 +524,6 @@ pub(crate) fn consolidation_snapshot_row_sources(
     Ok(row_sources)
 }
 
-#[cfg(any(feature = "format-plan", test))]
 pub(crate) fn build_metadata_only_format_pivot_cache(
     cache_num: usize,
     pivot: &PivotTable,
@@ -527,7 +546,6 @@ pub(crate) fn build_metadata_only_format_pivot_cache(
     })
 }
 
-#[cfg(any(feature = "format-plan", test))]
 pub(crate) fn metadata_only_format_source(source: &PivotSource) -> Option<FormatPivotSource> {
     match source {
         PivotSource::External {
@@ -556,7 +574,6 @@ pub(crate) fn metadata_only_format_source(source: &PivotSource) -> Option<Format
     }
 }
 
-#[cfg(any(feature = "format-plan", test))]
 pub(crate) fn metadata_only_format_cache_fields(
     pivot: &PivotTable,
 ) -> Result<Vec<FormatPivotCacheField>> {
@@ -637,7 +654,6 @@ pub(crate) fn metadata_only_format_cache_fields(
     Ok(fields)
 }
 
-#[cfg(any(feature = "format-plan", test))]
 pub(crate) fn push_metadata_only_format_cache_field(
     fields: &mut Vec<FormatPivotCacheField>,
     seen: &mut AHashSet<String>,
@@ -654,41 +670,40 @@ pub(crate) fn push_metadata_only_format_cache_field(
     }
 }
 
-#[cfg(any(feature = "format-plan", test))]
-pub(crate) fn metadata_only_format_cache_key(pivot: &PivotTable) -> String {
-    let source_key = match &pivot.source {
-        PivotSource::Consolidation { ranges } => ranges
-            .iter()
-            .map(consolidation_range_cache_name)
-            .collect::<Vec<_>>()
-            .join("|"),
+fn metadata_only_format_cache_key(pivot: &PivotTable) -> Option<MetadataOnlyFormatCacheKey> {
+    let source = match &pivot.source {
+        PivotSource::Consolidation { ranges } => {
+            MetadataOnlyFormatSourceCacheKey::Consolidation(ranges.clone())
+        }
         PivotSource::External {
             connection_name,
             command_text,
-        } => format!(
-            "external:{connection_name}:{}",
-            command_text.as_deref().unwrap_or("")
-        ),
-        PivotSource::Scenario { name } => format!("scenario:{name}"),
+        } => MetadataOnlyFormatSourceCacheKey::External {
+            connection_name: connection_name.clone(),
+            command_text: command_text.clone(),
+        },
+        PivotSource::Scenario { name } => {
+            MetadataOnlyFormatSourceCacheKey::Scenario { name: name.clone() }
+        }
         PivotSource::Olap {
             connection_name,
             cube,
             command_text,
-        } => format!(
-            "olap:{connection_name}:{}:{}",
-            cube.as_deref().unwrap_or(""),
-            command_text.as_deref().unwrap_or("")
-        ),
-        PivotSource::WorksheetRange { .. } | PivotSource::Table { .. } => String::new(),
+        } => MetadataOnlyFormatSourceCacheKey::Olap {
+            connection_name: connection_name.clone(),
+            cube: cube.clone(),
+            command_text: command_text.clone(),
+        },
+        PivotSource::WorksheetRange { .. } | PivotSource::Table { .. } => return None,
     };
-    let fields = metadata_only_format_cache_field_names_for_key(pivot).join("|");
-    format!(
-        "metadata-consolidation:{source_key}:fields:{fields}:calculated-fields:{:?}:calculated-items:{:?}",
-        pivot.calculated_fields, pivot.calculated_items
-    )
+    Some(MetadataOnlyFormatCacheKey {
+        source,
+        fields: metadata_only_format_cache_field_names_for_key(pivot),
+        calculated_fields: pivot.calculated_fields.clone(),
+        calculated_items: pivot.calculated_items.clone(),
+    })
 }
 
-#[cfg(any(feature = "format-plan", test))]
 pub(crate) fn metadata_only_format_cache_field_names_for_key(pivot: &PivotTable) -> Vec<String> {
     let mut fields = Vec::new();
     let mut seen = AHashSet::new();
@@ -738,7 +753,6 @@ pub(crate) fn metadata_only_format_cache_field_names_for_key(pivot: &PivotTable)
     fields
 }
 
-#[cfg(any(feature = "format-plan", test))]
 pub(crate) fn format_pivot_visible_rows(
     pivot: &PivotTable,
     snapshot: &SourceSnapshot,
@@ -785,7 +799,6 @@ pub(crate) fn format_pivot_visible_rows(
     Ok(Some(visible_rows))
 }
 
-#[cfg(any(feature = "format-plan", test))]
 pub(crate) fn format_pivot_axis_tuples(
     pivot: &PivotTable,
     snapshot: &SourceSnapshot,
@@ -797,7 +810,6 @@ pub(crate) fn format_pivot_axis_tuples(
     })
 }
 
-#[cfg(any(feature = "format-plan", test))]
 pub(crate) fn format_axis_tuples_for_fields(
     pivot: &PivotTable,
     snapshot: &SourceSnapshot,
@@ -827,7 +839,6 @@ pub(crate) fn format_axis_tuples_for_fields(
     Ok(Some(tuples))
 }
 
-#[cfg(any(feature = "format-plan", test))]
 pub(crate) fn format_axis_requires_writer_expansion(
     pivot: &PivotTable,
     fields: &[PivotField],
@@ -843,7 +854,6 @@ pub(crate) fn format_axis_requires_writer_expansion(
     })
 }
 
-#[cfg(any(feature = "format-plan", test))]
 pub(crate) fn format_unique_axis_tuples(
     snapshot: &SourceSnapshot,
     field_indexes: &[usize],
@@ -860,7 +870,6 @@ pub(crate) fn format_unique_axis_tuples(
     tuples
 }
 
-#[cfg(any(feature = "format-plan", test))]
 pub(crate) fn sort_format_axis_tuples_by_measure(
     pivot: &PivotTable,
     snapshot: &SourceSnapshot,
@@ -904,7 +913,6 @@ pub(crate) fn sort_format_axis_tuples_by_measure(
     Ok(())
 }
 
-#[cfg(any(feature = "format-plan", test))]
 pub(crate) fn format_axis_tuple_measure_totals(
     snapshot: &SourceSnapshot,
     field_indexes: &[usize],
@@ -923,7 +931,6 @@ pub(crate) fn format_axis_tuple_measure_totals(
     totals
 }
 
-#[cfg(any(feature = "format-plan", test))]
 pub(crate) fn format_update_states(
     states: &mut [AggregateState],
     snapshot: &SourceSnapshot,
@@ -940,7 +947,6 @@ pub(crate) fn format_update_states(
     }
 }
 
-#[cfg(any(feature = "format-plan", test))]
 pub(crate) fn format_visible_row_indexes(
     visible_rows: Option<&[usize]>,
     row_count: usize,
@@ -951,13 +957,11 @@ pub(crate) fn format_visible_row_indexes(
     }
 }
 
-#[cfg(any(feature = "format-plan", test))]
 pub(crate) enum FormatVisibleRowIter<'a> {
     All(std::ops::Range<usize>),
     Filtered(std::iter::Copied<std::slice::Iter<'a, usize>>),
 }
 
-#[cfg(any(feature = "format-plan", test))]
 impl Iterator for FormatVisibleRowIter<'_> {
     type Item = usize;
 
@@ -969,7 +973,6 @@ impl Iterator for FormatVisibleRowIter<'_> {
     }
 }
 
-#[cfg(any(feature = "format-plan", test))]
 pub(crate) fn validate_format_pivot_fields(
     pivot_name: &str,
     pivot: &PivotTable,
@@ -1003,7 +1006,6 @@ pub(crate) fn validate_format_pivot_fields(
     Ok(())
 }
 
-#[cfg(any(feature = "format-plan", test))]
 pub(crate) fn format_filter_field_name(filter: &PivotFilter) -> Option<&str> {
     match filter {
         PivotFilter::FieldItems { field, .. }
@@ -1019,7 +1021,6 @@ pub(crate) fn format_filter_field_name(filter: &PivotFilter) -> Option<&str> {
     }
 }
 
-#[cfg(any(feature = "format-plan", test))]
 pub(crate) fn format_filter_measure_field_name(filter: &PivotFilter) -> Option<&str> {
     match filter {
         PivotFilter::Value { measure, .. }
@@ -1029,7 +1030,6 @@ pub(crate) fn format_filter_measure_field_name(filter: &PivotFilter) -> Option<&
     }
 }
 
-#[cfg(any(feature = "format-plan", test))]
 pub(crate) fn format_measure_show_as_base_field_name(measure: &PivotMeasure) -> Option<&str> {
     match &measure.show_as {
         PivotShowAs::PercentOfParentTotal { base_field }

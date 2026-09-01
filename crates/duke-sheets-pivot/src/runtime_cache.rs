@@ -3,7 +3,7 @@ use crate::prelude::*;
 use crate::snapshot::*;
 use crate::source::*;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct PivotRuntimeCache {
     workbook_nonce: u64,
     structural_generation: u64,
@@ -58,13 +58,25 @@ impl PivotRuntimeCache {
             .map(|cache| *cache)
             .unwrap_or_default();
 
-        if cache.workbook_nonce != workbook.nonce()
-            || cache.structural_generation != workbook.structural_generation()
-        {
+        if !cache.is_valid_for(workbook) {
             cache = Self::for_workbook(workbook);
         }
 
         cache
+    }
+
+    pub(crate) fn clone_from_workbook(workbook: &Workbook) -> Self {
+        workbook
+            .pivot_runtime_cache()
+            .and_then(|cache| cache.downcast_ref::<Self>())
+            .filter(|cache| cache.is_valid_for(workbook))
+            .cloned()
+            .unwrap_or_else(|| Self::for_workbook(workbook))
+    }
+
+    fn is_valid_for(&self, workbook: &Workbook) -> bool {
+        self.workbook_nonce == workbook.nonce()
+            && self.structural_generation == workbook.structural_generation()
     }
 
     pub(crate) fn filter_baselines_for_pivot(

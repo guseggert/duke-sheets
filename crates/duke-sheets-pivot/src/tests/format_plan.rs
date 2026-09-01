@@ -32,7 +32,7 @@ fn format_pivot_plan_reuses_cache_and_exposes_field_major_items() {
     sheet.add_pivot_table(pivot_a).unwrap();
     sheet.add_pivot_table(pivot_b).unwrap();
 
-    let plan = crate::plan_format_pivots(&workbook).unwrap();
+    let plan = crate::plan::plan_format_pivots(&workbook).unwrap();
 
     assert_eq!(plan.caches.len(), 1);
     assert_eq!(plan.tables.len(), 2);
@@ -86,6 +86,30 @@ fn format_pivot_plan_reuses_cache_and_exposes_field_major_items() {
         vec![PivotValue::Number(10.0), PivotValue::Number(20.0)]
     );
     assert_eq!(revenue.item_ids, vec![0, 1]);
+}
+
+#[test]
+fn format_pivot_plan_reuses_refreshed_runtime_snapshot() {
+    let mut workbook = format_cache_reuse_workbook();
+    let refresh_stats = workbook.refresh_pivots().unwrap();
+    assert_eq!(refresh_stats.cache_misses, 1);
+
+    let (_, plan_stats) = crate::plan::plan_format_pivots_with_stats(&workbook).unwrap();
+
+    assert_eq!(plan_stats.cache_hits, 1);
+    assert_eq!(plan_stats.cache_misses, 0);
+}
+
+#[test]
+fn format_pivot_plan_rejects_stale_structural_generation() {
+    let mut workbook = format_cache_reuse_workbook();
+    workbook.refresh_pivots().unwrap();
+    workbook.add_worksheet_with_name("Other").unwrap();
+
+    let (_, plan_stats) = crate::plan::plan_format_pivots_with_stats(&workbook).unwrap();
+
+    assert_eq!(plan_stats.cache_hits, 0);
+    assert_eq!(plan_stats.cache_misses, 1);
 }
 
 #[test]
@@ -396,4 +420,25 @@ fn format_pivot_plan_applies_manual_group_item_filters_to_visible_rows() {
 
     assert_eq!(plan.tables[0].visible_rows, Some(vec![0, 1]));
     assert_eq!(plan.tables[0].axis_tuples.rows, None);
+}
+
+fn format_cache_reuse_workbook() -> Workbook {
+    let mut workbook = Workbook::new();
+    let sheet = workbook.worksheet_mut(0).unwrap();
+    sheet.set_cell_value("A1", "Region").unwrap();
+    sheet.set_cell_value("B1", "Revenue").unwrap();
+    sheet.set_cell_value("A2", "East").unwrap();
+    sheet.set_cell_value("B2", 10.0).unwrap();
+    sheet.set_cell_value("A3", "West").unwrap();
+    sheet.set_cell_value("B3", 20.0).unwrap();
+    let pivot = PivotTable::builder("SalesPivot")
+        .source_range(CellRange::parse("A1:B3").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("Region")
+        .measure("Revenue", PivotAggregate::Sum)
+        .build()
+        .unwrap();
+    sheet.add_pivot_table(pivot).unwrap();
+    workbook
 }

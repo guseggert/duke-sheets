@@ -1,8 +1,8 @@
-//! Pivot table refresh engine.
+//! Pivot table refresh and file-format planning engine.
 //!
 //! This crate refreshes semantic [`duke_sheets_core::PivotTable`] definitions
-//! into worksheet cells. The file-format pivot cache objects used by XLS/XLSB
-//! are deliberately kept out of the public authoring API.
+//! into worksheet cells and exposes immutable pivot cache plans to file-format
+//! writers.
 
 mod prelude;
 
@@ -10,8 +10,6 @@ mod aggregate;
 mod api;
 mod compile;
 mod filters;
-#[cfg(any(feature = "format-plan", test))]
-mod format_plan;
 mod refresh;
 mod render;
 mod runtime_cache;
@@ -21,10 +19,12 @@ mod sort;
 mod source;
 mod transform;
 
+/// Immutable, format-neutral pivot cache plans for file-format writers.
+#[path = "format_plan.rs"]
+pub mod plan;
+
 pub use api::{PivotRefreshOptions, PivotRefreshStats, WorkbookPivotExt};
-#[cfg(any(feature = "format-plan", test))]
-#[doc(hidden)]
-pub use format_plan::{
+pub use plan::{
     plan_format_pivots, FormatPivotAxisTuples, FormatPivotCache, FormatPivotCacheField,
     FormatPivotPlan, FormatPivotSource, FormatPivotTable,
 };

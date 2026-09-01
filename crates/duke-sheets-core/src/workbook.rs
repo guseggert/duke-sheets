@@ -771,6 +771,12 @@ impl Workbook {
         self.calc_cache = Some(cache);
     }
 
+    /// Borrow the pivot runtime cache without exposing its engine-specific type.
+    #[doc(hidden)]
+    pub fn pivot_runtime_cache(&self) -> Option<&(dyn Any + Send + Sync)> {
+        self.pivot_runtime_cache.as_deref()
+    }
+
     /// Take the pivot runtime cache (moves it out of the workbook).
     #[doc(hidden)]
     pub fn take_pivot_runtime_cache(&mut self) -> Option<Box<dyn Any + Send + Sync>> {
