@@ -1169,10 +1169,10 @@ impl<'a> FormulaParser<'a> {
                     specifiers.push(StructuredRefSpecifier::ThisRow);
                     let col_name = stripped.trim();
                     if !col_name.is_empty() {
-                        column = Some(col_name.to_string());
+                        column = Some(Self::structured_column_name(col_name));
                     }
                 } else {
-                    column = Some(part.to_string());
+                    column = Some(Self::structured_column_name(part));
                 }
             }
 
@@ -1197,7 +1197,7 @@ impl<'a> FormulaParser<'a> {
                 column: if col_name.is_empty() {
                     None
                 } else {
-                    Some(col_name.to_string())
+                    Some(Self::structured_column_name(col_name))
                 },
                 specifiers: vec![StructuredRefSpecifier::ThisRow],
             }))
@@ -1208,6 +1208,15 @@ impl<'a> FormulaParser<'a> {
                 column: Some(content.to_string()),
                 specifiers: vec![],
             }))
+        }
+    }
+
+    fn structured_column_name(name: &str) -> String {
+        let name = name.trim();
+        if name.len() >= 2 && name.starts_with('[') && name.ends_with(']') {
+            name[1..name.len() - 1].to_string()
+        } else {
+            name.to_string()
         }
     }
 
@@ -1714,6 +1723,18 @@ mod tests {
         if let FormulaExpr::StructuredRef(sr) = ast {
             assert_eq!(sr.table, Some("Table1".to_string()));
             assert_eq!(sr.column, Some("Column1".to_string()));
+            assert_eq!(sr.specifiers, vec![StructuredRefSpecifier::ThisRow]);
+        } else {
+            panic!("Expected StructuredRef, got {:?}", ast);
+        }
+    }
+
+    #[test]
+    fn test_parse_structured_ref_this_row_escaped_column() {
+        let ast = parse_formula("=Table1[@[Column Name]]").unwrap();
+        if let FormulaExpr::StructuredRef(sr) = ast {
+            assert_eq!(sr.table, Some("Table1".to_string()));
+            assert_eq!(sr.column, Some("Column Name".to_string()));
             assert_eq!(sr.specifiers, vec![StructuredRefSpecifier::ThisRow]);
         } else {
             panic!("Expected StructuredRef, got {:?}", ast);
