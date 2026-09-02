@@ -6,7 +6,7 @@ use quick_xml::reader::Reader;
 
 use super::{resolve_rel_path, SheetRel};
 use crate::biff12::RecordIter;
-use crate::biff12::{parser, ptg, records};
+use crate::biff12::{parser, records};
 use crate::error::{XlsbError, XlsbResult};
 use duke_sheets_core::style::NumberFormat;
 use duke_sheets_core::{
@@ -17,7 +17,10 @@ use duke_sheets_core::{
     PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable, PivotValue, PivotValuesAxis,
     WorkbookConnection, WorkbookConnectionKind,
 };
-use duke_sheets_formula::decompile::{function_argc, function_name};
+use duke_sheets_formula::decompile::{
+    decompile_pivot_formula as decompile_biff_pivot_formula, PivotFormulaHooks,
+    PivotVariableArgCount,
+};
 use ssfmt::{date_serial::date_to_serial, DateSystem};
 
 #[derive(Debug, Clone)]
@@ -50,12 +53,6 @@ struct PivotCacheField {
     cache_record_value_mode: CacheRecordValueMode,
 }
 
-#[derive(Debug, Clone)]
-struct PivotFormulaText {
-    text: String,
-    precedence: u8,
-}
-
 #[derive(Debug, Clone, Default)]
 struct PendingCalculatedItem {
     tokens: Vec<u8>,
@@ -75,15 +72,6 @@ enum CacheRecordValueMode {
     SharedItemIndex,
     Number,
     DateTime,
-}
-
-impl PivotFormulaText {
-    fn atom(text: String) -> Self {
-        Self {
-            text,
-            precedence: 8,
-        }
-    }
 }
 
 pub(crate) fn read_pivot_tables_for_sheet<R: Read + Seek>(
@@ -2583,116 +2571,31 @@ fn decompile_pivot_formula_with(
     field_names: &[String],
     name_formatter: fn(&str) -> String,
 ) -> Option<String> {
-    let mut stack: Vec<PivotFormulaText> = Vec::new();
-    let mut pos = 0usize;
-    while pos < tokens.len() {
-        let token = tokens[pos];
-        pos += 1;
-        match token {
-            0x03 => push_pivot_binary(&mut stack, "+", 3, false)?,
-            0x04 => push_pivot_binary(&mut stack, "-", 3, true)?,
-            0x05 => push_pivot_binary(&mut stack, "*", 4, false)?,
-            0x06 => push_pivot_binary(&mut stack, "/", 4, true)?,
-            0x07 => push_pivot_binary(&mut stack, "^", 5, true)?,
-            0x08 => push_pivot_binary(&mut stack, "&", 2, false)?,
-            0x09 => push_pivot_binary(&mut stack, "<", 1, true)?,
-            0x0A => push_pivot_binary(&mut stack, "<=", 1, true)?,
-            0x0B => push_pivot_binary(&mut stack, "=", 1, true)?,
-            0x0C => push_pivot_binary(&mut stack, ">=", 1, true)?,
-            0x0D => push_pivot_binary(&mut stack, ">", 1, true)?,
-            0x0E => push_pivot_binary(&mut stack, "<>", 1, true)?,
-            0x12 => push_pivot_prefix(&mut stack, "+")?,
-            0x13 => push_pivot_prefix(&mut stack, "-")?,
-            0x14 => push_pivot_percent(&mut stack)?,
-            0x15 => push_pivot_paren(&mut stack)?,
-            0x17 => {
-                let value = read_pivot_short_string(tokens, &mut pos)?;
-                stack.push(PivotFormulaText::atom(format!(
-                    "\"{}\"",
-                    value.replace('"', "\"\"")
-                )));
-            }
-            0x18 => {
-                if pos + 5 > tokens.len() {
-                    return None;
-                }
-                let subtype = tokens[pos];
-                pos += 1;
-                if subtype != 0x1D {
-                    return None;
-                }
-                let pname_index = u32::from_le_bytes([
-                    tokens[pos],
-                    tokens[pos + 1],
-                    tokens[pos + 2],
-                    tokens[pos + 3],
-                ]) as usize;
-                pos += 4;
-                let field_index = *pname_field_indexes.get(pname_index)?;
-                let field_name = field_names.get(field_index)?;
-                stack.push(PivotFormulaText::atom(name_formatter(field_name)));
-            }
-            token if ptg::base_ptg(token) == ptg::PTG_FUNC => {
-                if pos + 2 > tokens.len() {
-                    return None;
-                }
-                let func_idx = u16::from_le_bytes([tokens[pos], tokens[pos + 1]]);
-                pos += 2;
-                let argc = function_argc(func_idx);
-                if argc > 253 {
-                    return None;
-                }
-                push_pivot_function(&mut stack, func_idx, argc as usize)?;
-            }
-            token if ptg::base_ptg(token) == ptg::PTG_FUNC_VAR => {
-                if pos + 3 > tokens.len() {
-                    return None;
-                }
-                let argc = tokens[pos] as usize;
-                pos += 1;
-                let func_idx = u16::from_le_bytes([tokens[pos], tokens[pos + 1]]);
-                pos += 2;
-                push_pivot_function(&mut stack, func_idx, argc)?;
-            }
-            0x1C => {
-                if pos >= tokens.len() {
-                    return None;
-                }
-                stack.push(PivotFormulaText::atom(format_formula_error(tokens[pos])));
-                pos += 1;
-            }
-            0x1D => {
-                if pos >= tokens.len() {
-                    return None;
-                }
-                stack.push(PivotFormulaText::atom(if tokens[pos] != 0 {
-                    "TRUE".to_string()
-                } else {
-                    "FALSE".to_string()
-                }));
-                pos += 1;
-            }
-            0x1E => {
-                if pos + 2 > tokens.len() {
-                    return None;
-                }
-                let value = u16::from_le_bytes([tokens[pos], tokens[pos + 1]]);
-                pos += 2;
-                stack.push(PivotFormulaText::atom(value.to_string()));
-            }
-            0x1F => {
-                if pos + 8 > tokens.len() {
-                    return None;
-                }
-                let value = f64::from_le_bytes(tokens[pos..pos + 8].try_into().ok()?);
-                pos += 8;
-                stack.push(PivotFormulaText::atom(format_formula_number(value)));
-            }
-            _ => return None,
-        }
+    let mut hooks = XlsbPivotFormulaHooks {
+        indexes: pname_field_indexes,
+        names: field_names,
+        formatter: name_formatter,
+    };
+    decompile_biff_pivot_formula(tokens, &mut hooks).ok()
+}
+
+struct XlsbPivotFormulaHooks<'a> {
+    indexes: &'a [usize],
+    names: &'a [String],
+    formatter: fn(&str) -> String,
+}
+
+impl PivotFormulaHooks for XlsbPivotFormulaHooks<'_> {
+    fn resolve_name(&mut self, index: u32) -> Option<String> {
+        let field_index = *self.indexes.get(index as usize)?;
+        self.names
+            .get(field_index)
+            .map(|name| (self.formatter)(name))
     }
 
-    (stack.len() == 1).then(|| stack.pop().unwrap().text)
+    fn variable_arg_count(&self) -> PivotVariableArgCount {
+        PivotVariableArgCount::Biff12
+    }
 }
 
 fn decompile_pivot_item_formula(
@@ -2712,120 +2615,6 @@ fn decompile_pivot_item_formula(
         .collect::<Option<Vec<_>>>()?;
     let indexes = (0..names.len()).collect::<Vec<_>>();
     decompile_pivot_formula_with(tokens, &indexes, &names, pivot_formula_item_reference)
-}
-
-fn read_pivot_short_string(data: &[u8], offset: &mut usize) -> Option<String> {
-    if *offset + 2 > data.len() {
-        return None;
-    }
-    let char_count = data[*offset] as usize;
-    *offset += 1;
-    let flags = data[*offset];
-    *offset += 1;
-    if flags & 0x01 != 0 {
-        let byte_len = char_count.checked_mul(2)?;
-        if *offset + byte_len > data.len() {
-            return None;
-        }
-        let units = data[*offset..*offset + byte_len]
-            .chunks_exact(2)
-            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
-            .collect::<Vec<_>>();
-        *offset += byte_len;
-        Some(String::from_utf16_lossy(&units))
-    } else {
-        if *offset + char_count > data.len() {
-            return None;
-        }
-        let text = data[*offset..*offset + char_count]
-            .iter()
-            .map(|&byte| byte as char)
-            .collect::<String>();
-        *offset += char_count;
-        Some(text)
-    }
-}
-
-fn push_pivot_binary(
-    stack: &mut Vec<PivotFormulaText>,
-    op: &str,
-    precedence: u8,
-    parenthesize_equal_right: bool,
-) -> Option<()> {
-    let right = stack.pop()?;
-    let left = stack.pop()?;
-    let left_text = if left.precedence < precedence {
-        format!("({})", left.text)
-    } else {
-        left.text
-    };
-    let right_text = if right.precedence < precedence
-        || (parenthesize_equal_right && right.precedence == precedence)
-    {
-        format!("({})", right.text)
-    } else {
-        right.text
-    };
-    stack.push(PivotFormulaText {
-        text: format!("{left_text}{op}{right_text}"),
-        precedence,
-    });
-    Some(())
-}
-
-fn push_pivot_prefix(stack: &mut Vec<PivotFormulaText>, op: &str) -> Option<()> {
-    let operand = stack.pop()?;
-    let text = if operand.precedence < 6 {
-        format!("{op}({})", operand.text)
-    } else {
-        format!("{op}{}", operand.text)
-    };
-    stack.push(PivotFormulaText {
-        text,
-        precedence: 6,
-    });
-    Some(())
-}
-
-fn push_pivot_percent(stack: &mut Vec<PivotFormulaText>) -> Option<()> {
-    let operand = stack.pop()?;
-    let text = if operand.precedence < 7 {
-        format!("({})%", operand.text)
-    } else {
-        format!("{}%", operand.text)
-    };
-    stack.push(PivotFormulaText {
-        text,
-        precedence: 7,
-    });
-    Some(())
-}
-
-fn push_pivot_paren(stack: &mut Vec<PivotFormulaText>) -> Option<()> {
-    let operand = stack.pop()?;
-    stack.push(PivotFormulaText {
-        text: format!("({})", operand.text),
-        precedence: 8,
-    });
-    Some(())
-}
-
-fn push_pivot_function(
-    stack: &mut Vec<PivotFormulaText>,
-    func_idx: u16,
-    argc: usize,
-) -> Option<()> {
-    let name = function_name(func_idx);
-    if name.is_empty() || stack.len() < argc {
-        return None;
-    }
-    let start = stack.len() - argc;
-    let args = stack.drain(start..).map(|arg| arg.text).collect::<Vec<_>>();
-    stack.push(PivotFormulaText::atom(format!(
-        "{name}({})",
-        args.join(",")
-    )));
-    Some(())
 }
 
 fn pivot_formula_field_reference(name: &str) -> String {
