@@ -2304,6 +2304,12 @@ fn test_writer_round_trips_pivot_grouping() {
         r#"<fieldGroup><rangePr autoStart="0" autoEnd="0" groupBy="range" startNum="0" endNum="30" groupInterval="10"/></fieldGroup>"#
     ));
     assert!(cache_def.contains(r#"<fieldGroup><rangePr groupBy="months"/></fieldGroup>"#));
+    for source_value in ["2", "12", "22", "45292", "45323", "45352"] {
+        assert!(
+            cache_def.contains(&format!(r#"<n v="{source_value}"/>"#)),
+            "grouped cache lost source item {source_value}: {cache_def}"
+        );
+    }
 
     let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
     let pivot = roundtrip

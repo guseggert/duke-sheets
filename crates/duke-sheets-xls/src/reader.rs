@@ -4836,7 +4836,7 @@ mod tests {
             &formula_ctx,
             None,
             &[],
-            &std::collections::HashMap::new(),
+            &pivot::PivotCaches::default(),
         )
         .unwrap();
         ws
@@ -5172,7 +5172,7 @@ mod tests {
                 &formula_ctx,
                 None,
                 &[],
-                &std::collections::HashMap::new(),
+                &pivot::PivotCaches::default(),
             )
             .unwrap();
             ws

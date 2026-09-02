@@ -29,10 +29,8 @@ fn xlsx_cache_fields(cache: &FormatPivotCache) -> Vec<CacheField> {
     let mut fields = cache.fields.clone();
     for field in &mut fields {
         if let Some(grouping) = &field.grouping {
-            if matches!(grouping.definition, PivotGrouping::Manual { .. }) {
-                field.shared_items = grouping.source_items.clone();
-                field.item_ids = grouping.source_item_ids.clone();
-            }
+            field.shared_items = grouping.source_items.clone();
+            field.item_ids = grouping.source_item_ids.clone();
         }
     }
     for field in &cache.fields {

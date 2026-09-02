@@ -24,6 +24,7 @@ use crate::biff::strings::{read_character_data, read_unicode_string};
 use crate::biff::{self, BiffRecord};
 use crate::error::{XlsError, XlsResult};
 
+#[derive(Default)]
 pub(super) struct PivotCaches(std::collections::HashMap<u16, XlsPivotCache>);
 
 pub(super) fn parse_cache_source(record_type: u16, data: &[u8]) -> Option<PivotSource> {
@@ -161,6 +162,7 @@ struct XlsPivotViewBuilder {
     pending_sxaddl_field_name: Option<String>,
     row_axis_count: usize,
     column_axis_count: usize,
+    page_axis_count: usize,
     row_axis: Vec<i16>,
     column_axis: Vec<i16>,
     page_fields: Vec<(usize, u16)>,
@@ -174,6 +176,35 @@ struct XlsPivotViewBuilder {
     pending_sxaddl_label_filter_values: Vec<String>,
     pending_sxaddl_value_filter: Option<XlsPendingValueFilter>,
     pending_sxaddl_date_filter: Option<XlsPendingDateFilter>,
+}
+
+fn pivot_page_area_rows(layout: &duke_sheets_core::PivotLayout, count: usize) -> u32 {
+    if count == 0 {
+        return 0;
+    }
+    let wrap = layout.page_wrap as usize;
+    let rows = if wrap == 0 {
+        count
+    } else if layout.page_over_then_down {
+        count.div_ceil(wrap)
+    } else {
+        wrap.min(count)
+    };
+    rows as u32
+}
+
+fn pivot_target_from_body(
+    body: CellAddress,
+    layout: &duke_sheets_core::PivotLayout,
+    page_axis_count: usize,
+) -> CellAddress {
+    let page_rows = pivot_page_area_rows(layout, page_axis_count);
+    let row = if page_rows > 0 {
+        body.row.saturating_sub(page_rows.saturating_add(1))
+    } else {
+        body.row
+    };
+    CellAddress::new(row, body.col)
 }
 
 #[derive(Debug, Clone)]
@@ -832,7 +863,8 @@ impl XlsReader {
         let source = cache.source.clone();
         let source_kind = cache.source_kind;
 
-        let mut pivot = PivotTable::new(0, builder.name, source, builder.target);
+        let target = pivot_target_from_body(builder.target, &layout, builder.page_axis_count);
+        let mut pivot = PivotTable::new(0, builder.name, source, target);
         pivot.rows = rows;
         pivot.columns = columns;
         pivot.page_fields = page_fields;
@@ -1565,12 +1597,6 @@ impl XlsReader {
             None
         };
 
-        let target_row = if page_axis_count > 0 {
-            first_row.saturating_sub(u32::from(page_axis_count).saturating_add(1))
-        } else {
-            first_row
-        };
-
         let mut layout = duke_sheets_core::PivotLayout::default();
         layout.show_row_grand_totals = grbit & 0x0001 != 0;
         layout.show_column_grand_totals = grbit & 0x0002 != 0;
@@ -1581,7 +1607,7 @@ impl XlsReader {
         Ok(Some(XlsPivotViewBuilder {
             name,
             cache_id,
-            target: CellAddress::new(target_row, first_col),
+            target: CellAddress::new(first_row, first_col),
             rendered_range: Some(CellRange::from_indices(
                 first_row, first_col, last_row, last_col,
             )),
@@ -1589,6 +1615,7 @@ impl XlsReader {
             pending_sxaddl_field_name: None,
             row_axis_count,
             column_axis_count,
+            page_axis_count: usize::from(page_axis_count),
             row_axis: Vec::with_capacity(row_axis_count),
             column_axis: Vec::with_capacity(column_axis_count),
             page_fields: Vec::new(),
@@ -3062,5 +3089,20 @@ impl XlsReader {
         }
         fields.push(field);
     }
+}
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wrapped_page_fields_use_rendered_row_count_for_target() {
+        let mut layout = duke_sheets_core::PivotLayout::default();
+        layout.page_wrap = 2;
+        layout.page_over_then_down = true;
+
+        let target = pivot_target_from_body(CellAddress::new(3, 5), &layout, 2);
+
+        assert_eq!(target, CellAddress::new(1, 5));
+    }
 }
