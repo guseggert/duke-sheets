@@ -36,6 +36,7 @@ mod formula_parity;
 mod formula_parity_assertions;
 mod merged_cells;
 mod number_formats;
+mod pivot_reader;
 mod rich_text;
 mod roundtrip;
 mod selections;
