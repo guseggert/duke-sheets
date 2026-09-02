@@ -3238,6 +3238,7 @@ mod tests {
         assert!(ws.merge_cells(&range2).is_err());
     }
 
+    // features: PivotChart
     #[test]
     fn test_build_pivot_chart_from_rendered_range() {
         let mut ws = Worksheet::new("Pivot Output");

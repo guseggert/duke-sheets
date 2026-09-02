@@ -586,6 +586,7 @@ mod tests {
     use super::*;
     use crate::biff12::{encode_wide_str, RecordWriter};
 
+    // features: Data connections (basic)
     #[test]
     fn reads_xlsb_database_connection_records() {
         let connections = read_test_connections(database_connections_bin());

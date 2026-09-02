@@ -51,8 +51,11 @@ KNOWN_EVIDENCE_GAPS: set[tuple[str, str, str]] = set()
 
 CANONICAL_PARITY = {
     "crates/duke-sheets-excel-com/tests/e2e/writing.rs": "XLSX",
+    "crates/duke-sheets-excel-com/tests/e2e/writing_pivot.rs": "XLSX",
     "crates/duke-sheets-excel-com/tests/e2e/writing_xlsb.rs": "XLSB",
+    "crates/duke-sheets-excel-com/tests/e2e/writing_xlsb_pivot.rs": "XLSB",
     "crates/duke-sheets-excel-com/tests/e2e/writing_xls.rs": "XLS",
+    "crates/duke-sheets-excel-com/tests/e2e/writing_xls_pivot.rs": "XLS",
 }
 
 HARNESS_ALIASES = {

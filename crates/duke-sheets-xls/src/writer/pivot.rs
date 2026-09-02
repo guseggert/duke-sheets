@@ -1,3 +1,5 @@
+//! BIFF8 pivot writer using the SX* and DCON* record layouts in [MS-XLS] section 2.4.
+
 use super::*;
 
 pub(super) struct PivotLayouts(XlsPivotCacheLayouts);
@@ -5493,4 +5495,3 @@ fn field_is_numeric(field: &XlsPivotFieldLayout) -> bool {
             .iter()
             .all(|value| matches!(value, PivotValue::Number(_)))
 }
-

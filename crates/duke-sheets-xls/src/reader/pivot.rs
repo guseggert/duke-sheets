@@ -1,3 +1,5 @@
+//! BIFF8 pivot reader using the SX* and DCON* record layouts in [MS-XLS] section 2.4.
+
 use std::collections::{BTreeMap, HashSet};
 use std::io::Cursor;
 

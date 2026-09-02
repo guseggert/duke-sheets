@@ -1,3 +1,5 @@
+//! BIFF12 pivot writer using the BrtPCD* and BrtSX* structures in [MS-XLSB] section 2.4.
+
 use std::collections::{HashMap, HashSet};
 use std::io::{Seek, Write};
 

@@ -1,3 +1,5 @@
+//! OOXML pivot reader following the schemas in ECMA-376 section 18.10.1.
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{BufRead, BufReader, Cursor, Read, Seek};
 

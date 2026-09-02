@@ -140,6 +140,7 @@ mod tests {
         assert!(std::str::from_utf8(cs).unwrap().contains("cs-ext"));
     }
 
+    // features: PivotChart
     #[test]
     fn test_pivot_source_roundtrip() {
         let mut chart = Chart::new(ChartType::ColumnClustered);

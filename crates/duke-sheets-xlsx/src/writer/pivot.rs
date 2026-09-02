@@ -1,3 +1,5 @@
+//! OOXML pivot writer following the schemas in ECMA-376 section 18.10.1.
+
 use std::io::{Seek, Write};
 
 use quick_xml::events::{BytesEnd, BytesStart, Event};
@@ -2688,3 +2690,6 @@ fn aggregate_name(aggregate: PivotAggregate) -> &'static str {
         PivotAggregate::VarP => "varp",
     }
 }
+
+#[cfg(test)]
+mod tests;

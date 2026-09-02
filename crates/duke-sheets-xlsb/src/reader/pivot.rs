@@ -1,3 +1,5 @@
+//! BIFF12 pivot reader using the BrtPCD* and BrtSX* structures in [MS-XLSB] section 2.4.
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{BufReader, Read, Seek};
 use std::sync::Arc;
