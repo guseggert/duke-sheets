@@ -2,9 +2,9 @@
 
 use crate::roundtrip_through_excel;
 use duke_sheets_core::{
-    CellRange, PivotAggregate, PivotField, PivotFieldRef, PivotFilter, PivotGrouping,
-    PivotManualGroup, PivotMeasure, PivotSort, PivotSource, PivotSourceRange, PivotStyle,
-    PivotValue, Workbook,
+    CellRange, PivotAggregate, PivotDateGroupUnit, PivotField, PivotFieldRef, PivotFilter,
+    PivotGrouping, PivotManualGroup, PivotMeasure, PivotSort, PivotSource, PivotSourceRange,
+    PivotStyle, PivotValue, Workbook,
 };
 
 fn basic_pivot_workbook() -> Workbook {
@@ -304,4 +304,204 @@ fn test_write_manual_pivot_grouping_survives_excel_roundtrip() {
         }
         other => panic!("unexpected grouping after Excel roundtrip: {other:?}"),
     }
+}
+
+// features: Grouping (dates, numbers, items)
+#[test]
+fn test_write_numeric_pivot_grouping_survives_excel_roundtrip() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    for (address, value) in [("A1", "Amount"), ("B1", "Revenue")] {
+        sheet.set_cell_value(address, value).unwrap();
+    }
+    for (row, (amount, revenue)) in [(2.0, 20.0), (12.0, 120.0), (22.0, 220.0)]
+        .into_iter()
+        .enumerate()
+    {
+        let row = row + 2;
+        sheet.set_cell_value(&format!("A{row}"), amount).unwrap();
+        sheet.set_cell_value(&format!("B{row}"), revenue).unwrap();
+    }
+
+    let pivot = duke_sheets_core::PivotTable::builder("NumericGroupedSales")
+        .source_range(CellRange::parse("A1:B4").unwrap())
+        .target_address("E1")
+        .unwrap()
+        .row("Amount")
+        .measure("Revenue", PivotAggregate::Sum)
+        .grouping(PivotGrouping::Number {
+            field: "Amount".into(),
+            start: None,
+            end: None,
+            interval: 10.0,
+        })
+        .build()
+        .unwrap();
+    sheet.add_pivot_table(pivot).unwrap();
+
+    let result = roundtrip_through_excel(&wb);
+    let pivot = result
+        .worksheet(0)
+        .unwrap()
+        .pivot_table_by_name("NumericGroupedSales")
+        .expect("numeric grouping survives Excel roundtrip");
+    assert!(pivot.groupings.iter().any(|grouping| matches!(
+        grouping,
+        PivotGrouping::Number { field, start, end, interval }
+            if field.name == "Amount"
+                && *start == Some(2.0)
+                && *end == Some(22.0)
+                && *interval == 10.0
+    )));
+}
+
+// features: Grouping (dates, numbers, items)
+#[test]
+fn test_write_single_date_pivot_grouping_survives_excel_roundtrip() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_cell_value("A1", "SaleDate").unwrap();
+    sheet.set_cell_value("B1", "Revenue").unwrap();
+    for (row, (date, revenue)) in [(45292.0, 10.0), (45323.0, 20.0), (45352.0, 30.0)]
+        .into_iter()
+        .enumerate()
+    {
+        let row = row + 2;
+        sheet.set_cell_value(&format!("A{row}"), date).unwrap();
+        sheet.set_cell_value(&format!("B{row}"), revenue).unwrap();
+    }
+
+    let pivot = duke_sheets_core::PivotTable::builder("DateGroupedSales")
+        .source_range(CellRange::parse("A1:B4").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("SaleDate")
+        .measure("Revenue", PivotAggregate::Sum)
+        .grouping(PivotGrouping::Date {
+            field: "SaleDate".into(),
+            units: vec![PivotDateGroupUnit::Months],
+        })
+        .build()
+        .unwrap();
+    sheet.add_pivot_table(pivot).unwrap();
+
+    let result = roundtrip_through_excel(&wb);
+    let pivot = result
+        .worksheet(0)
+        .unwrap()
+        .pivot_table_by_name("DateGroupedSales")
+        .expect("date grouping survives Excel roundtrip");
+    assert!(pivot.groupings.iter().any(|grouping| matches!(
+        grouping,
+        PivotGrouping::Date { field, units }
+            if field.name == "SaleDate" && units == &[PivotDateGroupUnit::Months]
+    )));
+}
+
+// features: Grouping (dates, numbers, items)
+#[test]
+fn test_write_multi_date_pivot_grouping_survives_excel_roundtrip() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_cell_value("A1", "SaleDate").unwrap();
+    sheet.set_cell_value("B1", "Revenue").unwrap();
+    for (row, (date, revenue)) in [(45292.0, 10.0), (45323.0, 20.0), (45658.0, 30.0)]
+        .into_iter()
+        .enumerate()
+    {
+        let row = row + 2;
+        sheet.set_cell_value(&format!("A{row}"), date).unwrap();
+        sheet.set_cell_value(&format!("B{row}"), revenue).unwrap();
+    }
+
+    let pivot = duke_sheets_core::PivotTable::builder("MultiDateGroupedSales")
+        .source_range(CellRange::parse("A1:B4").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("SaleDate")
+        .measure("Revenue", PivotAggregate::Sum)
+        .grouping(PivotGrouping::Date {
+            field: "SaleDate".into(),
+            units: vec![PivotDateGroupUnit::Years, PivotDateGroupUnit::Months],
+        })
+        .build()
+        .unwrap();
+    sheet.add_pivot_table(pivot).unwrap();
+
+    let result = roundtrip_through_excel(&wb);
+    let pivot = result
+        .worksheet(0)
+        .unwrap()
+        .pivot_table_by_name("MultiDateGroupedSales")
+        .expect("multi-unit date grouping survives Excel roundtrip");
+    assert!(pivot.groupings.iter().any(|grouping| matches!(
+        grouping,
+        PivotGrouping::Date { field, units }
+            if field.name == "SaleDate"
+                && units == &[PivotDateGroupUnit::Years, PivotDateGroupUnit::Months]
+    )));
+}
+
+// features: Grouping (dates, numbers, items)
+#[test]
+fn test_write_range_pivot_grouping_survives_excel_roundtrip() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    for (address, value) in [("A1", "Amount"), ("B1", "SaleDate"), ("C1", "Revenue")] {
+        sheet.set_cell_value(address, value).unwrap();
+    }
+    for (row, (amount, date, revenue)) in [
+        (2.0, 45292.0, 10.0),
+        (12.0, 45323.0, 20.0),
+        (22.0, 45352.0, 30.0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let row = row + 2;
+        sheet.set_cell_value(&format!("A{row}"), amount).unwrap();
+        sheet.set_cell_value(&format!("B{row}"), date).unwrap();
+        sheet.set_cell_value(&format!("C{row}"), revenue).unwrap();
+    }
+
+    let pivot = duke_sheets_core::PivotTable::builder("RangeGroupedSales")
+        .source_range(CellRange::parse("A1:C4").unwrap())
+        .target_address("E1")
+        .unwrap()
+        .row("Amount")
+        .column("SaleDate")
+        .measure("Revenue", PivotAggregate::Sum)
+        .grouping(PivotGrouping::Number {
+            field: "Amount".into(),
+            start: Some(0.0),
+            end: Some(30.0),
+            interval: 10.0,
+        })
+        .grouping(PivotGrouping::Date {
+            field: "SaleDate".into(),
+            units: vec![PivotDateGroupUnit::Months],
+        })
+        .build()
+        .unwrap();
+    sheet.add_pivot_table(pivot).unwrap();
+
+    let result = roundtrip_through_excel(&wb);
+    let pivot = result
+        .worksheet(0)
+        .unwrap()
+        .pivot_table_by_name("RangeGroupedSales")
+        .expect("range groupings survive Excel roundtrip");
+    assert!(pivot.groupings.iter().any(|grouping| matches!(
+        grouping,
+        PivotGrouping::Number { field, start, end, interval }
+            if field.name == "Amount"
+                && *start == Some(0.0)
+                && *end == Some(30.0)
+                && *interval == 10.0
+    )));
+    assert!(pivot.groupings.iter().any(|grouping| matches!(
+        grouping,
+        PivotGrouping::Date { field, units }
+            if field.name == "SaleDate" && units == &[PivotDateGroupUnit::Months]
+    )));
 }

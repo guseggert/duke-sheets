@@ -2301,15 +2301,26 @@ fn test_writer_round_trips_pivot_grouping() {
 
     let cache_def = read_zip_entry(bytes.clone(), "xl/pivotCache/pivotCacheDefinition1.xml");
     assert!(cache_def.contains(
-        r#"<fieldGroup><rangePr autoStart="0" autoEnd="0" groupBy="range" startNum="0" endNum="30" groupInterval="10"/></fieldGroup>"#
+        r#"<fieldGroup base="0"><rangePr autoStart="0" autoEnd="0" startNum="0" endNum="30" groupInterval="10"/><groupItems count="5"><s v="&lt;0"/><s v="0-9"/><s v="10-19"/><s v="20-30"/><s v="&gt;30"/>"#
     ));
-    assert!(cache_def.contains(r#"<fieldGroup><rangePr groupBy="months"/></fieldGroup>"#));
-    for source_value in ["2", "12", "22", "45292", "45323", "45352"] {
+    assert!(cache_def.contains(r#"<fieldGroup par="3"/>"#));
+    assert!(cache_def.contains(
+        r#"<cacheField name="Months (SaleDate)" numFmtId="0" databaseField="0"><fieldGroup base="1"><rangePr groupBy="months" startDate="2024-01-01T00:00:00" endDate="2024-03-02T00:00:00"/><groupItems count="14"><s v="&lt;1/1/2024"/><s v="Jan"/><s v="Feb"/><s v="Mar"/>"#
+    ));
+    for source_value in ["2", "12", "22"] {
         assert!(
             cache_def.contains(&format!(r#"<n v="{source_value}"/>"#)),
             "grouped cache lost source item {source_value}: {cache_def}"
         );
     }
+    for source_date in ["2024-01-01", "2024-02-01", "2024-03-01"] {
+        assert!(cache_def.contains(&format!(r#"<d v="{source_date}T00:00:00"/>"#)));
+    }
+    let pivot_xml = read_zip_entry(bytes.clone(), "xl/pivotTables/pivotTable1.xml");
+    assert!(pivot_xml
+        .contains(r#"<rowItems count="4"><i><x v="1"/></i><i><x v="2"/></i><i><x v="3"/></i>"#));
+    assert!(pivot_xml
+        .contains(r#"<colItems count="4"><i><x v="1"/></i><i><x v="2"/></i><i><x v="3"/></i>"#));
 
     let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
     let pivot = roundtrip
@@ -2455,13 +2466,15 @@ fn test_writer_round_trips_multi_unit_date_grouping() {
 
     let cache_def = read_zip_entry(bytes.clone(), "xl/pivotCache/pivotCacheDefinition1.xml");
     assert!(cache_def.contains(r#"<cacheFields count="4">"#));
-    assert!(cache_def.contains(r#"<cacheField name="SaleDate (Years)">"#));
-    assert!(cache_def.contains(r#"<cacheField name="SaleDate (Months)">"#));
-    assert!(
-        cache_def.contains(r#"<fieldGroup base="0"><rangePr groupBy="years"/></fieldGroup>"#)
-    );
     assert!(cache_def
-        .contains(r#"<fieldGroup base="0" par="2"><rangePr groupBy="months"/></fieldGroup>"#));
+        .contains(r#"<cacheField name="Years (SaleDate)" numFmtId="0" databaseField="0">"#));
+    assert!(cache_def
+        .contains(r#"<cacheField name="Months (SaleDate)" numFmtId="0" databaseField="0">"#));
+    assert!(
+        cache_def.contains(r#"<fieldGroup base="0"><rangePr groupBy="years" startDate="2024-01-01T00:00:00" endDate="2025-01-02T00:00:00"/>"#)
+    );
+    assert!(cache_def.contains(r#"<fieldGroup base="0"><rangePr groupBy="months" startDate="2024-01-01T00:00:00" endDate="2025-01-02T00:00:00"/>"#));
+    assert!(cache_def.contains(r#"<groupItems count="4"><s v="&lt;1/1/2024"/><s v="2024"/><s v="2025"/><s v="&gt;1/2/2025"/>"#));
 
     let pivot_xml = read_zip_entry(bytes.clone(), "xl/pivotTables/pivotTable1.xml");
     assert!(pivot_xml.contains(r#"<rowFields count="2">"#));
@@ -2486,4 +2499,79 @@ fn test_writer_round_trips_multi_unit_date_grouping() {
         }
         other => panic!("unexpected grouping: {other:?}"),
     }
+}
+
+#[test]
+fn test_writer_emits_fractional_numeric_group_boundaries_and_extremes() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_cell_value("A1", "Amount").unwrap();
+    sheet.set_cell_value("B1", "Revenue").unwrap();
+    for (row, amount) in [-1.25, 0.25, 1.75, 3.0].into_iter().enumerate() {
+        let row = row + 2;
+        sheet.set_cell_value(&format!("A{row}"), amount).unwrap();
+        sheet.set_cell_value(&format!("B{row}"), 1.0).unwrap();
+    }
+    let pivot = PivotTable::builder("FractionGroups")
+        .source_range(CellRange::parse("A1:B5").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("Amount")
+        .measure("Revenue", PivotAggregate::Sum)
+        .grouping(PivotGrouping::Number {
+            field: "Amount".into(),
+            start: Some(0.0),
+            end: Some(2.0),
+            interval: 0.5,
+        })
+        .build()
+        .unwrap();
+    sheet.add_pivot_table(pivot).unwrap();
+
+    let mut out = Cursor::new(Vec::new());
+    XlsxWriter::write(&wb, &mut out).unwrap();
+    let bytes = out.into_inner();
+    let cache_def = read_zip_entry(bytes.clone(), "xl/pivotCache/pivotCacheDefinition1.xml");
+    assert!(cache_def.contains(
+        r#"<groupItems count="6"><s v="&lt;0"/><s v="0-0.5"/><s v="0.5-1"/><s v="1-1.5"/><s v="1.5-2"/><s v="&gt;2"/>"#
+    ));
+    let pivot_xml = read_zip_entry(bytes, "xl/pivotTables/pivotTable1.xml");
+    assert!(pivot_xml.contains(
+        r#"<rowItems count="5"><i><x/></i><i><x v="1"/></i><i><x v="4"/></i><i><x v="5"/></i>"#
+    ));
+}
+
+#[test]
+fn test_writer_emits_1904_date_times_as_typed_cache_items() {
+    let mut wb = Workbook::new();
+    wb.settings_mut().date_1904 = true;
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_cell_value("A1", "OccurredAt").unwrap();
+    sheet.set_cell_value("B1", "Count").unwrap();
+    sheet.set_cell_value("A2", 0.25).unwrap();
+    sheet.set_cell_value("B2", 1.0).unwrap();
+    sheet.set_cell_value("A3", 0.75).unwrap();
+    sheet.set_cell_value("B3", 1.0).unwrap();
+    let pivot = PivotTable::builder("HourlyGroups")
+        .source_range(CellRange::parse("A1:B3").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("OccurredAt")
+        .measure("Count", PivotAggregate::Sum)
+        .grouping(PivotGrouping::Date {
+            field: "OccurredAt".into(),
+            units: vec![PivotDateGroupUnit::Hours],
+        })
+        .build()
+        .unwrap();
+    sheet.add_pivot_table(pivot).unwrap();
+
+    let mut out = Cursor::new(Vec::new());
+    XlsxWriter::write(&wb, &mut out).unwrap();
+    let cache_def = read_zip_entry(out.into_inner(), "xl/pivotCache/pivotCacheDefinition1.xml");
+    assert!(cache_def.contains(r#"<d v="1904-01-01T06:00:00"/>"#));
+    assert!(cache_def.contains(r#"<d v="1904-01-01T18:00:00"/>"#));
+    assert!(cache_def.contains(
+        r#"<rangePr groupBy="hours" startDate="1904-01-01T06:00:00" endDate="1904-01-02T00:00:00"/>"#
+    ));
 }

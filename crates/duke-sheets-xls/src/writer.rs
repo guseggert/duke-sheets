@@ -69,7 +69,6 @@ const DBCELL_RECORD: u16 = 0x00D7;
 const COLINFO_RECORD: u16 = 0x007D;
 const PANE_RECORD: u16 = 0x0041;
 const WINDOW1_RECORD: u16 = 0x003D;
-const DEFCOLWIDTH_RECORD: u16 = 0x0055;
 const SAVERECALC_RECORD: u16 = 0x005F;
 const GUTS_RECORD: u16 = 0x0080;
 const WSBOOL_RECORD: u16 = 0x0081;
@@ -370,7 +369,6 @@ fn build_workbook_stream_with_pivots(
         write_margin_records(&mut stream, sheet);
         write_print_flags(&mut stream, sheet);
         write_setup_record(&mut stream, sheet);
-        write_default_column_width_record(&mut stream);
         write_dimension(&mut stream, sheet);
         let row_record_positions = write_row_records(&mut stream, sheet);
         let mut first_cell_positions = BTreeMap::new();
@@ -1726,10 +1724,6 @@ fn write_sheet_display_default_records(stream: &mut Vec<u8>, sheet: &Worksheet) 
     write_biff_record(stream, DEFAULTROWHEIGHT_RECORD, &row_height);
 
     write_biff_record(stream, WSBOOL_RECORD, &[0xC1, 0x04]);
-}
-
-fn write_default_column_width_record(stream: &mut Vec<u8>) {
-    write_biff_record(stream, DEFCOLWIDTH_RECORD, &8u16.to_le_bytes());
 }
 
 fn write_protect_records(stream: &mut Vec<u8>, sheet: &Worksheet) {
