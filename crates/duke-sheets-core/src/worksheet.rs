@@ -1464,7 +1464,6 @@ impl Worksheet {
 
         self.pivot_tables.push(pivot_table);
         self.mutation_count += 1;
-        self.topology_generation += 1;
         Ok(())
     }
 
@@ -1476,7 +1475,6 @@ impl Worksheet {
     /// Get a mutable reference to all pivot tables.
     pub fn pivot_tables_mut(&mut self) -> &mut Vec<PivotTable> {
         self.mutation_count += 1;
-        self.topology_generation += 1;
         &mut self.pivot_tables
     }
 
@@ -1494,7 +1492,6 @@ impl Worksheet {
             .iter()
             .position(|pivot| pivot.name.eq_ignore_ascii_case(name))?;
         self.mutation_count += 1;
-        self.topology_generation += 1;
         self.pivot_tables.get_mut(index)
     }
 
@@ -1510,7 +1507,6 @@ impl Worksheet {
             .iter()
             .position(|pivot| pivot.name.eq_ignore_ascii_case(name))?;
         self.mutation_count += 1;
-        self.topology_generation += 1;
         Some(self.pivot_tables.remove(index))
     }
 
@@ -1518,7 +1514,6 @@ impl Worksheet {
     pub fn clear_pivot_tables(&mut self) {
         if !self.pivot_tables.is_empty() {
             self.mutation_count += 1;
-            self.topology_generation += 1;
         }
         self.pivot_tables.clear();
     }
@@ -3313,6 +3308,41 @@ mod tests {
             )
             .unwrap_err();
         assert!(err.to_string().contains("does not have a rendered range"));
+    }
+
+    #[test]
+    fn pivot_mutations_do_not_change_formula_topology_generation() {
+        let pivot = |name: &str| {
+            PivotTable::builder(name)
+                .source_range(CellRange::parse("A1:B2").unwrap())
+                .target_address("D1")
+                .unwrap()
+                .measure("Revenue", crate::pivot::PivotAggregate::Sum)
+                .build()
+                .unwrap()
+        };
+        let mut ws = Worksheet::new("Pivot");
+
+        ws.add_pivot_table(pivot("SalesPivot")).unwrap();
+        assert_eq!(ws.mutation_count(), 1);
+        assert_eq!(ws.topology_generation(), 0);
+
+        ws.pivot_tables_mut()[0].name = "RenamedPivot".to_string();
+        assert_eq!(ws.mutation_count(), 2);
+        assert_eq!(ws.topology_generation(), 0);
+
+        ws.pivot_table_by_name_mut("RenamedPivot").unwrap().id = 2;
+        assert_eq!(ws.mutation_count(), 3);
+        assert_eq!(ws.topology_generation(), 0);
+
+        ws.remove_pivot_table("RenamedPivot").unwrap();
+        assert_eq!(ws.mutation_count(), 4);
+        assert_eq!(ws.topology_generation(), 0);
+
+        ws.add_pivot_table(pivot("ReplacementPivot")).unwrap();
+        ws.clear_pivot_tables();
+        assert_eq!(ws.mutation_count(), 6);
+        assert_eq!(ws.topology_generation(), 0);
     }
 
     #[test]

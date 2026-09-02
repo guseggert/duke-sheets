@@ -258,18 +258,12 @@ impl EncodedColumn {
     }
 
     pub(crate) fn push(&mut self, value: PivotValue) {
-        let id = if let Some(id) = self.lookup.get(&value) {
-            *id
-        } else {
-            let id = self.dictionary.len() as u32;
-            self.dictionary.push(value.clone());
-            self.lookup.insert(value, id);
-            id
-        };
+        let id = self.ensure_dictionary_value(value);
         self.values.push(id);
     }
 
     pub(crate) fn ensure_dictionary_value(&mut self, value: PivotValue) -> u32 {
+        let value = normalize_dictionary_value(value);
         if let Some(id) = self.lookup.get(&value) {
             *id
         } else {
@@ -289,7 +283,7 @@ impl EncodedColumn {
         let mut id_map = Vec::with_capacity(self.dictionary.len());
 
         for value in &self.dictionary {
-            let grouped = group_value(value);
+            let grouped = normalize_dictionary_value(group_value(value));
             let id = if let Some(id) = lookup.get(&grouped) {
                 *id
             } else {
@@ -322,7 +316,12 @@ impl EncodedColumn {
     }
 
     pub(crate) fn id_for_value(&self, value: &PivotValue) -> Option<u32> {
-        self.lookup.get(value).copied()
+        match value {
+            PivotValue::Number(value) if *value == 0.0 => {
+                self.lookup.get(&PivotValue::Number(0.0)).copied()
+            }
+            value => self.lookup.get(value).copied(),
+        }
     }
 
     fn remap_ids(values: &[u32], id_map: &[u32]) -> Vec<u32> {
@@ -337,5 +336,12 @@ impl EncodedColumn {
         }
 
         values.iter().map(|id| id_map[*id as usize]).collect()
+    }
+}
+
+fn normalize_dictionary_value(value: PivotValue) -> PivotValue {
+    match value {
+        PivotValue::Number(value) if value == 0.0 => PivotValue::Number(0.0),
+        value => value,
     }
 }

@@ -46,6 +46,10 @@ pub struct PivotRefreshOptions {
 }
 
 /// Extension methods for refreshing pivot tables in a workbook.
+///
+/// Refresh-all operations are fail-fast. They capture every local source snapshot
+/// before writing any pivot output, so pivot-on-pivot dependencies observe
+/// pre-refresh source data.
 pub trait WorkbookPivotExt {
     /// Refresh all pivot tables in the workbook.
     fn refresh_pivots(&mut self) -> Result<PivotRefreshStats>;

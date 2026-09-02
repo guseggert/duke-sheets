@@ -2,6 +2,72 @@ use crate::test_support::*;
 use pretty_assertions::assert_eq;
 
 #[test]
+fn encoded_column_push_coalesces_signed_zero() {
+    let mut column = EncodedColumn::with_capacity(2);
+    column.push(PivotValue::Number(-0.0));
+    column.push(PivotValue::Number(0.0));
+
+    assert_eq!(column.dictionary.len(), 1);
+    assert_eq!(column.values, vec![0, 0]);
+    let PivotValue::Number(value) = column.dictionary[0] else {
+        panic!("expected numeric dictionary value");
+    };
+    assert_eq!(value.to_bits(), 0.0f64.to_bits());
+    assert_eq!(column.id_for_value(&PivotValue::Number(-0.0)), Some(0));
+    assert_eq!(column.id_for_value(&PivotValue::Number(0.0)), Some(0));
+}
+
+#[test]
+fn encoded_column_ensure_dictionary_value_coalesces_signed_zero() {
+    let mut column = EncodedColumn::with_capacity(0);
+
+    let negative_id = column.ensure_dictionary_value(PivotValue::Number(-0.0));
+    let positive_id = column.ensure_dictionary_value(PivotValue::Number(0.0));
+
+    assert_eq!(negative_id, positive_id);
+    assert_eq!(column.dictionary.len(), 1);
+    let PivotValue::Number(value) = column.dictionary[0] else {
+        panic!("expected numeric dictionary value");
+    };
+    assert_eq!(value.to_bits(), 0.0f64.to_bits());
+}
+
+#[test]
+fn remapping_dictionary_coalesces_signed_zero_output() {
+    let mut column = EncodedColumn::with_capacity(2);
+    column.push(PivotValue::Number(-1.0));
+    column.push(PivotValue::Number(1.0));
+
+    let grouped = column.remap_dictionary(|value| match value {
+        PivotValue::Number(value) if value.is_sign_negative() => PivotValue::Number(-0.0),
+        PivotValue::Number(_) => PivotValue::Number(0.0),
+        value => value.clone(),
+    });
+
+    assert_eq!(grouped.dictionary.len(), 1);
+    assert_eq!(grouped.values, vec![0, 0]);
+    let PivotValue::Number(value) = grouped.dictionary[0] else {
+        panic!("expected numeric dictionary value");
+    };
+    assert_eq!(value.to_bits(), 0.0f64.to_bits());
+    assert_eq!(grouped.id_for_value(&PivotValue::Number(-0.0)), Some(0));
+    assert_eq!(grouped.id_for_value(&PivotValue::Number(0.0)), Some(0));
+}
+
+#[test]
+fn encoded_column_preserves_nan_bits() {
+    let mut column = EncodedColumn::with_capacity(2);
+    let first_nan = f64::from_bits(0x7ff8_0000_0000_0001);
+    let second_nan = f64::from_bits(0x7ff8_0000_0000_0002);
+    column.push(PivotValue::Number(first_nan));
+    column.push(PivotValue::Number(second_nan));
+
+    assert_eq!(column.dictionary.len(), 2);
+    assert_eq!(column.id_for_value(&PivotValue::Number(first_nan)), Some(0));
+    assert_eq!(column.id_for_value(&PivotValue::Number(second_nan)), Some(1));
+}
+
+#[test]
 fn remapping_grouped_column_coalesces_dictionary_ids() {
     let mut column = EncodedColumn::with_capacity(5);
     for value in ["East", "West", "South", "East", "West"] {

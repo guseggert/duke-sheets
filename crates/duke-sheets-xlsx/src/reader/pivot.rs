@@ -14,9 +14,9 @@ use duke_sheets_core::{
     CellAddress, CellError, CellRange, PivotAggregate, PivotCacheInfo, PivotCacheSourceKind,
     PivotCalculatedField, PivotCalculatedItem, PivotDateGroupUnit, PivotDatePeriod, PivotExtension,
     PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout, PivotLayoutKind,
-    PivotManualGroup, PivotMeasure, PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource,
-    PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable, PivotValue, PivotValuesAxis,
-    WorkbookConnection, WorkbookConnectionKind,
+    PivotManualGroup, PivotMeasure, PivotShowAs, PivotSort, PivotSource, PivotSourceRange,
+    PivotStyle, PivotSubtotal, PivotTable, PivotValue, PivotValuesAxis, WorkbookConnection,
+    WorkbookConnectionKind,
 };
 
 #[derive(Debug, Clone)]
@@ -1106,7 +1106,6 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
         source_kind: cache.source_kind,
         record_count: cache.record_count,
         refreshed_version: cache.refreshed_version.clone(),
-        refresh_status: PivotRefreshStatus::NotRefreshed,
     }));
 
     let hidden_item_filters = hidden_items_by_field

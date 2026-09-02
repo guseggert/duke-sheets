@@ -19,9 +19,9 @@ use duke_sheets_core::{
     CellAddress, CellComment, CellError, CellRange, CellValue, Hyperlink, PivotAggregate,
     PivotCacheInfo, PivotCacheSourceKind, PivotCalculatedField, PivotCalculatedItem,
     PivotDateGroupUnit, PivotDatePeriod, PivotField, PivotFieldRef, PivotFilter,
-    PivotFilterOperator, PivotGrouping, PivotManualGroup, PivotMeasure, PivotRefreshStatus,
-    PivotShowAs, PivotSort, PivotSource, PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable,
-    PivotValue, PivotValuesAxis, ProtectedRange, Style, Workbook, WorkbookProtection, Worksheet,
+    PivotFilterOperator, PivotGrouping, PivotManualGroup, PivotMeasure, PivotShowAs, PivotSort,
+    PivotSource, PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable, PivotValue,
+    PivotValuesAxis, ProtectedRange, Style, Workbook, WorkbookProtection, Worksheet,
 };
 use duke_sheets_formula::decompile::{
     decompile_pivot_formula as decompile_biff_pivot_formula, PivotFormulaHooks,
@@ -1996,7 +1996,6 @@ impl XlsReader {
             source_kind,
             record_count: cache.record_count,
             refreshed_version: None,
-            refresh_status: PivotRefreshStatus::NotRefreshed,
         }));
         Some(pivot)
     }

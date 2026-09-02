@@ -14,9 +14,9 @@ use duke_sheets_core::{
     CellAddress, CellError, CellRange, PivotAggregate, PivotCacheInfo, PivotCacheSourceKind,
     PivotCalculatedField, PivotCalculatedItem, PivotDateGroupUnit, PivotDatePeriod, PivotField,
     PivotFieldRef, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayoutKind,
-    PivotManualGroup, PivotMeasure, PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource,
-    PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable, PivotValue, PivotValuesAxis,
-    WorkbookConnection, WorkbookConnectionKind,
+    PivotManualGroup, PivotMeasure, PivotShowAs, PivotSort, PivotSource, PivotSourceRange,
+    PivotStyle, PivotSubtotal, PivotTable, PivotValue, PivotValuesAxis, WorkbookConnection,
+    WorkbookConnectionKind,
 };
 use duke_sheets_formula::decompile::{
     decompile_pivot_formula as decompile_biff_pivot_formula, PivotFormulaHooks,
@@ -455,7 +455,6 @@ fn read_pivot_table<R: Read + Seek>(
         source_kind: cache.source_kind,
         record_count: cache.record_count,
         refreshed_version: None,
-        refresh_status: PivotRefreshStatus::NotRefreshed,
     }));
     Ok(Some(pivot))
 }

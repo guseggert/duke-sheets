@@ -65,7 +65,6 @@ pub(crate) fn write_rendered_pivot(
     if let Some(pivot) = worksheet.pivot_tables_mut().get_mut(job.pivot_index) {
         pivot.rendered_range = Some(rendered.range);
         pivot.refresh_status = PivotRefreshStatus::Succeeded;
-        pivot.set_cache_refresh_status(PivotRefreshStatus::Succeeded);
     }
 
     Ok(())
@@ -239,9 +238,7 @@ pub(crate) fn mark_pivot_failed(
 ) {
     if let Some(worksheet) = workbook.worksheet_mut(sheet_index) {
         if let Some(pivot) = worksheet.pivot_tables_mut().get_mut(pivot_index) {
-            let status = PivotRefreshStatus::Failed { message };
-            pivot.refresh_status = status.clone();
-            pivot.set_cache_refresh_status(status);
+            pivot.refresh_status = PivotRefreshStatus::Failed { message };
         }
     }
 }
@@ -250,7 +247,6 @@ pub(crate) fn mark_pivot_external(workbook: &mut Workbook, sheet_index: usize, p
     if let Some(worksheet) = workbook.worksheet_mut(sheet_index) {
         if let Some(pivot) = worksheet.pivot_tables_mut().get_mut(pivot_index) {
             pivot.refresh_status = PivotRefreshStatus::External;
-            pivot.set_cache_refresh_status(PivotRefreshStatus::External);
         }
     }
 }

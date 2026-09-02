@@ -1228,8 +1228,6 @@ pub struct PivotCacheInfo {
     pub record_count: Option<u64>,
     /// Application version that last refreshed the cache, if known.
     pub refreshed_version: Option<String>,
-    /// Latest refresh status.
-    pub refresh_status: PivotRefreshStatus,
 }
 
 /// Pivot cache source kind reported by a reader.
@@ -1274,7 +1272,7 @@ impl Default for PivotRefreshStatus {
 /// A pivot table definition attached to a worksheet.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PivotTable {
-    /// Unique pivot table ID within the workbook. `0` means "assign on insert".
+    /// Worksheet-scoped unique pivot table ID. `0` means "assign on insert".
     pub id: u32,
     /// Pivot table name.
     pub name: String,
@@ -1360,14 +1358,6 @@ impl PivotTable {
     #[doc(hidden)]
     pub fn set_cache_info(&mut self, cache_info: Option<PivotCacheInfo>) {
         self.cache_info = cache_info;
-    }
-
-    /// Update the cache diagnostic refresh status when diagnostics exist.
-    #[doc(hidden)]
-    pub fn set_cache_refresh_status(&mut self, refresh_status: PivotRefreshStatus) {
-        if let Some(cache_info) = &mut self.cache_info {
-            cache_info.refresh_status = refresh_status;
-        }
     }
 }
 

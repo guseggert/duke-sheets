@@ -160,6 +160,33 @@ fn refreshes_table_sources() {
 }
 
 #[test]
+fn refresh_does_not_change_worksheet_topology_generation() {
+    let mut workbook = Workbook::new();
+    let sheet = workbook.worksheet_mut(0).unwrap();
+    sheet.set_cell_value("A1", "Region").unwrap();
+    sheet.set_cell_value("B1", "Revenue").unwrap();
+    sheet.set_cell_value("A2", "East").unwrap();
+    sheet.set_cell_value("B2", 10.0).unwrap();
+    let pivot = PivotTable::builder("SalesPivot")
+        .source_range(CellRange::parse("A1:B2").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("Region")
+        .measure("Revenue", PivotAggregate::Sum)
+        .build()
+        .unwrap();
+    sheet.add_pivot_table(pivot).unwrap();
+    let topology_generation = sheet.topology_generation();
+
+    workbook.refresh_pivots().unwrap();
+
+    assert_eq!(
+        workbook.worksheet(0).unwrap().topology_generation(),
+        topology_generation
+    );
+}
+
+#[test]
 fn shared_sources_hit_the_internal_snapshot_cache() {
     let mut workbook = Workbook::new();
     let sheet = workbook.worksheet_mut(0).unwrap();
