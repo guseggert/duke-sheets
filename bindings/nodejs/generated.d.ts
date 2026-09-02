@@ -222,6 +222,32 @@ export declare class Workbook {
    * @returns Statistics about the calculation
    */
   calculate(options?: JsCalculationOptions | undefined | null): CalculationStats
+  /** Refresh all pivot tables in the workbook. */
+  refreshPivots(options?: JsPivotRefreshOptions | undefined | null): JsPivotRefreshStats
+  /** Add a workbook-level database connection. */
+  addDataConnection(options: JsWorkbookConnectionOptions): void
+  /** Number of workbook-level data connections. */
+  get dataConnectionCount(): number
+  /** Workbook-level data connection names. */
+  get dataConnectionNames(): Array<string>
+  /** Workbook-level data connection definitions. */
+  get dataConnections(): Array<JsWorkbookConnectionDefinition>
+  /** Number of raw workbook extension elements preserved from the package. */
+  get workbookExtensionCount(): number
+  /** Raw workbook extension elements preserved from workbook.xml. */
+  get workbookExtensions(): Array<JsWorkbookExtension>
+  /** Number of raw workbook-related extension package parts. */
+  get workbookExtensionPartCount(): number
+  /** Raw workbook-related extension package parts. */
+  get workbookExtensionParts(): Array<JsWorkbookExtensionPart>
+  /** Get a raw workbook extension package part by package path. */
+  getWorkbookExtensionPart(path: string): JsWorkbookExtensionPart | null
+  /** Get a raw workbook extension package part by workbook relationship id. */
+  getWorkbookExtensionPartByRelationshipId(relationshipId: string): JsWorkbookExtensionPart | null
+  /** Get a workbook-level data connection by name. */
+  getDataConnection(name: string): JsWorkbookConnectionDefinition | null
+  /** Get a workbook-level data connection by id. */
+  getDataConnectionById(id: number): JsWorkbookConnectionDefinition | null
   /**
    * Define a named range
    *
@@ -507,6 +533,18 @@ export declare class Worksheet {
   get usedRange(): UsedRange | null
   /** Get IMAGE() metadata for a cell, or null if no image. */
   getImageAt(row: number, col: number): JsImageInfo | null
+  /** Number of pivot tables on the worksheet. */
+  get pivotCount(): number
+  /** Pivot table names on the worksheet. */
+  get pivotTableNames(): Array<string>
+  /** Pivot table definitions on the worksheet. */
+  get pivotTables(): Array<JsPivotTableDefinition>
+  /** Get a pivot table definition by name. */
+  getPivotTable(name: string): JsPivotTableDefinition | null
+  /** Add a semantic pivot table definition to the worksheet. */
+  addPivotTable(options: JsPivotTableOptions): void
+  /** Generate and add a PivotChart from a rendered pivot table. */
+  addPivotChart(options: JsPivotChartOptions): JsChart
   /** Set the height of a row in points */
   setRowHeight(row: number, height: number): void
   /** Set the width of a column in character units */
@@ -694,6 +732,7 @@ export interface JsChart {
   showNegativeBubbles?: boolean
   autoTitleDeleted?: boolean
   roundedCorners?: boolean
+  pivotSource?: JsPivotChartSource
   showDlblsOverMax?: boolean
   wireframe?: boolean
   radarStyle?: string
@@ -1501,6 +1540,386 @@ export interface JsPageSetup {
   alignWithMargins: boolean
 }
 
+export interface JsPivotCalculatedFieldDefinition {
+  name: string
+  formula: string
+}
+
+export interface JsPivotCalculatedFieldOptions {
+  name: string
+  formula: string
+}
+
+export interface JsPivotCalculatedItemDefinition {
+  field: string
+  item: JsPivotValue
+  formula: string
+}
+
+export interface JsPivotCalculatedItemOptions {
+  field: string
+  item: number | string | boolean
+  formula: string
+}
+
+export interface JsPivotChartOptions {
+  pivotName: string
+  chartType?: string
+}
+
+export interface JsPivotChartSource {
+  name: string
+  formatId: number
+}
+
+export interface JsPivotConsolidationRangeOptions {
+  sheet?: string
+  range?: string
+  name?: string
+  externalRelationshipId?: string
+  externalRelationshipTarget?: string
+  pageItems?: Array<string>
+}
+
+export interface JsPivotFieldDefinition {
+  field: string
+  caption?: string
+  sort: string
+  sortByMeasure?: JsPivotMeasureDefinition
+  subtotal: string
+  subtotalCaption?: string
+  subtotals: Array<string>
+  collapsedItems: Array<JsPivotValue>
+  showEmptyItems: boolean
+  showDropDowns: boolean
+  subtotalTop: boolean
+  insertBlankRow: boolean
+  insertPageBreak: boolean
+  includeNewItemsInFilter: boolean
+  itemPageCount: number
+}
+
+export interface JsPivotFieldOptions {
+  field: string
+  caption?: string
+  sort?: string
+  sortByMeasure?: JsPivotMeasureOptions
+  subtotal?: string
+  subtotalCaption?: string
+  subtotals?: Array<string>
+  collapsedItems?: Array<number | string | boolean>
+  showEmptyItems?: boolean
+  showDropDowns?: boolean
+  subtotalTop?: boolean
+  insertBlankRow?: boolean
+  insertPageBreak?: boolean
+  includeNewItemsInFilter?: boolean
+  itemPageCount?: number
+}
+
+export interface JsPivotFilterDefinition {
+  kind: string
+  field?: string
+  items?: Array<JsPivotValue>
+  operator?: string
+  text?: string
+  startText?: string
+  endText?: string
+  period?: string
+  measure?: JsPivotMeasureDefinition
+  value?: number
+  start?: number
+  end?: number
+  n?: number
+  top?: boolean
+  percent?: boolean
+  detail?: string
+}
+
+export interface JsPivotFilterOptions {
+  kind?: string
+  field: string
+  items?: Array<string>
+  operator?: string
+  text?: string
+  startText?: string
+  endText?: string
+  period?: string
+  measure?: JsPivotMeasureOptions
+  value?: number
+  start?: number
+  end?: number
+  n?: number
+  top?: boolean
+  percent?: boolean
+}
+
+export interface JsPivotGroupingDefinition {
+  kind: string
+  field: string
+  start?: number
+  end?: number
+  interval?: number
+  units?: Array<string>
+  groups?: Array<JsPivotManualGroupDefinition>
+}
+
+export interface JsPivotGroupingOptions {
+  field: string
+  kind: string
+  start?: number
+  end?: number
+  interval?: number
+  units?: Array<string>
+  groups?: Array<JsPivotManualGroupOptions>
+}
+
+export interface JsPivotLayoutDefinition {
+  kind: string
+  showRowGrandTotals: boolean
+  showColumnGrandTotals: boolean
+  showFieldHeaders: boolean
+  repeatItemLabels: boolean
+  showExpandCollapse: boolean
+  printDrillIndicators: boolean
+  itemPrintTitles: boolean
+  fieldPrintTitles: boolean
+  pageWrap: number
+  pageOverThenDown: boolean
+  mergeItemLabels: boolean
+  dataCaption: string
+  valuesAxis: string
+  valuesAxisPosition?: number
+  grandTotalCaption?: string
+  errorCaption?: string
+  showError: boolean
+  missingCaption?: string
+  showMissing: boolean
+  asteriskTotals: boolean
+  showItems: boolean
+  editData: boolean
+  disableFieldList: boolean
+  showCalculatedMembers: boolean
+  visualTotals: boolean
+  showMultipleLabel: boolean
+  showDataDropDown: boolean
+  showMemberPropertyTips: boolean
+  showDataTips: boolean
+  enableWizard: boolean
+  enableDrill: boolean
+  enableFieldProperties: boolean
+  subtotalHiddenItems: boolean
+  showDropZones: boolean
+  indent: number
+  showEmptyRows: boolean
+  showEmptyColumns: boolean
+}
+
+export interface JsPivotLayoutOptions {
+  kind?: string
+  showRowGrandTotals?: boolean
+  showColumnGrandTotals?: boolean
+  showFieldHeaders?: boolean
+  repeatItemLabels?: boolean
+  showExpandCollapse?: boolean
+  printDrillIndicators?: boolean
+  itemPrintTitles?: boolean
+  fieldPrintTitles?: boolean
+  pageWrap?: number
+  pageOverThenDown?: boolean
+  mergeItemLabels?: boolean
+  dataCaption?: string
+  valuesAxis?: string
+  valuesAxisPosition?: number
+  grandTotalCaption?: string
+  errorCaption?: string
+  showError?: boolean
+  missingCaption?: string
+  showMissing?: boolean
+  asteriskTotals?: boolean
+  showItems?: boolean
+  editData?: boolean
+  disableFieldList?: boolean
+  showCalculatedMembers?: boolean
+  visualTotals?: boolean
+  showMultipleLabel?: boolean
+  showDataDropDown?: boolean
+  showMemberPropertyTips?: boolean
+  showDataTips?: boolean
+  enableWizard?: boolean
+  enableDrill?: boolean
+  enableFieldProperties?: boolean
+  subtotalHiddenItems?: boolean
+  showDropZones?: boolean
+  indent?: number
+  showEmptyRows?: boolean
+  showEmptyColumns?: boolean
+}
+
+export interface JsPivotManualGroupDefinition {
+  name: string
+  members: Array<JsPivotValue>
+}
+
+export interface JsPivotManualGroupOptions {
+  name: string
+  members: Array<number | string | boolean>
+}
+
+export interface JsPivotMeasureDefinition {
+  field: string
+  aggregate: string
+  name?: string
+  caption: string
+  showAs: JsPivotShowAsDefinition
+  numberFormat?: string
+}
+
+export interface JsPivotMeasureOptions {
+  field: string
+  aggregate?: string
+  name?: string
+  showAs?: string
+  baseField?: string
+  baseItem?: number | string | boolean
+  numberFormat?: string
+}
+
+export interface JsPivotRefreshOptions {
+  maxThreads?: number
+  today?: number
+}
+
+export interface JsPivotRefreshPolicyDefinition {
+  refreshOnOpen: boolean
+  preserveFormatting: boolean
+  backgroundQuery: boolean
+  missingItemsLimit?: number
+}
+
+export interface JsPivotRefreshPolicyOptions {
+  refreshOnOpen?: boolean
+  preserveFormatting?: boolean
+  backgroundQuery?: boolean
+  missingItemsLimit?: number
+}
+
+export interface JsPivotRefreshStats {
+  pivotCount: number
+  pivotsRefreshed: number
+  sourceRows: number
+  outputCells: number
+  cacheHits: number
+  cacheMisses: number
+}
+
+export interface JsPivotRefreshStatusDefinition {
+  kind: string
+  message?: string
+}
+
+export interface JsPivotShowAsDefinition {
+  kind: string
+  baseField?: string
+  baseItem?: JsPivotValue
+}
+
+export interface JsPivotSourceDefinition {
+  kind: string
+  sheet?: string
+  range?: string
+  tableName?: string
+  connectionName?: string
+  commandText?: string
+  ranges?: Array<JsPivotSourceRangeDefinition>
+  scenarioName?: string
+  cube?: string
+}
+
+export interface JsPivotSourceRangeDefinition {
+  sheet?: string
+  range?: string
+  name?: string
+  externalRelationshipId?: string
+  externalRelationshipTarget?: string
+  pageItems: Array<string>
+}
+
+export interface JsPivotStyleDefinition {
+  name?: string
+  showRowHeaders: boolean
+  showColumnHeaders: boolean
+  showRowStripes: boolean
+  showColumnStripes: boolean
+  showLastColumn: boolean
+}
+
+export interface JsPivotStyleOptions {
+  name?: string
+  showRowHeaders?: boolean
+  showColumnHeaders?: boolean
+  showRowStripes?: boolean
+  showColumnStripes?: boolean
+  showLastColumn?: boolean
+}
+
+export interface JsPivotTableDefinition {
+  id: number
+  name: string
+  source: JsPivotSourceDefinition
+  target: string
+  rows: Array<JsPivotFieldDefinition>
+  columns: Array<JsPivotFieldDefinition>
+  pageFields: Array<JsPivotFieldDefinition>
+  filters: Array<JsPivotFilterDefinition>
+  calculatedFields: Array<JsPivotCalculatedFieldDefinition>
+  calculatedItems: Array<JsPivotCalculatedItemDefinition>
+  measures: Array<JsPivotMeasureDefinition>
+  groupings: Array<JsPivotGroupingDefinition>
+  layout: JsPivotLayoutDefinition
+  style: JsPivotStyleDefinition
+  refreshPolicy: JsPivotRefreshPolicyDefinition
+  overwritePolicy: string
+  renderedRange?: string
+  refreshStatus: JsPivotRefreshStatusDefinition
+  extensionCount: number
+}
+
+export interface JsPivotTableOptions {
+  name: string
+  sourceRange?: string
+  sourceSheet?: string
+  tableName?: string
+  externalConnectionName?: string
+  externalCommandText?: string
+  olapConnectionName?: string
+  consolidationRanges?: Array<JsPivotConsolidationRangeOptions>
+  target: string
+  rows?: Array<string>
+  columns?: Array<string>
+  pages?: Array<string>
+  rowFields?: Array<JsPivotFieldOptions>
+  columnFields?: Array<JsPivotFieldOptions>
+  pageFields?: Array<JsPivotFieldOptions>
+  measures: Array<JsPivotMeasureOptions>
+  filters?: Array<JsPivotFilterOptions>
+  calculatedFields?: Array<JsPivotCalculatedFieldOptions>
+  calculatedItems?: Array<JsPivotCalculatedItemOptions>
+  groupings?: Array<JsPivotGroupingOptions>
+  refreshPolicy?: JsPivotRefreshPolicyOptions
+  layout?: JsPivotLayoutOptions
+  style?: JsPivotStyleOptions
+  overwritePolicy?: string
+}
+
+export interface JsPivotValue {
+  kind: string
+  number?: number
+  text?: string
+  boolean?: boolean
+  error?: string
+}
+
 /** Protected editable range settings. */
 export interface JsProtectedRange {
   name: string
@@ -1750,6 +2169,80 @@ export interface JsView3D {
   heightPercent?: number
   perspective?: number
   rightAngleAxes?: boolean
+}
+
+export interface JsWorkbookConnectionDefinition {
+  id: number
+  name: string
+  kind: string
+  refreshedVersion: number
+  refreshOnLoad: boolean
+  background: boolean
+  saveData: boolean
+  connection?: string
+  command?: string
+  commandType?: number
+  url?: string
+  xml?: boolean
+  sourceData?: boolean
+  htmlTables?: boolean
+  htmlFormat?: string
+  post?: string
+  editPage?: string
+  sourceFile?: string
+  delimiter?: string
+  firstRow?: number
+  delimited?: boolean
+  decimal?: string
+  thousands?: string
+  local?: boolean
+  localConnection?: string
+  localRefresh?: boolean
+  sendLocale?: boolean
+  rowDrillCount?: number
+}
+
+export interface JsWorkbookConnectionOptions {
+  id: number
+  name: string
+  kind?: string
+  connection?: string
+  command?: string
+  commandType?: number
+  url?: string
+  xml?: boolean
+  sourceData?: boolean
+  htmlTables?: boolean
+  htmlFormat?: string
+  post?: string
+  editPage?: string
+  sourceFile?: string
+  delimiter?: string
+  firstRow?: number
+  delimited?: boolean
+  decimal?: string
+  thousands?: string
+  local?: boolean
+  localConnection?: string
+  localRefresh?: boolean
+  sendLocale?: boolean
+  rowDrillCount?: number
+  refreshOnLoad?: boolean
+  background?: boolean
+  saveData?: boolean
+}
+
+export interface JsWorkbookExtension {
+  uri: string
+  payload: Buffer
+}
+
+export interface JsWorkbookExtensionPart {
+  path: string
+  contentType: string
+  relationshipType: string
+  relationshipId?: string
+  payload: Buffer
 }
 
 /** Workbook protection settings. */

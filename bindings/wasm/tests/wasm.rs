@@ -408,12 +408,654 @@ fn make_options(entries: &[(&str, JsValue)]) -> JsValue {
     obj.into()
 }
 
+/// Helper to build a JS array from values
 fn make_array(values: &[JsValue]) -> JsValue {
     let array = Array::new();
     for value in values {
         array.push(value);
     }
     array.into()
+}
+
+#[wasm_bindgen_test]
+fn test_pivot_table_definitions_from_options() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+
+    let sort_measure = make_options(&[
+        ("field", JsValue::from_str("Revenue")),
+        ("aggregate", JsValue::from_str("sum")),
+        ("name", JsValue::from_str("Revenue")),
+    ]);
+    let row_field = make_options(&[
+        ("field", JsValue::from_str("Region")),
+        ("sort", JsValue::from_str("descending")),
+        ("sortByMeasure", sort_measure),
+        ("subtotal", JsValue::from_str("sum")),
+        (
+            "subtotals",
+            make_array(&[
+                JsValue::from_str("sum"),
+                JsValue::from_str("average"),
+                JsValue::from_str("max"),
+            ]),
+        ),
+        ("showDropDowns", JsValue::FALSE),
+        ("subtotalTop", JsValue::FALSE),
+        ("insertBlankRow", JsValue::TRUE),
+        ("insertPageBreak", JsValue::TRUE),
+        ("includeNewItemsInFilter", JsValue::TRUE),
+        ("itemPageCount", JsValue::from_f64(25.0)),
+    ]);
+    let measure = make_options(&[
+        ("field", JsValue::from_str("Revenue")),
+        ("aggregate", JsValue::from_str("sum")),
+        ("name", JsValue::from_str("Revenue")),
+        ("showAs", JsValue::from_str("percentOfGrandTotal")),
+        ("numberFormat", JsValue::from_str("0.0%")),
+    ]);
+    let filter = make_options(&[
+        ("kind", JsValue::from_str("label")),
+        ("field", JsValue::from_str("Region")),
+        ("operator", JsValue::from_str("beginsWith")),
+        ("text", JsValue::from_str("E")),
+    ]);
+    let label_range_filter = make_options(&[
+        ("kind", JsValue::from_str("labelBetween")),
+        ("field", JsValue::from_str("Region")),
+        ("startText", JsValue::from_str("East")),
+        ("endText", JsValue::from_str("North")),
+    ]);
+    let value_range_measure = make_options(&[
+        ("field", JsValue::from_str("Revenue")),
+        ("aggregate", JsValue::from_str("sum")),
+        ("name", JsValue::from_str("Revenue")),
+    ]);
+    let value_range_filter = make_options(&[
+        ("kind", JsValue::from_str("valueBetween")),
+        ("field", JsValue::from_str("Region")),
+        ("measure", value_range_measure),
+        ("start", JsValue::from_f64(10.0)),
+        ("end", JsValue::from_f64(30.0)),
+    ]);
+    let date_filter = make_options(&[
+        ("kind", JsValue::from_str("dateBetween")),
+        ("field", JsValue::from_str("Date")),
+        ("start", JsValue::from_f64(45292.0)),
+        ("end", JsValue::from_f64(45322.0)),
+    ]);
+    let period_filter = make_options(&[
+        ("kind", JsValue::from_str("datePeriod")),
+        ("field", JsValue::from_str("Date")),
+        ("period", JsValue::from_str("thisMonth")),
+    ]);
+    let calculated = make_options(&[
+        ("name", JsValue::from_str("Margin")),
+        ("formula", JsValue::from_str("=Revenue*0.2")),
+    ]);
+    let calculated_item = make_options(&[
+        ("field", JsValue::from_str("Region")),
+        ("item", JsValue::from_str("Combined")),
+        ("formula", JsValue::from_str("East+West")),
+    ]);
+    let refresh_policy = make_options(&[
+        ("refreshOnOpen", JsValue::TRUE),
+        ("missingItemsLimit", JsValue::from_f64(25.0)),
+    ]);
+    let layout = make_options(&[
+        ("kind", JsValue::from_str("tabular")),
+        ("repeatItemLabels", JsValue::TRUE),
+        ("pageWrap", JsValue::from_f64(2.0)),
+        ("pageOverThenDown", JsValue::TRUE),
+        ("mergeItemLabels", JsValue::TRUE),
+        ("dataCaption", JsValue::from_str("Metrics")),
+        ("valuesAxis", JsValue::from_str("rows")),
+        ("valuesAxisPosition", JsValue::from_f64(1.0)),
+        ("grandTotalCaption", JsValue::from_str("Overall")),
+        ("errorCaption", JsValue::from_str("ERR")),
+        ("showError", JsValue::TRUE),
+        ("missingCaption", JsValue::from_str("N/A")),
+        ("showMissing", JsValue::FALSE),
+        ("asteriskTotals", JsValue::TRUE),
+        ("showItems", JsValue::FALSE),
+        ("editData", JsValue::TRUE),
+        ("disableFieldList", JsValue::TRUE),
+        ("showCalculatedMembers", JsValue::FALSE),
+        ("visualTotals", JsValue::FALSE),
+        ("showMultipleLabel", JsValue::FALSE),
+        ("showDataDropDown", JsValue::FALSE),
+        ("showMemberPropertyTips", JsValue::FALSE),
+        ("showDataTips", JsValue::FALSE),
+        ("enableWizard", JsValue::FALSE),
+        ("enableDrill", JsValue::FALSE),
+        ("enableFieldProperties", JsValue::FALSE),
+        ("subtotalHiddenItems", JsValue::TRUE),
+        ("showDropZones", JsValue::FALSE),
+        ("indent", JsValue::from_f64(3.0)),
+        ("showEmptyRows", JsValue::TRUE),
+        ("showEmptyColumns", JsValue::TRUE),
+    ]);
+    let pivot = make_options(&[
+        ("name", JsValue::from_str("SalesPivot")),
+        ("sourceRange", JsValue::from_str("A1:D4")),
+        ("target", JsValue::from_str("E1")),
+        ("rowFields", make_array(&[row_field])),
+        ("columns", make_array(&[JsValue::from_str("Quarter")])),
+        ("measures", make_array(&[measure])),
+        (
+            "filters",
+            make_array(&[
+                filter,
+                label_range_filter,
+                value_range_filter,
+                date_filter,
+                period_filter,
+            ]),
+        ),
+        ("calculatedFields", make_array(&[calculated])),
+        ("calculatedItems", make_array(&[calculated_item])),
+        ("refreshPolicy", refresh_policy),
+        ("layout", layout),
+        ("overwritePolicy", JsValue::from_str("failOnOccupied")),
+    ]);
+
+    sheet.add_pivot_table(pivot).unwrap();
+
+    let pivot = sheet.get_pivot_table("SalesPivot").unwrap();
+    assert!(!pivot.is_null());
+    let pivots = Array::from(&sheet.pivot_tables().unwrap());
+    assert_eq!(pivots.length(), 1);
+    assert_eq!(get_string_field(&pivots.get(0), "name"), "SalesPivot");
+
+    let source = Reflect::get(&pivot, &JsValue::from_str("source")).unwrap();
+    assert_eq!(get_string_field(&source, "kind"), "worksheetRange");
+    assert_eq!(get_string_field(&source, "range"), "A1:D4");
+    assert_eq!(get_string_field(&pivot, "target"), "E1");
+
+    let rows = Array::from(&Reflect::get(&pivot, &JsValue::from_str("rows")).unwrap());
+    let row = rows.get(0);
+    assert_eq!(get_string_field(&row, "field"), "Region");
+    assert_eq!(get_string_field(&row, "sort"), "descending");
+    let sort_by_measure = Reflect::get(&row, &JsValue::from_str("sortByMeasure")).unwrap();
+    assert_eq!(get_string_field(&sort_by_measure, "field"), "Revenue");
+    assert_eq!(get_string_field(&sort_by_measure, "aggregate"), "sum");
+    assert_eq!(get_string_field(&sort_by_measure, "caption"), "Revenue");
+    assert_eq!(get_string_field(&row, "subtotal"), "sum");
+    let subtotals = Array::from(&Reflect::get(&row, &JsValue::from_str("subtotals")).unwrap());
+    assert_eq!(subtotals.length(), 3);
+    assert_eq!(subtotals.get(0).as_string().unwrap(), "sum");
+    assert_eq!(subtotals.get(1).as_string().unwrap(), "average");
+    assert_eq!(subtotals.get(2).as_string().unwrap(), "max");
+    assert!(!get_bool_field(&row, "showDropDowns"));
+    assert!(!get_bool_field(&row, "subtotalTop"));
+    assert!(get_bool_field(&row, "insertBlankRow"));
+    assert!(get_bool_field(&row, "insertPageBreak"));
+    assert!(get_bool_field(&row, "includeNewItemsInFilter"));
+    assert_eq!(get_f64_field(&row, "itemPageCount"), 25.0);
+
+    let columns = Array::from(&Reflect::get(&pivot, &JsValue::from_str("columns")).unwrap());
+    assert_eq!(get_string_field(&columns.get(0), "field"), "Quarter");
+
+    let measures = Array::from(&Reflect::get(&pivot, &JsValue::from_str("measures")).unwrap());
+    let measure = measures.get(0);
+    assert_eq!(get_string_field(&measure, "field"), "Revenue");
+    assert_eq!(get_string_field(&measure, "aggregate"), "sum");
+    assert_eq!(get_string_field(&measure, "caption"), "Revenue");
+    assert_eq!(get_string_field(&measure, "numberFormat"), "0.0%");
+    let show_as = Reflect::get(&measure, &JsValue::from_str("showAs")).unwrap();
+    assert_eq!(get_string_field(&show_as, "kind"), "percentOfGrandTotal");
+
+    let filters = Array::from(&Reflect::get(&pivot, &JsValue::from_str("filters")).unwrap());
+    let filter = filters.get(0);
+    assert_eq!(get_string_field(&filter, "kind"), "label");
+    assert_eq!(get_string_field(&filter, "operator"), "beginsWith");
+    let label_range_filter = filters.get(1);
+    assert_eq!(
+        get_string_field(&label_range_filter, "kind"),
+        "labelBetween"
+    );
+    assert_eq!(get_string_field(&label_range_filter, "field"), "Region");
+    assert_eq!(get_string_field(&label_range_filter, "startText"), "East");
+    assert_eq!(get_string_field(&label_range_filter, "endText"), "North");
+    let value_range_filter = filters.get(2);
+    assert_eq!(
+        get_string_field(&value_range_filter, "kind"),
+        "valueBetween"
+    );
+    assert_eq!(get_string_field(&value_range_filter, "field"), "Region");
+    assert_eq!(get_f64_field(&value_range_filter, "start"), 10.0);
+    assert_eq!(get_f64_field(&value_range_filter, "end"), 30.0);
+    let date_filter = filters.get(3);
+    assert_eq!(get_string_field(&date_filter, "kind"), "dateBetween");
+    assert_eq!(get_string_field(&date_filter, "field"), "Date");
+    assert_eq!(get_f64_field(&date_filter, "start"), 45292.0);
+    assert_eq!(get_f64_field(&date_filter, "end"), 45322.0);
+    let period_filter = filters.get(4);
+    assert_eq!(get_string_field(&period_filter, "kind"), "datePeriod");
+    assert_eq!(get_string_field(&period_filter, "field"), "Date");
+    assert_eq!(get_string_field(&period_filter, "period"), "thisMonth");
+
+    let calculated =
+        Array::from(&Reflect::get(&pivot, &JsValue::from_str("calculatedFields")).unwrap());
+    assert_eq!(get_string_field(&calculated.get(0), "name"), "Margin");
+    assert_eq!(
+        get_string_field(&calculated.get(0), "formula"),
+        "=Revenue*0.2"
+    );
+
+    let calculated_items =
+        Array::from(&Reflect::get(&pivot, &JsValue::from_str("calculatedItems")).unwrap());
+    let calculated_item = calculated_items.get(0);
+    assert_eq!(get_string_field(&calculated_item, "field"), "Region");
+    assert_eq!(get_string_field(&calculated_item, "formula"), "East+West");
+    let item = Reflect::get(&calculated_item, &JsValue::from_str("item")).unwrap();
+    assert_eq!(get_string_field(&item, "kind"), "string");
+    assert_eq!(get_string_field(&item, "text"), "Combined");
+
+    let pivot_layout = Reflect::get(&pivot, &JsValue::from_str("layout")).unwrap();
+    assert_eq!(get_string_field(&pivot_layout, "kind"), "tabular");
+    assert!(get_bool_field(&pivot_layout, "repeatItemLabels"));
+    assert_eq!(get_f64_field(&pivot_layout, "pageWrap"), 2.0);
+    assert!(get_bool_field(&pivot_layout, "pageOverThenDown"));
+    assert!(get_bool_field(&pivot_layout, "mergeItemLabels"));
+    assert_eq!(get_string_field(&pivot_layout, "dataCaption"), "Metrics");
+    assert_eq!(get_string_field(&pivot_layout, "valuesAxis"), "rows");
+    assert_eq!(get_f64_field(&pivot_layout, "valuesAxisPosition"), 1.0);
+    assert_eq!(
+        get_string_field(&pivot_layout, "grandTotalCaption"),
+        "Overall"
+    );
+    assert_eq!(get_string_field(&pivot_layout, "errorCaption"), "ERR");
+    assert!(get_bool_field(&pivot_layout, "showError"));
+    assert_eq!(get_string_field(&pivot_layout, "missingCaption"), "N/A");
+    assert!(!get_bool_field(&pivot_layout, "showMissing"));
+    assert!(get_bool_field(&pivot_layout, "asteriskTotals"));
+    assert!(!get_bool_field(&pivot_layout, "showItems"));
+    assert!(get_bool_field(&pivot_layout, "editData"));
+    assert!(get_bool_field(&pivot_layout, "disableFieldList"));
+    assert!(!get_bool_field(&pivot_layout, "showCalculatedMembers"));
+    assert!(!get_bool_field(&pivot_layout, "visualTotals"));
+    assert!(!get_bool_field(&pivot_layout, "showMultipleLabel"));
+    assert!(!get_bool_field(&pivot_layout, "showDataDropDown"));
+    assert!(!get_bool_field(&pivot_layout, "showMemberPropertyTips"));
+    assert!(!get_bool_field(&pivot_layout, "showDataTips"));
+    assert!(!get_bool_field(&pivot_layout, "enableWizard"));
+    assert!(!get_bool_field(&pivot_layout, "enableDrill"));
+    assert!(!get_bool_field(&pivot_layout, "enableFieldProperties"));
+    assert!(get_bool_field(&pivot_layout, "subtotalHiddenItems"));
+    assert!(!get_bool_field(&pivot_layout, "showDropZones"));
+    assert_eq!(get_f64_field(&pivot_layout, "indent"), 3.0);
+    assert!(get_bool_field(&pivot_layout, "showEmptyRows"));
+    assert!(get_bool_field(&pivot_layout, "showEmptyColumns"));
+    let policy = Reflect::get(&pivot, &JsValue::from_str("refreshPolicy")).unwrap();
+    assert!(get_bool_field(&policy, "refreshOnOpen"));
+    assert_eq!(get_f64_field(&policy, "missingItemsLimit"), 25.0);
+    assert_eq!(
+        get_string_field(&pivot, "overwritePolicy"),
+        "failOnOccupied"
+    );
+    let status = Reflect::get(&pivot, &JsValue::from_str("refreshStatus")).unwrap();
+    assert_eq!(get_string_field(&status, "kind"), "notRefreshed");
+    assert!(sheet.get_pivot_table("Missing").unwrap().is_null());
+}
+
+#[wasm_bindgen_test]
+fn test_pivot_external_connection_roundtrips_from_options() {
+    let wb = Workbook::new();
+    let connection = make_options(&[
+        ("id", JsValue::from_f64(7.0)),
+        ("name", JsValue::from_str("SalesConnection")),
+        (
+            "connection",
+            JsValue::from_str("Provider=MSDASQL;DSN=Sales;"),
+        ),
+        (
+            "command",
+            JsValue::from_str("select Region, Revenue from Sales"),
+        ),
+        ("refreshOnLoad", JsValue::TRUE),
+    ]);
+    wb.add_data_connection(connection).unwrap();
+    assert_eq!(wb.data_connection_count(), 1);
+    assert_eq!(
+        wb.data_connection_names(),
+        vec!["SalesConnection".to_string()]
+    );
+
+    let sheet = wb.get_sheet(0).unwrap();
+    let measure = make_options(&[
+        ("field", JsValue::from_str("Revenue")),
+        ("aggregate", JsValue::from_str("sum")),
+        ("name", JsValue::from_str("Revenue")),
+    ]);
+    let pivot = make_options(&[
+        ("name", JsValue::from_str("ExternalSales")),
+        (
+            "externalConnectionName",
+            JsValue::from_str("SalesConnection"),
+        ),
+        (
+            "externalCommandText",
+            JsValue::from_str("select Region, Revenue from Sales"),
+        ),
+        ("target", JsValue::from_str("A1")),
+        ("rows", make_array(&[JsValue::from_str("Region")])),
+        ("measures", make_array(&[measure])),
+    ]);
+
+    sheet.add_pivot_table(pivot).unwrap();
+    assert_eq!(sheet.pivot_count().unwrap(), 1);
+
+    let bytes = wb.save_xlsx_bytes().unwrap();
+    let roundtrip = Workbook::from_bytes(&bytes).unwrap();
+    assert_eq!(roundtrip.data_connection_count(), 1);
+    assert_eq!(
+        roundtrip.data_connection_names(),
+        vec!["SalesConnection".to_string()]
+    );
+    assert_eq!(
+        roundtrip.get_sheet(0).unwrap().pivot_table_names().unwrap(),
+        vec!["ExternalSales".to_string()]
+    );
+}
+
+#[wasm_bindgen_test]
+fn test_non_database_connections_roundtrip_from_options() {
+    let wb = Workbook::new();
+    let web = make_options(&[
+        ("id", JsValue::from_f64(8.0)),
+        ("name", JsValue::from_str("WebSales")),
+        ("kind", JsValue::from_str("web")),
+        ("url", JsValue::from_str("https://example.test/sales.html")),
+        ("sourceData", JsValue::TRUE),
+        ("htmlTables", JsValue::TRUE),
+    ]);
+    let text = make_options(&[
+        ("id", JsValue::from_f64(9.0)),
+        ("name", JsValue::from_str("CsvSales")),
+        ("kind", JsValue::from_str("text")),
+        ("sourceFile", JsValue::from_str("/data/sales.csv")),
+        ("delimiter", JsValue::from_str("|")),
+        ("firstRow", JsValue::from_f64(2.0)),
+    ]);
+    let olap = make_options(&[
+        ("id", JsValue::from_f64(10.0)),
+        ("name", JsValue::from_str("CubeSales")),
+        ("kind", JsValue::from_str("olap")),
+        ("local", JsValue::TRUE),
+        ("localConnection", JsValue::from_str("CubeFile=cube.cub")),
+        ("sendLocale", JsValue::TRUE),
+    ]);
+
+    wb.add_data_connection(web).unwrap();
+    wb.add_data_connection(text).unwrap();
+    wb.add_data_connection(olap).unwrap();
+    assert_eq!(
+        wb.data_connection_names(),
+        vec![
+            "WebSales".to_string(),
+            "CsvSales".to_string(),
+            "CubeSales".to_string()
+        ]
+    );
+    let connections = Array::from(&wb.data_connections().unwrap());
+    assert_eq!(connections.length(), 3);
+    assert_eq!(get_string_field(&connections.get(0), "kind"), "web");
+    assert_eq!(get_string_field(&connections.get(1), "kind"), "text");
+    assert_eq!(get_string_field(&connections.get(2), "kind"), "olap");
+    let text_connection = wb.get_data_connection("CsvSales").unwrap();
+    assert_eq!(get_string_field(&text_connection, "kind"), "text");
+    assert_eq!(
+        get_string_field(&text_connection, "sourceFile"),
+        "/data/sales.csv"
+    );
+    assert_eq!(get_string_field(&text_connection, "delimiter"), "|");
+    assert_eq!(get_f64_field(&text_connection, "firstRow"), 2.0);
+    assert!(get_bool_field(&text_connection, "delimited"));
+    let olap_connection = wb.get_data_connection_by_id(10).unwrap();
+    assert_eq!(get_string_field(&olap_connection, "kind"), "olap");
+    assert_eq!(
+        get_string_field(&olap_connection, "localConnection"),
+        "CubeFile=cube.cub"
+    );
+    assert!(get_bool_field(&olap_connection, "sendLocale"));
+    assert!(wb.get_data_connection("Missing").unwrap().is_null());
+
+    let bytes = wb.save_xlsx_bytes().unwrap();
+    let roundtrip = Workbook::from_bytes(&bytes).unwrap();
+    assert_eq!(roundtrip.data_connection_count(), 3);
+    assert_eq!(
+        roundtrip.data_connection_names(),
+        vec![
+            "WebSales".to_string(),
+            "CsvSales".to_string(),
+            "CubeSales".to_string()
+        ]
+    );
+    let roundtrip_connections = Array::from(&roundtrip.data_connections().unwrap());
+    assert_eq!(
+        get_string_field(&roundtrip_connections.get(0), "kind"),
+        "web"
+    );
+    assert_eq!(
+        get_string_field(&roundtrip.get_data_connection("WebSales").unwrap(), "url"),
+        "https://example.test/sales.html"
+    );
+    assert!(get_bool_field(
+        &roundtrip.get_data_connection_by_id(10).unwrap(),
+        "sendLocale"
+    ));
+}
+
+#[wasm_bindgen_test]
+fn test_pivot_olap_connection_roundtrips_from_options() {
+    let wb = Workbook::new();
+    let connection = make_options(&[
+        ("id", JsValue::from_f64(10.0)),
+        ("name", JsValue::from_str("CubeSales")),
+        ("kind", JsValue::from_str("olap")),
+        ("local", JsValue::TRUE),
+        ("localConnection", JsValue::from_str("CubeFile=cube.cub")),
+    ]);
+    wb.add_data_connection(connection).unwrap();
+
+    let sheet = wb.get_sheet(0).unwrap();
+    let measure = make_options(&[
+        ("field", JsValue::from_str("Revenue")),
+        ("aggregate", JsValue::from_str("sum")),
+        ("name", JsValue::from_str("Revenue")),
+    ]);
+    let pivot = make_options(&[
+        ("name", JsValue::from_str("OlapSales")),
+        ("olapConnectionName", JsValue::from_str("CubeSales")),
+        ("target", JsValue::from_str("A1")),
+        ("rows", make_array(&[JsValue::from_str("Region")])),
+        ("measures", make_array(&[measure])),
+    ]);
+
+    sheet.add_pivot_table(pivot).unwrap();
+    assert_eq!(sheet.pivot_count().unwrap(), 1);
+
+    let bytes = wb.save_xlsx_bytes().unwrap();
+    let roundtrip = Workbook::from_bytes(&bytes).unwrap();
+    assert_eq!(
+        roundtrip.data_connection_names(),
+        vec!["CubeSales".to_string()]
+    );
+    assert_eq!(
+        roundtrip.get_sheet(0).unwrap().pivot_table_names().unwrap(),
+        vec!["OlapSales".to_string()]
+    );
+}
+
+#[wasm_bindgen_test]
+fn test_pivot_consolidation_roundtrips_from_options() {
+    let wb = Workbook::new();
+    wb.add_sheet("North").unwrap();
+    wb.add_sheet("South").unwrap();
+    for (name, region, revenue) in [("North", "North", 10.0), ("South", "South", 20.0)] {
+        let source = wb.get_sheet_by_name(name).unwrap();
+        source.set_cell("A1", JsValue::from_str("Region")).unwrap();
+        source
+            .set_cell("B1", JsValue::from_str("Revenue"))
+            .unwrap();
+        source.set_cell("A2", JsValue::from_str(region)).unwrap();
+        source
+            .set_cell("B2", JsValue::from_f64(revenue))
+            .unwrap();
+    }
+
+    let sheet = wb.get_sheet(0).unwrap();
+    let measure = make_options(&[
+        ("field", JsValue::from_str("Revenue")),
+        ("aggregate", JsValue::from_str("sum")),
+        ("name", JsValue::from_str("Revenue")),
+    ]);
+    let north_range = make_options(&[
+        ("sheet", JsValue::from_str("North")),
+        ("range", JsValue::from_str("A1:B4")),
+        ("name", JsValue::from_str("NorthPlan")),
+        (
+            "pageItems",
+            make_array(&[JsValue::from_str("FY2025"), JsValue::from_str("Plan")]),
+        ),
+    ]);
+    let south_range = make_options(&[
+        ("sheet", JsValue::from_str("South")),
+        ("range", JsValue::from_str("A1:B4")),
+        ("name", JsValue::from_str("SouthActual")),
+        (
+            "pageItems",
+            make_array(&[JsValue::from_str("FY2025"), JsValue::from_str("Actual")]),
+        ),
+    ]);
+    let pivot = make_options(&[
+        ("name", JsValue::from_str("ConsolidatedSales")),
+        (
+            "consolidationRanges",
+            make_array(&[north_range, south_range]),
+        ),
+        ("target", JsValue::from_str("A1")),
+        ("rows", make_array(&[JsValue::from_str("Region")])),
+        ("measures", make_array(&[measure])),
+    ]);
+
+    sheet.add_pivot_table(pivot).unwrap();
+    assert_eq!(sheet.pivot_count().unwrap(), 1);
+
+    let bytes = wb.save_xlsx_bytes().unwrap();
+    let roundtrip = Workbook::from_bytes(&bytes).unwrap();
+    assert_eq!(
+        roundtrip.get_sheet(0).unwrap().pivot_table_names().unwrap(),
+        vec!["ConsolidatedSales".to_string()]
+    );
+}
+
+#[wasm_bindgen_test]
+fn test_pivot_manual_grouping_refreshes_from_options() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    sheet.set_cell("A1", JsValue::from_str("Region")).unwrap();
+    sheet.set_cell("B1", JsValue::from_str("Revenue")).unwrap();
+    sheet.set_cell("A2", JsValue::from_str("East")).unwrap();
+    sheet.set_cell("B2", JsValue::from_f64(10.0)).unwrap();
+    sheet.set_cell("A3", JsValue::from_str("West")).unwrap();
+    sheet.set_cell("B3", JsValue::from_f64(20.0)).unwrap();
+    sheet.set_cell("A4", JsValue::from_str("South")).unwrap();
+    sheet.set_cell("B4", JsValue::from_f64(5.0)).unwrap();
+
+    let measure = make_options(&[
+        ("field", JsValue::from_str("Revenue")),
+        ("aggregate", JsValue::from_str("sum")),
+        ("name", JsValue::from_str("Revenue")),
+    ]);
+    let group = make_options(&[
+        ("name", JsValue::from_str("Coastal")),
+        (
+            "members",
+            make_array(&[JsValue::from_str("East"), JsValue::from_str("West")]),
+        ),
+    ]);
+    let grouping = make_options(&[
+        ("kind", JsValue::from_str("manual")),
+        ("field", JsValue::from_str("Region")),
+        ("groups", make_array(&[group])),
+    ]);
+    let pivot = make_options(&[
+        ("name", JsValue::from_str("ManualGroupedRegions")),
+        ("sourceRange", JsValue::from_str("A1:B4")),
+        ("target", JsValue::from_str("D1")),
+        ("rows", make_array(&[JsValue::from_str("Region")])),
+        ("measures", make_array(&[measure])),
+        ("groupings", make_array(&[grouping])),
+    ]);
+
+    sheet.add_pivot_table(pivot).unwrap();
+
+    assert_eq!(sheet.pivot_count().unwrap(), 1);
+    assert_eq!(
+        sheet.pivot_table_names().unwrap(),
+        vec!["ManualGroupedRegions".to_string()]
+    );
+
+    let stats = wb.refresh_pivots(None).unwrap();
+
+    assert_eq!(get_f64_field(&stats, "pivotCount"), 1.0);
+    assert_eq!(get_f64_field(&stats, "pivotsRefreshed"), 1.0);
+    assert_eq!(
+        sheet.get_cell("D2").unwrap().as_text().as_deref(),
+        Some("Coastal")
+    );
+    assert_eq!(sheet.get_cell("E2").unwrap().as_number(), Some(30.0));
+    assert_eq!(
+        sheet.get_cell("D3").unwrap().as_text().as_deref(),
+        Some("South")
+    );
+    assert_eq!(sheet.get_cell("E3").unwrap().as_number(), Some(5.0));
+    assert_eq!(sheet.get_cell("E4").unwrap().as_number(), Some(35.0));
+}
+
+#[wasm_bindgen_test]
+fn test_pivot_chart_from_refreshed_pivot() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    sheet.set_cell("A1", JsValue::from_str("Region")).unwrap();
+    sheet.set_cell("B1", JsValue::from_str("Revenue")).unwrap();
+    sheet.set_cell("A2", JsValue::from_str("East")).unwrap();
+    sheet.set_cell("B2", JsValue::from_f64(10.0)).unwrap();
+    sheet.set_cell("A3", JsValue::from_str("West")).unwrap();
+    sheet.set_cell("B3", JsValue::from_f64(20.0)).unwrap();
+
+    let measure = make_options(&[
+        ("field", JsValue::from_str("Revenue")),
+        ("aggregate", JsValue::from_str("sum")),
+        ("name", JsValue::from_str("Revenue")),
+    ]);
+    let pivot = make_options(&[
+        ("name", JsValue::from_str("SalesPivot")),
+        ("sourceRange", JsValue::from_str("A1:B3")),
+        ("target", JsValue::from_str("D1")),
+        ("rows", make_array(&[JsValue::from_str("Region")])),
+        ("measures", make_array(&[measure])),
+    ]);
+    sheet.add_pivot_table(pivot).unwrap();
+    wb.refresh_pivots(None).unwrap();
+
+    let options = make_options(&[
+        ("pivotName", JsValue::from_str("SalesPivot")),
+        ("chartType", JsValue::from_str("barClustered")),
+    ]);
+    let chart = sheet.add_pivot_chart(options).unwrap();
+
+    assert_eq!(get_string_field(&chart, "chartType"), "BarClustered");
+    let pivot_source = Reflect::get(&chart, &JsValue::from_str("pivotSource")).unwrap();
+    assert_eq!(get_string_field(&pivot_source, "name"), "SalesPivot");
+    let series = Array::from(&Reflect::get(&chart, &JsValue::from_str("series")).unwrap());
+    assert_eq!(series.length(), 1);
+    let values = Reflect::get(&series.get(0), &JsValue::from_str("values")).unwrap();
+    assert_eq!(get_string_field(&values, "refType"), "formula");
+    let charts = Array::from(&sheet.charts().unwrap());
+    assert_eq!(charts.length(), 1);
 }
 
 fn drawing_marker(col: u32, row: u32) -> JsValue {

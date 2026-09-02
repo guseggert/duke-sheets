@@ -39,10 +39,26 @@
 //! ```
 
 pub mod calculation;
+pub mod pivot {
+    //! Pivot table model and refresh API.
+
+    pub use duke_sheets_core::pivot::{
+        PivotAggregate, PivotAxis, PivotCacheInfo, PivotCacheSourceKind, PivotCalculatedField,
+        PivotCalculatedItem, PivotDateGroupUnit, PivotDatePeriod, PivotExtension, PivotExtensions,
+        PivotField, PivotFieldRef, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout,
+        PivotLayoutKind, PivotManualGroup, PivotMeasure, PivotOverwritePolicy, PivotRefreshPolicy,
+        PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource, PivotSourceRange, PivotStyle,
+        PivotSubtotal, PivotTable, PivotTableBuilder, PivotValue, PivotValuesAxis,
+    };
+    pub use duke_sheets_pivot::{PivotRefreshOptions, PivotRefreshStats, WorkbookPivotExt};
+}
 pub mod prelude;
 
 // Re-export calculation types
 pub use calculation::{CalculationOptions, CalculationStats, WorkbookCalculationExt};
+
+// Re-export pivot refresh types
+pub use duke_sheets_pivot::{PivotRefreshOptions, PivotRefreshStats, WorkbookPivotExt};
 
 // Re-export core types
 pub use duke_sheets_core::auto_filter::{ColorFilter, DynamicFilter, DynamicFilterType};
@@ -123,6 +139,35 @@ pub use duke_sheets_core::{
     PageBreak,
     PageOrientation,
     PageSetup,
+    PivotAggregate,
+    PivotAxis,
+    PivotCacheInfo,
+    PivotCacheSourceKind,
+    PivotCalculatedItem,
+    PivotDateGroupUnit,
+    PivotDatePeriod,
+    PivotExtension,
+    PivotExtensions,
+    PivotField,
+    PivotFieldRef,
+    PivotFilter,
+    PivotFilterOperator,
+    PivotGrouping,
+    PivotLayout,
+    PivotLayoutKind,
+    PivotMeasure,
+    PivotOverwritePolicy,
+    PivotRefreshPolicy,
+    PivotRefreshStatus,
+    PivotShowAs,
+    PivotSort,
+    PivotSource,
+    PivotSourceRange,
+    PivotStyle,
+    PivotSubtotal,
+    PivotTable,
+    PivotTableBuilder,
+    PivotValue,
     Placed,
     PlacedControl,
     ProtectedRange,
@@ -181,7 +226,7 @@ pub use duke_sheets_formula::{
 pub use duke_sheets_chart::{
     column_width_to_emu, row_height_to_emu, Axis, AxisPosition, CellMarker, Chart, ChartEx,
     ChartType, DataReference, DataSeries, DrawingAnchor, DrawingMetrics, EditAs, EmbeddedImage,
-    ImageFormat, Legend,
+    ImageFormat, Legend, PivotChartSource,
 };
 
 // Re-export I/O types

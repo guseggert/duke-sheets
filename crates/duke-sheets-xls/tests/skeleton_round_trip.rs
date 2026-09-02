@@ -1,10 +1,5 @@
 #![allow(clippy::approx_constant)]
-//! Round-trip tests for the XLS skeleton writer.
-//!
-//! Build an empty `Workbook`, write it to BIFF8 bytes, read it back
-//! through `XlsReader`, and confirm the structure (sheet count, sheet
-//! names) round-trips. The skeleton writer doesn't yet emit cells,
-//! formatting, or formulas — those land in subsequent slices.
+//! Round-trip and CFB envelope tests for the XLS writer.
 
 use std::io::Cursor;
 
@@ -89,7 +84,8 @@ fn writes_cfb_v3_envelope() {
 #[test]
 fn special_and_unicode_sheet_names_round_trip() {
     let mut wb = Workbook::new();
-    wb.rename_worksheet(0, "First & Last").expect("rename Sheet1");
+    wb.rename_worksheet(0, "First & Last")
+        .expect("rename Sheet1");
     wb.add_worksheet_with_name("with 'apostrophe'")
         .expect("apostrophe sheet");
     wb.add_worksheet_with_name("日本語データ")
@@ -126,7 +122,7 @@ fn write_to_bytes_then_read_file_round_trips() {
 
 /// Probe whether LibreOffice's loadenv accepts our skeleton output.
 /// Useful for empirical viability checks during writer development.
-/// `#[ignore]`-gated because it needs a running LO container.
+/// The test harness auto-starts the LibreOffice container.
 #[test]
 fn lo_can_open_skeleton_workbook() {
     duke_sheets_test_harness::lo::ensure_lo();
@@ -145,12 +141,10 @@ fn lo_can_open_skeleton_workbook() {
         .build()
         .unwrap();
     let outcome: Result<i32, String> = rt.block_on(async {
-        let mut bridge = duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect(
-            "127.0.0.1",
-            2002,
-        )
-        .await
-        .map_err(|e| format!("connect: {e}"))?;
+        let mut bridge =
+            duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect("127.0.0.1", 2002)
+                .await
+                .map_err(|e| format!("connect: {e}"))?;
         let mut wb = bridge
             .open_workbook(&path)
             .await
@@ -187,12 +181,10 @@ fn lo_can_read_cell_values_we_emit() {
         .build()
         .unwrap();
     let outcome: Result<(f64, f64), String> = rt.block_on(async {
-        let mut bridge = duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect(
-            "127.0.0.1",
-            2002,
-        )
-        .await
-        .map_err(|e| format!("connect: {e}"))?;
+        let mut bridge =
+            duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect("127.0.0.1", 2002)
+                .await
+                .map_err(|e| format!("connect: {e}"))?;
         let mut wb = bridge
             .open_workbook(&path)
             .await

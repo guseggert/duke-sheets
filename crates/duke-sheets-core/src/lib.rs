@@ -37,6 +37,7 @@ pub mod form_control;
 pub mod hyperlink;
 pub mod locale;
 pub mod named_range;
+pub mod pivot;
 pub mod protection;
 pub mod range;
 pub mod rich_text;
@@ -78,11 +79,23 @@ pub use form_control::{
 };
 pub use hyperlink::Hyperlink;
 pub use locale::Locale;
+pub use pivot::{
+    PivotAggregate, PivotAxis, PivotCacheInfo, PivotCacheSourceKind, PivotCalculatedField,
+    PivotCalculatedItem, PivotDateGroupUnit, PivotDatePeriod, PivotExtension, PivotExtensions,
+    PivotField, PivotFieldRef, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout,
+    PivotLayoutKind, PivotManualGroup, PivotMeasure, PivotOverwritePolicy, PivotRefreshPolicy,
+    PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource, PivotSourceRange, PivotStyle,
+    PivotSubtotal, PivotTable, PivotTableBuilder, PivotValue, PivotValuesAxis,
+};
 pub use protection::{hash_legacy_protection_password, ProtectedRange, WorkbookProtection};
 pub use rich_text::{rich_text_to_plain, RichTextRun, RunFont};
 pub use table::{Table, TableColumn, TableStyleInfo, TotalsRowFunction};
 pub use validation::{DataValidation, ValidationErrorStyle, ValidationOperator, ValidationType};
-pub use workbook::{ChartSheet, SheetSlot, Workbook, WorkbookSettings};
+pub use workbook::{
+    ChartSheet, SheetSlot, Workbook, WorkbookConnection, WorkbookConnectionCredentials,
+    WorkbookConnectionKind, WorkbookConnectionParameter, WorkbookConnectionParameterType,
+    WorkbookConnectionParameterValue, WorkbookExtension, WorkbookExtensionPart, WorkbookSettings,
+};
 pub use worksheet::{
     FreezePanes, ImageInfo, ImageSizing, PageBreak, PageOrientation, PageSetup, Selection,
     SheetProtection, SheetVisibility, SplitPanes, Worksheet,

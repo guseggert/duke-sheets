@@ -12,7 +12,7 @@ pub use number::format_number;
 
 #[cfg(feature = "bigint")]
 #[allow(unused_imports)]
-pub use bigint::{format_bigint, fallback_format_bigint, is_safe_integer};
+pub use bigint::{fallback_format_bigint, format_bigint, is_safe_integer};
 
 use crate::ast::{FormatPart, NumberFormat, Section};
 use crate::error::FormatError;
@@ -97,7 +97,12 @@ impl NumberFormat {
             .parts
             .iter()
             .any(|p| matches!(p, FormatPart::Scientific { .. }));
-        let need_minus_sign = num_sections == 1 && value < 0.0 && (has_numeric_parts || is_single_char_literal) && !use_abs_value && !has_fraction && !has_scientific;
+        let need_minus_sign = num_sections == 1
+            && value < 0.0
+            && (has_numeric_parts || is_single_char_literal)
+            && !use_abs_value
+            && !has_fraction
+            && !has_scientific;
 
         // Format as a number
         let mut result = format_number(format_value, section, opts)?;
@@ -161,7 +166,14 @@ impl NumberFormat {
                     // Zero value - use section[2]
                     // Unless it's text-only (@), then use positive section
                     if sections[2].has_text_placeholder()
-                        && !sections[2].parts.iter().any(|p| p.is_numeric_part() || matches!(p, FormatPart::Literal(_) | FormatPart::EscapedLiteral(_))) {
+                        && !sections[2].parts.iter().any(|p| {
+                            p.is_numeric_part()
+                                || matches!(
+                                    p,
+                                    FormatPart::Literal(_) | FormatPart::EscapedLiteral(_)
+                                )
+                        })
+                    {
                         &sections[0]
                     } else {
                         &sections[2]
@@ -338,7 +350,9 @@ pub fn fallback_format(value: f64) -> String {
         if let Some(e_pos) = formatted.find('E') {
             let (mantissa, exponent) = formatted.split_at(e_pos);
             let trimmed_mantissa = mantissa.trim_end_matches('0');
-            let final_mantissa = trimmed_mantissa.strip_suffix('.').unwrap_or(trimmed_mantissa);
+            let final_mantissa = trimmed_mantissa
+                .strip_suffix('.')
+                .unwrap_or(trimmed_mantissa);
 
             // Format exponent to match Excel: E+12, E-05, etc.
             let exp_str = &exponent[1..]; // Skip 'E'

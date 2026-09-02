@@ -7,6 +7,7 @@
 pub mod decompiler;
 pub mod function_table;
 pub mod parsed_token;
+pub mod pivot_formula;
 
 pub use decompiler::decompile;
 pub use function_table::{
@@ -15,6 +16,10 @@ pub use function_table::{
     function_returns_reference, OperandClass,
 };
 pub use parsed_token::ParsedToken;
+pub use pivot_formula::{
+    decompile_pivot_formula, PivotFormulaError, PivotFormulaFunction, PivotFormulaHooks,
+    PivotVariableArgCount,
+};
 
 /// A SUPBOOK record: describes a supporting workbook reference.
 #[derive(Debug, Clone)]
