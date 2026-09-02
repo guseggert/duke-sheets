@@ -554,6 +554,16 @@ describe("PivotTables", () => {
       const wb = new Workbook();
       wb.addSheet("North");
       wb.addSheet("South");
+      for (const [name, region, revenue] of [
+        ["North", "North", 10],
+        ["South", "South", 20],
+      ] as const) {
+        const source = wb.getSheet(name);
+        source.setCell("A1", "Region");
+        source.setCell("B1", "Revenue");
+        source.setCell("A2", region);
+        source.setCell("B2", revenue);
+      }
       const sheet = wb.getSheet(0);
       sheet.addPivotTable({
         name: "ConsolidatedSales",
@@ -689,7 +699,7 @@ describe("PivotTables", () => {
     expect(chart.series[0].values.refType).toBe("formula");
     expect(chart.series[0].categories?.refType).toBe("formula");
     expect(sheet.charts).toHaveLength(1);
-    expect(sheet.charts[0].pivotSource?.name).toBe("SalesPivot");
+    expect(sheet.charts[0].chart?.pivotSource?.name).toBe("SalesPivot");
   });
 });
 

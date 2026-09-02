@@ -2669,14 +2669,11 @@ impl PyWorksheet {
         let ws = wb
             .worksheet_mut(self.sheet_index)
             .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
+        let anchor = duke_sheets::DrawingAnchor::default();
         let chart = ws
-            .build_pivot_chart(
-                pivot_name,
-                chart_type,
-                duke_sheets::DrawingAnchor::default(),
-            )
+            .build_pivot_chart(pivot_name, chart_type, anchor.clone())
             .map_err(to_py_err)?;
-        ws.add_chart(chart.clone());
+        ws.add_chart(chart.clone(), anchor).map_err(to_py_err)?;
         Ok(PyChart::from(&chart))
     }
 

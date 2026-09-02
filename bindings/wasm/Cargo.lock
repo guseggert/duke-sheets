@@ -498,6 +498,7 @@ name = "duke-sheets-pivot"
 version = "0.1.0"
 dependencies = [
  "ahash 0.8.12",
+ "chrono",
  "duke-sheets-core",
  "duke-sheets-formula",
  "rayon",
@@ -578,6 +579,7 @@ dependencies = [
  "duke-sheets-core",
  "duke-sheets-crypto",
  "duke-sheets-formula",
+ "duke-sheets-pivot",
  "duke-sheets-vml",
  "duke-sheets-xls",
  "log",

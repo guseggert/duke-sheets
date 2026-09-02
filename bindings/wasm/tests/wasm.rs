@@ -893,6 +893,17 @@ fn test_pivot_consolidation_roundtrips_from_options() {
     let wb = Workbook::new();
     wb.add_sheet("North").unwrap();
     wb.add_sheet("South").unwrap();
+    for (name, region, revenue) in [("North", "North", 10.0), ("South", "South", 20.0)] {
+        let source = wb.get_sheet_by_name(name).unwrap();
+        source.set_cell("A1", JsValue::from_str("Region")).unwrap();
+        source
+            .set_cell("B1", JsValue::from_str("Revenue"))
+            .unwrap();
+        source.set_cell("A2", JsValue::from_str(region)).unwrap();
+        source
+            .set_cell("B2", JsValue::from_f64(revenue))
+            .unwrap();
+    }
 
     let sheet = wb.get_sheet(0).unwrap();
     let measure = make_options(&[

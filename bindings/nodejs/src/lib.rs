@@ -2039,14 +2039,11 @@ impl Worksheet {
             let ws = wb
                 .worksheet_mut(self.sheet_index)
                 .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            let anchor = duke_sheets::DrawingAnchor::default();
             let chart = ws
-                .build_pivot_chart(
-                    &options.pivot_name,
-                    chart_type,
-                    duke_sheets::DrawingAnchor::default(),
-                )
+                .build_pivot_chart(&options.pivot_name, chart_type, anchor.clone())
                 .map_err(to_napi_err)?;
-            ws.add_chart(chart.clone());
+            ws.add_chart(chart.clone(), anchor).map_err(to_napi_err)?;
             Ok(JsChart::from(&chart))
         })
     }

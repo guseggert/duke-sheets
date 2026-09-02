@@ -653,6 +653,15 @@ class TestPivotTables:
         wb = duke_sheets.Workbook()
         wb.add_sheet("North")
         wb.add_sheet("South")
+        for name, region, revenue in [
+            ("North", "North", 10.0),
+            ("South", "South", 20.0),
+        ]:
+            source = wb.get_sheet(name)
+            source.set_cell("A1", "Region")
+            source.set_cell("B1", "Revenue")
+            source.set_cell("A2", region)
+            source.set_cell("B2", revenue)
 
         sheet = wb.get_sheet(0)
         sheet.add_pivot_table(
@@ -810,4 +819,4 @@ class TestPivotTables:
         assert chart.series[0].values.ref_type == "formula"
         assert chart.series[0].categories.ref_type == "formula"
         assert sheet.chart_count == 1
-        assert sheet.charts[0].pivot_source.name == "SalesPivot"
+        assert sheet.charts[0].chart.pivot_source.name == "SalesPivot"

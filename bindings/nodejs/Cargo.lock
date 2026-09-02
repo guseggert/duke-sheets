@@ -531,23 +531,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "duke-sheets-pivot"
+version = "0.1.0"
+dependencies = [
+ "ahash 0.8.12",
+ "chrono",
+ "duke-sheets-core",
+ "duke-sheets-formula",
+ "rayon",
+ "ssfmt",
+]
+
+[[package]]
 name = "duke-sheets-vml"
 version = "0.1.0"
 dependencies = [
  "duke-sheets-chart",
  "duke-sheets-core",
  "quick-xml",
-]
-
-[[package]]
-name = "duke-sheets-pivot"
-version = "0.1.0"
-dependencies = [
- "ahash 0.8.12",
- "duke-sheets-core",
- "duke-sheets-formula",
- "rayon",
- "ssfmt",
 ]
 
 [[package]]
@@ -593,6 +594,7 @@ dependencies = [
  "duke-sheets-core",
  "duke-sheets-crypto",
  "duke-sheets-formula",
+ "duke-sheets-pivot",
  "duke-sheets-vml",
  "duke-sheets-xls",
  "log",
