@@ -25,8 +25,10 @@ pub mod plan;
 
 pub use api::{PivotRefreshOptions, PivotRefreshStats, WorkbookPivotExt};
 pub use plan::{
-    plan_format_pivots, FormatPivotAxisTuples, FormatPivotCache, FormatPivotCacheField,
-    FormatPivotPlan, FormatPivotSource, FormatPivotTable,
+    pivot_date_period_filter_bounds, pivot_measure_matches_target, plan_format_pivots, shift_month,
+    visible_row_indexes, FormatPivotAxisTuples, FormatPivotCache, FormatPivotCacheField,
+    FormatPivotGroupLevel, FormatPivotGrouping, FormatPivotPlan, FormatPivotSource,
+    FormatPivotTable,
 };
 
 #[cfg(test)]

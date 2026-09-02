@@ -11,6 +11,7 @@ description = "Pivot table refresh engine for duke-sheets"
 duke-sheets-core.workspace = true
 duke-sheets-formula.workspace = true
 ahash.workspace = true
+chrono.workspace = true
 ssfmt.workspace = true
 rayon = { workspace = true, optional = true }
 

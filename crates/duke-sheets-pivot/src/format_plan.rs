@@ -125,6 +125,42 @@ pub struct FormatPivotCacheField {
     pub shared_items: Vec<PivotValue>,
     /// Field-major item IDs for each source row.
     pub item_ids: Vec<u32>,
+    /// Format-neutral grouping data when this is a grouped base field.
+    pub grouping: Option<FormatPivotGrouping>,
+}
+
+/// Resolved grouping data attached to a planned cache field.
+#[derive(Debug, Clone)]
+pub struct FormatPivotGrouping {
+    /// Semantic grouping definition supplied by the pivot table.
+    pub definition: PivotGrouping,
+    /// Zero-based cache-field index of the ungrouped base field.
+    pub base_field_index: usize,
+    /// Zero-based parent field index, when the grouping is nested below one.
+    pub parent_field_index: Option<usize>,
+    /// Ungrouped source dictionary in first-seen order.
+    pub source_items: Vec<PivotValue>,
+    /// Ungrouped source item IDs for every cache row.
+    pub source_item_ids: Vec<u32>,
+    /// One resolved level per numeric/manual grouping or date unit.
+    pub levels: Vec<FormatPivotGroupLevel>,
+}
+
+/// A resolved grouping level and its source-to-group mapping.
+#[derive(Debug, Clone)]
+pub struct FormatPivotGroupLevel {
+    /// Cache-field index carrying this level's transformed values.
+    pub field_index: usize,
+    /// Parent cache-field index for hierarchical date levels.
+    pub parent_field_index: Option<usize>,
+    /// Date unit represented by this level, or `None` for numeric/manual groups.
+    pub date_unit: Option<duke_sheets_core::PivotDateGroupUnit>,
+    /// Group item dictionary in planned tuple item-ID space.
+    pub group_items: Vec<PivotValue>,
+    /// Group item ID for each ungrouped source dictionary item.
+    pub source_item_group_ids: Vec<u32>,
+    /// Group item IDs for every cache row.
+    pub item_ids: Vec<u32>,
 }
 
 /// A planned pivot table part for file-format writers.
@@ -145,8 +181,12 @@ pub struct FormatPivotTable {
     pub visible_rows: Option<Vec<usize>>,
     /// Precomputed axis item tuples in planned cache item-id space.
     ///
-    /// `None` for an axis means the target format still needs a writer-local
-    /// expansion step, such as legacy grouped-field tuple expansion.
+    /// For every refreshable local source, both axes are `Some`, including
+    /// grouped and measure-sorted axes. `None` is reserved for metadata-only
+    /// external, OLAP, scenario, or externally refreshed consolidation caches
+    /// that have no cache rows. Grouped tuples use the item-ID spaces exposed
+    /// by [`FormatPivotGroupLevel`], with manual groups followed by their base
+    /// source item ID.
     pub axis_tuples: FormatPivotAxisTuples,
 }
 
@@ -193,6 +233,150 @@ enum MetadataOnlyFormatSourceCacheKey {
 /// Build immutable file-format pivot plans from a workbook.
 pub fn plan_format_pivots(workbook: &Workbook) -> Result<FormatPivotPlan> {
     plan_format_pivots_with_stats(workbook).map(|(plan, _)| plan)
+}
+
+/// Return whether a measure identifies the same sort or filter target.
+pub fn pivot_measure_matches_target(measure: &PivotMeasure, target: &PivotMeasure) -> bool {
+    pivot_measure_matches_sort_target(measure, target)
+}
+
+/// Shift a calendar year/month pair by a signed number of months.
+pub fn shift_month(year: i32, month: u32, delta: i32) -> Option<(i32, u32)> {
+    if !(1..=12).contains(&month) {
+        return None;
+    }
+    let zero_based = year.checked_mul(12)? + month as i32 - 1 + delta;
+    Some((
+        zero_based.div_euclid(12),
+        zero_based.rem_euclid(12) as u32 + 1,
+    ))
+}
+
+/// Resolve a relative pivot date period to an exclusive serial-number range.
+pub fn pivot_date_period_filter_bounds(
+    period: PivotDatePeriod,
+    date_system: DateSystem,
+) -> Option<(f64, f64)> {
+    use chrono::Datelike;
+
+    let today = chrono::Local::now().date_naive();
+    let year = today.year();
+    let month = today.month();
+    let day = today.day();
+    match period {
+        PivotDatePeriod::Tomorrow => {
+            let date = today.checked_add_signed(chrono::Duration::days(1))?;
+            Some(exclusive_day_range(
+                date.year(),
+                date.month(),
+                date.day(),
+                date_system,
+            ))
+        }
+        PivotDatePeriod::Today => Some(exclusive_day_range(year, month, day, date_system)),
+        PivotDatePeriod::Yesterday => {
+            let date = today.checked_sub_signed(chrono::Duration::days(1))?;
+            Some(exclusive_day_range(
+                date.year(),
+                date.month(),
+                date.day(),
+                date_system,
+            ))
+        }
+        PivotDatePeriod::NextWeek => {
+            let date = today.checked_add_signed(chrono::Duration::days(7))?;
+            week_filter_bounds(date.year(), date.month(), date.day(), date_system)
+        }
+        PivotDatePeriod::ThisWeek => week_filter_bounds(year, month, day, date_system),
+        PivotDatePeriod::LastWeek => {
+            let date = today.checked_sub_signed(chrono::Duration::days(7))?;
+            week_filter_bounds(date.year(), date.month(), date.day(), date_system)
+        }
+        PivotDatePeriod::NextMonth => {
+            let (year, month) = shift_month(year, month, 1)?;
+            Some(exclusive_month_range(year, month, date_system))
+        }
+        PivotDatePeriod::ThisMonth => Some(exclusive_month_range(year, month, date_system)),
+        PivotDatePeriod::LastMonth => {
+            let (year, month) = shift_month(year, month, -1)?;
+            Some(exclusive_month_range(year, month, date_system))
+        }
+        PivotDatePeriod::NextQuarter => {
+            let (year, month) = quarter_start_for_shift(year, month, 1)?;
+            exclusive_month_span(year, month, 3, date_system)
+        }
+        PivotDatePeriod::ThisQuarter => {
+            exclusive_month_span(year, ((month - 1) / 3) * 3 + 1, 3, date_system)
+        }
+        PivotDatePeriod::LastQuarter => {
+            let (year, month) = quarter_start_for_shift(year, month, -1)?;
+            exclusive_month_span(year, month, 3, date_system)
+        }
+        PivotDatePeriod::NextYear => Some(exclusive_year_range(year + 1, date_system)),
+        PivotDatePeriod::ThisYear => Some(exclusive_year_range(year, date_system)),
+        PivotDatePeriod::LastYear => Some(exclusive_year_range(year - 1, date_system)),
+        PivotDatePeriod::YearToDate => Some((
+            date_to_serial(year, 1, 1, date_system),
+            date_to_serial(year, month, day, date_system) + 1.0,
+        )),
+        PivotDatePeriod::Month(_) | PivotDatePeriod::Quarter(_) => None,
+    }
+}
+
+fn exclusive_day_range(year: i32, month: u32, day: u32, date_system: DateSystem) -> (f64, f64) {
+    let start = date_to_serial(year, month, day, date_system);
+    (start, start + 1.0)
+}
+
+fn week_filter_bounds(
+    year: i32,
+    month: u32,
+    day: u32,
+    date_system: DateSystem,
+) -> Option<(f64, f64)> {
+    use chrono::Datelike;
+
+    let date = chrono::NaiveDate::from_ymd_opt(year, month, day)?;
+    let start = date.checked_sub_signed(chrono::Duration::days(
+        date.weekday().num_days_from_monday() as i64,
+    ))?;
+    let end = start.checked_add_signed(chrono::Duration::days(7))?;
+    Some((
+        date_to_serial(start.year(), start.month(), start.day(), date_system),
+        date_to_serial(end.year(), end.month(), end.day(), date_system),
+    ))
+}
+
+fn exclusive_month_range(year: i32, month: u32, date_system: DateSystem) -> (f64, f64) {
+    let (end_year, end_month) = shift_month(year, month, 1).unwrap_or((year + 1, 1));
+    (
+        date_to_serial(year, month, 1, date_system),
+        date_to_serial(end_year, end_month, 1, date_system),
+    )
+}
+
+fn exclusive_month_span(
+    year: i32,
+    month: u32,
+    months: i32,
+    date_system: DateSystem,
+) -> Option<(f64, f64)> {
+    let (end_year, end_month) = shift_month(year, month, months)?;
+    Some((
+        date_to_serial(year, month, 1, date_system),
+        date_to_serial(end_year, end_month, 1, date_system),
+    ))
+}
+
+fn exclusive_year_range(year: i32, date_system: DateSystem) -> (f64, f64) {
+    (
+        date_to_serial(year, 1, 1, date_system),
+        date_to_serial(year + 1, 1, 1, date_system),
+    )
+}
+
+fn quarter_start_for_shift(year: i32, month: u32, delta: i32) -> Option<(i32, u32)> {
+    shift_month(year, ((month - 1) / 3) * 3 + 1, delta * 3)
 }
 
 pub(crate) fn plan_format_pivots_with_stats(
@@ -242,6 +426,7 @@ pub(crate) fn plan_format_pivots_with_stats(
             let source = format_pivot_source(workbook, &resolved, &pivot.source)?;
             let source_snapshot =
                 cache.snapshot_for_resolved_source(workbook, resolved, &mut stats)?;
+            let raw_snapshot = Arc::clone(&source_snapshot.snapshot);
             let key = FormatPivotCacheKey::Transformed(TransformedSnapshotCacheKey::new(
                 source_snapshot.key.clone(),
                 &pivot.calculated_fields,
@@ -267,14 +452,30 @@ pub(crate) fn plan_format_pivots_with_stats(
                 cache_num
             } else {
                 let cache_num = caches.len() + 1;
-                let planned_cache = build_format_pivot_cache(cache_num, source, &snapshot, pivot)?;
+                let planned_cache = build_format_pivot_cache(
+                    cache_num,
+                    source,
+                    &raw_snapshot,
+                    &snapshot,
+                    pivot,
+                    workbook.settings().date_1904,
+                )?;
                 cache_by_key.insert(key, cache_num);
                 caches.push(planned_cache);
                 cache_num
             };
 
             let visible_rows = format_pivot_visible_rows(pivot, &snapshot)?;
-            let axis_tuples = format_pivot_axis_tuples(pivot, &snapshot, visible_rows.as_deref())?;
+            let planned_cache = caches.get(cache_num - 1).ok_or_else(|| {
+                Error::other("planned pivot cache disappeared while building axis tuples")
+            })?;
+            let axis_tuples = format_pivot_axis_tuples(
+                pivot,
+                &raw_snapshot,
+                &snapshot,
+                planned_cache,
+                visible_rows.as_deref(),
+            )?;
 
             tables.push(FormatPivotTable {
                 sheet_index,
@@ -335,8 +536,10 @@ pub(crate) fn format_pivot_source(
 pub(crate) fn build_format_pivot_cache(
     cache_num: usize,
     source: FormatPivotSource,
+    raw_snapshot: &SourceSnapshot,
     snapshot: &SourceSnapshot,
     pivot: &PivotTable,
+    date_1904: bool,
 ) -> Result<FormatPivotCache> {
     if matches!(source, FormatPivotSource::Consolidation { .. }) {
         return build_consolidation_format_pivot_cache(cache_num, source, snapshot, pivot);
@@ -348,7 +551,7 @@ pub(crate) fn build_format_pivot_cache(
         .map(|field| (field.name.to_lowercase(), field.formula.clone()))
         .collect::<AHashMap<_, _>>();
 
-    let fields = snapshot
+    let mut fields = snapshot
         .headers
         .iter()
         .zip(snapshot.columns.iter())
@@ -360,9 +563,11 @@ pub(crate) fn build_format_pivot_cache(
                 formula,
                 shared_items: column.dictionary.clone(),
                 item_ids: column.values.clone(),
+                grouping: None,
             }
         })
-        .collect();
+        .collect::<Vec<_>>();
+    attach_format_groupings(&mut fields, raw_snapshot, snapshot, pivot, date_1904)?;
 
     Ok(FormatPivotCache {
         cache_num,
@@ -375,6 +580,197 @@ pub(crate) fn build_format_pivot_cache(
         refresh_on_load: pivot.refresh_policy.refresh_on_open,
         background_query: pivot.refresh_policy.background_query,
         missing_items_limit: pivot.refresh_policy.missing_items_limit,
+    })
+}
+
+fn attach_format_groupings(
+    fields: &mut [FormatPivotCacheField],
+    raw_snapshot: &SourceSnapshot,
+    snapshot: &SourceSnapshot,
+    pivot: &PivotTable,
+    date_1904: bool,
+) -> Result<()> {
+    let mut claimed_derived_fields = AHashSet::new();
+    for definition in &pivot.groupings {
+        let field_name = grouping_field_name(definition);
+        let base_field_index = raw_snapshot.field_index(field_name).ok_or_else(|| {
+            Error::other(format!(
+                "pivot table {} references missing grouping field: {field_name}",
+                pivot.name
+            ))
+        })?;
+        let source = raw_snapshot.columns.get(base_field_index).ok_or_else(|| {
+            Error::other("pivot grouping base field is missing from the source snapshot")
+        })?;
+        let mut levels = Vec::new();
+        match definition {
+            PivotGrouping::Date { units, .. } if units.len() > 1 => {
+                let mut parent_field_index = None;
+                for unit in units {
+                    let grouped =
+                        raw_snapshot.grouped_date_column(base_field_index, &[*unit], date_1904);
+                    let field_index = snapshot
+                        .headers
+                        .iter()
+                        .enumerate()
+                        .skip(raw_snapshot.headers.len())
+                        .find(|(index, name)| {
+                            !claimed_derived_fields.contains(index)
+                                && name.starts_with(&grouped_date_header(field_name, *unit))
+                        })
+                        .map(|(index, _)| index)
+                        .ok_or_else(|| {
+                            Error::other(format!(
+                                "pivot table {} is missing transformed date grouping field {field_name}",
+                                pivot.name
+                            ))
+                        })?;
+                    claimed_derived_fields.insert(field_index);
+                    levels.push(format_group_level(
+                        source,
+                        &grouped,
+                        field_index,
+                        parent_field_index,
+                        Some(*unit),
+                    )?);
+                    parent_field_index = Some(field_index);
+                }
+            }
+            PivotGrouping::Manual { groups, .. } => {
+                levels.push(format_manual_group_level(
+                    source,
+                    groups,
+                    base_field_index,
+                    &pivot.name,
+                )?);
+            }
+            PivotGrouping::Number { .. } | PivotGrouping::Date { .. } => {
+                let grouped = raw_snapshot.grouped_column(
+                    base_field_index,
+                    definition,
+                    date_1904,
+                    &pivot.name,
+                )?;
+                let date_unit = match definition {
+                    PivotGrouping::Date { units, .. } => units.first().copied(),
+                    _ => None,
+                };
+                levels.push(format_group_level(
+                    source,
+                    &grouped,
+                    base_field_index,
+                    None,
+                    date_unit,
+                )?);
+            }
+        }
+        fields[base_field_index].grouping = Some(FormatPivotGrouping {
+            definition: definition.clone(),
+            base_field_index,
+            parent_field_index: None,
+            source_items: source.dictionary.clone(),
+            source_item_ids: source.values.clone(),
+            levels,
+        });
+    }
+    Ok(())
+}
+
+fn format_group_level(
+    source: &EncodedColumn,
+    grouped: &EncodedColumn,
+    field_index: usize,
+    parent_field_index: Option<usize>,
+    date_unit: Option<duke_sheets_core::PivotDateGroupUnit>,
+) -> Result<FormatPivotGroupLevel> {
+    let source_item_group_ids = source
+        .dictionary
+        .iter()
+        .map(|value| {
+            let source_id = source
+                .id_for_value(value)
+                .ok_or_else(|| Error::other("pivot grouping source dictionary lookup failed"))?;
+            let row = source
+                .values
+                .iter()
+                .position(|id| *id == source_id)
+                .ok_or_else(|| Error::other("pivot grouping source item has no cache row"))?;
+            grouped
+                .values
+                .get(row)
+                .copied()
+                .ok_or_else(|| Error::other("pivot grouping row mapping is incomplete"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(FormatPivotGroupLevel {
+        field_index,
+        parent_field_index,
+        date_unit,
+        group_items: grouped.dictionary.clone(),
+        source_item_group_ids,
+        item_ids: grouped.values.clone(),
+    })
+}
+
+fn format_manual_group_level(
+    source: &EncodedColumn,
+    groups: &[PivotManualGroup],
+    field_index: usize,
+    pivot_name: &str,
+) -> Result<FormatPivotGroupLevel> {
+    let lookup = manual_group_lookup(groups, pivot_name)?;
+    for group in groups {
+        for member in &group.members {
+            if !source.dictionary.iter().any(|item| item == member) {
+                return Err(Error::other(format!(
+                    "pivot table {pivot_name} manual group {} references an item not found in the source field: {member}",
+                    group.name
+                )));
+            }
+        }
+    }
+    let mut group_items = source
+        .dictionary
+        .iter()
+        .filter(|item| !lookup.contains_key(*item))
+        .cloned()
+        .collect::<Vec<_>>();
+    let group_indexes = groups
+        .iter()
+        .map(|group| {
+            let index = group_items.len() as u32;
+            group_items.push(PivotValue::String(group.name.clone()));
+            (group.name.clone(), index)
+        })
+        .collect::<AHashMap<_, _>>();
+    let source_item_group_ids = source
+        .dictionary
+        .iter()
+        .map(|item| {
+            lookup
+                .get(item)
+                .and_then(|name| group_indexes.get(name).copied())
+                .or_else(|| {
+                    group_items
+                        .iter()
+                        .position(|value| value == item)
+                        .map(|index| index as u32)
+                })
+                .ok_or_else(|| Error::other("pivot manual grouping item mapping is incomplete"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let item_ids = source
+        .values
+        .iter()
+        .map(|item_id| source_item_group_ids[*item_id as usize])
+        .collect();
+    Ok(FormatPivotGroupLevel {
+        field_index,
+        parent_field_index: None,
+        date_unit: None,
+        group_items,
+        source_item_group_ids,
+        item_ids,
     })
 }
 
@@ -431,6 +827,7 @@ pub(crate) fn build_consolidation_format_pivot_cache(
             database_field: true,
             shared_items: row_field.dictionary,
             item_ids: row_field.values,
+            grouping: None,
         },
         FormatPivotCacheField {
             name: "Column".to_string(),
@@ -438,6 +835,7 @@ pub(crate) fn build_consolidation_format_pivot_cache(
             database_field: true,
             shared_items: column_field.dictionary,
             item_ids: column_field.values,
+            grouping: None,
         },
         FormatPivotCacheField {
             name: "Value".to_string(),
@@ -445,6 +843,7 @@ pub(crate) fn build_consolidation_format_pivot_cache(
             database_field: true,
             shared_items: value_field.dictionary,
             item_ids: value_field.values,
+            grouping: None,
         },
     ];
     for (index, page_field) in page_fields.into_iter().enumerate() {
@@ -454,6 +853,7 @@ pub(crate) fn build_consolidation_format_pivot_cache(
             database_field: true,
             shared_items: page_field.dictionary,
             item_ids: page_field.values,
+            grouping: None,
         });
     }
 
@@ -648,6 +1048,7 @@ pub(crate) fn metadata_only_format_cache_fields(
             database_field: false,
             shared_items: Vec::new(),
             item_ids: Vec::new(),
+            grouping: None,
         });
     }
 
@@ -666,6 +1067,7 @@ pub(crate) fn push_metadata_only_format_cache_field(
             database_field: true,
             shared_items: Vec::new(),
             item_ids: Vec::new(),
+            grouping: None,
         });
     }
 }
@@ -801,57 +1203,142 @@ pub(crate) fn format_pivot_visible_rows(
 
 pub(crate) fn format_pivot_axis_tuples(
     pivot: &PivotTable,
+    raw_snapshot: &SourceSnapshot,
     snapshot: &SourceSnapshot,
+    cache: &FormatPivotCache,
     visible_rows: Option<&[usize]>,
 ) -> Result<FormatPivotAxisTuples> {
     Ok(FormatPivotAxisTuples {
-        rows: format_axis_tuples_for_fields(pivot, snapshot, &pivot.rows, visible_rows)?,
-        columns: format_axis_tuples_for_fields(pivot, snapshot, &pivot.columns, visible_rows)?,
+        rows: format_axis_tuples_for_fields(
+            pivot,
+            raw_snapshot,
+            snapshot,
+            cache,
+            &pivot.rows,
+            visible_rows,
+        )?,
+        columns: format_axis_tuples_for_fields(
+            pivot,
+            raw_snapshot,
+            snapshot,
+            cache,
+            &pivot.columns,
+            visible_rows,
+        )?,
     })
 }
 
 pub(crate) fn format_axis_tuples_for_fields(
     pivot: &PivotTable,
+    raw_snapshot: &SourceSnapshot,
     snapshot: &SourceSnapshot,
+    cache: &FormatPivotCache,
     fields: &[PivotField],
     visible_rows: Option<&[usize]>,
 ) -> Result<Option<Vec<Vec<u32>>>> {
     if fields.is_empty() {
         return Ok(Some(Vec::new()));
     }
-    if format_axis_requires_writer_expansion(pivot, fields) {
-        return Ok(None);
-    }
 
-    let field_indexes = fields
-        .iter()
-        .map(|field| snapshot.required_field_index(&field.field.name, &pivot.name))
-        .collect::<Result<Vec<_>>>()?;
-    let mut tuples = format_unique_axis_tuples(snapshot, &field_indexes, visible_rows);
+    let (field_indexes, sort_fields) = format_axis_sort_fields(pivot, snapshot, cache, fields)?;
+    let mut semantic_tuples = format_unique_axis_tuples(snapshot, &field_indexes, visible_rows);
     sort_format_axis_tuples_by_measure(
         pivot,
         snapshot,
         &field_indexes,
-        fields,
+        &sort_fields,
         visible_rows,
-        &mut tuples,
+        &mut semantic_tuples,
     )?;
-    Ok(Some(tuples))
+    let semantic_positions = semantic_tuples
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(index, tuple)| (tuple, index))
+        .collect::<AHashMap<_, _>>();
+    let mut seen = AHashSet::new();
+    let mut tuples = Vec::new();
+    for row in visible_row_indexes(visible_rows, snapshot.row_count) {
+        let semantic = encoded_key(snapshot, &field_indexes, row);
+        let expanded = format_expanded_axis_tuple(raw_snapshot, cache, fields, row)?;
+        if seen.insert(expanded.clone()) {
+            tuples.push((
+                semantic_positions
+                    .get(&semantic)
+                    .copied()
+                    .unwrap_or(usize::MAX),
+                expanded,
+            ));
+        }
+    }
+    tuples.sort_by_key(|(position, _)| *position);
+    Ok(Some(tuples.into_iter().map(|(_, tuple)| tuple).collect()))
 }
 
-pub(crate) fn format_axis_requires_writer_expansion(
+fn format_axis_sort_fields(
     pivot: &PivotTable,
+    snapshot: &SourceSnapshot,
+    cache: &FormatPivotCache,
     fields: &[PivotField],
-) -> bool {
-    fields.iter().any(|field| {
-        pivot.groupings.iter().any(|grouping| {
-            grouping_field_name(grouping).eq_ignore_ascii_case(&field.field.name)
-                && matches!(
-                    grouping,
-                    PivotGrouping::Date { .. } | PivotGrouping::Manual { .. }
-                )
-        })
-    })
+) -> Result<(Vec<usize>, Vec<PivotField>)> {
+    let mut indexes = Vec::new();
+    let mut sort_fields = Vec::new();
+    for field in fields {
+        let cache_index = cache.field_index(&field.field.name).ok_or_else(|| {
+            Error::other(format!(
+                "pivot table {} references unknown axis field: {}",
+                pivot.name, field.field.name
+            ))
+        })?;
+        if let Some(grouping) = &cache.fields[cache_index].grouping {
+            if matches!(grouping.definition, PivotGrouping::Date { ref units, .. } if units.len() > 1)
+            {
+                for level in &grouping.levels {
+                    indexes.push(level.field_index);
+                    sort_fields.push(field.clone());
+                }
+                continue;
+            }
+        }
+        indexes.push(snapshot.required_field_index(&field.field.name, &pivot.name)?);
+        sort_fields.push(field.clone());
+    }
+    Ok((indexes, sort_fields))
+}
+
+fn format_expanded_axis_tuple(
+    _raw_snapshot: &SourceSnapshot,
+    cache: &FormatPivotCache,
+    fields: &[PivotField],
+    row: usize,
+) -> Result<Vec<u32>> {
+    let mut tuple = Vec::new();
+    for field in fields {
+        let cache_index = cache.field_index(&field.field.name).ok_or_else(|| {
+            Error::other(format!(
+                "pivot references unknown axis field {}",
+                field.field.name
+            ))
+        })?;
+        let cache_field = &cache.fields[cache_index];
+        if let Some(grouping) = &cache_field.grouping {
+            match &grouping.definition {
+                PivotGrouping::Manual { .. } => {
+                    tuple.push(grouping.levels[0].item_ids[row]);
+                    tuple.push(grouping.source_item_ids[row]);
+                }
+                PivotGrouping::Date { units, .. } if units.len() > 1 => {
+                    tuple.extend(grouping.levels.iter().map(|level| level.item_ids[row]));
+                }
+                PivotGrouping::Number { .. } | PivotGrouping::Date { .. } => {
+                    tuple.push(grouping.levels[0].item_ids[row]);
+                }
+            }
+        } else {
+            tuple.push(cache_field.item_ids[row]);
+        }
+    }
+    Ok(tuple)
 }
 
 pub(crate) fn format_unique_axis_tuples(
@@ -861,7 +1348,7 @@ pub(crate) fn format_unique_axis_tuples(
 ) -> Vec<Vec<u32>> {
     let mut seen = AHashSet::new();
     let mut tuples = Vec::new();
-    for row in format_visible_row_indexes(visible_rows, snapshot.row_count) {
+    for row in visible_row_indexes(visible_rows, snapshot.row_count) {
         let tuple = encoded_key(snapshot, field_indexes, row);
         if seen.insert(tuple.clone()) {
             tuples.push(tuple);
@@ -921,7 +1408,7 @@ pub(crate) fn format_axis_tuple_measure_totals(
     visible_rows: Option<&[usize]>,
 ) -> AHashMap<Vec<u32>, Vec<AggregateState>> {
     let mut totals = AHashMap::<Vec<u32>, Vec<AggregateState>>::new();
-    for row in format_visible_row_indexes(visible_rows, snapshot.row_count) {
+    for row in visible_row_indexes(visible_rows, snapshot.row_count) {
         let tuple = encoded_key(snapshot, field_indexes, row);
         let states = totals
             .entry(tuple)
@@ -947,7 +1434,8 @@ pub(crate) fn format_update_states(
     }
 }
 
-pub(crate) fn format_visible_row_indexes(
+/// Iterate all row indexes or a prefiltered subset without allocating.
+pub fn visible_row_indexes(
     visible_rows: Option<&[usize]>,
     row_count: usize,
 ) -> FormatVisibleRowIter<'_> {
@@ -957,8 +1445,11 @@ pub(crate) fn format_visible_row_indexes(
     }
 }
 
-pub(crate) enum FormatVisibleRowIter<'a> {
+/// Iterator returned by [`visible_row_indexes`].
+pub enum FormatVisibleRowIter<'a> {
+    /// Every cache row in source order.
     All(std::ops::Range<usize>),
+    /// A prefiltered sequence of cache row indexes.
     Filtered(std::iter::Copied<std::slice::Iter<'a, usize>>),
 }
 

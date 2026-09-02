@@ -7,12 +7,10 @@
 //! `BoundSheet8`. Cell values, formatting, formulas, and comments are
 //! deliberately not emitted yet — they land in subsequent slices.
 
-use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::Write;
 use std::path::Path;
 
-use chrono::Datelike;
 use duke_sheets_core::style::{
     Alignment, BorderEdge, BorderLineStyle, BorderStyle, Color, DiagonalDirection, FillStyle,
     FontStyle, HorizontalAlignment, NumberFormat, PatternType, ReadingOrder, Underline,
@@ -25,9 +23,12 @@ use duke_sheets_core::{
     PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotManualGroup, PivotMeasure,
     PivotShowAs, PivotSort, PivotSourceRange, PivotSubtotal, PivotValue, PivotValuesAxis,
 };
-use duke_sheets_pivot::{FormatPivotCache, FormatPivotPlan, FormatPivotSource, FormatPivotTable};
+use duke_sheets_pivot::{
+    pivot_date_period_filter_bounds, pivot_measure_matches_target, visible_row_indexes,
+    FormatPivotCache, FormatPivotPlan, FormatPivotSource, FormatPivotTable,
+};
 use ssfmt::{
-    date_serial::{date_to_serial, serial_to_date, serial_to_time},
+    date_serial::{serial_to_date, serial_to_time},
     DateSystem,
 };
 
@@ -201,131 +202,6 @@ struct XlsPivotCacheLayouts {
 struct XlsPivotAxisTuples {
     rows: Vec<Vec<u16>>,
     columns: Vec<Vec<u16>>,
-}
-
-enum XlsVisibleRowIter<'a> {
-    All(std::ops::Range<usize>),
-    Filtered(std::iter::Copied<std::slice::Iter<'a, usize>>),
-}
-
-impl Iterator for XlsVisibleRowIter<'_> {
-    type Item = usize;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            Self::All(rows) => rows.next(),
-            Self::Filtered(rows) => rows.next(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-struct XlsAggregateState {
-    count: u64,
-    number_count: u64,
-    sum: f64,
-    sum_sq: f64,
-    min: Option<f64>,
-    max: Option<f64>,
-    product: Option<f64>,
-}
-
-impl XlsAggregateState {
-    fn add(&mut self, value: &PivotValue) {
-        if !value.is_blank() {
-            self.count += 1;
-        }
-        let PivotValue::Number(number) = value else {
-            return;
-        };
-
-        self.number_count += 1;
-        self.sum += number;
-        self.sum_sq += number * number;
-        self.min = Some(self.min.map_or(*number, |min| min.min(*number)));
-        self.max = Some(self.max.map_or(*number, |max| max.max(*number)));
-        self.product = Some(self.product.unwrap_or(1.0) * number);
-    }
-
-    fn finalize_number(&self, aggregate: PivotAggregate) -> Option<f64> {
-        match aggregate {
-            PivotAggregate::Sum => (self.number_count > 0).then_some(self.sum),
-            PivotAggregate::Count => Some(self.count as f64),
-            PivotAggregate::CountNumbers => Some(self.number_count as f64),
-            PivotAggregate::Average => {
-                (self.number_count > 0).then_some(self.sum / self.number_count as f64)
-            }
-            PivotAggregate::Max => self.max,
-            PivotAggregate::Min => self.min,
-            PivotAggregate::Product => self.product,
-            PivotAggregate::StdDev => {
-                sample_std_dev_from_parts(self.sum, self.sum_sq, self.number_count)
-            }
-            PivotAggregate::StdDevP => {
-                population_std_dev_from_parts(self.sum, self.sum_sq, self.number_count)
-            }
-            PivotAggregate::Var => {
-                sample_variance_from_parts(self.sum, self.sum_sq, self.number_count)
-            }
-            PivotAggregate::VarP => {
-                population_variance_from_parts(self.sum, self.sum_sq, self.number_count)
-            }
-        }
-    }
-}
-
-fn merge_xls_aggregate_state_slices(
-    target: &mut [XlsAggregateState],
-    source: &[XlsAggregateState],
-) {
-    for (target, source) in target.iter_mut().zip(source) {
-        target.count += source.count;
-        target.number_count += source.number_count;
-        target.sum += source.sum;
-        target.sum_sq += source.sum_sq;
-        target.min = match (target.min, source.min) {
-            (Some(left), Some(right)) => Some(left.min(right)),
-            (Some(left), None) => Some(left),
-            (None, Some(right)) => Some(right),
-            (None, None) => None,
-        };
-        target.max = match (target.max, source.max) {
-            (Some(left), Some(right)) => Some(left.max(right)),
-            (Some(left), None) => Some(left),
-            (None, Some(right)) => Some(right),
-            (None, None) => None,
-        };
-        target.product = match (target.product, source.product) {
-            (Some(left), Some(right)) => Some(left * right),
-            (Some(left), None) => Some(left),
-            (None, Some(right)) => Some(right),
-            (None, None) => None,
-        };
-    }
-}
-
-fn population_std_dev_from_parts(sum: f64, sum_sq: f64, count: u64) -> Option<f64> {
-    population_variance_from_parts(sum, sum_sq, count).map(f64::sqrt)
-}
-
-fn sample_std_dev_from_parts(sum: f64, sum_sq: f64, count: u64) -> Option<f64> {
-    sample_variance_from_parts(sum, sum_sq, count).map(f64::sqrt)
-}
-
-fn population_variance_from_parts(sum: f64, sum_sq: f64, count: u64) -> Option<f64> {
-    if count == 0 {
-        return None;
-    }
-    let count = count as f64;
-    Some(((sum_sq - (sum * sum / count)) / count).max(0.0))
-}
-
-fn sample_variance_from_parts(sum: f64, sum_sq: f64, count: u64) -> Option<f64> {
-    if count <= 1 {
-        return None;
-    }
-    let count = count as f64;
-    Some(((sum_sq - (sum * sum / count)) / (count - 1.0)).max(0.0))
 }
 
 impl XlsPivotCacheLayouts {
@@ -522,8 +398,7 @@ struct XlsWritePackage {
 }
 
 const EXCEL_WORKBOOK_ROOT_CLSID: [u8; 16] = [
-    0x20, 0x08, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x46,
+    0x20, 0x08, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
 ];
 
 fn cfb_to_xls(err: crate::cfb::CfbError) -> XlsError {
@@ -751,15 +626,10 @@ fn build_xls_pivot_cache_layouts(
     for cache in &pivot_plan.caches {
         let groupings = groupings_for_cache(workbook, pivot_plan, cache)?;
         validate_xls_pivot_groupings(cache, groupings)?;
-        let grouping_infos = xls_pivot_grouping_infos(workbook, cache, groupings, date_system)?;
+        let grouping_infos = xls_pivot_grouping_infos(cache, groupings, date_system)?;
         let date_filter_fields = date_filter_fields_for_cache(workbook, pivot_plan, cache)?;
-        let layout = build_xls_pivot_cache_layout(
-            workbook,
-            cache,
-            &grouping_infos,
-            &date_filter_fields,
-            date_system,
-        )?;
+        let layout =
+            build_xls_pivot_cache_layout(cache, &grouping_infos, &date_filter_fields, date_system)?;
         by_cache_num.insert(cache.cache_num, layout);
     }
     Ok(XlsPivotCacheLayouts {
@@ -1138,8 +1008,7 @@ fn validate_xls_manual_grouping(field_name: &str, groups: &[PivotManualGroup]) -
 }
 
 fn xls_pivot_grouping_infos<'a>(
-    workbook: &Workbook,
-    cache: &FormatPivotCache,
+    cache: &'a FormatPivotCache,
     groupings: &'a [PivotGrouping],
     date_system: DateSystem,
 ) -> XlsResult<Vec<XlsPivotGroupingInfo<'a>>> {
@@ -1153,8 +1022,13 @@ fn xls_pivot_grouping_infos<'a>(
                         "XLS pivot grouping references unknown cache field: {field_name}"
                     ))
                 })?;
-                let (source_items, source_item_ids) =
-                    xls_manual_group_source_items(workbook, cache, field_index, field_name)?;
+                let metadata = cache.fields[field_index].grouping.as_ref().ok_or_else(|| {
+                    XlsError::InvalidFormat(format!(
+                        "XLS pivot manual grouping metadata is missing for field {field_name}"
+                    ))
+                })?;
+                let source_items = metadata.source_items.clone();
+                let source_item_ids = metadata.source_item_ids.clone();
                 let (group_items, base_item_group_ids) =
                     manual_group_items_and_ids(field_name, &source_items, groups)?;
                 let group_item_ids = source_item_ids
@@ -1184,7 +1058,6 @@ fn xls_pivot_grouping_infos<'a>(
             Ok(XlsPivotGroupingInfo {
                 grouping,
                 source_numbers: xls_grouping_source_numbers(
-                    workbook,
                     cache,
                     grouping,
                     date_system,
@@ -1200,7 +1073,6 @@ fn xls_pivot_grouping_infos<'a>(
 }
 
 fn xls_grouping_source_numbers(
-    workbook: &Workbook,
     cache: &FormatPivotCache,
     grouping: &PivotGrouping,
     date_system: DateSystem,
@@ -1211,46 +1083,32 @@ fn xls_grouping_source_numbers(
             "XLS pivot grouping references unknown cache field: {field_name}"
         ))
     })?;
-    let FormatPivotSource::Worksheet {
-        sheet_index, range, ..
-    } = &cache.source
-    else {
-        return Err(XlsError::InvalidFormat(
-            "XLS pivot grouping requires worksheet-range source data".into(),
-        ));
-    };
-    let source_col = u32::from(range.start.col)
-        .checked_add(field_index as u32)
-        .ok_or_else(|| XlsError::InvalidFormat("XLS pivot grouping field index overflow".into()))?;
-    if source_col > u16::MAX as u32 || source_col > u32::from(range.end.col) {
-        return Err(XlsError::InvalidFormat(format!(
-            "XLS pivot grouping for field {field_name} must reference a source field"
-        )));
-    }
-    let worksheet = workbook
-        .worksheet(*sheet_index)
-        .ok_or_else(|| XlsError::InvalidFormat("pivot source worksheet not found".into()))?;
+    let metadata = cache.fields[field_index].grouping.as_ref().ok_or_else(|| {
+        XlsError::InvalidFormat(format!(
+            "XLS pivot grouping metadata is missing for field {field_name}"
+        ))
+    })?;
     let is_date_grouping = matches!(grouping, PivotGrouping::Date { .. });
     let mut seen = HashSet::new();
     let mut numbers = Vec::new();
-    for row in range.start.row.saturating_add(1)..=range.end.row {
-        match worksheet.get_value_at(row, source_col as u16) {
-            CellValue::Number(value) if value.is_finite() => {
-                if is_date_grouping && !valid_xls_date_serial(value, date_system) {
+    for item_id in &metadata.source_item_ids {
+        match metadata.source_items.get(*item_id as usize) {
+            Some(PivotValue::Number(value)) if value.is_finite() => {
+                if is_date_grouping && !valid_xls_date_serial(*value, date_system) {
                     return Err(XlsError::InvalidFormat(format!(
                         "XLS pivot date grouping for field {field_name} has invalid date serial: {value}"
                     )));
                 }
                 if seen.insert(value.to_bits()) {
-                    numbers.push(value);
+                    numbers.push(*value);
                 }
             }
-            CellValue::Number(value) if is_date_grouping => {
+            Some(PivotValue::Number(value)) if is_date_grouping => {
                 return Err(XlsError::InvalidFormat(format!(
                     "XLS pivot date grouping for field {field_name} has non-finite source value: {value}"
                 )));
             }
-            CellValue::Empty if !is_date_grouping => {}
+            Some(PivotValue::Blank) if !is_date_grouping => {}
             _ if is_date_grouping => {
                 return Err(XlsError::InvalidFormat(format!(
                     "XLS pivot date grouping for field {field_name} requires numeric date source values"
@@ -1360,58 +1218,7 @@ fn xls_manual_group_item_is_supported(item: &PivotValue) -> bool {
     ) || matches!(item, PivotValue::Number(value) if value.is_finite())
 }
 
-fn xls_manual_group_source_items(
-    workbook: &Workbook,
-    cache: &FormatPivotCache,
-    field_index: usize,
-    field_name: &str,
-) -> XlsResult<(Vec<PivotValue>, Vec<u32>)> {
-    let FormatPivotSource::Worksheet {
-        sheet_index, range, ..
-    } = &cache.source
-    else {
-        return Err(XlsError::InvalidFormat(
-            "XLS pivot manual grouping requires worksheet-range source data".into(),
-        ));
-    };
-    let source_col = u32::from(range.start.col)
-        .checked_add(field_index as u32)
-        .ok_or_else(|| XlsError::InvalidFormat("XLS pivot grouping field index overflow".into()))?;
-    if source_col > u16::MAX as u32 || source_col > u32::from(range.end.col) {
-        return Err(XlsError::InvalidFormat(format!(
-            "XLS pivot manual grouping for field {field_name} must reference a source field"
-        )));
-    }
-    let worksheet = workbook
-        .worksheet(*sheet_index)
-        .ok_or_else(|| XlsError::InvalidFormat("pivot source worksheet not found".into()))?;
-
-    let mut source_items = Vec::new();
-    let mut source_item_ids = Vec::new();
-    let mut lookup = HashMap::new();
-    for row in range.start.row.saturating_add(1)..=range.end.row {
-        let cell_value = worksheet.get_value_at(row, source_col as u16);
-        let value = PivotValue::from_cell_value(&cell_value);
-        let item_id = if let Some(item_id) = lookup.get(&value) {
-            *item_id
-        } else {
-            let item_id = checked_u32(source_items.len(), "pivot manual source item index")?;
-            lookup.insert(value.clone(), item_id);
-            source_items.push(value);
-            item_id
-        };
-        source_item_ids.push(item_id);
-    }
-    if source_items.is_empty() {
-        return Err(XlsError::InvalidFormat(format!(
-            "XLS pivot manual grouping for field {field_name} has no source items"
-        )));
-    }
-    Ok((source_items, source_item_ids))
-}
-
 fn build_xls_pivot_cache_layout(
-    workbook: &Workbook,
     cache: &FormatPivotCache,
     grouping_infos: &[XlsPivotGroupingInfo<'_>],
     date_filter_fields: &HashSet<String>,
@@ -1479,7 +1286,7 @@ fn build_xls_pivot_cache_layout(
                 };
             }
             PivotGrouping::Date { units, .. } => {
-                let source = xls_date_source_data(workbook, cache, cache_field_index, date_system)?;
+                let source = xls_date_source_data(cache, cache_field_index, date_system)?;
                 let (start, end) =
                     source_number_min_max(&source.source_numbers).ok_or_else(|| {
                         XlsError::InvalidFormat(format!(
@@ -1618,7 +1425,7 @@ fn build_xls_pivot_cache_layout(
         if !matches!(layout.fields[field_index].kind, XlsPivotFieldKind::Regular) {
             continue;
         }
-        let source = xls_date_source_data(workbook, cache, cache_field_index, date_system)?;
+        let source = xls_date_source_data(cache, cache_field_index, date_system)?;
         layout.fields[field_index].shared_items = source.shared_items;
         layout.fields[field_index].item_ids = source.item_ids;
         layout.fields[field_index].calculated_item_indexes = calculated_item_indexes_for_xls_field(
@@ -1714,38 +1521,28 @@ fn unique_xls_manual_grouped_field_name(
 }
 
 fn xls_date_source_data(
-    workbook: &Workbook,
     cache: &FormatPivotCache,
     field_index: usize,
     date_system: DateSystem,
 ) -> XlsResult<XlsDateSourceData> {
-    let FormatPivotSource::Worksheet {
-        sheet_index, range, ..
-    } = &cache.source
-    else {
-        return Err(XlsError::InvalidFormat(
-            "XLS pivot date grouping requires worksheet-range source data".into(),
-        ));
-    };
-    let source_col = u32::from(range.start.col)
-        .checked_add(field_index as u32)
-        .ok_or_else(|| XlsError::InvalidFormat("XLS pivot grouping field index overflow".into()))?;
-    if source_col > u16::MAX as u32 || source_col > u32::from(range.end.col) {
-        return Err(XlsError::InvalidFormat(
-            "XLS pivot date grouping must reference a source field".into(),
-        ));
-    }
-    let worksheet = workbook
-        .worksheet(*sheet_index)
-        .ok_or_else(|| XlsError::InvalidFormat("pivot source worksheet not found".into()))?;
-    let mut shared_items = Vec::new();
-    let mut item_ids = Vec::new();
+    let field = cache.fields.get(field_index).ok_or_else(|| {
+        XlsError::InvalidFormat("XLS pivot date field index is out of range".into())
+    })?;
+    let (shared_items, item_ids) = field
+        .grouping
+        .as_ref()
+        .map(|grouping| {
+            (
+                grouping.source_items.clone(),
+                grouping.source_item_ids.clone(),
+            )
+        })
+        .unwrap_or_else(|| (field.shared_items.clone(), field.item_ids.clone()));
     let mut row_numbers = Vec::new();
-    let mut index_by_bits = HashMap::new();
-    for row in range.start.row.saturating_add(1)..=range.end.row {
-        let value = match worksheet.get_value_at(row, source_col as u16) {
-            CellValue::Number(value) if value.is_finite() => value,
-            CellValue::Number(value) => {
+    for item_id in &item_ids {
+        let value = match shared_items.get(*item_id as usize) {
+            Some(PivotValue::Number(value)) if value.is_finite() => *value,
+            Some(PivotValue::Number(value)) => {
                 return Err(XlsError::InvalidFormat(format!(
                     "XLS pivot date grouping has non-finite source value: {value}"
                 )));
@@ -1761,15 +1558,6 @@ fn xls_date_source_data(
                 "XLS pivot date grouping has invalid date serial: {value}"
             )));
         }
-        let id = if let Some(id) = index_by_bits.get(&value.to_bits()) {
-            *id
-        } else {
-            let id = checked_u32(shared_items.len(), "pivot date shared item index")?;
-            shared_items.push(PivotValue::Number(value));
-            index_by_bits.insert(value.to_bits(), id);
-            id
-        };
-        item_ids.push(id);
         row_numbers.push(value);
     }
     if row_numbers.len() != cache.row_count {
@@ -3501,7 +3289,7 @@ fn write_classic_pivot_view_records(
     styles: &StyleTables,
 ) -> XlsResult<()> {
     let effective_columns = xls_effective_column_fields(pivot, layout);
-    let axis_tuples = build_xls_axis_tuples(part, pivot, layout, &effective_columns)?;
+    let axis_tuples = build_xls_axis_tuples(part, pivot, cache, layout, &effective_columns)?;
     write_sxview_record_biff8(
         stream,
         pivot,
@@ -4486,7 +4274,7 @@ fn xls_sxvd_sort_measure_index(
     let found = pivot
         .measures
         .iter()
-        .any(|measure| pivot_measure_matches_sort_target(measure, sort_measure));
+        .any(|measure| pivot_measure_matches_target(measure, sort_measure));
     if !found {
         return Err(XlsError::InvalidFormat(format!(
             "XLS pivot table {} sorts field {} by an unknown measure",
@@ -4504,7 +4292,7 @@ fn xls_pivot_measure_index_for_filter(
     pivot
         .measures
         .iter()
-        .position(|measure| pivot_measure_matches_sort_target(measure, target))
+        .position(|measure| pivot_measure_matches_target(measure, target))
         .map(|index| index as i16)
         .ok_or_else(|| {
             XlsError::InvalidFormat(format!(
@@ -4512,15 +4300,6 @@ fn xls_pivot_measure_index_for_filter(
                 pivot.name, target.field.name
             ))
         })
-}
-
-fn pivot_measure_matches_sort_target(measure: &PivotMeasure, target: &PivotMeasure) -> bool {
-    measure.field.name.eq_ignore_ascii_case(&target.field.name)
-        && measure.aggregate == target.aggregate
-        && target
-            .name
-            .as_ref()
-            .is_none_or(|name| measure.name.as_ref() == Some(name))
 }
 
 fn set_u32_flag(flags: &mut u32, mask: u32, value: bool) {
@@ -4860,19 +4639,17 @@ fn axis_line_count(fields: &[PivotField], tuples: &[Vec<u16>]) -> XlsResult<u16>
 fn build_xls_axis_tuples(
     part: &FormatPivotTable,
     pivot: &duke_sheets_core::PivotTable,
+    cache: &FormatPivotCache,
     layout: &XlsPivotCacheLayout,
     effective_columns: &[PivotField],
 ) -> XlsResult<XlsPivotAxisTuples> {
     let mut rows = if pivot.rows.is_empty() {
         Vec::new()
     } else if let Some(tuples) = &part.axis_tuples.rows {
-        xls_planned_axis_tuples(tuples)?
+        xls_planned_axis_tuples(cache, layout, &pivot.rows, tuples)?
     } else {
         axis_item_tuples(part, layout, &pivot.rows)?
     };
-    if part.axis_tuples.rows.is_none() {
-        sort_xls_axis_tuples_by_measure(part, pivot, layout, &pivot.rows, &mut rows)?;
-    }
     append_calculated_item_axis_tuples(pivot, layout, &pivot.rows, &mut rows)?;
 
     let has_synthetic_consolidation_columns = effective_columns.len() != pivot.columns.len();
@@ -4880,29 +4657,77 @@ fn build_xls_axis_tuples(
         Vec::new()
     } else if !has_synthetic_consolidation_columns {
         if let Some(tuples) = &part.axis_tuples.columns {
-            xls_planned_axis_tuples(tuples)?
+            xls_planned_axis_tuples(cache, layout, effective_columns, tuples)?
         } else {
             axis_item_tuples(part, layout, effective_columns)?
         }
     } else {
         axis_item_tuples(part, layout, effective_columns)?
     };
-    if part.axis_tuples.columns.is_none() || has_synthetic_consolidation_columns {
-        sort_xls_axis_tuples_by_measure(part, pivot, layout, effective_columns, &mut columns)?;
-    }
     append_calculated_item_axis_tuples(pivot, layout, effective_columns, &mut columns)?;
 
     Ok(XlsPivotAxisTuples { rows, columns })
 }
 
-fn xls_planned_axis_tuples(tuples: &[Vec<u32>]) -> XlsResult<Vec<Vec<u16>>> {
+fn xls_planned_axis_tuples(
+    cache: &FormatPivotCache,
+    layout: &XlsPivotCacheLayout,
+    fields: &[PivotField],
+    tuples: &[Vec<u32>],
+) -> XlsResult<Vec<Vec<u16>>> {
+    let layout_indexes = expanded_axis_field_indexes(layout, fields)?;
     tuples
         .iter()
         .map(|tuple| {
-            tuple
-                .iter()
-                .map(|item_id| checked_u16(*item_id as usize, "pivot item index"))
-                .collect::<XlsResult<Vec<_>>>()
+            let mut source_position = 0usize;
+            let mut layout_position = 0usize;
+            let mut mapped = Vec::with_capacity(tuple.len());
+            for field in fields {
+                let cache_index = cache.field_index(&field.field.name).ok_or_else(|| {
+                    XlsError::InvalidFormat(format!(
+                        "pivot references unknown axis field {}",
+                        field.field.name
+                    ))
+                })?;
+                let Some(grouping) = &cache.fields[cache_index].grouping else {
+                    mapped.push(checked_u16(
+                        *tuple.get(source_position).unwrap_or(&0) as usize,
+                        "pivot item index",
+                    )?);
+                    source_position += 1;
+                    layout_position += 1;
+                    continue;
+                };
+                for level in &grouping.levels {
+                    let planned_id = *tuple.get(source_position).unwrap_or(&0);
+                    let target_field_index =
+                        *layout_indexes.get(layout_position).ok_or_else(|| {
+                            XlsError::InvalidFormat(
+                                "pivot grouped axis layout is incomplete".into(),
+                            )
+                        })?;
+                    let native_id = level
+                        .item_ids
+                        .iter()
+                        .position(|item_id| *item_id == planned_id)
+                        .and_then(|row| {
+                            layout.fields[target_field_index].item_ids.get(row).copied()
+                        })
+                        .unwrap_or(planned_id);
+                    mapped.push(checked_u16(native_id as usize, "pivot item index")?);
+                    source_position += 1;
+                    layout_position += 1;
+                }
+                if matches!(grouping.definition, PivotGrouping::Manual { .. }) {
+                    mapped.push(checked_u16(
+                        *tuple.get(source_position).unwrap_or(&0) as usize,
+                        "pivot item index",
+                    )?);
+                    source_position += 1;
+                    layout_position += 1;
+                }
+            }
+            Ok(mapped)
         })
         .collect()
 }
@@ -4916,7 +4741,7 @@ fn axis_item_tuples(
 
     let mut seen = HashSet::new();
     let mut tuples = Vec::new();
-    for row in xls_visible_row_indexes(part, layout.row_count) {
+    for row in visible_row_indexes(part.visible_rows.as_deref(), layout.row_count) {
         let tuple = indexes
             .iter()
             .map(|index| {
@@ -4971,269 +4796,6 @@ fn append_calculated_item_axis_tuples(
     }
     Ok(())
 }
-fn sort_xls_axis_tuples_by_measure(
-    part: &FormatPivotTable,
-    pivot: &duke_sheets_core::PivotTable,
-    layout: &XlsPivotCacheLayout,
-    fields: &[PivotField],
-    tuples: &mut [Vec<u16>],
-) -> XlsResult<()> {
-    if tuples.len() < 2
-        || !fields
-            .iter()
-            .any(|field| !matches!(field.sort, PivotSort::None) && field.sort_by_measure.is_some())
-    {
-        return Ok(());
-    }
-
-    let axis_indexes = expanded_axis_field_indexes(layout, fields)?;
-    let measure_field_indexes = pivot
-        .measures
-        .iter()
-        .map(|measure| {
-            layout.field_index(&measure.field.name).ok_or_else(|| {
-                XlsError::InvalidFormat(format!(
-                    "pivot measure field {} not found in XLS cache layout",
-                    measure.field.name
-                ))
-            })
-        })
-        .collect::<XlsResult<Vec<_>>>()?;
-    let totals =
-        xls_axis_tuple_measure_totals(part, layout, &axis_indexes, &measure_field_indexes)?;
-    let measure_sort_totals = xls_measure_sort_prefix_totals(&totals, fields, &pivot.measures);
-
-    tuples.sort_by(|left, right| {
-        compare_xls_axis_tuples_by_measure(
-            left,
-            right,
-            &axis_indexes,
-            fields,
-            &measure_sort_totals,
-            &pivot.measures,
-            layout,
-        )
-    });
-    Ok(())
-}
-
-fn xls_axis_tuple_measure_totals(
-    part: &FormatPivotTable,
-    layout: &XlsPivotCacheLayout,
-    axis_indexes: &[usize],
-    measure_field_indexes: &[usize],
-) -> XlsResult<HashMap<Vec<u16>, Vec<XlsAggregateState>>> {
-    let mut totals = HashMap::<Vec<u16>, Vec<XlsAggregateState>>::new();
-    for row in xls_visible_row_indexes(part, layout.row_count) {
-        let tuple = axis_indexes
-            .iter()
-            .map(|index| {
-                let item_id = layout.fields[*index]
-                    .item_ids
-                    .get(row)
-                    .copied()
-                    .unwrap_or(0);
-                checked_u16(item_id as usize, "pivot item index")
-            })
-            .collect::<XlsResult<Vec<_>>>()?;
-        let states = totals
-            .entry(tuple)
-            .or_insert_with(|| vec![XlsAggregateState::default(); measure_field_indexes.len()]);
-        for (state, field_index) in states.iter_mut().zip(measure_field_indexes.iter().copied()) {
-            let Some(field) = layout.fields.get(field_index) else {
-                continue;
-            };
-            let Some(item_id) = field.item_ids.get(row).copied() else {
-                continue;
-            };
-            let Some(value) = field.shared_items.get(item_id as usize) else {
-                continue;
-            };
-            state.add(value);
-        }
-    }
-    Ok(totals)
-}
-
-type XlsMeasureSortPrefixTotals = Vec<Option<HashMap<Vec<u16>, Vec<XlsAggregateState>>>>;
-
-fn xls_measure_sort_prefix_totals(
-    totals: &HashMap<Vec<u16>, Vec<XlsAggregateState>>,
-    fields: &[PivotField],
-    measures: &[PivotMeasure],
-) -> XlsMeasureSortPrefixTotals {
-    let mut prefix_totals = (0..fields.len()).map(|_| None).collect::<Vec<_>>();
-    for (field_position, field) in fields.iter().enumerate() {
-        if matches!(field.sort, PivotSort::None) || field.sort_by_measure.is_none() {
-            continue;
-        }
-
-        let mut scoped = HashMap::<Vec<u16>, Vec<XlsAggregateState>>::new();
-        for (key, states) in totals {
-            if key.len() <= field_position {
-                continue;
-            }
-            let entry = scoped
-                .entry(key[..=field_position].to_vec())
-                .or_insert_with(|| vec![XlsAggregateState::default(); measures.len()]);
-            merge_xls_aggregate_state_slices(entry, states);
-        }
-        prefix_totals[field_position] = Some(scoped);
-    }
-    prefix_totals
-}
-
-fn xls_visible_row_indexes(part: &FormatPivotTable, row_count: usize) -> XlsVisibleRowIter<'_> {
-    match part.visible_rows.as_deref() {
-        Some(rows) => XlsVisibleRowIter::Filtered(rows.iter().copied()),
-        None => XlsVisibleRowIter::All(0..row_count),
-    }
-}
-
-fn compare_xls_axis_tuples_by_measure(
-    left: &[u16],
-    right: &[u16],
-    axis_indexes: &[usize],
-    fields: &[PivotField],
-    totals: &XlsMeasureSortPrefixTotals,
-    measures: &[PivotMeasure],
-    layout: &XlsPivotCacheLayout,
-) -> Ordering {
-    for (field_position, field) in fields.iter().enumerate() {
-        if left.get(field_position) == right.get(field_position) {
-            continue;
-        }
-
-        if matches!(field.sort, PivotSort::None) {
-            return Ordering::Equal;
-        }
-
-        let ordering = field
-            .sort_by_measure
-            .as_ref()
-            .and_then(|sort_measure| {
-                measures
-                    .iter()
-                    .position(|measure| pivot_measure_matches_sort_target(measure, sort_measure))
-            })
-            .map(|measure_index| {
-                compare_xls_measure_sort_values(
-                    left,
-                    right,
-                    field_position,
-                    totals,
-                    measures,
-                    measure_index,
-                )
-            })
-            .unwrap_or(Ordering::Equal)
-            .then_with(|| {
-                compare_xls_tuple_values(left, right, axis_indexes, field_position, layout)
-            });
-
-        if ordering != Ordering::Equal {
-            return match field.sort {
-                PivotSort::Ascending => ordering,
-                PivotSort::Descending => ordering.reverse(),
-                PivotSort::None => Ordering::Equal,
-            };
-        }
-    }
-    Ordering::Equal
-}
-
-fn compare_xls_measure_sort_values(
-    left: &[u16],
-    right: &[u16],
-    field_position: usize,
-    totals: &XlsMeasureSortPrefixTotals,
-    measures: &[PivotMeasure],
-    measure_index: usize,
-) -> Ordering {
-    let Some(totals) = totals
-        .get(field_position)
-        .and_then(|totals| totals.as_ref())
-    else {
-        return Ordering::Equal;
-    };
-    if left.len() <= field_position || right.len() <= field_position {
-        return Ordering::Equal;
-    }
-    let aggregate = measures[measure_index].aggregate;
-    let left = totals
-        .get(&left[..=field_position])
-        .and_then(|states| states.get(measure_index))
-        .and_then(|state| state.finalize_number(aggregate));
-    let right = totals
-        .get(&right[..=field_position])
-        .and_then(|states| states.get(measure_index))
-        .and_then(|state| state.finalize_number(aggregate));
-    compare_xls_optional_numbers(left, right)
-}
-
-fn compare_xls_optional_numbers(left: Option<f64>, right: Option<f64>) -> Ordering {
-    match (left, right) {
-        (Some(left), Some(right)) => left.partial_cmp(&right).unwrap_or(Ordering::Equal),
-        (Some(_), None) => Ordering::Less,
-        (None, Some(_)) => Ordering::Greater,
-        (None, None) => Ordering::Equal,
-    }
-}
-
-fn compare_xls_tuple_values(
-    left: &[u16],
-    right: &[u16],
-    axis_indexes: &[usize],
-    field_position: usize,
-    layout: &XlsPivotCacheLayout,
-) -> Ordering {
-    let value = |tuple: &[u16]| {
-        let field_index = *axis_indexes.get(field_position)?;
-        let item_index = *tuple.get(field_position)? as usize;
-        layout.fields.get(field_index)?.shared_items.get(item_index)
-    };
-    compare_xls_optional_pivot_values(value(left), value(right))
-}
-
-fn compare_xls_optional_pivot_values(
-    left: Option<&PivotValue>,
-    right: Option<&PivotValue>,
-) -> Ordering {
-    match (left, right) {
-        (Some(left), Some(right)) => compare_xls_pivot_values(left, right),
-        (Some(_), None) => Ordering::Less,
-        (None, Some(_)) => Ordering::Greater,
-        (None, None) => Ordering::Equal,
-    }
-}
-
-fn compare_xls_pivot_values(left: &PivotValue, right: &PivotValue) -> Ordering {
-    xls_pivot_value_rank(left)
-        .cmp(&xls_pivot_value_rank(right))
-        .then_with(|| match (left, right) {
-            (PivotValue::Blank, PivotValue::Blank) => Ordering::Equal,
-            (PivotValue::Boolean(left), PivotValue::Boolean(right)) => left.cmp(right),
-            (PivotValue::Number(left), PivotValue::Number(right)) => {
-                left.partial_cmp(right).unwrap_or(Ordering::Equal)
-            }
-            (PivotValue::String(left), PivotValue::String(right)) => {
-                left.to_lowercase().cmp(&right.to_lowercase())
-            }
-            (PivotValue::Error(left), PivotValue::Error(right)) => left.code().cmp(&right.code()),
-            _ => Ordering::Equal,
-        })
-}
-
-fn xls_pivot_value_rank(value: &PivotValue) -> u8 {
-    match value {
-        PivotValue::Blank => 0,
-        PivotValue::Boolean(_) => 1,
-        PivotValue::Number(_) => 2,
-        PivotValue::String(_) => 3,
-        PivotValue::Error(_) => 4,
-    }
-}
-
 fn expanded_axis_field_count(
     layout: &XlsPivotCacheLayout,
     fields: &[PivotField],
@@ -6193,140 +5755,6 @@ fn xls_date_period_filter_codes(period: PivotDatePeriod) -> Option<(u32, u32)> {
         PivotDatePeriod::Month(_) | PivotDatePeriod::Quarter(_) => return None,
     };
     Some((cft + 22, cft))
-}
-
-fn pivot_date_period_filter_bounds(
-    period: PivotDatePeriod,
-    date_system: DateSystem,
-) -> Option<(f64, f64)> {
-    let today = chrono::Local::now().date_naive();
-    let year = today.year();
-    let month = today.month();
-    let day = today.day();
-    match period {
-        PivotDatePeriod::Tomorrow => {
-            let date = today.checked_add_signed(chrono::Duration::days(1))?;
-            Some(exclusive_day_range(
-                date.year(),
-                date.month(),
-                date.day(),
-                date_system,
-            ))
-        }
-        PivotDatePeriod::Today => Some(exclusive_day_range(year, month, day, date_system)),
-        PivotDatePeriod::Yesterday => {
-            let date = today.checked_sub_signed(chrono::Duration::days(1))?;
-            Some(exclusive_day_range(
-                date.year(),
-                date.month(),
-                date.day(),
-                date_system,
-            ))
-        }
-        PivotDatePeriod::NextWeek => {
-            let date = today.checked_add_signed(chrono::Duration::days(7))?;
-            week_filter_bounds(date.year(), date.month(), date.day(), date_system)
-        }
-        PivotDatePeriod::ThisWeek => week_filter_bounds(year, month, day, date_system),
-        PivotDatePeriod::LastWeek => {
-            let date = today.checked_sub_signed(chrono::Duration::days(7))?;
-            week_filter_bounds(date.year(), date.month(), date.day(), date_system)
-        }
-        PivotDatePeriod::NextMonth => {
-            let (year, month) = shift_month(year, month, 1)?;
-            Some(exclusive_month_range(year, month, date_system))
-        }
-        PivotDatePeriod::ThisMonth => Some(exclusive_month_range(year, month, date_system)),
-        PivotDatePeriod::LastMonth => {
-            let (year, month) = shift_month(year, month, -1)?;
-            Some(exclusive_month_range(year, month, date_system))
-        }
-        PivotDatePeriod::NextQuarter => {
-            let (start_year, start_month) = quarter_start_for_shift(year, month, 1)?;
-            exclusive_month_span(start_year, start_month, 3, date_system)
-        }
-        PivotDatePeriod::ThisQuarter => {
-            let start_month = ((month - 1) / 3) * 3 + 1;
-            exclusive_month_span(year, start_month, 3, date_system)
-        }
-        PivotDatePeriod::LastQuarter => {
-            let (start_year, start_month) = quarter_start_for_shift(year, month, -1)?;
-            exclusive_month_span(start_year, start_month, 3, date_system)
-        }
-        PivotDatePeriod::NextYear => Some(exclusive_year_range(year + 1, date_system)),
-        PivotDatePeriod::ThisYear => Some(exclusive_year_range(year, date_system)),
-        PivotDatePeriod::LastYear => Some(exclusive_year_range(year - 1, date_system)),
-        PivotDatePeriod::YearToDate => Some((
-            date_to_serial(year, 1, 1, date_system),
-            date_to_serial(year, month, day, date_system) + 1.0,
-        )),
-        PivotDatePeriod::Month(_) | PivotDatePeriod::Quarter(_) => None,
-    }
-}
-
-fn exclusive_day_range(year: i32, month: u32, day: u32, date_system: DateSystem) -> (f64, f64) {
-    let start = date_to_serial(year, month, day, date_system);
-    (start, start + 1.0)
-}
-
-fn week_filter_bounds(
-    year: i32,
-    month: u32,
-    day: u32,
-    date_system: DateSystem,
-) -> Option<(f64, f64)> {
-    let date = chrono::NaiveDate::from_ymd_opt(year, month, day)?;
-    let start = date.checked_sub_signed(chrono::Duration::days(
-        date.weekday().num_days_from_monday() as i64,
-    ))?;
-    let end = start.checked_add_signed(chrono::Duration::days(7))?;
-    Some((
-        date_to_serial(start.year(), start.month(), start.day(), date_system),
-        date_to_serial(end.year(), end.month(), end.day(), date_system),
-    ))
-}
-
-fn exclusive_month_range(year: i32, month: u32, date_system: DateSystem) -> (f64, f64) {
-    let (end_year, end_month) = shift_month(year, month, 1).unwrap_or((year + 1, 1));
-    (
-        date_to_serial(year, month, 1, date_system),
-        date_to_serial(end_year, end_month, 1, date_system),
-    )
-}
-
-fn exclusive_month_span(
-    year: i32,
-    month: u32,
-    months: i32,
-    date_system: DateSystem,
-) -> Option<(f64, f64)> {
-    let (end_year, end_month) = shift_month(year, month, months)?;
-    Some((
-        date_to_serial(year, month, 1, date_system),
-        date_to_serial(end_year, end_month, 1, date_system),
-    ))
-}
-
-fn exclusive_year_range(year: i32, date_system: DateSystem) -> (f64, f64) {
-    (
-        date_to_serial(year, 1, 1, date_system),
-        date_to_serial(year + 1, 1, 1, date_system),
-    )
-}
-
-fn shift_month(year: i32, month: u32, delta: i32) -> Option<(i32, u32)> {
-    if !(1..=12).contains(&month) {
-        return None;
-    }
-    let zero_based = year.checked_mul(12)? + month as i32 - 1 + delta;
-    let shifted_year = zero_based.div_euclid(12);
-    let shifted_month = zero_based.rem_euclid(12) as u32 + 1;
-    Some((shifted_year, shifted_month))
-}
-
-fn quarter_start_for_shift(year: i32, month: u32, delta: i32) -> Option<(i32, u32)> {
-    let start_month = ((month - 1) / 3) * 3 + 1;
-    shift_month(year, start_month, delta * 3)
 }
 
 fn xls_label_filter_criterion(operator: PivotFilterOperator, value: &str) -> String {
@@ -12141,9 +11569,7 @@ fn flatten_shape(
                 .then(|| client_anchor_from_drawing_anchor_with_metrics(&comment.anchor, metrics))
                 .and_then(Result::ok);
             converted
-                .unwrap_or_else(|| {
-                    OfficeArtClientAnchor::comment_default(comment.row, comment.col)
-                })
+                .unwrap_or_else(|| OfficeArtClientAnchor::comment_default(comment.row, comment.col))
                 .write_to(&mut pre);
             write_client_data(&mut pre);
 
@@ -12465,8 +11891,7 @@ fn client_anchor_from_drawing_anchor_with_metrics(
         Ok(())
     };
 
-    if matches!(anchor, DrawingAnchor::Absolute { x_emu, y_emu, .. } if *x_emu < 0 || *y_emu < 0)
-    {
+    if matches!(anchor, DrawingAnchor::Absolute { x_emu, y_emu, .. } if *x_emu < 0 || *y_emu < 0) {
         return Err(XlsError::InvalidFormat(
             "XLS absolute drawing anchor cannot start at a negative position".into(),
         ));
@@ -12691,12 +12116,7 @@ fn deterministic_guid(seed: u32) -> [u8; 16] {
 /// Emit a comment's `TXO` record + the two `CONTINUE` records that
 /// carry its text payload and formatting runs.
 fn write_comment_txo_to_vec(out: &mut Vec<u8>, comment: &CommentShape) -> XlsResult<()> {
-    write_txo_records(
-        out,
-        &comment.text.plain_text(),
-        0x0212,
-        &comment.txo_runs,
-    )
+    write_txo_records(out, &comment.text.plain_text(), 0x0212, &comment.txo_runs)
 }
 
 /// Emit a `TXO` record with the given flags, plus (for non-empty
@@ -13615,7 +13035,11 @@ mod tests {
             props
         };
         assert_eq!(line_props(false), 0x0008_0008, "outlined shape sets fLine");
-        assert_eq!(line_props(true), 0x0008_0000, "no-outline shape clears fLine");
+        assert_eq!(
+            line_props(true),
+            0x0008_0000,
+            "no-outline shape clears fLine"
+        );
     }
 
     fn test_control_shape(spid: u32, obj_id: u16) -> SheetShape {
@@ -13652,12 +13076,13 @@ mod tests {
             let h = OfficeArtRecordHeader::read_from(&bytes[cursor..]).ok()?;
             if h.rec_type == er::FOPT {
                 let (table, _) = FoptTable::read_from(&bytes[cursor..]).ok()?;
-                return table.entries().find(|entry| entry.id == 0x0004).map(
-                    |entry| match entry.value {
+                return table
+                    .entries()
+                    .find(|entry| entry.id == 0x0004)
+                    .map(|entry| match entry.value {
                         FoptValue::Simple(v) => v,
                         FoptValue::Complex(_) => panic!("rotation is a simple property"),
-                    },
-                );
+                    });
             }
             cursor += HEADER_LEN
                 + if h.is_container() {
@@ -13693,7 +13118,13 @@ mod tests {
         };
         let metrics = duke_sheets_core::Worksheet::new("m");
         let mut flats = Vec::new();
-        flatten_shape(&SheetShape::Group(group), &mut flats, &metrics, &duke_sheets_core::style::ThemePalette::default()).expect("flatten");
+        flatten_shape(
+            &SheetShape::Group(group),
+            &mut flats,
+            &metrics,
+            &duke_sheets_core::style::ThemePalette::default(),
+        )
+        .expect("flatten");
         assert_eq!(
             fopt_rotation_in(&flats[0].pre),
             Some(5_898_240),
@@ -13719,7 +13150,13 @@ mod tests {
         };
         let metrics = duke_sheets_core::Worksheet::new("m");
         let mut flats = Vec::new();
-        flatten_shape(&SheetShape::Picture(picture), &mut flats, &metrics, &duke_sheets_core::style::ThemePalette::default()).expect("flatten");
+        flatten_shape(
+            &SheetShape::Picture(picture),
+            &mut flats,
+            &metrics,
+            &duke_sheets_core::style::ThemePalette::default(),
+        )
+        .expect("flatten");
         assert_eq!(
             fopt_rotation_in(&flats[0].pre),
             Some(5_898_240),

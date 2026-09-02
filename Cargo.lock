@@ -884,6 +884,7 @@ name = "duke-sheets-pivot"
 version = "0.1.0"
 dependencies = [
  "ahash 0.8.12",
+ "chrono",
  "duke-sheets-core",
  "duke-sheets-formula",
  "pretty_assertions",
