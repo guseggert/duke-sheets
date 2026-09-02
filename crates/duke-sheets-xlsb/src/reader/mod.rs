@@ -34,6 +34,14 @@ pub(crate) struct SheetRel {
 
 pub struct XlsbReader;
 
+struct XlsbReadOutput {
+    workbook: Workbook,
+    #[cfg(test)]
+    pivot_cache_definition_parse_count: usize,
+    #[cfg(test)]
+    pivot_cache_records_parse_count: usize,
+}
+
 impl XlsbReader {
     pub fn read_file<P: AsRef<Path>>(path: P) -> XlsbResult<Workbook> {
         let file = std::fs::File::open(path.as_ref())?;
@@ -41,6 +49,22 @@ impl XlsbReader {
     }
 
     pub fn read<R: Read + Seek>(reader: R) -> XlsbResult<Workbook> {
+        Ok(Self::read_inner(reader)?.workbook)
+    }
+
+    #[cfg(test)]
+    fn read_with_pivot_cache_parse_counts<R: Read + Seek>(
+        reader: R,
+    ) -> XlsbResult<(Workbook, usize, usize)> {
+        let output = Self::read_inner(reader)?;
+        Ok((
+            output.workbook,
+            output.pivot_cache_definition_parse_count,
+            output.pivot_cache_records_parse_count,
+        ))
+    }
+
+    fn read_inner<R: Read + Seek>(reader: R) -> XlsbResult<XlsbReadOutput> {
         let mut archive = zip::ZipArchive::new(reader)
             .map_err(|e| XlsbError::InvalidFormat(format!("not a valid ZIP: {e}")))?;
 
@@ -109,6 +133,14 @@ impl XlsbReader {
         }
 
         apply_print_settings(&props, &mut wb);
+
+        let date_system = if props.date_1904 {
+            ssfmt::DateSystem::Date1904
+        } else {
+            ssfmt::DateSystem::Date1900
+        };
+        let mut pivot_read_context =
+            pivot::PivotReadContext::new(date_system, &data_connections_by_id);
 
         for (i, entry) in props.sheets.iter().enumerate() {
             if entry.path.is_empty() {
@@ -191,18 +223,12 @@ impl XlsbReader {
                 }
             }
 
-            let date_system = if props.date_1904 {
-                ssfmt::DateSystem::Date1904
-            } else {
-                ssfmt::DateSystem::Date1900
-            };
             for pivot in pivot::read_pivot_tables_for_sheet(
                 &mut archive,
                 &entry.path,
                 &sheet_rels,
-                date_system,
                 &styles_data.numfmts,
-                &data_connections_by_id,
+                &mut pivot_read_context,
             )? {
                 wb.worksheet_mut(i)
                     .unwrap()
@@ -230,7 +256,13 @@ impl XlsbReader {
             wb.add_worksheet_with_name_unchecked("Sheet1");
         }
 
-        Ok(wb)
+        Ok(XlsbReadOutput {
+            workbook: wb,
+            #[cfg(test)]
+            pivot_cache_definition_parse_count: pivot_read_context.cache_definition_parse_count(),
+            #[cfg(test)]
+            pivot_cache_records_parse_count: pivot_read_context.cache_records_parse_count(),
+        })
     }
 }
 

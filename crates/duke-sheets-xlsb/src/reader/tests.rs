@@ -335,6 +335,54 @@ mod tests {
     }
 
     #[test]
+    fn reads_shared_pivot_cache_once_across_sheets() {
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_cell_value("A1", "Region").unwrap();
+        ws.set_cell_value("B1", "Revenue").unwrap();
+        ws.set_cell_value("A2", "East").unwrap();
+        ws.set_cell_value("B2", 10.0).unwrap();
+        ws.set_cell_value("A3", "West").unwrap();
+        ws.set_cell_value("B3", 20.0).unwrap();
+        let second_sheet = wb.add_worksheet().unwrap();
+
+        let first = PivotTable::builder("SalesPivotA")
+            .source_range_on_sheet("Sheet1", CellRange::parse("A1:B3").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .measure("Revenue", PivotAggregate::Sum)
+            .build()
+            .unwrap();
+        let second = PivotTable::builder("SalesPivotB")
+            .source_range_on_sheet("Sheet1", CellRange::parse("A1:B3").unwrap())
+            .target_address("A1")
+            .unwrap()
+            .row("Region")
+            .measure("Revenue", PivotAggregate::Sum)
+            .build()
+            .unwrap();
+        wb.worksheet_mut(0).unwrap().add_pivot_table(first).unwrap();
+        wb.worksheet_mut(second_sheet)
+            .unwrap()
+            .add_pivot_table(second)
+            .unwrap();
+
+        let bytes = write_xlsb(&wb);
+        let (read, definition_parses, records_parses) =
+            XlsbReader::read_with_pivot_cache_parse_counts(Cursor::new(bytes)).unwrap();
+
+        let first_pivots = read.worksheet(0).unwrap().pivot_tables();
+        let second_pivots = read.worksheet(1).unwrap().pivot_tables();
+        assert_eq!(first_pivots.len(), 1);
+        assert_eq!(second_pivots.len(), 1);
+        assert_eq!(first_pivots[0].name, "SalesPivotA");
+        assert_eq!(second_pivots[0].name, "SalesPivotB");
+        assert_eq!(definition_parses, 1);
+        assert_eq!(records_parses, 1);
+    }
+
+    #[test]
     fn read_shared_strings() {
         let sst = build_sst(&["Hello", "World"]);
         let ws_data = build_worksheet_bin(&[

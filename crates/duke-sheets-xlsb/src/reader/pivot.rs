@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{BufReader, Read, Seek};
+use std::sync::Arc;
 
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
@@ -74,13 +75,79 @@ enum CacheRecordValueMode {
     DateTime,
 }
 
+#[cfg(test)]
+#[derive(Debug, Default)]
+struct PivotCacheParseCounts {
+    definitions: usize,
+    records: usize,
+}
+
+pub(crate) struct PivotReadContext<'a> {
+    date_system: DateSystem,
+    connections: &'a HashMap<u32, WorkbookConnection>,
+    caches: HashMap<String, Arc<PivotCacheDefinition>>,
+    #[cfg(test)]
+    parse_counts: PivotCacheParseCounts,
+}
+
+impl<'a> PivotReadContext<'a> {
+    pub(crate) fn new(
+        date_system: DateSystem,
+        connections: &'a HashMap<u32, WorkbookConnection>,
+    ) -> Self {
+        Self {
+            date_system,
+            connections,
+            caches: HashMap::new(),
+            #[cfg(test)]
+            parse_counts: PivotCacheParseCounts::default(),
+        }
+    }
+
+    fn read_cache<R: Read + Seek>(
+        &mut self,
+        archive: &mut zip::ZipArchive<R>,
+        path: &str,
+    ) -> XlsbResult<Option<Arc<PivotCacheDefinition>>> {
+        let key = canonical_package_path(path);
+        if let Some(cache) = self.caches.get(&key) {
+            return Ok(Some(cache.clone()));
+        }
+
+        let cache_id = trailing_number(path).unwrap_or(0);
+        let cache = read_pivot_cache_definition(
+            archive,
+            cache_id,
+            path,
+            self.date_system,
+            self.connections,
+            #[cfg(test)]
+            &mut self.parse_counts,
+        )?
+        .map(Arc::new);
+        if let Some(cache) = &cache {
+            self.caches.insert(key, cache.clone());
+        }
+        Ok(cache)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cache_definition_parse_count(&self) -> usize {
+        self.parse_counts.definitions
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cache_records_parse_count(&self) -> usize {
+        self.parse_counts.records
+    }
+}
+
 pub(crate) fn read_pivot_tables_for_sheet<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     sheet_path: &str,
     sheet_rels: &HashMap<String, SheetRel>,
-    date_system: DateSystem,
     num_fmts: &HashMap<u32, String>,
-    connections: &HashMap<u32, WorkbookConnection>,
+    context: &mut PivotReadContext<'_>,
 ) -> XlsbResult<Vec<PivotTable>> {
     let mut pivot_paths = sheet_rels
         .values()
@@ -91,9 +158,7 @@ pub(crate) fn read_pivot_tables_for_sheet<R: Read + Seek>(
 
     let mut pivots = Vec::new();
     for pivot_path in pivot_paths {
-        if let Some(pivot) =
-            read_pivot_table(archive, &pivot_path, date_system, num_fmts, connections)?
-        {
+        if let Some(pivot) = read_pivot_table(archive, &pivot_path, num_fmts, context)? {
             pivots.push(pivot);
         }
     }
@@ -103,17 +168,13 @@ pub(crate) fn read_pivot_tables_for_sheet<R: Read + Seek>(
 fn read_pivot_table<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     path: &str,
-    date_system: DateSystem,
     num_fmts: &HashMap<u32, String>,
-    connections: &HashMap<u32, WorkbookConnection>,
+    context: &mut PivotReadContext<'_>,
 ) -> XlsbResult<Option<PivotTable>> {
     let Some(cache_path) = related_part_path(archive, path, "/pivotCacheDefinition")? else {
         return Ok(None);
     };
-    let cache_id = trailing_number(&cache_path).unwrap_or(0);
-    let Some(cache) =
-        read_pivot_cache_definition(archive, cache_id, &cache_path, date_system, connections)?
-    else {
+    let Some(cache) = context.read_cache(archive, &cache_path)? else {
         return Ok(None);
     };
 
@@ -405,12 +466,17 @@ fn read_pivot_cache_definition<R: Read + Seek>(
     path: &str,
     date_system: DateSystem,
     connections: &HashMap<u32, WorkbookConnection>,
+    #[cfg(test)] parse_counts: &mut PivotCacheParseCounts,
 ) -> XlsbResult<Option<PivotCacheDefinition>> {
     let relationships = read_pivot_cache_definition_relationships(archive, path)?;
     let file = match archive.by_name(path) {
         Ok(file) => file,
         Err(_) => return Ok(None),
     };
+    #[cfg(test)]
+    {
+        parse_counts.definitions += 1;
+    }
     let mut iter = RecordIter::new(file);
     let mut buf = Vec::with_capacity(1024);
 
@@ -625,6 +691,8 @@ fn read_pivot_cache_definition<R: Read + Seek>(
             date_system,
             &mut fields,
             &mut record_count,
+            #[cfg(test)]
+            parse_counts,
         )?;
     }
 
@@ -661,6 +729,7 @@ fn read_pivot_cache_records<R: Read + Seek>(
     date_system: DateSystem,
     fields: &mut [PivotCacheField],
     record_count: &mut Option<u64>,
+    #[cfg(test)] parse_counts: &mut PivotCacheParseCounts,
 ) -> XlsbResult<()> {
     let need_value_enrichment = fields.iter().any(cache_record_field_needs_enrichment);
     if !need_value_enrichment && record_count.is_some() {
@@ -671,6 +740,10 @@ fn read_pivot_cache_records<R: Read + Seek>(
         Ok(file) => file,
         Err(_) => return Ok(()),
     };
+    #[cfg(test)]
+    {
+        parse_counts.records += 1;
+    }
     let mut iter = RecordIter::new(file);
     let mut buf = Vec::with_capacity(1024);
     let mut actual_count = 0u64;
@@ -2880,6 +2953,21 @@ fn rels_path_for_part(part_path: &str) -> String {
     } else {
         format!("{base_dir}/_rels/{file_name}.rels")
     }
+}
+
+fn canonical_package_path(path: &str) -> String {
+    let normalized = path.replace('\\', "/");
+    let mut parts = Vec::new();
+    for part in normalized.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            _ => parts.push(part),
+        }
+    }
+    parts.join("/").to_ascii_lowercase()
 }
 
 fn trailing_number(path: &str) -> Option<u32> {
