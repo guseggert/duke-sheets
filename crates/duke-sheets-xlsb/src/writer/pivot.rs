@@ -2864,8 +2864,13 @@ fn write_sx_location<W: Write>(
     let first_data_col = expanded_axis_field_count(cache, layout, &pivot.rows).max(1) as u32;
     let page_field_count = effective_page_field_count(cache, layout, pivot);
     let (page_rows, page_cols) = page_field_area_size(pivot, page_field_count);
+    let body_start_row = if page_rows > 0 && range.start == pivot.target {
+        range.start.row.saturating_add(page_rows).saturating_add(1)
+    } else {
+        range.start.row
+    };
     let mut payload = Vec::new();
-    payload.extend_from_slice(&range.start.row.to_le_bytes());
+    payload.extend_from_slice(&body_start_row.to_le_bytes());
     payload.extend_from_slice(&range.end.row.to_le_bytes());
     payload.extend_from_slice(&(range.start.col as u32).to_le_bytes());
     payload.extend_from_slice(&(range.end.col as u32).to_le_bytes());
