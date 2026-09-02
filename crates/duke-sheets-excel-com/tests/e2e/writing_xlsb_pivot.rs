@@ -1694,9 +1694,9 @@ fn excel_preserves_xlsb_pivot_table_source() {
         &pivot.source,
         PivotSource::Table { name } if name == "SalesData"
     ));
-    assert_eq!(pivot.rows[0].field.name, "Row");
-    assert_eq!(pivot.columns[0].field.name, "Column");
-    assert_eq!(pivot.measures[0].field.name, "Value");
+    assert_eq!(pivot.rows[0].field.name, "Region");
+    assert!(pivot.columns.is_empty());
+    assert_eq!(pivot.measures[0].field.name, "Revenue");
 }
 
 #[test]
