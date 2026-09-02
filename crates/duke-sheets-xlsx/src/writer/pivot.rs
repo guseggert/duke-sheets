@@ -1,854 +1,141 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Seek, Write};
 
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 
 use crate::styles::XlsxStyleTable;
 use duke_sheets_core::{
-    CellAddress, CellError, CellRange, PivotAggregate, PivotCalculatedField, PivotCalculatedItem,
-    PivotDateGroupUnit, PivotDatePeriod, PivotField, PivotFieldRef, PivotFilter,
-    PivotFilterOperator, PivotGrouping, PivotLayoutKind, PivotManualGroup, PivotMeasure,
-    PivotShowAs, PivotSort, PivotSource, PivotSourceRange, PivotSubtotal, PivotTable, PivotValue,
-    PivotValuesAxis, Table, Workbook, WorkbookConnection, WorkbookConnectionKind, Worksheet,
+    CellAddress, CellRange, PivotAggregate, PivotCalculatedItem, PivotDateGroupUnit,
+    PivotDatePeriod, PivotField, PivotFieldRef, PivotFilter, PivotFilterOperator, PivotGrouping,
+    PivotLayoutKind, PivotShowAs, PivotSort, PivotSourceRange, PivotSubtotal, PivotTable,
+    PivotValue, PivotValuesAxis, Workbook, WorkbookConnection,
 };
-use duke_sheets_formula::{
-    evaluate, parse_formula, EvaluationContext, FormulaExpr, FormulaValue, StructuredRefSpecifier,
-    StructuredReference,
-};
-#[cfg(feature = "parallel")]
-use rayon::prelude::*;
-use ssfmt::{
-    date_serial::{serial_to_date, serial_to_time},
-    DateSystem,
+use duke_sheets_pivot::plan::{
+    pivot_measure_matches_target, FormatPivotCache, FormatPivotCacheField, FormatPivotGrouping,
+    FormatPivotPlan, FormatPivotSource, FormatPivotTable,
 };
 
-use super::{
-    write_xml_part, XlsxError, XlsxResult, XmlWriter, NS_DOC_RELS, NS_RELATIONSHIPS,
-    NS_SPREADSHEET, RT_PIVOT_CACHE_DEFINITION, RT_PIVOT_CACHE_RECORDS,
-};
+use super::{write_xml_part, XlsxError, XlsxResult, XmlWriter, NS_DOC_RELS, NS_SPREADSHEET};
 
 const NS_SPREADSHEET_X14: &str = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main";
 const EXT_URI_X14_DATA_FIELD: &str = "{2946ED86-A175-432a-8AC1-64E0C546D7DE}";
-const RT_EXTERNAL_LINK_PATH: &str =
+pub(super) const RT_EXTERNAL_LINK_PATH: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLinkPath";
-#[cfg(feature = "parallel")]
-const PARALLEL_CACHE_ROW_THRESHOLD: usize = 50_000;
 
-#[derive(Debug, Clone)]
-pub(super) struct PivotNumbering {
-    pub(super) cache_parts: Vec<PivotCachePart>,
-    pub(super) table_parts: Vec<PivotTablePart>,
-}
+type CacheField = FormatPivotCacheField;
 
-#[derive(Debug, Clone)]
-pub(super) struct PivotCachePart {
-    pub(super) cache_num: usize,
-    source: PivotSource,
-    source_sheet_index: usize,
-    fields: Vec<CacheField>,
-    calculated_items: Vec<PivotCalculatedItem>,
-    rows: Vec<Vec<Option<u32>>>,
-    record_count: usize,
-    save_data: bool,
-    refresh_on_load: bool,
-    background_query: bool,
-    missing_items_limit: Option<u32>,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct PivotTablePart {
-    pub(super) sheet_index: usize,
-    pub(super) pivot_index: usize,
-    pub(super) table_num: usize,
-    pub(super) cache_num: usize,
-}
-
-#[derive(Debug, Clone)]
-struct ResolvedPivotSource {
-    key: String,
-    source: PivotSource,
-    source_sheet_index: usize,
-    fields: Vec<CacheField>,
-    rows: Vec<Vec<Option<u32>>>,
-    record_count: usize,
-    save_data: bool,
-}
-
-#[derive(Debug, Clone)]
-struct CacheField {
-    name: String,
-    formula: Option<String>,
-    database_field: bool,
-    metadata_only_shared_items: bool,
-    group: Option<CacheFieldGroup>,
-    shared_items: Vec<PivotValue>,
-    item_lookup: HashMap<PivotValue, u32>,
-}
-
-#[derive(Debug, Clone)]
-enum CacheFieldGroup {
-    Base {
-        parent: usize,
-    },
-    Range(PivotGrouping),
-    Manual {
-        base: usize,
-        item_indexes: Vec<u32>,
-        group_items: Vec<PivotValue>,
-    },
-    DateUnit {
-        base: usize,
-        parent: Option<usize>,
-        unit: PivotDateGroupUnit,
-    },
-}
-
-impl CacheField {
-    fn new(name: String) -> Self {
-        Self {
+fn xlsx_cache_fields(cache: &FormatPivotCache) -> Vec<CacheField> {
+    let mut fields = cache.fields.clone();
+    for field in &mut fields {
+        if let Some(grouping) = &field.grouping {
+            if matches!(grouping.definition, PivotGrouping::Manual { .. }) {
+                field.shared_items = grouping.source_items.clone();
+                field.item_ids = grouping.source_item_ids.clone();
+            }
+        }
+    }
+    for field in &cache.fields {
+        let Some(grouping) = &field.grouping else {
+            continue;
+        };
+        if !matches!(grouping.definition, PivotGrouping::Manual { .. }) {
+            continue;
+        }
+        let mut suffix = 2;
+        let name = loop {
+            let candidate = format!("{}{suffix}", field.name);
+            if fields
+                .iter()
+                .all(|existing| !existing.name.eq_ignore_ascii_case(&candidate))
+            {
+                break candidate;
+            }
+            suffix += 1;
+        };
+        fields.push(CacheField {
             name,
             formula: None,
-            database_field: true,
-            metadata_only_shared_items: false,
-            group: None,
-            shared_items: Vec::new(),
-            item_lookup: HashMap::new(),
-        }
-    }
-
-    fn calculated(name: String, formula: String) -> Self {
-        Self {
-            name,
-            formula: Some(formula),
             database_field: false,
-            metadata_only_shared_items: false,
-            group: None,
             shared_items: Vec::new(),
-            item_lookup: HashMap::new(),
-        }
+            item_ids: Vec::new(),
+            grouping: Some(grouping.clone()),
+        });
     }
-
-    fn intern(&mut self, value: PivotValue) -> u32 {
-        if let Some(index) = self.item_lookup.get(&value) {
-            return *index;
-        }
-
-        let index = self.shared_items.len() as u32;
-        self.shared_items.push(value.clone());
-        self.item_lookup.insert(value, index);
-        index
-    }
+    fields
 }
 
-pub(super) fn workbook_cache_rid(_workbook: &Workbook, cache_num: usize) -> String {
+fn xlsx_table_fields(cache: &FormatPivotCache, pivot: &PivotTable) -> Vec<CacheField> {
+    let mut fields = xlsx_cache_fields(cache);
+    let referenced = pivot
+        .rows
+        .iter()
+        .chain(&pivot.columns)
+        .chain(&pivot.page_fields)
+        .map(|field| field.field.name.as_str())
+        .chain(
+            pivot
+                .measures
+                .iter()
+                .map(|measure| measure.field.name.as_str()),
+        )
+        .collect::<Vec<_>>();
+    for (alias, target) in &cache.field_aliases {
+        if !referenced
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(alias))
+        {
+            continue;
+        }
+        if let Some(field) = fields
+            .iter_mut()
+            .find(|field| field.name.eq_ignore_ascii_case(target))
+        {
+            field.name.clone_from(alias);
+        }
+    }
+    fields
+}
+pub(super) fn workbook_cache_rid(cache_num: usize) -> String {
     format!("rIdPivotCache{}", cache_num)
 }
 
-pub(super) fn build_pivot_numbering(workbook: &Workbook) -> XlsxResult<PivotNumbering> {
-    let mut cache_by_source: BTreeMap<String, usize> = BTreeMap::new();
-    let mut cache_parts: Vec<PivotCachePart> = Vec::new();
-    let mut table_parts: Vec<PivotTablePart> = Vec::new();
-
-    for (sheet_index, sheet) in workbook.worksheets().enumerate() {
-        for (pivot_index, pivot) in sheet.pivot_tables().iter().enumerate() {
-            validate_writable_pivot(pivot)?;
-
-            let mut resolved = resolve_pivot_source(workbook, sheet_index, pivot)?;
-            apply_calculated_cache_fields(&pivot.name, &mut resolved, &pivot.calculated_fields)?;
-            apply_calculated_cache_items(&pivot.name, &mut resolved, &pivot.calculated_items)?;
-            validate_pivot_fields(pivot, &resolved.fields)?;
-            validate_pivot_groupings(pivot, &resolved.fields)?;
-            apply_grouped_cache_fields(
-                &pivot.name,
-                &mut resolved,
-                &pivot.groupings,
-                workbook.settings().date_1904,
-            )?;
-            mark_metadata_only_measure_fields(pivot, &mut resolved.fields);
-            let cache_key = cache_key_for_pivot(&resolved.key, pivot);
-
-            let cache_num = if let Some(cache_num) = cache_by_source.get(&cache_key) {
-                if let Some(cache_part) = cache_parts.get_mut(*cache_num - 1) {
-                    merge_cache_field_usage(&mut cache_part.fields, &resolved.fields);
-                }
-                if pivot.refresh_policy.refresh_on_open {
-                    if let Some(cache_part) = cache_parts.get_mut(*cache_num - 1) {
-                        cache_part.refresh_on_load = true;
-                    }
-                }
-                if pivot.refresh_policy.background_query {
-                    if let Some(cache_part) = cache_parts.get_mut(*cache_num - 1) {
-                        cache_part.background_query = true;
-                    }
-                }
-                *cache_num
-            } else {
-                let cache_num = cache_parts.len() + 1;
-                cache_by_source.insert(cache_key, cache_num);
-                cache_parts.push(PivotCachePart {
-                    cache_num,
-                    source: resolved.source,
-                    source_sheet_index: resolved.source_sheet_index,
-                    fields: resolved.fields,
-                    calculated_items: pivot.calculated_items.clone(),
-                    rows: resolved.rows,
-                    record_count: resolved.record_count,
-                    save_data: resolved.save_data,
-                    refresh_on_load: pivot.refresh_policy.refresh_on_open,
-                    background_query: pivot.refresh_policy.background_query,
-                    missing_items_limit: pivot.refresh_policy.missing_items_limit,
-                });
-                cache_num
-            };
-
-            table_parts.push(PivotTablePart {
-                sheet_index,
-                pivot_index,
-                table_num: table_parts.len() + 1,
-                cache_num,
-            });
-        }
-    }
-
-    Ok(PivotNumbering {
-        cache_parts,
-        table_parts,
-    })
-}
-
-fn validate_writable_pivot(pivot: &PivotTable) -> XlsxResult<()> {
-    if pivot.measures.is_empty() {
-        return Err(XlsxError::InvalidFormat(format!(
-            "pivot table {} has no measures",
-            pivot.name
-        )));
-    }
-
-    if pivot
-        .measures
+pub(super) fn avoid_preserved_part_collisions(plan: &mut FormatPivotPlan, workbook: &Workbook) {
+    let claimed = workbook
+        .workbook_extension_parts()
         .iter()
-        .any(|measure| !is_writable_show_as(&measure.show_as))
-    {
-        return Err(XlsxError::InvalidFormat(format!(
-            "pivot table {} uses show-as calculations that are not written yet",
-            pivot.name
-        )));
-    }
-
-    if pivot
-        .filters
+        .map(|part| part.path.trim_start_matches('/').to_ascii_lowercase())
+        .collect::<std::collections::HashSet<_>>();
+    let mut cache_numbers = std::collections::HashMap::new();
+    let mut next_cache = 1;
+    for cache in &mut plan.caches {
+        while [
+            format!("xl/pivotcache/pivotcachedefinition{next_cache}.xml"),
+            format!("xl/pivotcache/pivotcacherecords{next_cache}.xml"),
+            format!("xl/pivotcache/_rels/pivotcachedefinition{next_cache}.xml.rels"),
+        ]
         .iter()
-        .any(|filter| !is_writable_filter(filter))
-    {
-        return Err(XlsxError::InvalidFormat(format!(
-            "pivot table {} uses a filter type that is not written yet",
-            pivot.name
-        )));
-    }
-
-    for filter in &pivot.filters {
-        match filter {
-            PivotFilter::Value { value, .. } if !value.is_finite() => {
-                return Err(XlsxError::InvalidFormat(format!(
-                    "pivot table {} uses a non-finite value filter operand",
-                    pivot.name
-                )));
-            }
-            PivotFilter::ValueBetween { start, end, .. }
-                if !start.is_finite() || !end.is_finite() =>
-            {
-                return Err(XlsxError::InvalidFormat(format!(
-                    "pivot table {} uses a non-finite value range filter operand",
-                    pivot.name
-                )));
-            }
-            PivotFilter::Date { value, .. } if !value.is_finite() => {
-                return Err(XlsxError::InvalidFormat(format!(
-                    "pivot table {} uses a non-finite date filter operand",
-                    pivot.name
-                )));
-            }
-            PivotFilter::DateBetween { start, end, .. }
-                if !start.is_finite() || !end.is_finite() =>
-            {
-                return Err(XlsxError::InvalidFormat(format!(
-                    "pivot table {} uses a non-finite date range filter operand",
-                    pivot.name
-                )));
-            }
-            PivotFilter::TopN { n, .. } if *n == 0 => {
-                return Err(XlsxError::InvalidFormat(format!(
-                    "pivot table {} uses a top-N filter with a zero threshold",
-                    pivot.name
-                )));
-            }
-            _ => {}
-        }
-    }
-
-    Ok(())
-}
-
-fn is_writable_filter(filter: &PivotFilter) -> bool {
-    match filter {
-        PivotFilter::FieldItems { .. }
-        | PivotFilter::Label { .. }
-        | PivotFilter::LabelBetween { .. }
-        | PivotFilter::DateBetween { .. }
-        | PivotFilter::TopN { .. } => true,
-        PivotFilter::Date { operator, .. } => date_filter_type_name(*operator).is_some(),
-        PivotFilter::DatePeriod { period, .. } => date_period_filter_type_name(*period).is_some(),
-        PivotFilter::Value { operator, .. } => value_filter_type_name(*operator).is_some(),
-        PivotFilter::ValueBetween { .. } => true,
-        PivotFilter::Unsupported { .. } => false,
-    }
-}
-
-fn validate_pivot_fields(pivot: &PivotTable, fields: &[CacheField]) -> XlsxResult<()> {
-    for field in pivot
-        .rows
-        .iter()
-        .map(|field| &field.field)
-        .chain(pivot.columns.iter().map(|field| &field.field))
-        .chain(pivot.page_fields.iter().map(|field| &field.field))
-        .chain(pivot.measures.iter().map(|measure| &measure.field))
-        .chain(pivot.filters.iter().filter_map(filter_field_ref))
-        .chain(pivot.filters.iter().filter_map(filter_measure_field_ref))
-        .chain(pivot.groupings.iter().map(grouping_field_ref))
-    {
-        if field_index(fields, &field.name).is_none() {
-            return Err(XlsxError::InvalidFormat(format!(
-                "pivot table {} references unknown source field: {}",
-                pivot.name, field.name
-            )));
-        }
-    }
-
-    Ok(())
-}
-
-fn validate_pivot_groupings(pivot: &PivotTable, fields: &[CacheField]) -> XlsxResult<()> {
-    let mut grouped_fields = HashSet::new();
-    for grouping in &pivot.groupings {
-        let field = grouping_field_ref(grouping);
-        if field_index(fields, &field.name).is_none() {
-            return Err(XlsxError::InvalidFormat(format!(
-                "pivot table {} references unknown grouped source field: {}",
-                pivot.name, field.name
-            )));
-        }
-        if !grouped_fields.insert(field.name.to_lowercase()) {
-            return Err(XlsxError::InvalidFormat(format!(
-                "pivot table {} has more than one grouping for field {}",
-                pivot.name, field.name
-            )));
-        }
-
-        match grouping {
-            PivotGrouping::Number {
-                start,
-                end,
-                interval,
-                ..
-            } => {
-                if !interval.is_finite() || *interval <= 0.0 {
-                    return Err(XlsxError::InvalidFormat(format!(
-                        "pivot table {} has an invalid numeric grouping interval for field {}",
-                        pivot.name, field.name
-                    )));
-                }
-                if start.is_some_and(|value| !value.is_finite())
-                    || end.is_some_and(|value| !value.is_finite())
-                {
-                    return Err(XlsxError::InvalidFormat(format!(
-                        "pivot table {} has a non-finite numeric grouping bound for field {}",
-                        pivot.name, field.name
-                    )));
-                }
-            }
-            PivotGrouping::Date { units, .. } => {
-                if units.is_empty() {
-                    return Err(XlsxError::InvalidFormat(format!(
-                        "pivot table {} has an empty date grouping for field {}",
-                        pivot.name, field.name
-                    )));
-                }
-            }
-            PivotGrouping::Manual { groups, .. } => {
-                validate_manual_grouping(&pivot.name, &field.name, groups)?;
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn mark_metadata_only_measure_fields(pivot: &PivotTable, fields: &mut [CacheField]) {
-    let measure_fields = pivot
-        .measures
-        .iter()
-        .map(|measure| measure.field.name.to_lowercase())
-        .collect::<HashSet<_>>();
-    let explicit_item_fields = pivot
-        .rows
-        .iter()
-        .chain(pivot.columns.iter())
-        .chain(pivot.page_fields.iter())
-        .map(|field| field.field.name.to_lowercase())
-        .chain(
-            pivot
-                .filters
-                .iter()
-                .filter_map(filter_field_ref)
-                .map(|field| field.name.to_lowercase()),
-        )
-        .chain(
-            pivot
-                .groupings
-                .iter()
-                .map(grouping_field_ref)
-                .map(|field| field.name.to_lowercase()),
-        )
-        .collect::<HashSet<_>>();
-
-    for field in fields {
-        let name = field.name.to_lowercase();
-        field.metadata_only_shared_items =
-            measure_fields.contains(&name) && !explicit_item_fields.contains(&name);
-    }
-}
-
-fn merge_cache_field_usage(existing: &mut [CacheField], incoming: &[CacheField]) {
-    for field in existing {
-        if let Some(incoming) = incoming
-            .iter()
-            .find(|incoming| incoming.name.eq_ignore_ascii_case(&field.name))
+        .any(|path| claimed.contains(path))
         {
-            field.metadata_only_shared_items &= incoming.metadata_only_shared_items;
+            next_cache += 1;
         }
+        cache_numbers.insert(cache.cache_num, next_cache);
+        cache.cache_num = next_cache;
+        next_cache += 1;
     }
-}
-
-fn apply_grouped_cache_fields(
-    pivot_name: &str,
-    resolved: &mut ResolvedPivotSource,
-    groupings: &[PivotGrouping],
-    date_1904: bool,
-) -> XlsxResult<()> {
-    let date_system = if date_1904 {
-        DateSystem::Date1904
-    } else {
-        DateSystem::Date1900
-    };
-
-    for grouping in groupings {
-        let field_name = &grouping_field_ref(grouping).name;
-        let field_index = field_index(&resolved.fields, field_name).ok_or_else(|| {
-            XlsxError::InvalidFormat(format!(
-                "pivot table {pivot_name} references unknown grouped source field: {field_name}"
-            ))
-        })?;
-
-        match grouping {
-            PivotGrouping::Manual { groups, .. } => {
-                let (item_indexes, group_items) = manual_group_cache_items(
-                    pivot_name,
-                    field_name,
-                    &resolved.fields[field_index],
-                    groups,
-                )?;
-                let grouped_name = unique_manual_grouped_header(&resolved.fields, field_name);
-                let grouped_index = resolved.fields.len();
-                resolved.fields[field_index].group = Some(CacheFieldGroup::Base {
-                    parent: grouped_index,
-                });
-                let mut grouped = CacheField::new(grouped_name);
-                grouped.database_field = false;
-                grouped.group = Some(CacheFieldGroup::Manual {
-                    base: field_index,
-                    item_indexes,
-                    group_items,
-                });
-                resolved.fields.push(grouped);
-            }
-            PivotGrouping::Date { units, .. } if units.len() > 1 => {
-                let base_values = resolved
-                    .rows
-                    .iter()
-                    .map(|row| {
-                        row.get(field_index)
-                            .and_then(|index| *index)
-                            .and_then(|index| {
-                                resolved.fields[field_index]
-                                    .shared_items
-                                    .get(index as usize)
-                                    .cloned()
-                            })
-                            .unwrap_or(PivotValue::Blank)
-                    })
-                    .collect::<Vec<_>>();
-
-                let mut parent = None;
-                for unit in units {
-                    let header = unique_grouped_header(&resolved.fields, field_name, *unit);
-                    let mut grouped = CacheField::new(header);
-                    grouped.group = Some(CacheFieldGroup::DateUnit {
-                        base: field_index,
-                        parent,
-                        unit: *unit,
-                    });
-
-                    let row_indexes = base_values
-                        .iter()
-                        .map(|value| {
-                            let grouped_value = group_date_value(value, *unit, date_system);
-                            grouped.intern(grouped_value)
-                        })
-                        .collect::<Vec<_>>();
-                    for (row, index) in resolved.rows.iter_mut().zip(row_indexes) {
-                        row.push(Some(index));
-                    }
-
-                    parent = Some(resolved.fields.len());
-                    resolved.fields.push(grouped);
-                }
-            }
-            _ => match grouping {
-                _ => {
-                    resolved.fields[field_index].group =
-                        Some(CacheFieldGroup::Range(grouping.clone()));
-                }
-            },
-        }
-    }
-
-    Ok(())
-}
-
-fn validate_manual_grouping(
-    pivot_name: &str,
-    field_name: &str,
-    groups: &[PivotManualGroup],
-) -> XlsxResult<()> {
-    if groups.is_empty() {
-        return Err(XlsxError::InvalidFormat(format!(
-            "pivot table {pivot_name} has an empty manual grouping for field {field_name}"
-        )));
-    }
-
-    let mut group_names = HashSet::new();
-    let mut members = HashSet::new();
-    for group in groups {
-        if group.name.trim().is_empty() {
-            return Err(XlsxError::InvalidFormat(format!(
-                "pivot table {pivot_name} has a manual group with a blank name for field {field_name}"
-            )));
-        }
-        if group.members.is_empty() {
-            return Err(XlsxError::InvalidFormat(format!(
-                "pivot table {pivot_name} manual group {} has no members",
-                group.name
-            )));
-        }
-        if !group_names.insert(group.name.to_lowercase()) {
-            return Err(XlsxError::InvalidFormat(format!(
-                "pivot table {pivot_name} has duplicate manual group name {}",
-                group.name
-            )));
-        }
-        for member in &group.members {
-            if !members.insert(member.clone()) {
-                return Err(XlsxError::InvalidFormat(format!(
-                    "pivot table {pivot_name} assigns pivot item {member} to more than one manual group"
-                )));
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn manual_group_cache_items(
-    pivot_name: &str,
-    field_name: &str,
-    base_field: &CacheField,
-    groups: &[PivotManualGroup],
-) -> XlsxResult<(Vec<u32>, Vec<PivotValue>)> {
-    let mut member_to_group = HashMap::new();
-    for group in groups {
-        for member in &group.members {
-            if !base_field.item_lookup.contains_key(member) {
-                return Err(XlsxError::InvalidFormat(format!(
-                    "pivot table {pivot_name} manual group {} references item not found in field {field_name}: {member}",
-                    group.name
-                )));
-            }
-            member_to_group.insert(member.clone(), group.name.clone());
-        }
-    }
-
-    let mut group_items = Vec::new();
-    let mut ungrouped_item_indexes = HashMap::new();
-
-    for item in &base_field.shared_items {
-        if member_to_group.contains_key(item) {
-            continue;
-        }
-        let index = group_items.len() as u32;
-        ungrouped_item_indexes.insert(item.clone(), index);
-        group_items.push(item.clone());
-    }
-
-    let mut group_name_indexes = HashMap::new();
-    for group in groups {
-        let value = PivotValue::String(group.name.clone());
-        let index = group_items.len() as u32;
-        group_name_indexes.insert(group.name.clone(), index);
-        group_items.push(value);
-    }
-
-    let item_indexes = base_field
-        .shared_items
+    let mut next_table = 1;
+    for table in &mut plan.tables {
+        table.cache_num = cache_numbers[&table.cache_num];
+        while [
+            format!("xl/pivottables/pivottable{next_table}.xml"),
+            format!("xl/pivottables/_rels/pivottable{next_table}.xml.rels"),
+        ]
         .iter()
-        .map(|item| {
-            if let Some(group_name) = member_to_group.get(item) {
-                group_name_indexes
-                    .get(group_name)
-                    .copied()
-                    .ok_or_else(|| {
-                        XlsxError::InvalidFormat(format!(
-                            "pivot table {pivot_name} could not map manual group for field {field_name}: {group_name}"
-                        ))
-                    })
-            } else {
-                ungrouped_item_indexes
-                    .get(item)
-                    .copied()
-                    .ok_or_else(|| {
-                        XlsxError::InvalidFormat(format!(
-                            "pivot table {pivot_name} could not map ungrouped item for field {field_name}: {item}"
-                        ))
-                    })
-            }
-        })
-        .collect::<XlsxResult<Vec<_>>>()?;
-
-    Ok((item_indexes, group_items))
-}
-
-fn unique_manual_grouped_header(fields: &[CacheField], field_name: &str) -> String {
-    for suffix in 2.. {
-        let candidate = format!("{field_name}{suffix}");
-        if fields
-            .iter()
-            .all(|field| !field.name.eq_ignore_ascii_case(&candidate))
+        .any(|path| claimed.contains(path))
         {
-            return candidate;
+            next_table += 1;
         }
+        table.table_num = next_table;
+        next_table += 1;
     }
-    unreachable!("unbounded manual grouped header suffix search should return")
-}
-
-fn unique_grouped_header(
-    fields: &[CacheField],
-    field_name: &str,
-    unit: PivotDateGroupUnit,
-) -> String {
-    let base = grouped_date_header(field_name, unit);
-    if fields
-        .iter()
-        .all(|field| !field.name.eq_ignore_ascii_case(&base))
-    {
-        return base;
-    }
-
-    for suffix in 2.. {
-        let candidate = format!("{base} {suffix}");
-        if fields
-            .iter()
-            .all(|field| !field.name.eq_ignore_ascii_case(&candidate))
-        {
-            return candidate;
-        }
-    }
-    unreachable!("unbounded grouped header suffix search should return")
-}
-
-fn grouped_date_header(field_name: &str, unit: PivotDateGroupUnit) -> String {
-    format!("{field_name} ({})", date_group_unit_name(unit))
-}
-
-fn date_group_unit_name(unit: PivotDateGroupUnit) -> &'static str {
-    match unit {
-        PivotDateGroupUnit::Seconds => "Seconds",
-        PivotDateGroupUnit::Minutes => "Minutes",
-        PivotDateGroupUnit::Hours => "Hours",
-        PivotDateGroupUnit::Days => "Days",
-        PivotDateGroupUnit::Months => "Months",
-        PivotDateGroupUnit::Quarters => "Quarters",
-        PivotDateGroupUnit::Years => "Years",
-    }
-}
-
-fn group_date_value(
-    value: &PivotValue,
-    unit: PivotDateGroupUnit,
-    date_system: DateSystem,
-) -> PivotValue {
-    let PivotValue::Number(serial) = value else {
-        return value.clone();
-    };
-    if !serial.is_finite() {
-        return value.clone();
-    }
-    let Some((year, month, day)) = serial_to_date(*serial, date_system) else {
-        return value.clone();
-    };
-    let (hour, minute, second) = serial_to_time(*serial);
-
-    let value = match unit {
-        PivotDateGroupUnit::Years => year as f64,
-        PivotDateGroupUnit::Quarters => ((month - 1) / 3 + 1) as f64,
-        PivotDateGroupUnit::Months => month as f64,
-        PivotDateGroupUnit::Days => day as f64,
-        PivotDateGroupUnit::Hours => hour as f64,
-        PivotDateGroupUnit::Minutes => minute as f64,
-        PivotDateGroupUnit::Seconds => second as f64,
-    };
-    PivotValue::Number(value)
-}
-
-fn grouping_field_ref(grouping: &PivotGrouping) -> &PivotFieldRef {
-    match grouping {
-        PivotGrouping::Number { field, .. }
-        | PivotGrouping::Date { field, .. }
-        | PivotGrouping::Manual { field, .. } => field,
-    }
-}
-
-fn cache_key_for_pivot(source_key: &str, pivot: &PivotTable) -> String {
-    if pivot.groupings.is_empty()
-        && pivot.calculated_fields.is_empty()
-        && pivot.calculated_items.is_empty()
-        && !pivot.refresh_policy.refresh_on_open
-        && !pivot.refresh_policy.background_query
-        && pivot.refresh_policy.missing_items_limit.is_none()
-    {
-        return source_key.to_string();
-    }
-
-    let mut grouping_signatures = pivot
-        .groupings
-        .iter()
-        .map(grouping_signature)
-        .collect::<Vec<_>>();
-    grouping_signatures.sort();
-    let calculated_signatures = pivot
-        .calculated_fields
-        .iter()
-        .map(calculated_field_signature)
-        .collect::<Vec<_>>()
-        .join(";");
-    let mut calculated_item_signatures = pivot
-        .calculated_items
-        .iter()
-        .map(calculated_item_signature)
-        .collect::<Vec<_>>();
-    calculated_item_signatures.sort();
-    format!(
-        "{source_key}|calculated:{calculated_signatures}|calculatedItems:{}|groupings:{}|refreshOnLoad:{}|backgroundQuery:{}|missingItemsLimit:{}",
-        calculated_item_signatures.join(";"),
-        grouping_signatures.join(";"),
-        pivot.refresh_policy.refresh_on_open,
-        pivot.refresh_policy.background_query,
-        pivot
-            .refresh_policy
-            .missing_items_limit
-            .map(|limit| limit.to_string())
-            .unwrap_or_else(|| "none".to_string())
-    )
-}
-
-fn calculated_field_signature(field: &PivotCalculatedField) -> String {
-    format!(
-        "{}:{}",
-        field.name.to_lowercase(),
-        normalized_formula_for_key(&field.formula)
-    )
-}
-
-fn calculated_item_signature(item: &PivotCalculatedItem) -> String {
-    format!(
-        "{}:{}:{}",
-        item.field.name.to_lowercase(),
-        pivot_value_signature(&item.item),
-        normalized_formula_for_key(&item.formula)
-    )
-}
-
-fn pivot_value_signature(value: &PivotValue) -> String {
-    match value {
-        PivotValue::Blank => "blank".to_string(),
-        PivotValue::Boolean(value) => format!("bool:{value}"),
-        PivotValue::Number(value) => format!("num:{:016x}", value.to_bits()),
-        PivotValue::String(value) => format!("str:{value}"),
-        PivotValue::Error(value) => format!("err:{value}"),
-    }
-}
-
-fn normalized_formula_for_key(formula: &str) -> String {
-    formula.trim().trim_start_matches('=').to_string()
-}
-
-fn grouping_signature(grouping: &PivotGrouping) -> String {
-    match grouping {
-        PivotGrouping::Number {
-            field,
-            start,
-            end,
-            interval,
-        } => format!(
-            "n:{}:{}:{}:{}",
-            field.name.to_lowercase(),
-            f64_option_signature(*start),
-            f64_option_signature(*end),
-            f64_signature(*interval)
-        ),
-        PivotGrouping::Date { field, units } => {
-            let units = units
-                .iter()
-                .map(|unit| date_group_by_name(*unit))
-                .collect::<Vec<_>>()
-                .join(",");
-            format!("d:{}:{units}", field.name.to_lowercase())
-        }
-        PivotGrouping::Manual { field, groups } => {
-            let groups = groups
-                .iter()
-                .map(|group| {
-                    let members = group
-                        .members
-                        .iter()
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>()
-                        .join(",");
-                    format!("{}=[{}]", group.name, members)
-                })
-                .collect::<Vec<_>>()
-                .join(",");
-            format!("m:{}:{groups}", field.name.to_lowercase())
-        }
-    }
-}
-
-fn f64_option_signature(value: Option<f64>) -> String {
-    value
-        .map(f64_signature)
-        .unwrap_or_else(|| "auto".to_string())
-}
-
-fn f64_signature(value: f64) -> String {
-    format!("{:016x}", value.to_bits())
 }
 
 fn filter_field_ref(filter: &PivotFilter) -> Option<&PivotFieldRef> {
@@ -866,754 +153,6 @@ fn filter_field_ref(filter: &PivotFilter) -> Option<&PivotFieldRef> {
     }
 }
 
-fn filter_measure_field_ref(filter: &PivotFilter) -> Option<&PivotFieldRef> {
-    match filter {
-        PivotFilter::Value { measure, .. }
-        | PivotFilter::ValueBetween { measure, .. }
-        | PivotFilter::TopN { measure, .. } => Some(&measure.field),
-        PivotFilter::FieldItems { .. }
-        | PivotFilter::Label { .. }
-        | PivotFilter::LabelBetween { .. }
-        | PivotFilter::Date { .. }
-        | PivotFilter::DateBetween { .. }
-        | PivotFilter::DatePeriod { .. }
-        | PivotFilter::Unsupported { .. } => None,
-    }
-}
-
-fn show_as_base_field_ref(measure: &PivotMeasure) -> Option<&PivotFieldRef> {
-    match &measure.show_as {
-        PivotShowAs::RunningTotal { base_field }
-        | PivotShowAs::DifferenceFrom { base_field, .. }
-        | PivotShowAs::PercentDifferenceFrom { base_field, .. }
-        | PivotShowAs::RankAscending { base_field }
-        | PivotShowAs::RankDescending { base_field } => Some(base_field),
-        PivotShowAs::Normal
-        | PivotShowAs::PercentOfGrandTotal
-        | PivotShowAs::PercentOfRowTotal
-        | PivotShowAs::PercentOfColumnTotal
-        | PivotShowAs::PercentOfParentRowTotal
-        | PivotShowAs::PercentOfParentColumnTotal
-        | PivotShowAs::PercentOfParentTotal { .. }
-        | PivotShowAs::Index => None,
-    }
-}
-
-fn resolve_pivot_source(
-    workbook: &Workbook,
-    pivot_sheet_index: usize,
-    pivot: &PivotTable,
-) -> XlsxResult<ResolvedPivotSource> {
-    match &pivot.source {
-        PivotSource::WorksheetRange { sheet, range } => {
-            let source_sheet_index = match sheet {
-                Some(sheet_name) => workbook.sheet_index(sheet_name).ok_or_else(|| {
-                    XlsxError::InvalidFormat(format!("pivot source sheet not found: {sheet_name}"))
-                })?,
-                None => pivot_sheet_index,
-            };
-            let source_sheet = workbook.worksheet(source_sheet_index).ok_or_else(|| {
-                XlsxError::InvalidFormat(format!(
-                    "pivot source sheet index out of bounds: {source_sheet_index}"
-                ))
-            })?;
-            let sheet_name = source_sheet.name().to_string();
-            let key = format!("range:{source_sheet_index}:{}", range.to_a1_string());
-            let (fields, rows, record_count) = build_cache_data_from_range(
-                source_sheet,
-                *range,
-                range.start.row + 1,
-                range.end.row,
-            )?;
-            Ok(ResolvedPivotSource {
-                key,
-                source: PivotSource::WorksheetRange {
-                    sheet: Some(sheet_name),
-                    range: *range,
-                },
-                source_sheet_index,
-                fields,
-                rows,
-                record_count,
-                save_data: true,
-            })
-        }
-        PivotSource::Table { name } => {
-            let (source_sheet_index, source_sheet, table) =
-                find_table(workbook, name).ok_or_else(|| {
-                    XlsxError::InvalidFormat(format!("pivot source table not found: {name}"))
-                })?;
-            let key = format!("table:{}", table.name.to_lowercase());
-            let headers = table_headers(table, source_sheet);
-            let data_start = table.reference.start.row + table.header_row_count;
-            let data_end = table
-                .reference
-                .end
-                .row
-                .saturating_sub(table.totals_row_count);
-            let (fields, rows, record_count) = build_cache_data(
-                source_sheet,
-                table.reference.start.col,
-                headers,
-                data_start,
-                data_end,
-            )?;
-            Ok(ResolvedPivotSource {
-                key,
-                source: PivotSource::Table {
-                    name: table.name.clone(),
-                },
-                source_sheet_index,
-                fields,
-                rows,
-                record_count,
-                save_data: true,
-            })
-        }
-        PivotSource::External {
-            connection_name,
-            command_text,
-        } => {
-            validate_external_pivot_connection(workbook, connection_name, command_text.as_deref())?;
-            resolve_non_refreshable_pivot_source(pivot_sheet_index, &pivot.source, pivot)
-        }
-        PivotSource::Consolidation { .. }
-        | PivotSource::Scenario { .. }
-        | PivotSource::Olap { .. } => {
-            resolve_non_refreshable_pivot_source(pivot_sheet_index, &pivot.source, pivot)
-        }
-    }
-}
-
-fn validate_external_pivot_connection(
-    workbook: &Workbook,
-    connection_name: &str,
-    command_text: Option<&str>,
-) -> XlsxResult<()> {
-    let Some(command_text) = command_text else {
-        return Ok(());
-    };
-    let Some(connection) = find_workbook_connection(workbook, connection_name) else {
-        return Err(XlsxError::InvalidFormat(format!(
-            "XLSX pivot external source command text requires a matching workbook data connection: {connection_name}"
-        )));
-    };
-    let WorkbookConnectionKind::Database { command, .. } = &connection.kind else {
-        return Err(XlsxError::InvalidFormat(format!(
-            "XLSX pivot external source command text requires a database data connection: {connection_name}"
-        )));
-    };
-    if command.as_deref() != Some(command_text) {
-        return Err(XlsxError::InvalidFormat(format!(
-            "XLSX pivot external source command text does not match workbook data connection: {connection_name}"
-        )));
-    }
-    Ok(())
-}
-
-fn find_workbook_connection<'a>(
-    workbook: &'a Workbook,
-    connection_name: &str,
-) -> Option<&'a WorkbookConnection> {
-    connection_name
-        .parse::<u32>()
-        .ok()
-        .and_then(|id| workbook.data_connection_by_id(id))
-        .or_else(|| workbook.data_connection_by_name(connection_name))
-}
-
-fn resolve_non_refreshable_pivot_source(
-    pivot_sheet_index: usize,
-    source: &PivotSource,
-    pivot: &PivotTable,
-) -> XlsxResult<ResolvedPivotSource> {
-    let fields = non_refreshable_source_fields(pivot)?;
-    Ok(ResolvedPivotSource {
-        key: non_refreshable_source_key(source),
-        source: source.clone(),
-        source_sheet_index: pivot_sheet_index,
-        fields,
-        rows: Vec::new(),
-        record_count: 0,
-        save_data: false,
-    })
-}
-
-fn non_refreshable_source_key(source: &PivotSource) -> String {
-    match source {
-        PivotSource::External {
-            connection_name,
-            command_text,
-        } => format!(
-            "external:{connection_name}:{}",
-            command_text.as_deref().unwrap_or("")
-        ),
-        PivotSource::Consolidation { ranges } => {
-            let ranges = ranges
-                .iter()
-                .map(|range| {
-                    let sheet = range.sheet.as_deref().unwrap_or("");
-                    let range_ref = range
-                        .range
-                        .map(|range| range.to_a1_string())
-                        .unwrap_or_default();
-                    format!(
-                        "{}!{}:{}:{}:{}:{}",
-                        sheet,
-                        range_ref,
-                        range.name.as_deref().unwrap_or(""),
-                        range.external_relationship_id.as_deref().unwrap_or(""),
-                        range.external_relationship_target.as_deref().unwrap_or(""),
-                        range.page_items.join("/")
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(",");
-            format!("consolidation:{ranges}")
-        }
-        PivotSource::Scenario { name } => format!("scenario:{name}"),
-        PivotSource::Olap {
-            connection_name,
-            cube,
-            command_text,
-        } => format!(
-            "olap:{connection_name}:{}:{}",
-            cube.as_deref().unwrap_or(""),
-            command_text.as_deref().unwrap_or("")
-        ),
-        PivotSource::WorksheetRange { .. } | PivotSource::Table { .. } => unreachable!(),
-    }
-}
-
-fn non_refreshable_source_fields(pivot: &PivotTable) -> XlsxResult<Vec<CacheField>> {
-    let calculated_names = pivot
-        .calculated_fields
-        .iter()
-        .map(|field| field.name.to_lowercase())
-        .collect::<HashSet<_>>();
-    let mut fields = Vec::new();
-    let mut seen = HashSet::new();
-
-    for field in pivot
-        .rows
-        .iter()
-        .map(|field| &field.field)
-        .chain(pivot.columns.iter().map(|field| &field.field))
-        .chain(pivot.page_fields.iter().map(|field| &field.field))
-        .chain(pivot.measures.iter().map(|measure| &measure.field))
-        .chain(pivot.filters.iter().filter_map(filter_field_ref))
-        .chain(pivot.filters.iter().filter_map(filter_measure_field_ref))
-        .chain(pivot.groupings.iter().map(grouping_field_ref))
-        .chain(pivot.measures.iter().filter_map(show_as_base_field_ref))
-        .chain(pivot.calculated_items.iter().map(|item| &item.field))
-    {
-        if calculated_names.contains(&field.name.to_lowercase()) {
-            continue;
-        }
-        push_non_refreshable_field(&mut fields, &mut seen, &field.name);
-    }
-
-    for field in &pivot.calculated_fields {
-        if field.name.trim().is_empty() {
-            return Err(XlsxError::InvalidFormat(format!(
-                "pivot table {} has a calculated field with a blank name",
-                pivot.name
-            )));
-        }
-        if !seen.insert(field.name.to_lowercase()) {
-            return Err(XlsxError::InvalidFormat(format!(
-                "pivot table {} calculated field duplicates source field: {}",
-                pivot.name, field.name
-            )));
-        }
-        fields.push(CacheField::calculated(
-            field.name.clone(),
-            formula_for_cache_attr(&field.formula),
-        ));
-    }
-
-    Ok(fields)
-}
-
-fn push_non_refreshable_field(
-    fields: &mut Vec<CacheField>,
-    seen: &mut HashSet<String>,
-    name: &str,
-) {
-    if seen.insert(name.to_lowercase()) {
-        fields.push(CacheField::new(name.to_string()));
-    }
-}
-
-fn build_cache_data_from_range(
-    worksheet: &Worksheet,
-    range: CellRange,
-    data_start: u32,
-    data_end: u32,
-) -> XlsxResult<(Vec<CacheField>, Vec<Vec<Option<u32>>>, usize)> {
-    let headers = (range.start.col..=range.end.col)
-        .map(|col| {
-            let value = effective_pivot_value(worksheet, range.start.row, col);
-            let header = value.to_string();
-            if header.trim().is_empty() {
-                Err(XlsxError::InvalidFormat(format!(
-                    "pivot source header cannot be blank at {}",
-                    duke_sheets_core::CellAddress::new(range.start.row, col)
-                )))
-            } else {
-                Ok(header)
-            }
-        })
-        .collect::<XlsxResult<Vec<_>>>()?;
-
-    build_cache_data(worksheet, range.start.col, headers, data_start, data_end)
-}
-
-fn build_cache_data(
-    worksheet: &Worksheet,
-    start_col: u16,
-    headers: Vec<String>,
-    data_start: u32,
-    data_end: u32,
-) -> XlsxResult<(Vec<CacheField>, Vec<Vec<Option<u32>>>, usize)> {
-    validate_headers(&headers)?;
-
-    let mut fields = headers.into_iter().map(CacheField::new).collect::<Vec<_>>();
-    let mut rows = Vec::new();
-
-    if data_start <= data_end {
-        for row_values in
-            collect_cache_row_values(worksheet, start_col, fields.len(), data_start, data_end)
-        {
-            let mut record = Vec::with_capacity(fields.len());
-            for (field, value) in fields.iter_mut().zip(row_values) {
-                let index = field.intern(value);
-                record.push(Some(index));
-            }
-            rows.push(record);
-        }
-    }
-
-    let record_count = rows.len();
-    Ok((fields, rows, record_count))
-}
-
-fn collect_cache_row_values(
-    worksheet: &Worksheet,
-    start_col: u16,
-    field_count: usize,
-    data_start: u32,
-    data_end: u32,
-) -> Vec<Vec<PivotValue>> {
-    #[cfg(feature = "parallel")]
-    {
-        let row_count = (data_end - data_start + 1) as usize;
-        if row_count >= PARALLEL_CACHE_ROW_THRESHOLD {
-            return (data_start..=data_end)
-                .into_par_iter()
-                .map(|row| cache_row_values(worksheet, row, start_col, field_count))
-                .collect();
-        }
-    }
-
-    (data_start..=data_end)
-        .map(|row| cache_row_values(worksheet, row, start_col, field_count))
-        .collect()
-}
-
-fn cache_row_values(
-    worksheet: &Worksheet,
-    row: u32,
-    start_col: u16,
-    field_count: usize,
-) -> Vec<PivotValue> {
-    (0..field_count)
-        .map(|offset| effective_pivot_value(worksheet, row, start_col + offset as u16))
-        .collect()
-}
-
-fn validate_headers(headers: &[String]) -> XlsxResult<()> {
-    let mut seen = std::collections::HashSet::new();
-    for header in headers {
-        if header.trim().is_empty() {
-            return Err(XlsxError::InvalidFormat(
-                "pivot source headers cannot be blank".into(),
-            ));
-        }
-        if !seen.insert(header.to_lowercase()) {
-            return Err(XlsxError::InvalidFormat(format!(
-                "pivot source header is duplicated: {header}"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn find_table<'a>(workbook: &'a Workbook, name: &str) -> Option<(usize, &'a Worksheet, &'a Table)> {
-    workbook
-        .worksheets()
-        .enumerate()
-        .find_map(|(sheet_index, worksheet)| {
-            worksheet
-                .table_by_name(name)
-                .map(|table| (sheet_index, worksheet, table))
-        })
-}
-
-fn table_headers(table: &Table, worksheet: &Worksheet) -> Vec<String> {
-    let col_count = table.reference.col_count() as usize;
-    (0..col_count)
-        .map(|index| {
-            table
-                .columns
-                .get(index)
-                .map(|column| column.name.clone())
-                .filter(|name| !name.trim().is_empty())
-                .unwrap_or_else(|| {
-                    effective_pivot_value(
-                        worksheet,
-                        table.reference.start.row,
-                        table.reference.start.col + index as u16,
-                    )
-                    .to_string()
-                })
-        })
-        .collect()
-}
-
-fn effective_pivot_value(worksheet: &Worksheet, row: u32, col: u16) -> PivotValue {
-    worksheet
-        .get_calculated_value_at(row, col)
-        .map(PivotValue::from_cell_value)
-        .unwrap_or_else(|| PivotValue::from_cell_value(&worksheet.get_value_at(row, col)))
-}
-
-fn apply_calculated_cache_fields(
-    pivot_name: &str,
-    resolved: &mut ResolvedPivotSource,
-    calculated_fields: &[PivotCalculatedField],
-) -> XlsxResult<()> {
-    let source_name = structured_ref_source_name(&resolved.source).map(str::to_string);
-    for field in calculated_fields {
-        if field.name.trim().is_empty() {
-            return Err(XlsxError::InvalidFormat(format!(
-                "pivot table {pivot_name} has a calculated field with a blank name"
-            )));
-        }
-        if field_index(&resolved.fields, &field.name).is_some() {
-            return Err(XlsxError::InvalidFormat(format!(
-                "pivot table {pivot_name} calculated field duplicates source field: {}",
-                field.name
-            )));
-        }
-
-        let ast = parse_calculated_formula(pivot_name, field)?;
-        let lookup = cache_field_lookup(&resolved.fields);
-        let mut cache_field =
-            CacheField::calculated(field.name.clone(), formula_for_cache_attr(&field.formula));
-        for row in &mut resolved.rows {
-            let value = evaluate_calculated_cache_row(
-                pivot_name,
-                field,
-                &ast,
-                &resolved.fields,
-                row,
-                &lookup,
-                source_name.as_deref(),
-            )?;
-            let index = cache_field.intern(value);
-            row.push(Some(index));
-        }
-        resolved.fields.push(cache_field);
-    }
-
-    Ok(())
-}
-
-fn apply_calculated_cache_items(
-    pivot_name: &str,
-    resolved: &mut ResolvedPivotSource,
-    calculated_items: &[PivotCalculatedItem],
-) -> XlsxResult<()> {
-    for item in calculated_items {
-        if item.field.name.trim().is_empty() {
-            return Err(XlsxError::InvalidFormat(format!(
-                "pivot table {pivot_name} has a calculated item with a blank field name"
-            )));
-        }
-        if item.formula.trim().is_empty() {
-            return Err(XlsxError::InvalidFormat(format!(
-                "pivot table {pivot_name} calculated item for field {} has a blank formula",
-                item.field.name
-            )));
-        }
-        if item.item.is_blank() {
-            return Err(XlsxError::InvalidFormat(format!(
-                "pivot table {pivot_name} calculated item for field {} has a blank item name",
-                item.field.name
-            )));
-        }
-
-        let field_index = field_index(&resolved.fields, &item.field.name).ok_or_else(|| {
-            XlsxError::InvalidFormat(format!(
-                "pivot table {pivot_name} calculated item references unknown source field: {}",
-                item.field.name
-            ))
-        })?;
-        resolved.fields[field_index].intern(item.item.clone());
-    }
-
-    Ok(())
-}
-
-fn parse_calculated_formula(
-    pivot_name: &str,
-    field: &PivotCalculatedField,
-) -> XlsxResult<FormulaExpr> {
-    let formula = field.formula.trim();
-    if formula.is_empty() {
-        return Err(XlsxError::InvalidFormat(format!(
-            "pivot table {pivot_name} calculated field {} has a blank formula",
-            field.name
-        )));
-    }
-    let formula = if formula.starts_with('=') {
-        formula.to_string()
-    } else {
-        format!("={formula}")
-    };
-    parse_formula(&formula).map_err(|error| {
-        XlsxError::InvalidFormat(format!(
-            "pivot table {pivot_name} calculated field {} formula did not parse: {error}",
-            field.name
-        ))
-    })
-}
-
-fn cache_field_lookup(fields: &[CacheField]) -> HashMap<String, usize> {
-    fields
-        .iter()
-        .enumerate()
-        .map(|(index, field)| (field.name.to_lowercase(), index))
-        .collect()
-}
-
-fn evaluate_calculated_cache_row(
-    pivot_name: &str,
-    field: &PivotCalculatedField,
-    ast: &FormulaExpr,
-    fields: &[CacheField],
-    row: &[Option<u32>],
-    lookup: &HashMap<String, usize>,
-    source_name: Option<&str>,
-) -> XlsxResult<PivotValue> {
-    let materialized =
-        materialize_calculated_expr(pivot_name, field, ast, fields, row, lookup, source_name)?;
-    let value = evaluate(&materialized, &EvaluationContext::simple()).map_err(|error| {
-        XlsxError::InvalidFormat(format!(
-            "pivot table {pivot_name} calculated field {} evaluation failed: {error}",
-            field.name
-        ))
-    })?;
-    Ok(formula_value_to_pivot_value(value))
-}
-
-fn materialize_calculated_expr(
-    pivot_name: &str,
-    field: &PivotCalculatedField,
-    expr: &FormulaExpr,
-    fields: &[CacheField],
-    row: &[Option<u32>],
-    lookup: &HashMap<String, usize>,
-    source_name: Option<&str>,
-) -> XlsxResult<FormulaExpr> {
-    Ok(match expr {
-        FormulaExpr::Number(value) => FormulaExpr::Number(*value),
-        FormulaExpr::String(value) => FormulaExpr::String(value.clone()),
-        FormulaExpr::Boolean(value) => FormulaExpr::Boolean(*value),
-        FormulaExpr::Error(value) => FormulaExpr::Error(*value),
-        FormulaExpr::Empty => FormulaExpr::Empty,
-        FormulaExpr::NameRef(name) => {
-            calculated_cache_value_expr(pivot_name, field, name, fields, row, lookup)?
-        }
-        FormulaExpr::StructuredRef(reference) => {
-            if let Some(name) = structured_ref_field_name(reference, source_name) {
-                calculated_cache_value_expr(pivot_name, field, name, fields, row, lookup)?
-            } else {
-                return Err(XlsxError::InvalidFormat(format!(
-                    "pivot table {pivot_name} calculated field {} uses an unsupported structured reference",
-                    field.name
-                )));
-            }
-        }
-        FormulaExpr::CellRef(_) | FormulaExpr::RangeRef(_) | FormulaExpr::ExternalRef(_) => {
-            return Err(XlsxError::InvalidFormat(format!(
-                "pivot table {pivot_name} calculated field {} uses workbook references, which are not valid pivot source-field references",
-                field.name
-            )));
-        }
-        FormulaExpr::BinaryOp { op, left, right } => FormulaExpr::BinaryOp {
-            op: *op,
-            left: Box::new(materialize_calculated_expr(
-                pivot_name,
-                field,
-                left,
-                fields,
-                row,
-                lookup,
-                source_name,
-            )?),
-            right: Box::new(materialize_calculated_expr(
-                pivot_name,
-                field,
-                right,
-                fields,
-                row,
-                lookup,
-                source_name,
-            )?),
-        },
-        FormulaExpr::UnaryOp { op, operand } => FormulaExpr::UnaryOp {
-            op: *op,
-            operand: Box::new(materialize_calculated_expr(
-                pivot_name,
-                field,
-                operand,
-                fields,
-                row,
-                lookup,
-                source_name,
-            )?),
-        },
-        FormulaExpr::Function { name, args } => FormulaExpr::Function {
-            name: name.clone(),
-            args: materialize_calculated_args(
-                pivot_name,
-                field,
-                args,
-                fields,
-                row,
-                lookup,
-                source_name,
-            )?,
-        },
-        FormulaExpr::ExternalFunction { book, name, args } => FormulaExpr::ExternalFunction {
-            book: book.clone(),
-            name: name.clone(),
-            args: materialize_calculated_args(
-                pivot_name,
-                field,
-                args,
-                fields,
-                row,
-                lookup,
-                source_name,
-            )?,
-        },
-        FormulaExpr::Array(rows) => {
-            let mut materialized_rows = Vec::with_capacity(rows.len());
-            for formula_row in rows {
-                materialized_rows.push(materialize_calculated_args(
-                    pivot_name,
-                    field,
-                    formula_row,
-                    fields,
-                    row,
-                    lookup,
-                    source_name,
-                )?);
-            }
-            FormulaExpr::Array(materialized_rows)
-        }
-    })
-}
-
-fn materialize_calculated_args(
-    pivot_name: &str,
-    field: &PivotCalculatedField,
-    args: &[FormulaExpr],
-    fields: &[CacheField],
-    row: &[Option<u32>],
-    lookup: &HashMap<String, usize>,
-    source_name: Option<&str>,
-) -> XlsxResult<Vec<FormulaExpr>> {
-    args.iter()
-        .map(|arg| {
-            materialize_calculated_expr(pivot_name, field, arg, fields, row, lookup, source_name)
-        })
-        .collect()
-}
-
-fn calculated_cache_value_expr(
-    pivot_name: &str,
-    field: &PivotCalculatedField,
-    name: &str,
-    fields: &[CacheField],
-    row: &[Option<u32>],
-    lookup: &HashMap<String, usize>,
-) -> XlsxResult<FormulaExpr> {
-    let field_index = lookup.get(&name.to_lowercase()).copied().ok_or_else(|| {
-        XlsxError::InvalidFormat(format!(
-            "pivot table {pivot_name} calculated field {} references unknown field: {name}",
-            field.name
-        ))
-    })?;
-    let value = row
-        .get(field_index)
-        .and_then(|index| *index)
-        .and_then(|index| fields[field_index].shared_items.get(index as usize))
-        .unwrap_or(&PivotValue::Blank);
-    Ok(pivot_value_to_formula_expr(value))
-}
-
-fn structured_ref_source_name(source: &PivotSource) -> Option<&str> {
-    match source {
-        PivotSource::Table { name } => Some(name.as_str()),
-        _ => None,
-    }
-}
-
-fn structured_ref_field_name<'a>(
-    reference: &'a StructuredReference,
-    source_name: Option<&str>,
-) -> Option<&'a str> {
-    if let Some(table) = reference.table.as_deref() {
-        let source_name = source_name?;
-        if !table.eq_ignore_ascii_case(source_name) {
-            return None;
-        }
-    }
-    if !reference
-        .specifiers
-        .iter()
-        .all(|specifier| matches!(specifier, StructuredRefSpecifier::ThisRow))
-    {
-        return None;
-    }
-    reference.column.as_deref()
-}
-
-fn pivot_value_to_formula_expr(value: &PivotValue) -> FormulaExpr {
-    match value {
-        PivotValue::Blank => FormulaExpr::Empty,
-        PivotValue::Boolean(value) => FormulaExpr::Boolean(*value),
-        PivotValue::Number(value) => FormulaExpr::Number(*value),
-        PivotValue::String(value) => FormulaExpr::String(value.clone()),
-        PivotValue::Error(value) => FormulaExpr::Error(*value),
-    }
-}
-
-fn formula_value_to_pivot_value(value: FormulaValue) -> PivotValue {
-    match value {
-        FormulaValue::Empty => PivotValue::Blank,
-        FormulaValue::Boolean(value) => PivotValue::Boolean(value),
-        FormulaValue::Number(value) => PivotValue::Number(value),
-        FormulaValue::String(value) => PivotValue::String(value),
-        FormulaValue::Error(value) => PivotValue::Error(value),
-        FormulaValue::Array { .. } => PivotValue::Error(CellError::Value),
-    }
-}
-
 fn formula_for_cache_attr(formula: &str) -> String {
     formula.trim().trim_start_matches('=').to_string()
 }
@@ -1621,8 +160,8 @@ fn formula_for_cache_attr(formula: &str) -> String {
 pub(super) fn write_pivot_table_part<W: Write + Seek>(
     zip: &mut zip::ZipWriter<W>,
     workbook: &Workbook,
-    part: &PivotTablePart,
-    cache_part: &PivotCachePart,
+    part: &FormatPivotTable,
+    cache_part: &FormatPivotCache,
     style_table: &XlsxStyleTable,
 ) -> XlsxResult<()> {
     let sheet = workbook
@@ -1632,6 +171,7 @@ pub(super) fn write_pivot_table_part<W: Write + Seek>(
         .pivot_tables()
         .get(part.pivot_index)
         .ok_or_else(|| XlsxError::InvalidFormat("pivot table not found".into()))?;
+    let fields = xlsx_table_fields(cache_part, pivot);
 
     let path = format!("xl/pivotTables/pivotTable{}.xml", part.table_num);
     write_xml_part(zip, &path, |w| {
@@ -1783,13 +323,13 @@ pub(super) fn write_pivot_table_part<W: Write + Seek>(
         tag.push_attribute(("outline", outline));
         w.write_event(Event::Start(tag))?;
 
-        write_location(w, pivot, &cache_part.fields, &cache_part.rows)?;
-        write_pivot_fields(w, pivot, &cache_part.fields)?;
+        write_location(w, pivot, &fields, part)?;
+        write_pivot_fields(w, pivot, &fields)?;
         write_axis_fields(
             w,
             "rowFields",
             &pivot.rows,
-            &cache_part.fields,
+            &fields,
             values_field_on_axis(pivot, PivotValuesAxis::Rows),
             pivot.layout.values_axis_position,
         )?;
@@ -1797,8 +337,8 @@ pub(super) fn write_pivot_table_part<W: Write + Seek>(
             w,
             "rowItems",
             &pivot.rows,
-            &cache_part.fields,
-            &cache_part.rows,
+            &fields,
+            part.axis_tuples.rows.as_deref(),
             pivot.layout.show_row_grand_totals,
             false,
         )?;
@@ -1806,7 +346,7 @@ pub(super) fn write_pivot_table_part<W: Write + Seek>(
             w,
             "colFields",
             &pivot.columns,
-            &cache_part.fields,
+            &fields,
             values_field_on_axis(pivot, PivotValuesAxis::Columns),
             pivot.layout.values_axis_position,
         )?;
@@ -1814,40 +354,18 @@ pub(super) fn write_pivot_table_part<W: Write + Seek>(
             w,
             "colItems",
             &pivot.columns,
-            &cache_part.fields,
-            &cache_part.rows,
+            &fields,
+            part.axis_tuples.columns.as_deref(),
             pivot.layout.show_column_grand_totals,
             true,
         )?;
-        write_page_fields(w, pivot, &cache_part.fields)?;
-        write_data_fields(w, pivot, &cache_part.fields, style_table)?;
+        write_page_fields(w, pivot, &fields)?;
+        write_data_fields(w, pivot, &fields, style_table)?;
         write_pivot_style(w, pivot)?;
-        write_pivot_filters(w, pivot, &cache_part.fields)?;
+        write_pivot_filters(w, pivot, &fields)?;
         write_pivot_extensions(w, pivot)?;
 
         w.write_event(Event::End(BytesEnd::new("pivotTableDefinition")))?;
-        Ok(())
-    })
-}
-
-pub(super) fn write_pivot_table_rels<W: Write + Seek>(
-    zip: &mut zip::ZipWriter<W>,
-    part: &PivotTablePart,
-) -> XlsxResult<()> {
-    let path = format!("xl/pivotTables/_rels/pivotTable{}.xml.rels", part.table_num);
-    write_xml_part(zip, &path, |w| {
-        let mut relationships = BytesStart::new("Relationships");
-        relationships.push_attribute(("xmlns", NS_RELATIONSHIPS));
-        w.write_event(Event::Start(relationships))?;
-
-        let target = format!("../pivotCache/pivotCacheDefinition{}.xml", part.cache_num);
-        w.create_element("Relationship")
-            .with_attribute(("Id", "rId1"))
-            .with_attribute(("Type", RT_PIVOT_CACHE_DEFINITION))
-            .with_attribute(("Target", target.as_str()))
-            .write_empty()?;
-
-        w.write_event(Event::End(BytesEnd::new("Relationships")))?;
         Ok(())
     })
 }
@@ -1856,11 +374,11 @@ fn write_location(
     w: &mut XmlWriter,
     pivot: &PivotTable,
     fields: &[CacheField],
-    rows: &[Vec<Option<u32>>],
+    table: &FormatPivotTable,
 ) -> XlsxResult<()> {
     let range = match pivot.rendered_range {
         Some(range) => range,
-        None => estimated_pivot_output_range(pivot, fields, rows)?,
+        None => estimated_pivot_output_range(pivot, fields, table)?,
     };
     let ref_str = range.to_a1_string();
     let first_data_col = expanded_axis_field_count(&pivot.rows, fields)
@@ -1879,11 +397,16 @@ fn write_location(
 fn estimated_pivot_output_range(
     pivot: &PivotTable,
     fields: &[CacheField],
-    rows: &[Vec<Option<u32>>],
+    table: &FormatPivotTable,
 ) -> XlsxResult<CellRange> {
     let row_label_width = expanded_axis_field_count(&pivot.rows, fields).max(1);
     let measure_width = pivot.measures.len().max(1);
-    let column_tuple_count = axis_item_tuples(&pivot.columns, fields, rows)?.len().max(1);
+    let column_tuple_count = table
+        .axis_tuples
+        .columns
+        .as_ref()
+        .map_or(0, Vec::len)
+        .max(1);
     let value_width = if pivot.columns.is_empty() {
         measure_width
     } else {
@@ -1891,7 +414,7 @@ fn estimated_pivot_output_range(
     };
     let width = row_label_width + value_width;
 
-    let row_tuple_count = axis_item_tuples(&pivot.rows, fields, rows)?.len();
+    let row_tuple_count = table.axis_tuples.rows.as_ref().map_or(0, Vec::len);
     let data_rows = if pivot.rows.is_empty() {
         1
     } else {
@@ -2012,12 +535,9 @@ fn should_write_pivot_field_items(
     field_index: usize,
 ) -> bool {
     pivot_axis_field(pivot, fields, field_index).is_some()
-        || fields.get(field_index).is_some_and(|field| {
-            matches!(
-                field.group,
-                Some(CacheFieldGroup::Base { .. } | CacheFieldGroup::Manual { .. })
-            )
-        })
+        || fields
+            .get(field_index)
+            .is_some_and(|field| field.grouping.is_some())
 }
 
 fn write_pivot_field_items(
@@ -2054,10 +574,14 @@ fn write_pivot_field_items(
 }
 
 fn pivot_field_item_count(field: &CacheField) -> usize {
-    match &field.group {
-        Some(CacheFieldGroup::Manual { group_items, .. }) => group_items.len(),
-        _ => field.shared_items.len(),
+    if !field.database_field {
+        if let Some(grouping) = &field.grouping {
+            if matches!(grouping.definition, PivotGrouping::Manual { .. }) {
+                return grouping.levels[0].group_items.len();
+            }
+        }
     }
+    field.shared_items.len()
 }
 
 fn field_axis(
@@ -2137,7 +661,7 @@ fn field_sort_measure_index(
     pivot
         .measures
         .iter()
-        .position(|measure| pivot_measure_matches_sort_target(measure, sort_measure))
+        .position(|measure| pivot_measure_matches_target(measure, sort_measure))
         .map(Some)
         .ok_or_else(|| {
             XlsxError::InvalidFormat(format!(
@@ -2145,15 +669,6 @@ fn field_sort_measure_index(
                 pivot.name, axis_field.field.name
             ))
         })
-}
-
-fn pivot_measure_matches_sort_target(measure: &PivotMeasure, target: &PivotMeasure) -> bool {
-    measure.field.name.eq_ignore_ascii_case(&target.field.name)
-        && measure.aggregate == target.aggregate
-        && target
-            .name
-            .as_ref()
-            .is_none_or(|name| measure.name.as_ref() == Some(name))
 }
 
 fn write_auto_sort_scope(w: &mut XmlWriter, measure_index: usize) -> XlsxResult<()> {
@@ -2213,13 +728,20 @@ fn pivot_axis_field<'a>(
 
 fn axis_semantic_field_name(fields: &[CacheField], field_index: usize) -> Option<String> {
     let field = fields.get(field_index)?;
-    if matches!(field.group, Some(CacheFieldGroup::Base { .. })) {
+    if let Some(grouping) = &field.grouping {
+        if matches!(grouping.definition, PivotGrouping::Manual { .. }) && !field.database_field {
+            return fields
+                .get(grouping.base_field_index)
+                .map(|base| base.name.clone());
+        }
+    }
+    if field.grouping.is_some() {
         return Some(field.name.clone());
     }
-    if let Some(CacheFieldGroup::DateUnit { base, .. } | CacheFieldGroup::Manual { base, .. }) =
-        &field.group
-    {
-        return fields.get(*base).map(|field| field.name.clone());
+    if let Some((base, _)) = grouping_level_for_field(fields, field_index) {
+        return fields
+            .get(base.base_field_index)
+            .map(|field| field.name.clone());
     }
     if has_grouped_children(fields, field_index) {
         return None;
@@ -2228,13 +750,15 @@ fn axis_semantic_field_name(fields: &[CacheField], field_index: usize) -> Option
 }
 
 fn has_grouped_children(fields: &[CacheField], field_index: usize) -> bool {
-    fields.iter().any(|field| {
-        matches!(
-            field.group,
-            Some(CacheFieldGroup::DateUnit { base, .. } | CacheFieldGroup::Manual { base, .. })
-                if base == field_index
-        )
-    })
+    fields
+        .get(field_index)
+        .and_then(|field| field.grouping.as_ref())
+        .is_some_and(|grouping| {
+            grouping
+                .levels
+                .iter()
+                .any(|level| level.field_index != field_index)
+        })
 }
 
 fn push_pivot_field_option_attrs(pivot_field: &mut BytesStart<'_>, field: &PivotField) {
@@ -2359,7 +883,13 @@ fn hidden_item_indexes(
 
     let allowed = allowed_items
         .iter()
-        .filter_map(|item| field.item_lookup.get(item).copied())
+        .filter_map(|item| {
+            field
+                .shared_items
+                .iter()
+                .position(|candidate| candidate == item)
+                .map(|index| index as u32)
+        })
         .collect::<std::collections::HashSet<_>>();
 
     Ok((0..field.shared_items.len() as u32)
@@ -2391,13 +921,22 @@ fn collapsed_item_indexes(
 }
 
 fn pivot_field_item_index(field: &CacheField, item: &PivotValue) -> Option<u32> {
-    match &field.group {
-        Some(CacheFieldGroup::Manual { group_items, .. }) => group_items
-            .iter()
-            .position(|value| value == item)
-            .map(|index| index as u32),
-        _ => field.item_lookup.get(item).copied(),
+    if !field.database_field {
+        if let Some(grouping) = &field.grouping {
+            if matches!(grouping.definition, PivotGrouping::Manual { .. }) {
+                return grouping.levels[0]
+                    .group_items
+                    .iter()
+                    .position(|value| value == item)
+                    .map(|index| index as u32);
+            }
+        }
     }
+    field
+        .shared_items
+        .iter()
+        .position(|value| value == item)
+        .map(|index| index as u32)
 }
 
 fn write_axis_fields(
@@ -2448,7 +987,7 @@ fn write_axis_items(
     tag_name: &str,
     axis_fields: &[duke_sheets_core::PivotField],
     fields: &[CacheField],
-    rows: &[Vec<Option<u32>>],
+    tuples: Option<&[Vec<u32>]>,
     include_grand_total: bool,
     write_empty_item_when_no_fields: bool,
 ) -> XlsxResult<()> {
@@ -2464,7 +1003,7 @@ fn write_axis_items(
     }
 
     let field_indexes = expanded_axis_field_indexes(axis_fields, fields)?;
-    let tuples = axis_item_tuples(axis_fields, fields, rows)?;
+    let tuples = tuples.unwrap_or(&[]);
 
     let count = (tuples.len() + usize::from(include_grand_total)).to_string();
     let mut tag = BytesStart::new(tag_name);
@@ -2481,50 +1020,6 @@ fn write_axis_items(
 
     w.write_event(Event::End(BytesEnd::new(tag_name)))?;
     Ok(())
-}
-
-fn axis_item_tuples(
-    axis_fields: &[duke_sheets_core::PivotField],
-    fields: &[CacheField],
-    rows: &[Vec<Option<u32>>],
-) -> XlsxResult<Vec<Vec<u32>>> {
-    if axis_fields.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let field_indexes = expanded_axis_field_indexes(axis_fields, fields)?;
-    let mut seen = HashSet::new();
-    let mut tuples = Vec::new();
-    for row in rows {
-        let tuple = field_indexes
-            .iter()
-            .map(|field_index| cache_record_axis_item_index(fields, row, *field_index).unwrap_or(0))
-            .collect::<Vec<_>>();
-        if seen.insert(tuple.clone()) {
-            tuples.push(tuple);
-        }
-    }
-    Ok(tuples)
-}
-
-fn cache_record_axis_item_index(
-    fields: &[CacheField],
-    row: &[Option<u32>],
-    field_index: usize,
-) -> Option<u32> {
-    if let Some(index) = row.get(field_index).and_then(|index| *index) {
-        return Some(index);
-    }
-
-    match fields.get(field_index)?.group.as_ref()? {
-        CacheFieldGroup::Manual {
-            base, item_indexes, ..
-        } => row
-            .get(*base)
-            .and_then(|index| *index)
-            .and_then(|index| item_indexes.get(index as usize).copied()),
-        _ => None,
-    }
 }
 
 fn write_axis_item(w: &mut XmlWriter, item_type: Option<&str>, indexes: &[u32]) -> XlsxResult<()> {
@@ -2585,33 +1080,28 @@ fn expanded_axis_field_indexes(
 
 fn grouped_cache_field_indexes(fields: &[CacheField], field_name: &str) -> Option<Vec<usize>> {
     let base = field_index(fields, field_name)?;
-    let manual_indexes = fields
-        .iter()
-        .enumerate()
-        .filter_map(|(index, field)| match field.group {
-            Some(CacheFieldGroup::Manual {
-                base: group_base, ..
-            }) if group_base == base => Some(index),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    if !manual_indexes.is_empty() {
-        let mut indexes = manual_indexes;
-        indexes.push(base);
-        return Some(indexes);
+    let grouping = fields.get(base)?.grouping.as_ref()?;
+    match &grouping.definition {
+        PivotGrouping::Manual { .. } => fields
+            .iter()
+            .enumerate()
+            .find(|(_, field)| {
+                !field.database_field
+                    && field.grouping.as_ref().is_some_and(|candidate| {
+                        matches!(candidate.definition, PivotGrouping::Manual { .. })
+                            && candidate.base_field_index == base
+                    })
+            })
+            .map(|(grouped, _)| vec![grouped, base]),
+        PivotGrouping::Date { units, .. } if units.len() > 1 => Some(
+            grouping
+                .levels
+                .iter()
+                .map(|level| level.field_index)
+                .collect(),
+        ),
+        _ => None,
     }
-
-    let indexes = fields
-        .iter()
-        .enumerate()
-        .filter_map(|(index, field)| match field.group {
-            Some(CacheFieldGroup::DateUnit {
-                base: group_base, ..
-            }) if group_base == base => Some(index),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    (!indexes.is_empty()).then_some(indexes)
 }
 
 fn write_page_fields(
@@ -2663,7 +1153,11 @@ fn selected_page_item_index(
     let [item] = allowed_items.as_slice() else {
         return None;
     };
-    field.item_lookup.get(item).copied()
+    field
+        .shared_items
+        .iter()
+        .position(|candidate| candidate == item)
+        .map(|index| index as u32)
 }
 
 fn write_data_fields(
@@ -3230,25 +1724,6 @@ fn write_pivot_extensions(w: &mut XmlWriter, pivot: &PivotTable) -> XlsxResult<(
     Ok(())
 }
 
-fn is_writable_show_as(show_as: &PivotShowAs) -> bool {
-    matches!(
-        show_as,
-        PivotShowAs::Normal
-            | PivotShowAs::PercentOfGrandTotal
-            | PivotShowAs::PercentOfRowTotal
-            | PivotShowAs::PercentOfColumnTotal
-            | PivotShowAs::PercentOfParentRowTotal
-            | PivotShowAs::PercentOfParentColumnTotal
-            | PivotShowAs::PercentOfParentTotal { .. }
-            | PivotShowAs::Index
-            | PivotShowAs::RunningTotal { .. }
-            | PivotShowAs::DifferenceFrom { .. }
-            | PivotShowAs::PercentDifferenceFrom { .. }
-            | PivotShowAs::RankAscending { .. }
-            | PivotShowAs::RankDescending { .. }
-    )
-}
-
 fn show_data_as_name(show_as: &PivotShowAs) -> Option<&'static str> {
     match show_as {
         PivotShowAs::Normal => None,
@@ -3326,9 +1801,10 @@ fn show_as_base_item_index(
         XlsxError::InvalidFormat(format!("pivot base field not found: {base_field}"))
     })?;
     fields[field_index]
-        .item_lookup
-        .get(base_item)
-        .copied()
+        .shared_items
+        .iter()
+        .position(|item| item == base_item)
+        .map(|index| index as u32)
         .map(Some)
         .ok_or_else(|| {
             XlsxError::InvalidFormat(format!(
@@ -3354,11 +1830,13 @@ fn write_pivot_style(w: &mut XmlWriter, pivot: &PivotTable) -> XlsxResult<()> {
 pub(super) fn write_pivot_cache_definition_part<W: Write + Seek>(
     zip: &mut zip::ZipWriter<W>,
     workbook: &Workbook,
-    part: &PivotCachePart,
+    plan: &FormatPivotPlan,
+    part: &FormatPivotCache,
 ) -> XlsxResult<()> {
+    let fields = xlsx_cache_fields(part);
     let path = format!("xl/pivotCache/pivotCacheDefinition{}.xml", part.cache_num);
     write_xml_part(zip, &path, |w| {
-        let record_count = part.record_count.to_string();
+        let record_count = part.row_count.to_string();
         let refresh_on_load = bool_attr(part.refresh_on_load);
         let background_query = bool_attr(part.background_query);
         let save_data = bool_attr(part.save_data);
@@ -3381,12 +1859,19 @@ pub(super) fn write_pivot_cache_definition_part<W: Write + Seek>(
 
         write_cache_source(w, workbook, part)?;
 
-        let count = part.fields.len().to_string();
+        let count = fields.len().to_string();
         let mut cache_fields = BytesStart::new("cacheFields");
         cache_fields.push_attribute(("count", count.as_str()));
         w.write_event(Event::Start(cache_fields))?;
-        for field in &part.fields {
-            write_cache_field(w, field)?;
+        for (index, field) in fields.iter().enumerate() {
+            write_cache_field(
+                w,
+                &fields,
+                index,
+                field,
+                index < part.fields.len()
+                    && cache_field_shared_items_are_metadata_only(workbook, plan, part, index),
+            )?;
         }
         w.write_event(Event::End(BytesEnd::new("cacheFields")))?;
 
@@ -3406,15 +1891,15 @@ fn cache_source_tag(source_type: &'static str) -> BytesStart<'static> {
 fn write_cache_source(
     w: &mut XmlWriter,
     workbook: &Workbook,
-    part: &PivotCachePart,
+    part: &FormatPivotCache,
 ) -> XlsxResult<()> {
     match &part.source {
-        PivotSource::WorksheetRange { .. } | PivotSource::Table { .. } => {
+        FormatPivotSource::Worksheet { .. } => {
             w.write_event(Event::Start(cache_source_tag("worksheet")))?;
             write_worksheet_source(w, workbook, part)?;
             w.write_event(Event::End(BytesEnd::new("cacheSource")))?;
         }
-        PivotSource::External {
+        FormatPivotSource::External {
             connection_name, ..
         } => {
             let mut cache_source = cache_source_tag("external");
@@ -3423,12 +1908,12 @@ fn write_cache_source(
             }
             w.write_event(Event::Empty(cache_source))?;
         }
-        PivotSource::Consolidation { ranges } => {
+        FormatPivotSource::Consolidation { ranges } => {
             w.write_event(Event::Start(cache_source_tag("consolidation")))?;
             write_consolidation_source(w, ranges)?;
             w.write_event(Event::End(BytesEnd::new("cacheSource")))?;
         }
-        PivotSource::Scenario { name } => {
+        FormatPivotSource::Scenario { name } => {
             if name.is_empty() {
                 w.write_event(Event::Empty(cache_source_tag("scenario")))?;
             } else {
@@ -3439,7 +1924,7 @@ fn write_cache_source(
                 w.write_event(Event::End(BytesEnd::new("cacheSource")))?;
             }
         }
-        PivotSource::Olap {
+        FormatPivotSource::Olap {
             connection_name, ..
         } => {
             let mut cache_source = cache_source_tag("olap");
@@ -3465,6 +1950,17 @@ fn connection_id_attr(workbook: &Workbook, connection_name: &str) -> XlsxResult<
         ))
     })?;
     Ok(Some(connection_id.to_string()))
+}
+
+fn find_workbook_connection<'a>(
+    workbook: &'a Workbook,
+    connection_name: &str,
+) -> Option<&'a WorkbookConnection> {
+    connection_name
+        .parse::<u32>()
+        .ok()
+        .and_then(|id| workbook.data_connection_by_id(id))
+        .or_else(|| workbook.data_connection_by_name(connection_name))
 }
 
 fn write_consolidation_source(w: &mut XmlWriter, ranges: &[PivotSourceRange]) -> XlsxResult<()> {
@@ -3608,26 +2104,25 @@ fn consolidation_external_relationship_id(
 
 fn write_worksheet_source(
     w: &mut XmlWriter,
-    workbook: &Workbook,
-    part: &PivotCachePart,
+    _workbook: &Workbook,
+    part: &FormatPivotCache,
 ) -> XlsxResult<()> {
     let mut source = BytesStart::new("worksheetSource");
     match &part.source {
-        PivotSource::WorksheetRange { sheet, range } => {
-            let sheet_name = sheet
-                .as_deref()
-                .or_else(|| {
-                    workbook
-                        .worksheet(part.source_sheet_index)
-                        .map(Worksheet::name)
-                })
-                .unwrap_or("Sheet1");
+        FormatPivotSource::Worksheet {
+            sheet_name,
+            range,
+            table_name,
+            ..
+        } => {
+            if let Some(name) = table_name {
+                source.push_attribute(("name", name.as_str()));
+                w.write_event(Event::Empty(source))?;
+                return Ok(());
+            }
             let ref_str = range.to_a1_string();
             source.push_attribute(("ref", ref_str.as_str()));
-            source.push_attribute(("sheet", sheet_name));
-        }
-        PivotSource::Table { name } => {
-            source.push_attribute(("name", name.as_str()));
+            source.push_attribute(("sheet", sheet_name.as_str()));
         }
         _ => {}
     }
@@ -3635,7 +2130,7 @@ fn write_worksheet_source(
     Ok(())
 }
 
-fn write_calculated_items(w: &mut XmlWriter, part: &PivotCachePart) -> XlsxResult<()> {
+fn write_calculated_items(w: &mut XmlWriter, part: &FormatPivotCache) -> XlsxResult<()> {
     if part.calculated_items.is_empty() {
         return Ok(());
     }
@@ -3665,9 +2160,10 @@ fn write_calculated_item(
         ))
     })?;
     let item_index = fields[field_index]
-        .item_lookup
-        .get(&item.item)
-        .copied()
+        .shared_items
+        .iter()
+        .position(|candidate| candidate == &item.item)
+        .map(|index| index as u32)
         .ok_or_else(|| {
             XlsxError::InvalidFormat(format!(
                 "pivot calculated item {} was not registered in field {}",
@@ -3709,16 +2205,24 @@ fn write_calculated_item(
     Ok(())
 }
 
-fn write_cache_field(w: &mut XmlWriter, field: &CacheField) -> XlsxResult<()> {
+fn write_cache_field(
+    w: &mut XmlWriter,
+    fields: &[CacheField],
+    field_index: usize,
+    field: &CacheField,
+    metadata_only: bool,
+) -> XlsxResult<()> {
     let mut cache_field = BytesStart::new("cacheField");
     cache_field.push_attribute(("name", field.name.as_str()));
-    if matches!(
-        field.group,
-        Some(CacheFieldGroup::Base { .. } | CacheFieldGroup::Manual { .. })
-    ) {
+    if field
+        .grouping
+        .as_ref()
+        .is_some_and(|grouping| matches!(grouping.definition, PivotGrouping::Manual { .. }))
+    {
         cache_field.push_attribute(("numFmtId", "0"));
     }
     if let Some(formula) = &field.formula {
+        let formula = formula_for_cache_attr(formula);
         cache_field.push_attribute(("formula", formula.as_str()));
     }
     if !field.database_field {
@@ -3726,11 +2230,13 @@ fn write_cache_field(w: &mut XmlWriter, field: &CacheField) -> XlsxResult<()> {
     }
     w.write_event(Event::Start(cache_field))?;
 
-    if !matches!(field.group, Some(CacheFieldGroup::Manual { .. }))
-        || !field.shared_items.is_empty()
+    if !(field
+        .grouping
+        .as_ref()
+        .is_some_and(|grouping| matches!(grouping.definition, PivotGrouping::Manual { .. }))
+        && !field.database_field)
     {
         let mut shared_items = BytesStart::new("sharedItems");
-        let metadata_only = shared_items_are_metadata_only(field);
         let count = field.shared_items.len().to_string();
         if !metadata_only {
             shared_items.push_attribute(("count", count.as_str()));
@@ -3758,22 +2264,101 @@ fn write_cache_field(w: &mut XmlWriter, field: &CacheField) -> XlsxResult<()> {
         w.write_event(Event::End(BytesEnd::new("sharedItems")))?;
     }
 
-    if let Some(grouping) = &field.group {
-        write_field_group(w, grouping)?;
+    if let Some(grouping) = &field.grouping {
+        match &grouping.definition {
+            PivotGrouping::Manual { .. } if field.database_field => {
+                let parent = fields
+                    .iter()
+                    .enumerate()
+                    .find(|(_, candidate)| {
+                        !candidate.database_field
+                            && candidate
+                                .grouping
+                                .as_ref()
+                                .is_some_and(|candidate_grouping| {
+                                    matches!(
+                                        candidate_grouping.definition,
+                                        PivotGrouping::Manual { .. }
+                                    ) && candidate_grouping.base_field_index == field_index
+                                })
+                    })
+                    .map(|(index, _)| index)
+                    .ok_or_else(|| {
+                        XlsxError::InvalidFormat("manual pivot grouping field is missing".into())
+                    })?;
+                let mut field_group = BytesStart::new("fieldGroup");
+                let parent = parent.to_string();
+                field_group.push_attribute(("par", parent.as_str()));
+                w.write_event(Event::Empty(field_group))?;
+            }
+            PivotGrouping::Manual { .. } => write_field_group(w, grouping, None)?,
+            PivotGrouping::Date { units, .. } if units.len() > 1 => {}
+            _ => write_field_group(w, grouping, None)?,
+        }
+    } else if let Some((grouping, level)) = grouping_level_for_field(fields, field_index) {
+        write_field_group(w, grouping, Some(level))?;
     }
 
     w.write_event(Event::End(BytesEnd::new("cacheField")))?;
     Ok(())
 }
 
-fn shared_items_are_metadata_only(field: &CacheField) -> bool {
-    field.metadata_only_shared_items
-        && field.group.is_none()
-        && !field.shared_items.is_empty()
-        && field
+fn cache_field_shared_items_are_metadata_only(
+    workbook: &Workbook,
+    plan: &FormatPivotPlan,
+    cache: &FormatPivotCache,
+    field_index: usize,
+) -> bool {
+    let field = &cache.fields[field_index];
+    if field.grouping.is_some()
+        || field.shared_items.is_empty()
+        || !field
             .shared_items
             .iter()
             .all(|value| matches!(value, PivotValue::Number(_)))
+    {
+        return false;
+    }
+    let mut used_as_measure = false;
+    for table in plan
+        .tables
+        .iter()
+        .filter(|table| table.cache_num == cache.cache_num)
+    {
+        let Some(pivot) = workbook
+            .worksheet(table.sheet_index)
+            .and_then(|sheet| sheet.pivot_tables().get(table.pivot_index))
+        else {
+            return false;
+        };
+        let explicit = pivot
+            .rows
+            .iter()
+            .chain(&pivot.columns)
+            .chain(&pivot.page_fields)
+            .map(|field| field.field.name.as_str())
+            .chain(
+                pivot
+                    .filters
+                    .iter()
+                    .filter_map(filter_field_ref)
+                    .map(|field| field.name.as_str()),
+            )
+            .chain(pivot.groupings.iter().map(|grouping| match grouping {
+                PivotGrouping::Number { field, .. }
+                | PivotGrouping::Date { field, .. }
+                | PivotGrouping::Manual { field, .. } => field.name.as_str(),
+            }))
+            .any(|name| cache.field_index(name) == Some(field_index));
+        if explicit {
+            return false;
+        }
+        used_as_measure |= pivot
+            .measures
+            .iter()
+            .any(|measure| cache.field_index(&measure.field.name) == Some(field_index));
+    }
+    used_as_measure
 }
 
 fn numeric_shared_item_stats(field: &CacheField) -> (Option<bool>, Option<String>, Option<String>) {
@@ -3801,22 +2386,36 @@ fn numeric_shared_item_stats(field: &CacheField) -> (Option<bool>, Option<String
     )
 }
 
-fn write_field_group(w: &mut XmlWriter, grouping: &CacheFieldGroup) -> XlsxResult<()> {
+fn grouping_level_for_field(
+    fields: &[CacheField],
+    field_index: usize,
+) -> Option<(
+    &FormatPivotGrouping,
+    &duke_sheets_pivot::plan::FormatPivotGroupLevel,
+)> {
+    fields
+        .iter()
+        .filter_map(|field| field.grouping.as_ref())
+        .find_map(|grouping| {
+            grouping
+                .levels
+                .iter()
+                .find(|level| {
+                    level.field_index == field_index && field_index != grouping.base_field_index
+                })
+                .map(|level| (grouping, level))
+        })
+}
+
+fn write_field_group(
+    w: &mut XmlWriter,
+    grouping: &FormatPivotGrouping,
+    level: Option<&duke_sheets_pivot::plan::FormatPivotGroupLevel>,
+) -> XlsxResult<()> {
     let mut field_group = BytesStart::new("fieldGroup");
-    let base = match grouping {
-        CacheFieldGroup::Base { .. } => None,
-        CacheFieldGroup::DateUnit { base, .. } => Some(base.to_string()),
-        CacheFieldGroup::Manual { base, .. } => Some(base.to_string()),
-        CacheFieldGroup::Range(_) => None,
-    };
-    let parent = match grouping {
-        CacheFieldGroup::Base { parent } => Some(parent.to_string()),
-        CacheFieldGroup::DateUnit {
-            parent: Some(parent),
-            ..
-        } => Some(parent.to_string()),
-        _ => None,
-    };
+    let base = (level.is_some() || matches!(grouping.definition, PivotGrouping::Manual { .. }))
+        .then(|| grouping.base_field_index.to_string());
+    let parent = level.and_then(|level| level.parent_field_index.map(|parent| parent.to_string()));
     if let Some(base) = base.as_deref() {
         field_group.push_attribute(("base", base));
     }
@@ -3824,19 +2423,12 @@ fn write_field_group(w: &mut XmlWriter, grouping: &CacheFieldGroup) -> XlsxResul
         field_group.push_attribute(("par", parent));
     }
 
-    if let CacheFieldGroup::Base { .. } = grouping {
-        w.write_event(Event::Empty(field_group))?;
-        return Ok(());
-    }
-
     w.write_event(Event::Start(field_group))?;
 
-    if let CacheFieldGroup::Manual {
-        item_indexes,
-        group_items,
-        ..
-    } = grouping
-    {
+    if matches!(grouping.definition, PivotGrouping::Manual { .. }) {
+        let level = &grouping.levels[0];
+        let item_indexes = &level.source_item_group_ids;
+        let group_items = &level.group_items;
         let count = item_indexes.len().to_string();
         let mut discrete_pr = BytesStart::new("discretePr");
         discrete_pr.push_attribute(("count", count.as_str()));
@@ -3862,14 +2454,16 @@ fn write_field_group(w: &mut XmlWriter, grouping: &CacheFieldGroup) -> XlsxResul
     }
 
     let mut range_pr = BytesStart::new("rangePr");
-    match grouping {
-        CacheFieldGroup::Base { .. } => unreachable!("base field groups return before rangePr"),
-        CacheFieldGroup::Range(PivotGrouping::Number {
-            start,
-            end,
-            interval,
-            ..
-        }) => {
+    match (&grouping.definition, level) {
+        (
+            PivotGrouping::Number {
+                start,
+                end,
+                interval,
+                ..
+            },
+            _,
+        ) => {
             let auto_start = bool_attr(start.is_none());
             let auto_end = bool_attr(end.is_none());
             let start_num = start.map(|value| value.to_string());
@@ -3887,16 +2481,18 @@ fn write_field_group(w: &mut XmlWriter, grouping: &CacheFieldGroup) -> XlsxResul
             }
             range_pr.push_attribute(("groupInterval", group_interval.as_str()));
         }
-        CacheFieldGroup::Range(PivotGrouping::Date { units, .. }) => {
+        (PivotGrouping::Date { units, .. }, None) => {
             range_pr.push_attribute(("groupBy", date_group_by_name(units[0])));
         }
-        CacheFieldGroup::Range(PivotGrouping::Manual { .. }) => {
-            unreachable!("manual pivot groups use CacheFieldGroup::Manual")
+        (PivotGrouping::Date { .. }, Some(level)) => {
+            range_pr.push_attribute((
+                "groupBy",
+                date_group_by_name(level.date_unit.ok_or_else(|| {
+                    XlsxError::InvalidFormat("date grouping level has no unit".into())
+                })?),
+            ));
         }
-        CacheFieldGroup::Manual { .. } => unreachable!("manual groups return before rangePr"),
-        CacheFieldGroup::DateUnit { unit, .. } => {
-            range_pr.push_attribute(("groupBy", date_group_by_name(*unit)));
-        }
+        (PivotGrouping::Manual { .. }, _) => unreachable!("manual groups return before rangePr"),
     }
     w.write_event(Event::Empty(range_pr))?;
 
@@ -3918,21 +2514,28 @@ fn date_group_by_name(unit: PivotDateGroupUnit) -> &'static str {
 
 pub(super) fn write_pivot_cache_records_part<W: Write + Seek>(
     zip: &mut zip::ZipWriter<W>,
-    _workbook: &Workbook,
-    part: &PivotCachePart,
+    workbook: &Workbook,
+    plan: &FormatPivotPlan,
+    part: &FormatPivotCache,
 ) -> XlsxResult<()> {
+    let fields = xlsx_cache_fields(part);
     let path = format!("xl/pivotCache/pivotCacheRecords{}.xml", part.cache_num);
     write_xml_part(zip, &path, |w| {
-        let count = part.record_count.to_string();
+        let count = part.row_count.to_string();
         let mut records = BytesStart::new("pivotCacheRecords");
         records.push_attribute(("xmlns", NS_SPREADSHEET));
         records.push_attribute(("count", count.as_str()));
         w.write_event(Event::Start(records))?;
 
-        for row in &part.rows {
+        for row in 0..part.row_count {
             w.write_event(Event::Start(BytesStart::new("r")))?;
-            for (field, value_index) in part.fields.iter().zip(row) {
-                write_cache_record_value(w, field, *value_index)?;
+            for (index, field) in fields.iter().take(part.fields.len()).enumerate() {
+                write_cache_record_value(
+                    w,
+                    field,
+                    field.item_ids.get(row).copied(),
+                    cache_field_shared_items_are_metadata_only(workbook, plan, part, index),
+                )?;
             }
             w.write_event(Event::End(BytesEnd::new("r")))?;
         }
@@ -3946,65 +2549,32 @@ fn write_cache_record_value(
     w: &mut XmlWriter,
     field: &CacheField,
     value_index: Option<u32>,
+    metadata_only: bool,
 ) -> XlsxResult<()> {
     let Some(index) = value_index else {
         w.write_event(Event::Empty(BytesStart::new("m")))?;
         return Ok(());
     };
 
-    let Some(value) = field.shared_items.get(index as usize) else {
+    let Some(pivot_value) = field.shared_items.get(index as usize) else {
         w.write_event(Event::Empty(BytesStart::new("m")))?;
         return Ok(());
     };
-
-    match value {
-        PivotValue::String(_) => {
-            let value = index.to_string();
-            let mut x = BytesStart::new("x");
-            x.push_attribute(("v", value.as_str()));
-            w.write_event(Event::Empty(x))?;
-        }
-        _ => write_pivot_value(w, value)?,
+    if metadata_only {
+        return write_pivot_value(w, pivot_value);
     }
+
+    let value = index.to_string();
+    let mut x = BytesStart::new("x");
+    x.push_attribute(("v", value.as_str()));
+    w.write_event(Event::Empty(x))?;
     Ok(())
 }
 
-pub(super) fn write_pivot_cache_definition_rels<W: Write + Seek>(
-    zip: &mut zip::ZipWriter<W>,
-    part: &PivotCachePart,
-) -> XlsxResult<()> {
-    let path = format!(
-        "xl/pivotCache/_rels/pivotCacheDefinition{}.xml.rels",
-        part.cache_num
-    );
-    write_xml_part(zip, &path, |w| {
-        let mut relationships = BytesStart::new("Relationships");
-        relationships.push_attribute(("xmlns", NS_RELATIONSHIPS));
-        w.write_event(Event::Start(relationships))?;
-
-        let target = format!("pivotCacheRecords{}.xml", part.cache_num);
-        w.create_element("Relationship")
-            .with_attribute(("Id", "rId1"))
-            .with_attribute(("Type", RT_PIVOT_CACHE_RECORDS))
-            .with_attribute(("Target", target.as_str()))
-            .write_empty()?;
-
-        for (id, target) in consolidation_external_relationships(&part.source)? {
-            w.create_element("Relationship")
-                .with_attribute(("Id", id.as_str()))
-                .with_attribute(("Type", RT_EXTERNAL_LINK_PATH))
-                .with_attribute(("Target", target.as_str()))
-                .with_attribute(("TargetMode", "External"))
-                .write_empty()?;
-        }
-
-        w.write_event(Event::End(BytesEnd::new("Relationships")))?;
-        Ok(())
-    })
-}
-
-fn consolidation_external_relationships(source: &PivotSource) -> XlsxResult<Vec<(String, String)>> {
-    let PivotSource::Consolidation { ranges } = source else {
+pub(super) fn consolidation_external_relationships(
+    source: &FormatPivotSource,
+) -> XlsxResult<Vec<(String, String)>> {
+    let FormatPivotSource::Consolidation { ranges } = source else {
         return Ok(Vec::new());
     };
 

@@ -10,6 +10,7 @@ description = "XLSX (Office Open XML) reader/writer for duke-sheets"
 [dependencies]
 duke-sheets-core.workspace = true
 duke-sheets-formula.workspace = true
+duke-sheets-pivot.workspace = true
 duke-sheets-chart = { workspace = true, features = ["parse", "write"] }
 duke-sheets-vml.workspace = true
 duke-sheets-crypto.workspace = true
@@ -26,7 +27,7 @@ rayon = { workspace = true, optional = true }
 
 [features]
 default = []
-parallel = ["dep:rayon"]
+parallel = ["dep:rayon", "duke-sheets-pivot/parallel"]
 
 [dev-dependencies]
 tempfile.workspace = true

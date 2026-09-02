@@ -201,8 +201,25 @@ pub struct FormatPivotAxisTuples {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum FormatPivotCacheKey {
-    Transformed(TransformedSnapshotCacheKey),
-    MetadataOnly(MetadataOnlyFormatCacheKey),
+    Transformed(TransformedSnapshotCacheKey, FormatPivotCachePolicyKey),
+    MetadataOnly(MetadataOnlyFormatCacheKey, FormatPivotCachePolicyKey),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct FormatPivotCachePolicyKey {
+    refresh_on_open: bool,
+    background_query: bool,
+    missing_items_limit: Option<u32>,
+}
+
+impl From<&duke_sheets_core::PivotRefreshPolicy> for FormatPivotCachePolicyKey {
+    fn from(policy: &duke_sheets_core::PivotRefreshPolicy) -> Self {
+        Self {
+            refresh_on_open: policy.refresh_on_open,
+            background_query: policy.background_query,
+            missing_items_limit: policy.missing_items_limit,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -396,6 +413,7 @@ pub(crate) fn plan_format_pivots_with_stats(
                     metadata_only_format_cache_key(pivot).ok_or_else(|| {
                         Error::other("metadata-only pivot source has no cache key")
                     })?,
+                    (&pivot.refresh_policy).into(),
                 );
                 let cache_num = if let Some(cache_num) = cache_by_key.get(&key).copied() {
                     if let Some(existing) = caches.get_mut(cache_num - 1) {
@@ -427,13 +445,16 @@ pub(crate) fn plan_format_pivots_with_stats(
             let source_snapshot =
                 cache.snapshot_for_resolved_source(workbook, resolved, &mut stats)?;
             let raw_snapshot = Arc::clone(&source_snapshot.snapshot);
-            let key = FormatPivotCacheKey::Transformed(TransformedSnapshotCacheKey::new(
-                source_snapshot.key.clone(),
-                &pivot.calculated_fields,
-                &pivot.groupings,
-                &pivot.calculated_items,
-                workbook.settings().date_1904,
-            ));
+            let key = FormatPivotCacheKey::Transformed(
+                TransformedSnapshotCacheKey::new(
+                    source_snapshot.key.clone(),
+                    &pivot.calculated_fields,
+                    &pivot.groupings,
+                    &pivot.calculated_items,
+                    workbook.settings().date_1904,
+                ),
+                (&pivot.refresh_policy).into(),
+            );
             let snapshot = transformed_snapshot_for_pivot(
                 workbook,
                 sheet_index,

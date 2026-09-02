@@ -89,6 +89,41 @@ fn format_pivot_plan_reuses_cache_and_exposes_field_major_items() {
 }
 
 #[test]
+fn format_pivot_cache_identity_uses_cache_level_refresh_policy() {
+    let mut workbook = Workbook::new();
+    let sheet = workbook.worksheet_mut(0).unwrap();
+    sheet.set_cell_value("A1", "Region").unwrap();
+    sheet.set_cell_value("B1", "Revenue").unwrap();
+    sheet.set_cell_value("A2", "East").unwrap();
+    sheet.set_cell_value("B2", 10.0).unwrap();
+
+    let pivot_a = PivotTable::builder("SalesPivotA")
+        .source_range(CellRange::parse("A1:B2").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("Region")
+        .measure("Revenue", PivotAggregate::Sum)
+        .build()
+        .unwrap();
+    let mut pivot_b = pivot_a.clone();
+    pivot_b.name = "SalesPivotB".to_string();
+    pivot_b.target = duke_sheets_core::CellAddress::parse("G1").unwrap();
+    pivot_b.refresh_policy.preserve_formatting = false;
+    let sheet = workbook.worksheet_mut(0).unwrap();
+    sheet.add_pivot_table(pivot_a).unwrap();
+    sheet.add_pivot_table(pivot_b).unwrap();
+
+    let plan = crate::plan::plan_format_pivots(&workbook).unwrap();
+    assert_eq!(plan.caches.len(), 1);
+
+    workbook.worksheet_mut(0).unwrap().pivot_tables_mut()[1]
+        .refresh_policy
+        .missing_items_limit = Some(10);
+    let plan = crate::plan::plan_format_pivots(&workbook).unwrap();
+    assert_eq!(plan.caches.len(), 2);
+}
+
+#[test]
 fn format_pivot_plan_reuses_refreshed_runtime_snapshot() {
     let mut workbook = format_cache_reuse_workbook();
     let refresh_stats = workbook.refresh_pivots().unwrap();

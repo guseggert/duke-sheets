@@ -21,6 +21,7 @@ use duke_sheets_core::{
     CellAddress, CellRange, SheetSlot, Workbook, WorkbookConnectionCredentials,
     WorkbookConnectionParameter, WorkbookConnectionParameterType, WorkbookConnectionParameterValue,
 };
+use duke_sheets_pivot::plan::{plan_format_pivots, FormatPivotPlan};
 use form_controls::radio_head_flags;
 
 mod chart;
@@ -29,15 +30,13 @@ mod comments;
 mod conditional_format;
 mod data_validation;
 mod drawing;
-mod pivot;
 pub(crate) mod form_controls;
 mod manifest;
+mod pivot;
 mod tables;
 
 const NS_SPREADSHEET: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 const NS_DOC_RELS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
-const NS_RELATIONSHIPS: &str =
-    "http://schemas.openxmlformats.org/package/2006/relationships";
 const RT_PIVOT_TABLE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotTable";
 const RT_PIVOT_CACHE_DEFINITION: &str =
@@ -462,11 +461,9 @@ fn plan_raw_part(
         .iter()
         .find(|plan| plan.path.eq_ignore_ascii_case(&path))
     {
-        Some(existing) if existing.content_type != content_type => {
-            Err(XlsxError::InvalidFormat(format!(
-                "conflicting content types for raw part {path}"
-            )))
-        }
+        Some(existing) if existing.content_type != content_type => Err(XlsxError::InvalidFormat(
+            format!("conflicting content types for raw part {path}"),
+        )),
         Some(_) => Ok(()),
         None => {
             plans.push(RawPartPlan { path, content_type });
@@ -982,7 +979,8 @@ impl XlsxWriter {
             }
         }
 
-        let pivot_numbering = pivot::build_pivot_numbering(workbook)?;
+        let mut pivot_plan = plan_format_pivots(workbook)?;
+        pivot::avoid_preserved_part_collisions(&mut pivot_plan, workbook);
         // Raw drawing entries can carry preserved media parts
         // (xl/media/imageN.ext). Reserve their numbers so generated
         // media filenames never collide, and collect their content
@@ -1121,8 +1119,7 @@ impl XlsxWriter {
             total_ctrl_props,
             &sst,
             &table_numbering,
-            &pivot_numbering.cache_parts,
-            &pivot_numbering.table_parts,
+            &pivot_plan,
             &drawing_numbering,
             &chart_numbering,
             &chart_ex_numbering,
@@ -1134,7 +1131,7 @@ impl XlsxWriter {
             needs_metadata,
         )?;
         // Write xl/workbook.xml
-        Self::write_workbook_xml(&mut zip, workbook, &pivot_numbering.cache_parts)?;
+        Self::write_workbook_xml(&mut zip, workbook, &pivot_plan)?;
 
         if !workbook.data_connections().is_empty() {
             Self::write_connections_xml(&mut zip, workbook)?;
@@ -1168,11 +1165,10 @@ impl XlsxWriter {
                 .filter(|(si, _, _)| *si == i)
                 .map(|(_, _, gn)| *gn)
                 .collect();
-            let sheet_pivot_parts: Vec<pivot::PivotTablePart> = pivot_numbering
-                .table_parts
+            let sheet_pivot_parts: Vec<_> = pivot_plan
+                .tables
                 .iter()
                 .filter(|part| part.sheet_index == i)
-                .cloned()
                 .collect();
 
             let drawing_num = drawing_numbering
@@ -1193,7 +1189,7 @@ impl XlsxWriter {
                 &style_table,
                 &sst,
                 &sheet_table_globals,
-                &sheet_pivot_parts,
+                &pivot_plan,
                 drawing_num,
                 ctrl_prop_start,
             )?;
@@ -1233,13 +1229,12 @@ impl XlsxWriter {
                 tables::write_table_part(&mut zip, sheet, local_idx, global_num)?;
             }
             for part in &sheet_pivot_parts {
-                let cache_part = pivot_numbering
-                    .cache_parts
+                let cache_part = pivot_plan
+                    .caches
                     .iter()
                     .find(|cache_part| cache_part.cache_num == part.cache_num)
                     .ok_or_else(|| XlsxError::InvalidFormat("pivot cache part not found".into()))?;
                 pivot::write_pivot_table_part(&mut zip, workbook, part, cache_part, &style_table)?;
-                pivot::write_pivot_table_rels(&mut zip, part)?;
             }
 
             // Write drawing and chart XML files for this sheet
@@ -1356,10 +1351,9 @@ impl XlsxWriter {
             }
         }
 
-        for cache_part in &pivot_numbering.cache_parts {
-            pivot::write_pivot_cache_definition_part(&mut zip, workbook, cache_part)?;
-            pivot::write_pivot_cache_records_part(&mut zip, workbook, cache_part)?;
-            pivot::write_pivot_cache_definition_rels(&mut zip, cache_part)?;
+        for cache_part in &pivot_plan.caches {
+            pivot::write_pivot_cache_definition_part(&mut zip, workbook, &pivot_plan, cache_part)?;
+            pivot::write_pivot_cache_records_part(&mut zip, workbook, &pivot_plan, cache_part)?;
         }
 
         for part in workbook.workbook_extension_parts() {
@@ -1449,8 +1443,7 @@ impl XlsxWriter {
         total_ctrl_props: usize,
         sst: &SharedStringTable,
         table_numbering: &[(usize, usize, usize)],
-        pivot_cache_parts: &[pivot::PivotCachePart],
-        pivot_table_parts: &[pivot::PivotTablePart],
+        pivot_plan: &FormatPivotPlan,
         drawing_numbering: &[(usize, usize)],
         chart_numbering: &[(usize, usize, usize)],
         chart_ex_numbering: &[(usize, usize, usize)],
@@ -1501,18 +1494,15 @@ impl XlsxWriter {
         for &(_, _, global_num) in table_numbering {
             manifest.register_part(&format!("xl/tables/table{global_num}.xml"), CT_TABLE)?;
         }
-        for part in pivot_table_parts {
+        for part in &pivot_plan.tables {
             manifest.register_part(
                 &format!("xl/pivotTables/pivotTable{}.xml", part.table_num),
                 CT_PIVOT_TABLE,
             )?;
         }
-        for part in pivot_cache_parts {
+        for part in &pivot_plan.caches {
             manifest.register_part(
-                &format!(
-                    "xl/pivotCache/pivotCacheDefinition{}.xml",
-                    part.cache_num
-                ),
+                &format!("xl/pivotCache/pivotCacheDefinition{}.xml", part.cache_num),
                 CT_PIVOT_CACHE_DEFINITION,
             )?;
             manifest.register_part(
@@ -1525,6 +1515,34 @@ impl XlsxWriter {
         }
         for part in workbook.workbook_extension_parts() {
             manifest.register_raw_part(&part.path, &part.content_type)?;
+        }
+        for part in &pivot_plan.tables {
+            manifest.register_relationship(
+                Some(&format!("xl/pivotTables/pivotTable{}.xml", part.table_num)),
+                "rId1",
+                RT_PIVOT_CACHE_DEFINITION,
+                &format!("../pivotCache/pivotCacheDefinition{}.xml", part.cache_num),
+                false,
+            )?;
+        }
+        for part in &pivot_plan.caches {
+            let source = format!("xl/pivotCache/pivotCacheDefinition{}.xml", part.cache_num);
+            manifest.register_relationship(
+                Some(&source),
+                "rId1",
+                RT_PIVOT_CACHE_RECORDS,
+                &format!("pivotCacheRecords{}.xml", part.cache_num),
+                false,
+            )?;
+            for (id, target) in pivot::consolidation_external_relationships(&part.source)? {
+                manifest.register_relationship(
+                    Some(&source),
+                    &id,
+                    pivot::RT_EXTERNAL_LINK_PATH,
+                    &target,
+                    true,
+                )?;
+            }
         }
         for &(_, drawing_num) in drawing_numbering.iter().chain(cs_drawing_numbering.iter()) {
             manifest.register_part(&format!("xl/drawings/drawing{drawing_num}.xml"), CT_DRAWING)?;
@@ -1763,10 +1781,10 @@ impl XlsxWriter {
                 false,
             )?;
         }
-        for cache_part in pivot_cache_parts {
+        for cache_part in &pivot_plan.caches {
             manifest.register_relationship(
                 Some("xl/workbook.xml"),
-                &pivot::workbook_cache_rid(workbook, cache_part.cache_num),
+                &pivot::workbook_cache_rid(cache_part.cache_num),
                 RT_PIVOT_CACHE_DEFINITION,
                 &format!(
                     "pivotCache/pivotCacheDefinition{}.xml",
@@ -1794,7 +1812,7 @@ impl XlsxWriter {
     fn write_workbook_xml<W: Write + Seek>(
         zip: &mut zip::ZipWriter<W>,
         workbook: &Workbook,
-        pivot_cache_parts: &[pivot::PivotCachePart],
+        pivot_plan: &FormatPivotPlan,
     ) -> XlsxResult<()> {
         write_xml_part(zip, "xl/workbook.xml", |w| {
             let mut tag = BytesStart::new("workbook");
@@ -1932,11 +1950,11 @@ impl XlsxWriter {
                     .write_empty()?;
             }
 
-            if !pivot_cache_parts.is_empty() {
+            if !pivot_plan.caches.is_empty() {
                 w.write_event(Event::Start(BytesStart::new("pivotCaches")))?;
-                for cache_part in pivot_cache_parts {
+                for cache_part in &pivot_plan.caches {
                     let cache_id = cache_part.cache_num.to_string();
-                    let rid = pivot::workbook_cache_rid(workbook, cache_part.cache_num);
+                    let rid = pivot::workbook_cache_rid(cache_part.cache_num);
                     w.create_element("pivotCache")
                         .with_attribute(("cacheId", cache_id.as_str()))
                         .with_attribute(("r:id", rid.as_str()))
@@ -2236,7 +2254,9 @@ impl XlsxWriter {
         if let Some(ref part) = chart.color_style {
             let color_path = format!("xl/charts/colors{}.xml", chart_num);
             zip.start_file(&color_path, options)?;
-            zip.write_all(&duke_sheets_chart::write::chart_color_style_part_bytes(part))?;
+            zip.write_all(&duke_sheets_chart::write::chart_color_style_part_bytes(
+                part,
+            ))?;
         }
         Ok(())
     }
@@ -2494,7 +2514,7 @@ impl XlsxWriter {
         style_table: &XlsxStyleTable,
         sst: &SharedStringTable,
         sheet_table_globals: &[usize],
-        sheet_pivot_parts: &[pivot::PivotTablePart],
+        pivot_plan: &FormatPivotPlan,
         drawing_num: Option<usize>,
         ctrl_prop_start: usize,
     ) -> XlsxResult<Vec<WorksheetRelationship>> {
@@ -2669,6 +2689,11 @@ impl XlsxWriter {
                 w.write_event(Event::End(BytesEnd::new("tableParts")))?;
             }
 
+            let sheet_pivot_parts = pivot_plan
+                .tables
+                .iter()
+                .filter(|part| part.sheet_index == index)
+                .collect::<Vec<_>>();
             if !sheet_pivot_parts.is_empty() {
                 w.write_event(Event::Start(BytesStart::new("pivotTableDefinitions")))?;
                 for part in sheet_pivot_parts {
@@ -3977,6 +4002,7 @@ mod tests {
         WorkbookConnectionParameter, WorkbookConnectionParameterValue, WorkbookExtension,
         WorkbookExtensionPart,
     };
+    use duke_sheets_pivot::WorkbookPivotExt;
     use ssfmt::{date_serial::date_to_serial, DateSystem};
     use std::io::Read;
 
@@ -5325,6 +5351,9 @@ mod tests {
         assert!(pivot_xml.contains("<autoSortScope>"));
         assert!(pivot_xml.contains(r#"<reference field="4294967294" count="1" selected="0">"#));
         assert!(pivot_xml.contains(r#"<x v="0"/>"#));
+        assert!(pivot_xml.contains(
+            r#"<rowItems count="3"><i><x v="1"/></i><i><x/></i><i t="grand"><x/></i></rowItems>"#
+        ));
 
         let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
         let pivot = roundtrip
@@ -5893,6 +5922,8 @@ mod tests {
         let pivot_xml = read_zip_entry(bytes.clone(), "xl/pivotTables/pivotTable1.xml");
         assert!(pivot_xml.contains(r#"axis="axisPage""#));
         assert!(pivot_xml.contains(r#"<pageFields count="1"><pageField fld="1" item="0"/>"#));
+        assert!(pivot_xml
+            .contains(r#"<rowItems count="2"><i><x/></i><i t="grand"><x/></i></rowItems>"#));
 
         let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
         let pivot = roundtrip
@@ -6579,6 +6610,133 @@ mod tests {
     }
 
     #[test]
+    fn test_writer_round_trips_pivot_calculated_field_workbook_reference() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Units").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 2.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", 7.0).unwrap();
+        sheet.set_cell_value("J1", 3.0).unwrap();
+        let pivot = PivotTable::builder("WorkbookRef")
+            .source_range(CellRange::parse("A1:B3").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .calculated_field("Adjusted", "=Units*$J$1")
+            .measure("Adjusted", PivotAggregate::Sum)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+        wb.refresh_pivots().unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).unwrap();
+        let mut roundtrip = XlsxReader::read(Cursor::new(out.into_inner())).unwrap();
+        let formula =
+            &roundtrip.worksheet(0).unwrap().pivot_tables()[0].calculated_fields[0].formula;
+        assert_eq!(formula, "Units*$J$1");
+        roundtrip.refresh_pivots().unwrap();
+        assert_eq!(
+            roundtrip
+                .worksheet(0)
+                .unwrap()
+                .get_value("E2")
+                .unwrap()
+                .as_number(),
+            Some(6.0)
+        );
+        assert_eq!(
+            roundtrip
+                .worksheet(0)
+                .unwrap()
+                .get_value("E3")
+                .unwrap()
+                .as_number(),
+            Some(21.0)
+        );
+    }
+
+    #[test]
+    fn test_writer_serializes_refreshable_consolidation_records() {
+        let mut wb = Workbook::new();
+        wb.worksheet_mut(0).unwrap().set_name("North");
+        let south = wb.add_worksheet().unwrap();
+        wb.worksheet_mut(south).unwrap().set_name("South");
+        for sheet_index in [0, south] {
+            let sheet = wb.worksheet_mut(sheet_index).unwrap();
+            sheet.set_cell_value("A1", "Region").unwrap();
+            sheet.set_cell_value("B1", "Revenue").unwrap();
+            sheet
+                .set_cell_value("A2", if sheet_index == 0 { "East" } else { "West" })
+                .unwrap();
+            sheet
+                .set_cell_value("B2", if sheet_index == 0 { 10.0 } else { 20.0 })
+                .unwrap();
+        }
+        let pivot = PivotTable::builder("Consolidated")
+            .source(PivotSource::Consolidation {
+                ranges: vec![
+                    PivotSourceRange::new("North", CellRange::parse("A1:B2").unwrap()),
+                    PivotSourceRange::new("South", CellRange::parse("A1:B2").unwrap()),
+                ],
+            })
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .measure("Revenue", PivotAggregate::Sum)
+            .build()
+            .unwrap();
+        wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).unwrap();
+        let bytes = out.into_inner();
+        let definition = read_zip_entry(bytes.clone(), "xl/pivotCache/pivotCacheDefinition1.xml");
+        assert!(definition.contains(r#"recordCount="2" saveData="1""#));
+        let records = read_zip_entry(bytes, "xl/pivotCache/pivotCacheRecords1.xml");
+        assert!(records.contains(r#"<pivotCacheRecords xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="2">"#));
+        assert_eq!(records.matches("<r>").count(), 2);
+    }
+
+    #[test]
+    fn test_writer_avoids_preserved_pivot_relationship_part_collision() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 10.0).unwrap();
+        sheet
+            .add_pivot_table(
+                PivotTable::builder("Sales")
+                    .source_range(CellRange::parse("A1:B2").unwrap())
+                    .target_address("D1")
+                    .unwrap()
+                    .row("Region")
+                    .measure("Revenue", PivotAggregate::Sum)
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap();
+        wb.workbook_extension_parts_mut().push(WorkbookExtensionPart::new(
+            "xl/pivotTables/_rels/pivotTable1.xml.rels",
+            "application/vnd.openxmlformats-package.relationships+xml",
+            "http://example.com/preserved-pivot-rel",
+            br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>"#.to_vec(),
+        ));
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).unwrap();
+        let bytes = out.into_inner();
+        assert!(read_zip_entry(bytes.clone(), "xl/pivotTables/pivotTable2.xml").contains("Sales"));
+        let rels = read_zip_entry(bytes, "xl/pivotTables/_rels/pivotTable2.xml.rels");
+        assert!(rels.contains("pivotCacheDefinition1.xml"));
+    }
+
+    #[test]
     fn test_writer_round_trips_table_qualified_pivot_calculated_fields() {
         use duke_sheets_core::table::{Table, TableColumn};
 
@@ -7074,15 +7232,18 @@ mod tests {
 
         // Read the handcrafted XLSX.
         let mut wb = XlsxReader::read(Cursor::new(&xlsx_buf)).unwrap();
-        wb.worksheet_mut(0).unwrap().add_form_control(
-            duke_sheets_core::FormControl::new(duke_sheets_core::FormControlKind::Checkbox {
-                caption: "linked".into(),
-                state: duke_sheets_core::CheckState::Checked,
-                cell_link: Some("$A$1".into()),
-                no_3d: false,
-            }),
-            duke_sheets_chart::DrawingAnchor::default(),
-        ).unwrap();
+        wb.worksheet_mut(0)
+            .unwrap()
+            .add_form_control(
+                duke_sheets_core::FormControl::new(duke_sheets_core::FormControlKind::Checkbox {
+                    caption: "linked".into(),
+                    state: duke_sheets_core::CheckState::Checked,
+                    cell_link: Some("$A$1".into()),
+                    no_3d: false,
+                }),
+                duke_sheets_chart::DrawingAnchor::default(),
+            )
+            .unwrap();
         let snapshot = wb.synchronized_for_save().unwrap();
 
         // Write a linked-cell-synchronized snapshot back out.
@@ -7198,7 +7359,9 @@ mod tests {
         chart.title = Some("Pie Chart".to_string());
         let s = DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$3")).with_name("Slices");
         chart.add_series(s);
-        sheet.add_chart(chart, duke_sheets_chart::DrawingAnchor::default()).unwrap();
+        sheet
+            .add_chart(chart, duke_sheets_chart::DrawingAnchor::default())
+            .unwrap();
 
         let mut out = Cursor::new(Vec::new());
         XlsxWriter::write(&wb, &mut out).unwrap();
@@ -7224,7 +7387,9 @@ mod tests {
         let s = DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$5"))
             .with_categories(DataReference::formula("Sheet1!$A$1:$A$5"));
         chart.add_series(s);
-        sheet.add_chart(chart, duke_sheets_chart::DrawingAnchor::default()).unwrap();
+        sheet
+            .add_chart(chart, duke_sheets_chart::DrawingAnchor::default())
+            .unwrap();
 
         let mut out = Cursor::new(Vec::new());
         XlsxWriter::write(&wb, &mut out).unwrap();
@@ -7258,12 +7423,16 @@ mod tests {
         c1.title = Some("Line Chart".to_string());
         c1.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
         c1.legend = Some(Legend::new(LegendPosition::Right));
-        sheet.add_chart(c1, duke_sheets_chart::DrawingAnchor::default()).unwrap();
+        sheet
+            .add_chart(c1, duke_sheets_chart::DrawingAnchor::default())
+            .unwrap();
 
         let mut c2 = Chart::new(ChartType::BarClustered);
         c2.title = Some("Bar Chart".to_string());
         c2.add_series(DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$5")));
-        sheet.add_chart(c2, duke_sheets_chart::DrawingAnchor::default()).unwrap();
+        sheet
+            .add_chart(c2, duke_sheets_chart::DrawingAnchor::default())
+            .unwrap();
 
         let mut out = Cursor::new(Vec::new());
         XlsxWriter::write(&wb, &mut out).unwrap();
@@ -7273,10 +7442,7 @@ mod tests {
         let wb2_sheet = wb2.worksheet(0).unwrap();
         assert_eq!(wb2_sheet.chart_count(), 2);
 
-        let types: Vec<&ChartType> = wb2_sheet
-            .charts()
-            .map(|c| &c.payload.chart_type)
-            .collect();
+        let types: Vec<&ChartType> = wb2_sheet.charts().map(|c| &c.payload.chart_type).collect();
         assert!(types.contains(&&ChartType::Line));
         assert!(types.contains(&&ChartType::BarClustered));
     }
@@ -7288,7 +7454,9 @@ mod tests {
         let mut wb = Workbook::new();
         let sheet = wb.worksheet_mut(0).unwrap();
         let chart = Chart::new(ChartType::Area);
-        sheet.add_chart(chart, duke_sheets_chart::DrawingAnchor::default()).unwrap();
+        sheet
+            .add_chart(chart, duke_sheets_chart::DrawingAnchor::default())
+            .unwrap();
 
         let mut out = Cursor::new(Vec::new());
         XlsxWriter::write(&wb, &mut out).unwrap();
@@ -7310,10 +7478,14 @@ mod tests {
 
         let mut good = Chart::new(ChartType::Line);
         good.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-        sheet.add_chart(good, duke_sheets_chart::DrawingAnchor::default()).unwrap();
+        sheet
+            .add_chart(good, duke_sheets_chart::DrawingAnchor::default())
+            .unwrap();
 
         let unsupported = Chart::new(ChartType::Unsupported("c:ofPieChart".into()));
-        sheet.add_chart(unsupported, duke_sheets_chart::DrawingAnchor::default()).unwrap();
+        sheet
+            .add_chart(unsupported, duke_sheets_chart::DrawingAnchor::default())
+            .unwrap();
 
         let mut out = Cursor::new(Vec::new());
         XlsxWriter::write(&wb, &mut out).unwrap();
@@ -7353,7 +7525,9 @@ mod tests {
 
         let mut chart = Chart::new(ChartType::ColumnClustered);
         chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$B$2:$B$3")));
-        sheet.add_chart(chart, duke_sheets_chart::DrawingAnchor::default()).unwrap();
+        sheet
+            .add_chart(chart, duke_sheets_chart::DrawingAnchor::default())
+            .unwrap();
 
         let mut out = Cursor::new(Vec::new());
         XlsxWriter::write(&wb, &mut out).unwrap();
@@ -7377,7 +7551,9 @@ mod tests {
         let sheet = wb.worksheet_mut(0).unwrap();
         let mut chart = Chart::new(ChartType::Line);
         chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-        sheet.add_chart(chart, duke_sheets_chart::DrawingAnchor::default()).unwrap();
+        sheet
+            .add_chart(chart, duke_sheets_chart::DrawingAnchor::default())
+            .unwrap();
 
         let mut out = Cursor::new(Vec::new());
         XlsxWriter::write(&wb, &mut out).unwrap();
@@ -7396,14 +7572,20 @@ mod tests {
         assert!(ct.contains(CT_CHART), "wrong chart content type");
 
         let sheet_rels = read_zip_entry(bytes.clone(), "xl/worksheets/_rels/sheet1.xml.rels");
-        assert!(sheet_rels.contains(RelationshipKind::Drawing.uri()), "missing drawing rel type");
+        assert!(
+            sheet_rels.contains(RelationshipKind::Drawing.uri()),
+            "missing drawing rel type"
+        );
         assert!(
             sheet_rels.contains("../drawings/drawing1.xml"),
             "missing drawing target"
         );
 
         let drawing_rels = read_zip_entry(bytes.clone(), "xl/drawings/_rels/drawing1.xml.rels");
-        assert!(drawing_rels.contains(RelationshipKind::Chart.uri()), "missing chart rel type");
+        assert!(
+            drawing_rels.contains(RelationshipKind::Chart.uri()),
+            "missing chart rel type"
+        );
         assert!(
             drawing_rels.contains("../charts/chart1.xml"),
             "missing chart target"
