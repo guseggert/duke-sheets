@@ -11,7 +11,7 @@ use quick_xml::reader::Reader;
 use crate::error::{XlsxError, XlsxResult};
 use crate::opc::{
     resolve_internal_target, ContentTypeExpectation, OpcPackage, PartName, Relationship,
-    RelationshipKind, RelationshipSet, XlsxDiagnosticCode, XlsxDiagnosticSeverity,
+    RelationshipKind, RelationshipSet, RelationshipSource, XlsxDiagnosticCode, XlsxDiagnosticSeverity,
     XlsxPackagePolicy,
 };
 use crate::styles::{
@@ -844,7 +844,10 @@ impl XlsxReader {
                 workbook
                     .sheet_order_mut()
                     .push(SheetSlot::Worksheet(sheet_idx));
-                let sheet_rels = read_part_rels(&mut package, path)?;
+                let sheet_rels_source = RelationshipSource::Part(PartName::from_zip_name(path)?);
+                let sheet_rels_part_exists =
+                    package.part_exists(&sheet_rels_source.relationships_part()?);
+                let sheet_rels = package.relationships(&sheet_rels_source, false)?;
                 let worksheet_file = package.open_zip_name(path)?;
                 let pending_controls =
                     form_controls::dedupe_pending_controls(Self::read_worksheet(
@@ -865,7 +868,8 @@ impl XlsxReader {
                 let comments_path = comments_rel
                     .and_then(|rel| rel.internal_path().map(str::to_string))
                     .or_else(|| {
-                        (package.policy() == XlsxPackagePolicy::Compatible)
+                        (package.policy() == XlsxPackagePolicy::Compatible
+                            && !sheet_rels_part_exists)
                             .then(|| format!("xl/comments{}.xml", ws_count))
                     });
                 let vml_rel = sheet_rels
@@ -874,7 +878,8 @@ impl XlsxReader {
                 let vml_path = vml_rel
                     .and_then(|rel| rel.internal_path().map(str::to_string))
                     .or_else(|| {
-                        (package.policy() == XlsxPackagePolicy::Compatible)
+                        (package.policy() == XlsxPackagePolicy::Compatible
+                            && !sheet_rels_part_exists)
                             .then(|| format!("xl/drawings/vmlDrawing{}.vml", ws_count))
                     });
 
@@ -4521,5 +4526,60 @@ mod tests {
         let comment = sheet.comment("A1").unwrap().expect("comment via rels path");
         assert_eq!(comment.author, "Alice");
         assert_eq!(comment.plain_text(), "Custom path comment");
+    }
+
+    #[test]
+    fn test_vml_controls_do_not_leak_when_sheet_rels_exist_without_vml_rel() {
+        // Regression: a compatible-mode fallback to vmlDrawing{N}.vml
+        // must not run when the worksheet has a .rels part that simply
+        // omits a VML relationship.
+        let mut buf = Vec::new();
+        {
+            let cursor = Cursor::new(&mut buf);
+            let mut zip = zip::ZipWriter::new(cursor);
+            let options = zip::write::SimpleFileOptions::default();
+
+            zip.start_file("[Content_Types].xml", options).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/><Default Extension="bin" ContentType="application/octet-stream"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>"#).unwrap();
+
+            zip.start_file("_rels/.rels", options).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#).unwrap();
+
+            zip.start_file("xl/workbook.xml", options).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/><sheet name="Sheet2" sheetId="2" r:id="rId2"/></sheets></workbook>"#).unwrap();
+
+            zip.start_file("xl/_rels/workbook.xml.rels", options)
+                .unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/></Relationships>"#).unwrap();
+
+            zip.start_file("xl/worksheets/sheet1.xml", options).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>"#).unwrap();
+
+            // sheet1 has a relationships part, but no VML relationship.
+            zip.start_file("xl/worksheets/_rels/sheet1.xml.rels", options)
+                .unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/printerSettings" Target="../printerSettings/printerSettings1.bin"/></Relationships>"#).unwrap();
+            zip.start_file("xl/printerSettings/printerSettings1.bin", options)
+                .unwrap();
+            zip.write_all(&[0u8]).unwrap();
+
+            zip.start_file("xl/worksheets/sheet2.xml", options).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>"#).unwrap();
+
+            zip.start_file("xl/worksheets/_rels/sheet2.xml.rels", options)
+                .unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing" Target="../drawings/vmlDrawing1.vml"/></Relationships>"#).unwrap();
+
+            zip.start_file("xl/drawings/vmlDrawing1.vml", options).unwrap();
+            zip.write_all(br##"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><v:shape id="_x0000_s1025" type="#_x0000_t201"><x:ClientData ObjectType="Checkbox"><x:Anchor>0, 0, 0, 0, 1, 0, 1, 0</x:Anchor><x:Checked>1</x:Checked></x:ClientData></v:shape></xml>"##).unwrap();
+
+            zip.finish().unwrap();
+        }
+
+        let workbook = XlsxReader::read(Cursor::new(buf)).unwrap();
+        let controls_sheet1 = workbook.worksheet(0).unwrap().form_controls().count();
+        let controls_sheet2 = workbook.worksheet(1).unwrap().form_controls().count();
+        assert_eq!(controls_sheet1, 0, "sheet1 must not inherit sheet2 VML controls");
+        assert_eq!(controls_sheet2, 1, "sheet2 should expose its VML control");
     }
 }
