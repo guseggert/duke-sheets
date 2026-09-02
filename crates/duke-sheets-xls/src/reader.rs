@@ -27,6 +27,7 @@ use duke_sheets_formula::decompile::{
     decompile_pivot_formula as decompile_biff_pivot_formula, PivotFormulaHooks,
     PivotVariableArgCount,
 };
+use ssfmt::{date_serial::date_to_serial, DateSystem};
 
 use crate::biff::formula::token_parser::ParsedToken;
 use crate::biff::formula::{
@@ -290,7 +291,10 @@ struct XlsPivotViewBuilder {
     rendered_range: Option<CellRange>,
     field_options: Vec<XlsPivotFieldOptions>,
     pending_sxaddl_field_name: Option<String>,
-    axis_declarations: Vec<Vec<i16>>,
+    row_axis_count: usize,
+    column_axis_count: usize,
+    row_axis: Vec<i16>,
+    column_axis: Vec<i16>,
     page_fields: Vec<(usize, u16)>,
     measures: Vec<PivotMeasure>,
     layout: duke_sheets_core::PivotLayout,
@@ -694,9 +698,9 @@ impl XlsReader {
                         pending_pivot_cache_num = Some(cache_num);
                     }
                 }
-                0x0051 | 0x0052 if in_globals => {
+                records::DCONREF | records::DCONNAME if in_globals => {
                     if let Some(cache_num) = pending_pivot_cache_num {
-                        let source = if rec.record_type == 0x0051 {
+                        let source = if rec.record_type == records::DCONREF {
                             Self::parse_dconref(&rec.data)
                         } else {
                             Self::parse_dconname(&rec.data)
@@ -731,7 +735,7 @@ impl XlsReader {
                         }
                     }
                 }
-                0x00CD if in_globals => {
+                records::SXSTRING if in_globals => {
                     if let Some((cache_id, remaining)) = pending_consolidation_page_names.as_mut() {
                         let mut offset = 0usize;
                         if let Ok(page_item) = read_unicode_string(&rec.data, &mut offset) {
@@ -784,7 +788,13 @@ impl XlsReader {
             &pivot_cache_consolidation_page_refs,
             &pivot_cache_consolidation_page_names,
         );
-        let pivot_caches = Self::read_pivot_caches(&cfb, &pivot_cache_ids, &pivot_cache_sources)?;
+        let date_system = if date_mode_1904 {
+            DateSystem::Date1904
+        } else {
+            DateSystem::Date1900
+        };
+        let pivot_caches =
+            Self::read_pivot_caches(&cfb, &pivot_cache_ids, &pivot_cache_sources, date_system)?;
 
         // Build the workbook
         let mut workbook = Workbook::empty();
@@ -1433,6 +1443,7 @@ impl XlsReader {
         cfb: &crate::cfb::CompoundFile,
         cache_ids: &std::collections::BTreeSet<u16>,
         sources: &std::collections::HashMap<u16, Vec<PivotSource>>,
+        date_system: DateSystem,
     ) -> XlsResult<std::collections::HashMap<u16, XlsPivotCache>> {
         let mut caches = std::collections::HashMap::new();
         for cache_id in cache_ids {
@@ -1442,7 +1453,9 @@ impl XlsReader {
             };
             let records = biff::read_all_records(&mut Cursor::new(stream))?;
             let source = sources.get(cache_id).cloned().unwrap_or_default();
-            if let Some(cache) = Self::parse_pivot_cache_stream(*cache_id, source, &records)? {
+            if let Some(cache) =
+                Self::parse_pivot_cache_stream(*cache_id, source, &records, date_system)?
+            {
                 caches.insert(*cache_id, cache);
             }
         }
@@ -1453,6 +1466,7 @@ impl XlsReader {
         cache_id: u16,
         sources: Vec<PivotSource>,
         records: &[BiffRecord],
+        date_system: DateSystem,
     ) -> XlsResult<Option<XlsPivotCache>> {
         let mut fields = Vec::new();
         let mut current_field: Option<XlsPivotCacheField> = None;
@@ -1465,7 +1479,7 @@ impl XlsReader {
 
         for rec in records {
             match rec.record_type {
-                0x00C6 => {
+                records::SXDB => {
                     if rec.data.len() >= 4 {
                         record_count = Some(u32::from_le_bytes([
                             rec.data[0],
@@ -1482,7 +1496,7 @@ impl XlsReader {
                             ]));
                     }
                 }
-                0x00C7 => {
+                records::SXFDB => {
                     Self::attach_pending_pivot_grouping(
                         &mut current_field,
                         &mut pending_group_range,
@@ -1550,19 +1564,19 @@ impl XlsReader {
                         }
                     }
                 }
-                0x00CD => {
+                records::SXSTRING => {
                     if let Some(field) = &mut current_field {
                         field.shared_items.push(Self::parse_sxstring(&rec.data)?);
                     }
                 }
-                0x00CA => {
+                records::SXBOOL => {
                     if let Some(field) = &mut current_field {
                         field.shared_items.push(PivotValue::Boolean(
                             rec.data.first().copied().unwrap_or(0) != 0,
                         ));
                     }
                 }
-                0x00CB => {
+                records::SXERR => {
                     if let Some(field) = &mut current_field {
                         field.shared_items.push(PivotValue::Error(
                             Self::cell_error_from_biff_code(
@@ -1571,7 +1585,41 @@ impl XlsReader {
                         ));
                     }
                 }
-                0x00D9 => {
+                records::SXINT => {
+                    if rec.data.len() >= 2 {
+                        let value = i16::from_le_bytes([rec.data[0], rec.data[1]]) as f64;
+                        if let Some(pending) = &mut pending_group_range {
+                            pending.numbers.push(value);
+                            Self::attach_pending_pivot_grouping(
+                                &mut current_field,
+                                &mut pending_group_range,
+                                &fields,
+                            );
+                        } else if let Some(field) = &mut current_field {
+                            field.shared_items.push(PivotValue::Number(value));
+                        }
+                    }
+                }
+                records::SXDTR => {
+                    if let Some(value) = Self::parse_sxdtr(&rec.data, date_system) {
+                        if let Some(pending) = &mut pending_group_range {
+                            pending.numbers.push(value);
+                            Self::attach_pending_pivot_grouping(
+                                &mut current_field,
+                                &mut pending_group_range,
+                                &fields,
+                            );
+                        } else if let Some(field) = &mut current_field {
+                            field.shared_items.push(PivotValue::Number(value));
+                        }
+                    }
+                }
+                records::SXNIL => {
+                    if let Some(field) = &mut current_field {
+                        field.shared_items.push(PivotValue::Blank);
+                    }
+                }
+                records::SXIDSTM => {
                     if let Some(field) = &mut current_field {
                         field.manual_group_item_ids = rec
                             .data
@@ -1580,10 +1628,10 @@ impl XlsReader {
                             .collect();
                     }
                 }
-                0x00D8 => {
+                records::SXRNG => {
                     pending_group_range = Self::parse_sxrng(&rec.data);
                 }
-                0x00C8 => {
+                records::SXDBB => {
                     Self::attach_pending_pivot_grouping(
                         &mut current_field,
                         &mut pending_group_range,
@@ -1598,7 +1646,7 @@ impl XlsReader {
                         fields.push(field);
                     }
                 }
-                0x00C9 => {
+                records::SXNUM => {
                     if let Some(pending) = &mut pending_group_range {
                         if rec.data.len() >= 8 {
                             pending
@@ -1638,7 +1686,9 @@ impl XlsReader {
             .iter()
             .filter_map(|pending| Self::calculated_item_formula_from_pending(pending, &fields))
             .collect();
-        let source = Self::pivot_source_for_sxdb_kind(source_kind, sources);
+        let Some(source) = Self::pivot_source_for_sxdb_kind(source_kind, sources) else {
+            return Ok(None);
+        };
 
         Ok(Some(XlsPivotCache {
             cache_id,
@@ -1660,7 +1710,7 @@ impl XlsReader {
 
         for rec in records {
             match rec.record_type {
-                0x00B0 => {
+                records::SXVIEW => {
                     if let Some(builder) = current.take() {
                         if let Some(pivot) = Self::finish_pivot_view(builder, caches) {
                             ws.add_pivot_table(pivot).map_err(|e| {
@@ -1670,21 +1720,33 @@ impl XlsReader {
                     }
                     current = Self::parse_sxview(&rec.data)?;
                 }
-                0x00B1 => {
+                records::SXVD => {
                     if let Some(builder) = &mut current {
                         builder.field_options.push(Self::parse_sxvd(&rec.data));
                     }
                 }
-                0x00B2 => {
+                records::SXVI => {
                     if let Some(builder) = &mut current {
                         if let Some(options) = builder.field_options.last_mut() {
                             Self::apply_sxvi(options, &rec.data);
                         }
                     }
                 }
-                0x00B4 => {
+                records::SXIVD => {
                     if let Some(builder) = &mut current {
-                        builder.axis_declarations.push(Self::parse_sxivd(&rec.data));
+                        let mut declaration = Self::parse_sxivd(&rec.data).into_iter();
+                        while builder.row_axis.len() < builder.row_axis_count {
+                            let Some(index) = declaration.next() else {
+                                break;
+                            };
+                            builder.row_axis.push(index);
+                        }
+                        while builder.column_axis.len() < builder.column_axis_count {
+                            let Some(index) = declaration.next() else {
+                                break;
+                            };
+                            builder.column_axis.push(index);
+                        }
                     }
                 }
                 0x0100 => {
@@ -1750,20 +1812,12 @@ impl XlsReader {
         let mut layout = builder.layout;
         let mut rows = Vec::new();
         let mut columns = Vec::new();
-        let row_field_indexes = builder
-            .axis_declarations
-            .first()
-            .map(|indexes| Self::axis_field_indexes(indexes))
-            .unwrap_or_default();
-        let column_field_indexes = builder
-            .axis_declarations
-            .get(1)
-            .map(|indexes| Self::axis_field_indexes(indexes))
-            .unwrap_or_default();
+        let row_field_indexes = Self::axis_field_indexes(&builder.row_axis);
+        let column_field_indexes = Self::axis_field_indexes(&builder.column_axis);
 
-        if let Some(row_axis) = builder.axis_declarations.first() {
+        if !builder.row_axis.is_empty() {
             Self::push_pivot_axis_fields(
-                row_axis,
+                &builder.row_axis,
                 cache,
                 &builder.field_options,
                 &mut rows,
@@ -1771,9 +1825,9 @@ impl XlsReader {
                 &mut layout,
             );
         }
-        if let Some(column_axis) = builder.axis_declarations.get(1) {
+        if !builder.column_axis.is_empty() {
             Self::push_pivot_axis_fields(
-                column_axis,
+                &builder.column_axis,
                 cache,
                 &builder.field_options,
                 &mut columns,
@@ -1960,19 +2014,21 @@ impl XlsReader {
     fn pivot_source_for_sxdb_kind(
         source_kind: PivotCacheSourceKind,
         sources: Vec<PivotSource>,
-    ) -> PivotSource {
+    ) -> Option<PivotSource> {
         match source_kind {
-            PivotCacheSourceKind::Worksheet => sources
-                .into_iter()
-                .next()
-                .unwrap_or_else(|| PivotSource::range(CellRange::from_indices(0, 0, 0, 0))),
-            PivotCacheSourceKind::External => sources
-                .into_iter()
-                .find(|source| matches!(source, PivotSource::External { .. }))
-                .unwrap_or_else(|| PivotSource::External {
-                    connection_name: String::new(),
-                    command_text: None,
-                }),
+            PivotCacheSourceKind::Worksheet => sources.into_iter().next().or_else(|| {
+                log::warn!("skipping XLS worksheet pivot cache without DCONREF/DCONNAME source");
+                None
+            }),
+            PivotCacheSourceKind::External => Some(
+                sources
+                    .into_iter()
+                    .find(|source| matches!(source, PivotSource::External { .. }))
+                    .unwrap_or_else(|| PivotSource::External {
+                        connection_name: String::new(),
+                        command_text: None,
+                    }),
+            ),
             PivotCacheSourceKind::Consolidation => {
                 let ranges = sources
                     .into_iter()
@@ -1985,25 +2041,22 @@ impl XlsReader {
                         _ => Vec::new(),
                     })
                     .collect();
-                PivotSource::Consolidation { ranges }
+                Some(PivotSource::Consolidation { ranges })
             }
-            PivotCacheSourceKind::Scenario => PivotSource::Scenario {
+            PivotCacheSourceKind::Scenario => Some(PivotSource::Scenario {
                 name: String::new(),
-            },
-            PivotCacheSourceKind::Olap => PivotSource::Olap {
+            }),
+            PivotCacheSourceKind::Olap => Some(PivotSource::Olap {
                 connection_name: String::new(),
                 cube: None,
                 command_text: None,
-            },
-            PivotCacheSourceKind::Unknown => {
-                sources
-                    .into_iter()
-                    .next()
-                    .unwrap_or_else(|| PivotSource::External {
-                        connection_name: String::new(),
-                        command_text: None,
-                    })
-            }
+            }),
+            PivotCacheSourceKind::Unknown => Some(sources.into_iter().next().unwrap_or_else(
+                || PivotSource::External {
+                    connection_name: String::new(),
+                    command_text: None,
+                },
+            )),
         }
     }
 
@@ -2635,6 +2688,8 @@ impl XlsReader {
         let last_col = u16::from_le_bytes([data[6], data[7]]);
         let cache_id = u16::from_le_bytes([data[14], data[15]]);
         let page_axis_count = u16::from_le_bytes([data[28], data[29]]);
+        let row_axis_count = u16::from_le_bytes([data[24], data[25]]) as usize;
+        let column_axis_count = u16::from_le_bytes([data[26], data[27]]) as usize;
         let grbit = u16::from_le_bytes([data[36], data[37]]);
         let name_len = u16::from_le_bytes([data[40], data[41]]);
         let data_caption_len = u16::from_le_bytes([data[42], data[43]]);
@@ -2669,7 +2724,10 @@ impl XlsReader {
             )),
             field_options: Vec::new(),
             pending_sxaddl_field_name: None,
-            axis_declarations: Vec::new(),
+            row_axis_count,
+            column_axis_count,
+            row_axis: Vec::with_capacity(row_axis_count),
+            column_axis: Vec::with_capacity(column_axis_count),
             page_fields: Vec::new(),
             measures: Vec::new(),
             layout,
@@ -3744,6 +3802,32 @@ impl XlsReader {
         }
     }
 
+    fn parse_sxdtr(data: &[u8], date_system: DateSystem) -> Option<f64> {
+        if data.len() < 8 {
+            return None;
+        }
+        let year = u16::from_le_bytes([data[0], data[1]]) as i32;
+        let month = u16::from_le_bytes([data[2], data[3]]) as u32;
+        let day = u32::from(data[4]);
+        let hour = u32::from(data[5]);
+        let minute = u32::from(data[6]);
+        let second = u32::from(data[7]);
+        if !(1900..=9999).contains(&year)
+            || !(1..=12).contains(&month)
+            || day > 31
+            || (day == 0 && (year != 1900 || month != 1))
+            || hour > 23
+            || minute > 59
+            || second > 59
+        {
+            return None;
+        }
+        Some(
+            date_to_serial(year, month, day, date_system)
+                + f64::from(hour * 3600 + minute * 60 + second) / 86_400.0,
+        )
+    }
+
     fn cell_error_from_biff_code(code: u8) -> CellError {
         match code {
             0x00 => CellError::Null,
@@ -3900,9 +3984,9 @@ impl XlsReader {
         pending_group_range: &mut Option<PendingPivotRangeGroup>,
         fields: &[XlsPivotCacheField],
     ) {
-        let ready = pending_group_range.as_ref().is_some_and(|pending| {
-            xls_date_group_unit_from_flags(pending.flags).is_some() || pending.numbers.len() >= 3
-        });
+        let ready = pending_group_range
+            .as_ref()
+            .is_some_and(|pending| pending.numbers.len() >= 3);
         if !ready {
             return;
         }

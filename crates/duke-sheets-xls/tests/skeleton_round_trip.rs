@@ -1721,6 +1721,129 @@ fn reads_xls_external_pivot_cache_source_kind() {
 }
 
 #[test]
+fn xls_reader_uses_sxview_counts_for_column_only_axis() {
+    let read = read_test_pivot_with_axes(0, 1, &[0]);
+    let pivot = read
+        .worksheet(0)
+        .unwrap()
+        .pivot_table_by_name("BasicPivot")
+        .unwrap();
+
+    assert!(pivot.rows.is_empty());
+    assert_eq!(pivot.columns.len(), 1);
+    assert_eq!(pivot.columns[0].field.name, "Region");
+}
+
+#[test]
+fn xls_reader_assigns_values_pseudo_field_to_column_only_axis() {
+    let read = read_test_pivot_with_axes(0, 1, &[-2]);
+    let pivot = read
+        .worksheet(0)
+        .unwrap()
+        .pivot_table_by_name("BasicPivot")
+        .unwrap();
+
+    assert!(pivot.rows.is_empty());
+    assert!(pivot.columns.is_empty());
+    assert_eq!(pivot.layout.values_axis, PivotValuesAxis::Columns);
+    assert_eq!(pivot.layout.values_axis_position, Some(0));
+}
+
+#[test]
+fn xls_reader_assigns_values_pseudo_field_to_row_only_axis() {
+    let read = read_test_pivot_with_axes(1, 0, &[-2]);
+    let pivot = read
+        .worksheet(0)
+        .unwrap()
+        .pivot_table_by_name("BasicPivot")
+        .unwrap();
+
+    assert!(pivot.rows.is_empty());
+    assert!(pivot.columns.is_empty());
+    assert_eq!(pivot.layout.values_axis, PivotValuesAxis::Rows);
+    assert_eq!(pivot.layout.values_axis_position, Some(0));
+}
+
+#[test]
+fn xls_reader_skips_worksheet_pivot_cache_without_dconref() {
+    let mut wb = Workbook::new();
+    add_test_pivot(&mut wb);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize pivot workbook");
+    let cfb = CompoundFile::open(Cursor::new(&bytes)).expect("open cfb");
+    let workbook = cfb.read_stream("/Workbook").expect("read workbook stream");
+    let cache = cfb
+        .read_stream("/_SX_DB_CUR/0001")
+        .expect("read pivot cache stream");
+    let records = records_with_payload(&workbook)
+        .into_iter()
+        .filter(|(record_type, _)| !matches!(*record_type, 0x0051 | 0x0052))
+        .collect::<Vec<_>>();
+    let patched = build_single_cache_xls(serialize_biff_records(&records), cache);
+
+    let read = XlsReader::read(Cursor::new(patched)).expect("read pivot without DCONREF");
+    assert!(
+        read.worksheet(0).unwrap().pivot_tables().is_empty(),
+        "a missing worksheet source must not be fabricated as A1:A1"
+    );
+}
+
+#[test]
+fn xls_external_reader_output_remains_an_explicit_writer_limitation() {
+    let read = read_test_pivot_with_sxdb_source_type(0x0002);
+    let err = XlsWriter::write_to_bytes(&read)
+        .expect_err("legacy external connection metadata cannot be reconstructed");
+
+    assert!(
+        err.to_string()
+            .contains("XLS external database pivot source authoring"),
+        "{err}"
+    );
+}
+
+#[test]
+fn xls_reader_parses_sxint_shared_items() {
+    let pivot = read_page_pivot_with_replaced_shared_item(0x00CC, 42i16.to_le_bytes().to_vec());
+
+    assert_eq!(
+        pivot.filters,
+        vec![PivotFilter::FieldItems {
+            field: PivotFieldRef::new("Salesperson"),
+            allowed_items: vec![PivotValue::Number(42.0)],
+        }]
+    );
+}
+
+#[test]
+fn xls_reader_parses_sxdtr_shared_items() {
+    let pivot = read_page_pivot_with_replaced_shared_item(
+        0x00CE,
+        vec![0xE4, 0x07, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00],
+    );
+
+    assert_eq!(
+        pivot.filters,
+        vec![PivotFilter::FieldItems {
+            field: PivotFieldRef::new("Salesperson"),
+            allowed_items: vec![PivotValue::Number(43832.0)],
+        }]
+    );
+}
+
+#[test]
+fn xls_reader_parses_sxnil_shared_items() {
+    let pivot = read_page_pivot_with_replaced_shared_item(0x00CF, Vec::new());
+
+    assert_eq!(
+        pivot.filters,
+        vec![PivotFilter::FieldItems {
+            field: PivotFieldRef::new("Salesperson"),
+            allowed_items: vec![PivotValue::Blank],
+        }]
+    );
+}
+
+#[test]
 fn reads_xls_consolidation_pivot_cache_source_kind() {
     let read = read_test_pivot_with_sxdb_source_type(0x0004);
     let pivot = read
@@ -6722,6 +6845,82 @@ fn read_test_pivot_with_sxdb_source_type(source_type: u16) -> Workbook {
         .expect("read pivot cache stream");
     let patched_cache = patch_sxdb_source_type(&cache, source_type);
 
+    let patched = build_single_cache_xls(workbook, patched_cache);
+
+    XlsReader::read(Cursor::new(patched)).expect("read patched pivot workbook")
+}
+
+fn read_test_pivot_with_axes(row_count: u16, column_count: u16, fields: &[i16]) -> Workbook {
+    let mut wb = Workbook::new();
+    add_test_pivot(&mut wb);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize pivot workbook");
+    let cfb = CompoundFile::open(Cursor::new(&bytes)).expect("open cfb");
+    let workbook = cfb.read_stream("/Workbook").expect("read workbook stream");
+    let cache = cfb
+        .read_stream("/_SX_DB_CUR/0001")
+        .expect("read pivot cache stream");
+    let mut saw_sxview = false;
+    let mut saw_sxivd = false;
+    let field_payload = fields
+        .iter()
+        .flat_map(|field| field.to_le_bytes())
+        .collect::<Vec<_>>();
+    let records = records_with_payload(&workbook)
+        .into_iter()
+        .map(|(record_type, mut payload)| {
+            if record_type == 0x00B0 {
+                payload[24..26].copy_from_slice(&row_count.to_le_bytes());
+                payload[26..28].copy_from_slice(&column_count.to_le_bytes());
+                saw_sxview = true;
+            } else if record_type == 0x00B4 {
+                payload = field_payload.clone();
+                saw_sxivd = true;
+            }
+            (record_type, payload)
+        })
+        .collect::<Vec<_>>();
+    assert!(saw_sxview && saw_sxivd);
+    let patched = build_single_cache_xls(serialize_biff_records(&records), cache);
+    XlsReader::read(Cursor::new(patched)).expect("read patched pivot axes")
+}
+
+fn read_page_pivot_with_replaced_shared_item(
+    replacement_type: u16,
+    replacement_payload: Vec<u8>,
+) -> PivotTable {
+    let mut wb = Workbook::new();
+    add_page_pivot(&mut wb);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize page pivot workbook");
+    let cfb = CompoundFile::open(Cursor::new(&bytes)).expect("open cfb");
+    let workbook = cfb.read_stream("/Workbook").expect("read workbook stream");
+    let cache = cfb
+        .read_stream("/_SX_DB_CUR/0001")
+        .expect("read pivot cache stream");
+    let mut replaced = false;
+    let records = records_with_payload(&cache)
+        .into_iter()
+        .map(|(record_type, payload)| {
+            if !replaced && record_type == 0x00CD && xls_unicode_string_at(&payload, 0) == "Ada" {
+                replaced = true;
+                (replacement_type, replacement_payload.clone())
+            } else {
+                (record_type, payload)
+            }
+        })
+        .collect::<Vec<_>>();
+    assert!(replaced, "Salesperson shared item was not found");
+    let patched = build_single_cache_xls(workbook, serialize_biff_records(&records));
+    let read = XlsReader::read(Cursor::new(patched)).expect("read patched shared item");
+    read.worksheet(0)
+        .unwrap()
+        .pivot_table_by_name("RevenueByRep")
+        .expect("parsed pivot")
+        .clone()
+}
+
+fn build_single_cache_xls(workbook: Vec<u8>, cache: Vec<u8>) -> Vec<u8> {
     let mut builder = CompoundFileBuilder::new();
     builder
         .add_stream("/Workbook", workbook)
@@ -6730,11 +6929,9 @@ fn read_test_pivot_with_sxdb_source_type(source_type: u16) -> Workbook {
         .add_storage("/_SX_DB_CUR")
         .expect("add pivot cache storage");
     builder
-        .add_stream("/_SX_DB_CUR/0001", patched_cache)
-        .expect("add patched pivot cache stream");
-    let patched = builder.build().expect("build patched XLS file");
-
-    XlsReader::read(Cursor::new(patched)).expect("read patched pivot workbook")
+        .add_stream("/_SX_DB_CUR/0001", cache)
+        .expect("add pivot cache stream");
+    builder.build().expect("build patched XLS file")
 }
 
 fn patch_sxdb_source_type(stream: &[u8], source_type: u16) -> Vec<u8> {

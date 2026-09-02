@@ -32,6 +32,7 @@ use ssfmt::{
     DateSystem,
 };
 
+use crate::biff::records;
 use crate::cfb::CompoundFileBuilder;
 use crate::error::{XlsError, XlsResult};
 
@@ -112,16 +113,16 @@ const PIVOT_SXFMLA_RECORD: u16 = 0x00F9;
 const PIVOT_SXNAME_RECORD: u16 = 0x00F6;
 const PIVOT_SXPAIR_RECORD: u16 = 0x00F8;
 const PIVOT_SXFORMULA_RECORD: u16 = 0x0103;
-const PIVOT_SXFDB_RECORD: u16 = 0x00C7;
-const PIVOT_SXDBB_RECORD: u16 = 0x00C8;
-const PIVOT_SXNUM_RECORD: u16 = 0x00C9;
-const PIVOT_SXBOOL_RECORD: u16 = 0x00CA;
-const PIVOT_SXERR_RECORD: u16 = 0x00CB;
-const PIVOT_SXINT_RECORD: u16 = 0x00CC;
-const PIVOT_SXSTRING_RECORD: u16 = 0x00CD;
-const PIVOT_SXDTR_RECORD: u16 = 0x00CE;
-const PIVOT_SXRNG_RECORD: u16 = 0x00D8;
-const PIVOT_SXIDSTM_RECORD: u16 = 0x00D9;
+const PIVOT_SXFDB_RECORD: u16 = records::SXFDB;
+const PIVOT_SXDBB_RECORD: u16 = records::SXDBB;
+const PIVOT_SXNUM_RECORD: u16 = records::SXNUM;
+const PIVOT_SXBOOL_RECORD: u16 = records::SXBOOL;
+const PIVOT_SXERR_RECORD: u16 = records::SXERR;
+const PIVOT_SXINT_RECORD: u16 = records::SXINT;
+const PIVOT_SXSTRING_RECORD: u16 = records::SXSTRING;
+const PIVOT_SXDTR_RECORD: u16 = records::SXDTR;
+const PIVOT_SXRNG_RECORD: u16 = records::SXRNG;
+const PIVOT_SXIDSTM_RECORD: u16 = records::SXIDSTM;
 const BOOKEXT_RECORD: u16 = 0x0863;
 const COMPAT12_RECORD: u16 = 0x088C;
 const TABLESTYLES_RECORD: u16 = 0x088E;
@@ -688,7 +689,7 @@ fn build_pivot_cache_stream(
     } else {
         sxdb.extend_from_slice(&0xFFFFu16.to_le_bytes());
     }
-    write_biff_record(&mut stream, 0x00C6, &sxdb);
+    write_biff_record(&mut stream, records::SXDB, &sxdb);
     if has_calculated_item {
         write_biff_record(
             &mut stream,
@@ -3434,7 +3435,7 @@ fn write_sxview_record_biff8(
     body.extend_from_slice(&xlunicode_len_u16(data_caption)?.to_le_bytes());
     push_xlunicode_string_no_cch(&mut body, &pivot.name)?;
     push_xlunicode_string_no_cch(&mut body, data_caption)?;
-    write_biff_record(stream, 0x00B0, &body);
+    write_biff_record(stream, records::SXVIEW, &body);
     Ok(())
 }
 
@@ -3589,7 +3590,7 @@ fn write_sxvd_record(
     } else {
         body.extend_from_slice(&0xFFFFu16.to_le_bytes());
     }
-    write_biff_record(stream, 0x00B1, &body);
+    write_biff_record(stream, records::SXVD, &body);
 
     let hidden_items = if let Some(filter_field_name) =
         xls_filter_field_name_for_hidden_items(layout, field_index)
@@ -4322,12 +4323,12 @@ fn write_sxivd_record(
     for field_index in expanded_axis_field_indexes(layout, fields)? {
         body.extend_from_slice(&checked_u16(field_index, "pivot axis field index")?.to_le_bytes());
     }
-    write_biff_record(stream, 0x00B4, &body);
+    write_biff_record(stream, records::SXIVD, &body);
     Ok(())
 }
 
 fn write_values_sxivd_record(stream: &mut Vec<u8>) {
-    write_biff_record(stream, 0x00B4, &(-2i16).to_le_bytes());
+    write_biff_record(stream, records::SXIVD, &(-2i16).to_le_bytes());
 }
 
 fn write_sxpi_records(
