@@ -51,8 +51,11 @@ KNOWN_EVIDENCE_GAPS: set[tuple[str, str, str]] = set()
 
 CANONICAL_PARITY = {
     "crates/duke-sheets-excel-com/tests/e2e/writing.rs": "XLSX",
+    "crates/duke-sheets-excel-com/tests/e2e/writing_pivot.rs": "XLSX",
     "crates/duke-sheets-excel-com/tests/e2e/writing_xlsb.rs": "XLSB",
+    "crates/duke-sheets-excel-com/tests/e2e/writing_xlsb_pivot.rs": "XLSB",
     "crates/duke-sheets-excel-com/tests/e2e/writing_xls.rs": "XLS",
+    "crates/duke-sheets-excel-com/tests/e2e/writing_xls_pivot.rs": "XLS",
 }
 
 HARNESS_ALIASES = {
@@ -356,6 +359,8 @@ def body_directions(test: TestFunction, fmt: str) -> set[str]:
     # body evidence; test names alone grant nothing.
     if re.search(rf"\bround_?trip(?:_{fmt.lower()})?\s*\(", body):
         directions.update(("R", "W"))
+    if fmt == "XLSX" and re.search(r"\broundtrip_chart\s*\(", body):
+        directions.update(("R", "W"))
     # Curated file-local writer-helper names (each wraps an in-process
     # format writer at its definition site, e.g. write_bytes in
     # xlsb_drawing_order.rs wraps XlsbWriter::write).
@@ -409,7 +414,7 @@ def classify_test(test: TestFunction) -> None:
         elif "/src/reader/" in path or path.endswith("/src/reader.rs"):
             set_formats(test, {"XLSX"}, {"R"})
         elif "/src/writer/" in path or path.endswith("/src/writer.rs"):
-            set_formats(test, {"XLSX"}, {"W"})
+            set_formats(test, {"XLSX"}, body_directions(test, "XLSX") or {"W"})
         elif "/tests/" in path:
             directions = body_directions(test, "XLSX")
             if "compat" in path and not directions:

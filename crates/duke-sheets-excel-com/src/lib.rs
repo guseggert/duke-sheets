@@ -13,10 +13,9 @@
 //!                                    └── COM: Excel.Application
 //! ```
 //!
-//! The protocol is a generic COM proxy with just 5 commands: `Init`, `Get`,
-//! `Set`, `Invoke`, `Release`, and `Shutdown`. All Excel-specific knowledge
-//! lives in this client crate - the server never needs modification when new
-//! Excel features are added.
+//! The protocol is a generic COM proxy with a small set of commands: `Ping`,
+//! `Init`, `Get`, `Set`, `Invoke`, `Navigate`, `Release`, and `Shutdown`.
+//! All Excel-specific knowledge lives in this client crate.
 //!
 //! # Example
 //!

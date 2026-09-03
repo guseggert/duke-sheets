@@ -168,6 +168,7 @@ fn write_plot_area(w: &mut XmlWriter, chart: &Chart) -> XlsxResult<()> {
             side_wall: group.side_wall.clone(),
             back_wall: group.back_wall.clone(),
             text_properties: chart.text_properties.clone(),
+            pivot_source: chart.pivot_source.clone(),
         };
         write_chart_type_group(w, &legacy)?;
         write_axes(w, &legacy)?;

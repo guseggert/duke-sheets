@@ -7,12 +7,434 @@
 export * from './generated'
 
 import type * as Generated from './generated'
-import type { JsRow, JsRowsOptions } from './generated'
+import type {
+  JsPivotTableDefinition,
+  JsPivotRefreshOptions,
+  JsRow,
+  JsRowsOptions,
+  JsWorkbookConnectionDefinition,
+  JsWorkbookExtension,
+  JsWorkbookExtensionPart,
+  Worksheet as _Worksheet,
+} from './generated'
 
 /** Iterator over sparse rows. Batches FFI calls internally for performance. */
 export declare class RowIterator implements IterableIterator<JsRow> {
   [Symbol.iterator](): IterableIterator<JsRow>
   next(): IteratorResult<JsRow>
+}
+
+export interface JsPivotMeasureOptions {
+  field: string
+  aggregate?: 'sum' | 'count' | 'countNumbers' | 'average' | 'max' | 'min' | 'product' | 'stdDev' | 'stdDevP' | 'var' | 'varP'
+  name?: string
+  showAs?:
+    | 'normal'
+    | 'percentOfGrandTotal'
+    | 'percentOfRowTotal'
+    | 'percentOfColumnTotal'
+    | 'percentOfParentRowTotal'
+    | 'percentOfParentRow'
+    | 'percentOfParentColumnTotal'
+    | 'percentOfParentCol'
+    | 'percentOfParentTotal'
+    | 'percentOfParent'
+    | 'index'
+    | 'runningTotal'
+    | 'runTotal'
+    | 'differenceFrom'
+    | 'difference'
+    | 'percentDifferenceFrom'
+    | 'percentDiff'
+    | 'rankAscending'
+    | 'rankDescending'
+  baseField?: string
+  baseItem?: string | number | boolean
+  numberFormat?: string
+}
+
+export interface JsPivotItemFilterOptions {
+  kind?: 'item' | 'items' | 'fieldItems' | 'field_items'
+  field: string
+  items: string[]
+}
+
+export type JsPivotFilterOperator =
+  | 'equals'
+  | 'equal'
+  | 'eq'
+  | 'notEquals'
+  | 'notEqual'
+  | 'ne'
+  | 'lessThan'
+  | 'lt'
+  | 'lessThanOrEqual'
+  | 'lte'
+  | 'greaterThan'
+  | 'gt'
+  | 'greaterThanOrEqual'
+  | 'gte'
+  | 'beginsWith'
+  | 'doesNotBeginWith'
+  | 'notBeginsWith'
+  | 'endsWith'
+  | 'doesNotEndWith'
+  | 'notEndsWith'
+  | 'contains'
+  | 'doesNotContain'
+  | 'notContains'
+
+export interface JsPivotLabelFilterOptions {
+  kind: 'label'
+  field: string
+  operator: JsPivotFilterOperator
+  text: string
+}
+
+export interface JsPivotLabelBetweenFilterOptions {
+  kind: 'labelBetween' | 'label_between' | 'captionBetween' | 'caption_between' | 'labelNotBetween' | 'label_not_between' | 'captionNotBetween' | 'caption_not_between'
+  field: string
+  startText: string
+  endText: string
+}
+
+export interface JsPivotValueFilterOptions {
+  kind: 'value'
+  field: string
+  measure: JsPivotMeasureOptions
+  operator: JsPivotFilterOperator
+  value: number
+}
+
+export interface JsPivotValueBetweenFilterOptions {
+  kind: 'valueBetween' | 'value_between' | 'valueRange' | 'value_range' | 'valueNotBetween' | 'value_not_between' | 'valueNotRange' | 'value_not_range'
+  field: string
+  measure: JsPivotMeasureOptions
+  start: number
+  end: number
+}
+
+export interface JsPivotDateFilterOptions {
+  kind: 'date'
+  field: string
+  operator: JsPivotFilterOperator
+  value: number
+}
+
+export interface JsPivotDateBetweenFilterOptions {
+  kind: 'dateBetween' | 'date_between' | 'dateRange' | 'date_range' | 'dateNotBetween' | 'date_not_between' | 'dateNotRange' | 'date_not_range'
+  field: string
+  start: number
+  end: number
+}
+
+export interface JsPivotDatePeriodFilterOptions {
+  kind: 'datePeriod' | 'date_period' | 'period'
+  field: string
+  period: string
+}
+
+export interface JsPivotTopNFilterOptions {
+  kind: 'topN' | 'top_n' | 'top'
+  field: string
+  measure: JsPivotMeasureOptions
+  n: number
+  top?: boolean
+  percent?: boolean
+}
+
+export type JsPivotFilterOptions =
+  | JsPivotItemFilterOptions
+  | JsPivotLabelFilterOptions
+  | JsPivotLabelBetweenFilterOptions
+  | JsPivotValueFilterOptions
+  | JsPivotValueBetweenFilterOptions
+  | JsPivotDateFilterOptions
+  | JsPivotDateBetweenFilterOptions
+  | JsPivotDatePeriodFilterOptions
+  | JsPivotTopNFilterOptions
+
+export interface JsPivotCalculatedFieldOptions {
+  name: string
+  formula: string
+}
+
+export type JsPivotValueInput = string | number | boolean
+
+export interface JsPivotCalculatedItemOptions {
+  field: string
+  item: JsPivotValueInput
+  formula: string
+}
+
+export interface JsPivotManualGroupOptions {
+  name: string
+  members: JsPivotValueInput[]
+}
+
+export interface JsPivotGroupingOptions {
+  field: string
+  kind: 'number' | 'numeric' | 'date' | 'manual' | 'items' | 'item'
+  start?: number
+  end?: number
+  interval?: number
+  units?: Array<'seconds' | 'minutes' | 'hours' | 'days' | 'months' | 'quarters' | 'years'>
+  groups?: JsPivotManualGroupOptions[]
+}
+
+export interface JsPivotFieldOptions {
+  field: string
+  caption?: string
+  sort?: 'none' | 'manual' | 'ascending' | 'asc' | 'descending' | 'desc'
+  sortByMeasure?: JsPivotMeasureOptions
+  subtotalCaption?: string
+  subtotal?:
+    | 'automatic'
+    | 'auto'
+    | 'none'
+    | 'sum'
+    | 'count'
+    | 'count_numbers'
+    | 'countNumbers'
+    | 'countnumbers'
+    | 'count_nums'
+    | 'countNums'
+    | 'countnums'
+    | 'average'
+    | 'avg'
+    | 'min'
+    | 'max'
+    | 'product'
+    | 'std_dev'
+    | 'stdDev'
+    | 'stddev'
+    | 'std_dev_p'
+    | 'stdDevP'
+    | 'stddevp'
+    | 'var'
+    | 'variance'
+    | 'var_p'
+    | 'varP'
+    | 'varp'
+    | 'variance_p'
+    | 'varianceP'
+  subtotals?: string[]
+  collapsedItems?: JsPivotValueInput[]
+  showEmptyItems?: boolean
+  showDropDowns?: boolean
+  subtotalTop?: boolean
+  insertBlankRow?: boolean
+  insertPageBreak?: boolean
+  includeNewItemsInFilter?: boolean
+  itemPageCount?: number
+}
+
+export interface JsPivotRefreshPolicyOptions {
+  refreshOnOpen?: boolean
+  preserveFormatting?: boolean
+  backgroundQuery?: boolean
+  missingItemsLimit?: number
+}
+
+export interface JsPivotLayoutOptions {
+  kind?: 'compact' | 'outline' | 'tabular'
+  showRowGrandTotals?: boolean
+  showColumnGrandTotals?: boolean
+  showFieldHeaders?: boolean
+  repeatItemLabels?: boolean
+  showExpandCollapse?: boolean
+  printDrillIndicators?: boolean
+  itemPrintTitles?: boolean
+  fieldPrintTitles?: boolean
+  pageWrap?: number
+  pageOverThenDown?: boolean
+  mergeItemLabels?: boolean
+  dataCaption?: string
+  valuesAxis?: 'columns' | 'rows'
+  valuesAxisPosition?: number
+  grandTotalCaption?: string
+  errorCaption?: string
+  showError?: boolean
+  missingCaption?: string
+  showMissing?: boolean
+  asteriskTotals?: boolean
+  showItems?: boolean
+  editData?: boolean
+  disableFieldList?: boolean
+  showCalculatedMembers?: boolean
+  visualTotals?: boolean
+  showMultipleLabel?: boolean
+  showDataDropDown?: boolean
+  showMemberPropertyTips?: boolean
+  showDataTips?: boolean
+  enableWizard?: boolean
+  enableDrill?: boolean
+  enableFieldProperties?: boolean
+  subtotalHiddenItems?: boolean
+  showDropZones?: boolean
+  indent?: number
+  showEmptyRows?: boolean
+  showEmptyColumns?: boolean
+}
+
+export interface JsPivotStyleOptions {
+  name?: string
+  showRowHeaders?: boolean
+  showColumnHeaders?: boolean
+  showRowStripes?: boolean
+  showColumnStripes?: boolean
+  showLastColumn?: boolean
+}
+
+export interface JsPivotConsolidationRangeOptions {
+  sheet?: string
+  range?: string
+  name?: string
+  externalRelationshipId?: string
+  externalRelationshipTarget?: string
+  pageItems?: string[]
+}
+
+export interface JsPivotTableOptions {
+  name: string
+  sourceRange?: string
+  sourceSheet?: string
+  tableName?: string
+  externalConnectionName?: string
+  externalCommandText?: string
+  olapConnectionName?: string
+  consolidationRanges?: JsPivotConsolidationRangeOptions[]
+  target: string
+  rows?: string[]
+  columns?: string[]
+  pages?: string[]
+  rowFields?: JsPivotFieldOptions[]
+  columnFields?: JsPivotFieldOptions[]
+  pageFields?: JsPivotFieldOptions[]
+  measures: JsPivotMeasureOptions[]
+  filters?: JsPivotFilterOptions[]
+  calculatedFields?: JsPivotCalculatedFieldOptions[]
+  calculatedItems?: JsPivotCalculatedItemOptions[]
+  groupings?: JsPivotGroupingOptions[]
+  refreshPolicy?: JsPivotRefreshPolicyOptions
+  layout?: JsPivotLayoutOptions
+  style?: JsPivotStyleOptions
+  overwritePolicy?: 'clearOwnedRange' | 'clear_owned_range' | 'clear' | 'overwrite' | 'failOnOccupied' | 'fail_on_occupied'
+}
+
+export interface JsPivotChartOptions {
+  pivotName: string
+  chartType?: 'columnClustered' | 'columnStacked' | 'columnPercentStacked' | 'barClustered' | 'barStacked' | 'barPercentStacked' | 'line' | 'lineStacked' | 'pie' | 'pieExploded' | 'doughnut' | 'area' | 'areaStacked' | 'areaPercentStacked' | 'scatterMarkers' | 'scatterSmooth' | 'scatterLines' | 'bubble' | 'radar' | 'stock' | 'surface' | string
+}
+
+export interface JsWorkbookConnectionOptions {
+  id: number
+  name: string
+  kind?: 'database' | 'db' | 'web' | 'text' | 'olap'
+  connection?: string
+  command?: string
+  commandType?: number
+  url?: string
+  xml?: boolean
+  sourceData?: boolean
+  htmlTables?: boolean
+  htmlFormat?: string
+  post?: string
+  editPage?: string
+  sourceFile?: string
+  delimiter?: string
+  firstRow?: number
+  delimited?: boolean
+  decimal?: string
+  thousands?: string
+  local?: boolean
+  localConnection?: string
+  localRefresh?: boolean
+  sendLocale?: boolean
+  rowDrillCount?: number
+  refreshOnLoad?: boolean
+  background?: boolean
+  saveData?: boolean
+}
+
+export interface JsPivotRefreshStats {
+  pivotCount: number
+  pivotsRefreshed: number
+  sourceRows: number
+  outputCells: number
+  cacheHits: number
+  cacheMisses: number
+}
+
+// Augment the generated Worksheet class with JS-side methods
+declare module './generated' {
+  interface Workbook {
+    /** Number of workbook-level data connections. */
+    readonly dataConnectionCount: number
+
+    /** Workbook-level data connection names. */
+    readonly dataConnectionNames: string[]
+
+    /** Workbook-level data connection definitions. */
+    readonly dataConnections: JsWorkbookConnectionDefinition[]
+
+    /** Number of raw workbook extension elements preserved from the package. */
+    readonly workbookExtensionCount: number
+
+    /** Raw workbook extension elements preserved from workbook.xml. */
+    readonly workbookExtensions: JsWorkbookExtension[]
+
+    /** Number of raw workbook-related extension package parts. */
+    readonly workbookExtensionPartCount: number
+
+    /** Raw workbook-related extension package parts. */
+    readonly workbookExtensionParts: JsWorkbookExtensionPart[]
+
+    /** Get a raw workbook extension package part by package path. */
+    getWorkbookExtensionPart(path: string): JsWorkbookExtensionPart | null
+
+    /** Get a raw workbook extension package part by workbook relationship id. */
+    getWorkbookExtensionPartByRelationshipId(relationshipId: string): JsWorkbookExtensionPart | null
+
+    /** Get a workbook-level data connection by name. */
+    getDataConnection(name: string): JsWorkbookConnectionDefinition | null
+
+    /** Get a workbook-level data connection by id. */
+    getDataConnectionById(id: number): JsWorkbookConnectionDefinition | null
+
+    /** Add a workbook-level database connection. */
+    addDataConnection(options: JsWorkbookConnectionOptions): void
+
+    /** Refresh all pivot tables in the workbook. */
+    refreshPivots(options?: JsPivotRefreshOptions | null): JsPivotRefreshStats
+  }
+
+  interface Worksheet {
+    /**
+     * Iterate over all rows with data as sparse rows.
+     * Only non-empty cells are included. Internally batches FFI calls for performance.
+     * When metadata flags are enabled, cells with that metadata are included even if empty.
+     */
+    iterateRows(opts?: JsRowsOptions): RowIterator
+
+    /** Number of pivot tables on the worksheet. */
+    readonly pivotCount: number
+
+    /** Pivot table names on the worksheet. */
+    readonly pivotTableNames: string[]
+
+    /** Pivot table definitions on the worksheet. */
+    readonly pivotTables: JsPivotTableDefinition[]
+
+    /** Get a pivot table definition by name. */
+    getPivotTable(name: string): JsPivotTableDefinition | null
+
+    /** Add a semantic pivot table definition to the worksheet. */
+    addPivotTable(options: JsPivotTableOptions): void
+
+    /** Generate and add a PivotChart from a rendered pivot table. */
+    addPivotChart(options: JsPivotChartOptions): JsChart
+  }
 }
 
 export type JsChart = Omit<Generated.JsChart, 'anchor'>

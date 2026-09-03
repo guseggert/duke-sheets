@@ -94,6 +94,28 @@ pub const SCL: u16 = 0x00A0; // Zoom level (numerator/denominator)
 pub const PRINTHEADERS: u16 = 0x002A; // Print row/column headings
 pub const PRINTGRIDLINES: u16 = 0x002B; // Print gridlines
 
+// PivotTable records. [MS-XLS] sections name the corresponding record structures.
+pub const DCONREF: u16 = 0x0051; // [MS-XLS] §2.4.86 DConRef
+pub const DCONNAME: u16 = 0x0052; // [MS-XLS] §2.4.85 DConName
+pub const SXVIEW: u16 = 0x00B0; // [MS-XLS] §2.4.313 SXView
+pub const SXVD: u16 = 0x00B1; // [MS-XLS] §2.4.309 Sxvd
+pub const SXVI: u16 = 0x00B2; // [MS-XLS] §2.4.312 SXVI
+pub const SXIVD: u16 = 0x00B4; // [MS-XLS] §2.4.292 SxIvd
+pub const SXPI: u16 = 0x00B6; // [MS-XLS] §2.4.298 SXPI
+pub const SXDI: u16 = 0x00C5; // [MS-XLS] §2.4.278 SXDI
+pub const SXDB: u16 = 0x00C6; // [MS-XLS] §2.4.275 SXDB
+pub const SXFDB: u16 = 0x00C7; // [MS-XLS] §2.4.283 SXFDB
+pub const SXDBB: u16 = 0x00C8; // [MS-XLS] §2.4.276 SXDBB
+pub const SXNUM: u16 = 0x00C9; // [MS-XLS] §2.4.296 SXNum
+pub const SXBOOL: u16 = 0x00CA; // [MS-XLS] §2.4.274 SxBool
+pub const SXERR: u16 = 0x00CB; // [MS-XLS] §2.4.281 SxErr
+pub const SXINT: u16 = 0x00CC; // [MS-XLS] §2.4.289 SXInt
+pub const SXSTRING: u16 = 0x00CD; // [MS-XLS] §2.4.304 SXString
+pub const SXDTR: u16 = 0x00CE; // [MS-XLS] §2.4.279 SXDtr
+pub const SXNIL: u16 = 0x00CF; // [MS-XLS] §2.4.295 SxNil
+pub const SXRNG: u16 = 0x00D8; // [MS-XLS] §2.4.300 SXRng
+pub const SXIDSTM: u16 = 0x00D9; // [MS-XLS] §2.4.290 SxIsxoper (SXIDSTM)
+
 // ── BOF subtypes (the `dt` field) ───────────────────────────────────────
 pub const BOF_WORKBOOK_GLOBALS: u16 = 0x0005;
 pub const BOF_WORKSHEET: u16 = 0x0010;

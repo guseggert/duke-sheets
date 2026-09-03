@@ -12,11 +12,17 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use duke_sheets::{
-    CalculationOptions, CalculationStats as CoreCalculationStats, FormulaValue, ImageSizing,
-    WorkbookCalculationExt, WorkbookExt,
+    CalculationOptions, CalculationStats as CoreCalculationStats, ChartType, FormulaValue,
+    ImageSizing, PivotRefreshOptions, WorkbookCalculationExt, WorkbookExt, WorkbookPivotExt,
 };
 use duke_sheets_core::{
-    CellAddress, CellError, CellRange, CellValue as CoreCellValue, Workbook as CoreWorkbook,
+    CellAddress, CellError, CellRange, CellValue as CoreCellValue, PivotAggregate,
+    PivotDateGroupUnit, PivotDatePeriod, PivotField, PivotFilter, PivotFilterOperator,
+    PivotGrouping, PivotLayout, PivotLayoutKind, PivotManualGroup, PivotMeasure,
+    PivotOverwritePolicy, PivotRefreshPolicy, PivotShowAs, PivotSort, PivotSource,
+    PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable, PivotValue, PivotValuesAxis,
+    Workbook as CoreWorkbook, WorkbookConnection, WorkbookConnectionKind, WorkbookExtension,
+    WorkbookExtensionPart,
 };
 
 fn to_napi_err(e: impl std::fmt::Display) -> napi::Error {
@@ -328,6 +334,1344 @@ pub struct UsedRange {
     pub max_col: u32,
 }
 
+#[napi(object)]
+pub struct JsPivotMeasureOptions {
+    pub field: String,
+    pub aggregate: Option<String>,
+    pub name: Option<String>,
+    pub show_as: Option<String>,
+    pub base_field: Option<String>,
+    pub base_item: Option<Either3<f64, String, bool>>,
+    pub number_format: Option<String>,
+}
+
+#[napi(object)]
+pub struct JsPivotFilterOptions {
+    pub kind: Option<String>,
+    pub field: String,
+    pub items: Option<Vec<String>>,
+    pub operator: Option<String>,
+    pub text: Option<String>,
+    pub start_text: Option<String>,
+    pub end_text: Option<String>,
+    pub period: Option<String>,
+    pub measure: Option<JsPivotMeasureOptions>,
+    pub value: Option<f64>,
+    pub start: Option<f64>,
+    pub end: Option<f64>,
+    pub n: Option<u32>,
+    pub top: Option<bool>,
+    pub percent: Option<bool>,
+}
+
+#[napi(object)]
+pub struct JsPivotCalculatedFieldOptions {
+    pub name: String,
+    pub formula: String,
+}
+
+#[napi(object)]
+pub struct JsPivotCalculatedItemOptions {
+    pub field: String,
+    pub item: Either3<f64, String, bool>,
+    pub formula: String,
+}
+
+#[napi(object)]
+pub struct JsPivotManualGroupOptions {
+    pub name: String,
+    pub members: Vec<Either3<f64, String, bool>>,
+}
+
+#[napi(object)]
+pub struct JsPivotGroupingOptions {
+    pub field: String,
+    pub kind: String,
+    pub start: Option<f64>,
+    pub end: Option<f64>,
+    pub interval: Option<f64>,
+    pub units: Option<Vec<String>>,
+    pub groups: Option<Vec<JsPivotManualGroupOptions>>,
+}
+
+#[napi(object)]
+pub struct JsPivotFieldOptions {
+    pub field: String,
+    pub caption: Option<String>,
+    pub sort: Option<String>,
+    pub sort_by_measure: Option<JsPivotMeasureOptions>,
+    pub subtotal: Option<String>,
+    pub subtotal_caption: Option<String>,
+    pub subtotals: Option<Vec<String>>,
+    pub collapsed_items: Option<Vec<Either3<f64, String, bool>>>,
+    pub show_empty_items: Option<bool>,
+    pub show_drop_downs: Option<bool>,
+    pub subtotal_top: Option<bool>,
+    pub insert_blank_row: Option<bool>,
+    pub insert_page_break: Option<bool>,
+    pub include_new_items_in_filter: Option<bool>,
+    pub item_page_count: Option<u32>,
+}
+
+#[napi(object)]
+pub struct JsPivotRefreshPolicyOptions {
+    pub refresh_on_open: Option<bool>,
+    pub preserve_formatting: Option<bool>,
+    pub background_query: Option<bool>,
+    pub missing_items_limit: Option<u32>,
+}
+
+#[napi(object)]
+pub struct JsPivotLayoutOptions {
+    pub kind: Option<String>,
+    pub show_row_grand_totals: Option<bool>,
+    pub show_column_grand_totals: Option<bool>,
+    pub show_field_headers: Option<bool>,
+    pub repeat_item_labels: Option<bool>,
+    pub show_expand_collapse: Option<bool>,
+    pub print_drill_indicators: Option<bool>,
+    pub item_print_titles: Option<bool>,
+    pub field_print_titles: Option<bool>,
+    pub page_wrap: Option<u32>,
+    pub page_over_then_down: Option<bool>,
+    pub merge_item_labels: Option<bool>,
+    pub data_caption: Option<String>,
+    pub values_axis: Option<String>,
+    pub values_axis_position: Option<u32>,
+    pub grand_total_caption: Option<String>,
+    pub error_caption: Option<String>,
+    pub show_error: Option<bool>,
+    pub missing_caption: Option<String>,
+    pub show_missing: Option<bool>,
+    pub asterisk_totals: Option<bool>,
+    pub show_items: Option<bool>,
+    pub edit_data: Option<bool>,
+    pub disable_field_list: Option<bool>,
+    pub show_calculated_members: Option<bool>,
+    pub visual_totals: Option<bool>,
+    pub show_multiple_label: Option<bool>,
+    pub show_data_drop_down: Option<bool>,
+    pub show_member_property_tips: Option<bool>,
+    pub show_data_tips: Option<bool>,
+    pub enable_wizard: Option<bool>,
+    pub enable_drill: Option<bool>,
+    pub enable_field_properties: Option<bool>,
+    pub subtotal_hidden_items: Option<bool>,
+    pub show_drop_zones: Option<bool>,
+    pub indent: Option<u32>,
+    pub show_empty_rows: Option<bool>,
+    pub show_empty_columns: Option<bool>,
+}
+
+#[napi(object)]
+pub struct JsPivotStyleOptions {
+    pub name: Option<String>,
+    pub show_row_headers: Option<bool>,
+    pub show_column_headers: Option<bool>,
+    pub show_row_stripes: Option<bool>,
+    pub show_column_stripes: Option<bool>,
+    pub show_last_column: Option<bool>,
+}
+
+#[napi(object)]
+pub struct JsPivotConsolidationRangeOptions {
+    pub sheet: Option<String>,
+    pub range: Option<String>,
+    pub name: Option<String>,
+    pub external_relationship_id: Option<String>,
+    pub external_relationship_target: Option<String>,
+    pub page_items: Option<Vec<String>>,
+}
+
+#[napi(object)]
+pub struct JsPivotTableOptions {
+    pub name: String,
+    pub source_range: Option<String>,
+    pub source_sheet: Option<String>,
+    pub table_name: Option<String>,
+    pub external_connection_name: Option<String>,
+    pub external_command_text: Option<String>,
+    pub olap_connection_name: Option<String>,
+    pub consolidation_ranges: Option<Vec<JsPivotConsolidationRangeOptions>>,
+    pub target: String,
+    pub rows: Option<Vec<String>>,
+    pub columns: Option<Vec<String>>,
+    pub pages: Option<Vec<String>>,
+    pub row_fields: Option<Vec<JsPivotFieldOptions>>,
+    pub column_fields: Option<Vec<JsPivotFieldOptions>>,
+    pub page_fields: Option<Vec<JsPivotFieldOptions>>,
+    pub measures: Vec<JsPivotMeasureOptions>,
+    pub filters: Option<Vec<JsPivotFilterOptions>>,
+    pub calculated_fields: Option<Vec<JsPivotCalculatedFieldOptions>>,
+    pub calculated_items: Option<Vec<JsPivotCalculatedItemOptions>>,
+    pub groupings: Option<Vec<JsPivotGroupingOptions>>,
+    pub refresh_policy: Option<JsPivotRefreshPolicyOptions>,
+    pub layout: Option<JsPivotLayoutOptions>,
+    pub style: Option<JsPivotStyleOptions>,
+    pub overwrite_policy: Option<String>,
+}
+
+#[napi(object)]
+pub struct JsPivotChartOptions {
+    pub pivot_name: String,
+    pub chart_type: Option<String>,
+}
+
+#[napi(object)]
+pub struct JsWorkbookConnectionOptions {
+    pub id: u32,
+    pub name: String,
+    pub kind: Option<String>,
+    pub connection: Option<String>,
+    pub command: Option<String>,
+    pub command_type: Option<u32>,
+    pub url: Option<String>,
+    pub xml: Option<bool>,
+    pub source_data: Option<bool>,
+    pub html_tables: Option<bool>,
+    pub html_format: Option<String>,
+    pub post: Option<String>,
+    pub edit_page: Option<String>,
+    pub source_file: Option<String>,
+    pub delimiter: Option<String>,
+    pub first_row: Option<u32>,
+    pub delimited: Option<bool>,
+    pub decimal: Option<String>,
+    pub thousands: Option<String>,
+    pub local: Option<bool>,
+    pub local_connection: Option<String>,
+    pub local_refresh: Option<bool>,
+    pub send_locale: Option<bool>,
+    pub row_drill_count: Option<u32>,
+    pub refresh_on_load: Option<bool>,
+    pub background: Option<bool>,
+    pub save_data: Option<bool>,
+}
+
+#[napi(object)]
+pub struct JsWorkbookConnectionDefinition {
+    pub id: u32,
+    pub name: String,
+    pub kind: String,
+    pub refreshed_version: u32,
+    pub refresh_on_load: bool,
+    pub background: bool,
+    pub save_data: bool,
+    pub connection: Option<String>,
+    pub command: Option<String>,
+    pub command_type: Option<u32>,
+    pub url: Option<String>,
+    pub xml: Option<bool>,
+    pub source_data: Option<bool>,
+    pub html_tables: Option<bool>,
+    pub html_format: Option<String>,
+    pub post: Option<String>,
+    pub edit_page: Option<String>,
+    pub source_file: Option<String>,
+    pub delimiter: Option<String>,
+    pub first_row: Option<u32>,
+    pub delimited: Option<bool>,
+    pub decimal: Option<String>,
+    pub thousands: Option<String>,
+    pub local: Option<bool>,
+    pub local_connection: Option<String>,
+    pub local_refresh: Option<bool>,
+    pub send_locale: Option<bool>,
+    pub row_drill_count: Option<u32>,
+}
+
+impl From<&WorkbookConnection> for JsWorkbookConnectionDefinition {
+    fn from(connection: &WorkbookConnection) -> Self {
+        let mut definition = Self {
+            id: connection.id,
+            name: connection.name.clone(),
+            kind: workbook_connection_kind_name(&connection.kind).into(),
+            refreshed_version: u32::from(connection.refreshed_version),
+            refresh_on_load: connection.refresh_on_load,
+            background: connection.background,
+            save_data: connection.save_data,
+            connection: None,
+            command: None,
+            command_type: None,
+            url: None,
+            xml: None,
+            source_data: None,
+            html_tables: None,
+            html_format: None,
+            post: None,
+            edit_page: None,
+            source_file: None,
+            delimiter: None,
+            first_row: None,
+            delimited: None,
+            decimal: None,
+            thousands: None,
+            local: None,
+            local_connection: None,
+            local_refresh: None,
+            send_locale: None,
+            row_drill_count: None,
+        };
+        match &connection.kind {
+            WorkbookConnectionKind::Database {
+                connection,
+                command,
+                command_type,
+            } => {
+                definition.connection = Some(connection.clone());
+                definition.command = command.clone();
+                definition.command_type = *command_type;
+            }
+            WorkbookConnectionKind::Olap {
+                connection,
+                command,
+                command_type,
+                local,
+                local_connection,
+                local_refresh,
+                send_locale,
+                row_drill_count,
+            } => {
+                definition.connection = connection.clone();
+                definition.command = command.clone();
+                definition.command_type = *command_type;
+                definition.local = Some(*local);
+                definition.local_connection = local_connection.clone();
+                definition.local_refresh = Some(*local_refresh);
+                definition.send_locale = Some(*send_locale);
+                definition.row_drill_count = *row_drill_count;
+            }
+            WorkbookConnectionKind::Web {
+                url,
+                xml,
+                source_data,
+                html_tables,
+                html_format,
+                post,
+                edit_page,
+            } => {
+                definition.url = url.clone();
+                definition.xml = Some(*xml);
+                definition.source_data = Some(*source_data);
+                definition.html_tables = Some(*html_tables);
+                definition.html_format = html_format.clone();
+                definition.post = post.clone();
+                definition.edit_page = edit_page.clone();
+            }
+            WorkbookConnectionKind::Text {
+                source_file,
+                delimiter,
+                first_row,
+                delimited,
+                decimal,
+                thousands,
+            } => {
+                definition.source_file = source_file.clone();
+                definition.delimiter = delimiter.clone();
+                definition.first_row = Some(*first_row);
+                definition.delimited = Some(*delimited);
+                definition.decimal = decimal.clone();
+                definition.thousands = thousands.clone();
+            }
+        }
+        definition
+    }
+}
+
+fn workbook_connection_kind_name(kind: &WorkbookConnectionKind) -> &'static str {
+    match kind {
+        WorkbookConnectionKind::Database { .. } => "database",
+        WorkbookConnectionKind::Olap { .. } => "olap",
+        WorkbookConnectionKind::Web { .. } => "web",
+        WorkbookConnectionKind::Text { .. } => "text",
+    }
+}
+
+#[napi(object)]
+pub struct JsWorkbookExtension {
+    pub uri: String,
+    pub payload: Buffer,
+}
+
+impl From<&WorkbookExtension> for JsWorkbookExtension {
+    fn from(extension: &WorkbookExtension) -> Self {
+        Self {
+            uri: extension.uri.clone(),
+            payload: extension.payload.clone().into(),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsWorkbookExtensionPart {
+    pub path: String,
+    pub content_type: String,
+    pub relationship_type: String,
+    pub relationship_id: Option<String>,
+    pub payload: Buffer,
+}
+
+impl From<&WorkbookExtensionPart> for JsWorkbookExtensionPart {
+    fn from(part: &WorkbookExtensionPart) -> Self {
+        Self {
+            path: part.path.clone(),
+            content_type: part.content_type.clone(),
+            relationship_type: part.relationship_type.clone(),
+            relationship_id: part.relationship_id.clone(),
+            payload: part.payload.clone().into(),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsPivotRefreshOptions {
+    pub max_threads: Option<u32>,
+    pub today: Option<f64>,
+}
+
+impl From<JsPivotRefreshOptions> for PivotRefreshOptions {
+    fn from(options: JsPivotRefreshOptions) -> Self {
+        Self {
+            max_threads: options.max_threads.map(|threads| threads as usize),
+            today: options.today,
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsPivotRefreshStats {
+    pub pivot_count: u32,
+    pub pivots_refreshed: u32,
+    pub source_rows: u32,
+    pub output_cells: u32,
+    pub cache_hits: u32,
+    pub cache_misses: u32,
+}
+
+impl TryFrom<duke_sheets::PivotRefreshStats> for JsPivotRefreshStats {
+    type Error = napi::Error;
+
+    fn try_from(stats: duke_sheets::PivotRefreshStats) -> Result<Self> {
+        Ok(Self {
+            pivot_count: u32::try_from(stats.pivot_count).map_err(to_napi_err)?,
+            pivots_refreshed: u32::try_from(stats.pivots_refreshed).map_err(to_napi_err)?,
+            source_rows: u32::try_from(stats.source_rows).map_err(to_napi_err)?,
+            output_cells: u32::try_from(stats.output_cells).map_err(to_napi_err)?,
+            cache_hits: u32::try_from(stats.cache_hits).map_err(to_napi_err)?,
+            cache_misses: u32::try_from(stats.cache_misses).map_err(to_napi_err)?,
+        })
+    }
+}
+
+fn build_pivot_table_from_js(options: JsPivotTableOptions) -> Result<PivotTable> {
+    let mut builder = PivotTable::builder(options.name);
+    if options.external_command_text.is_some() && options.external_connection_name.is_none() {
+        return Err(napi::Error::from_reason(
+            "Pivot options require externalConnectionName when externalCommandText is set",
+        ));
+    }
+    let source_count = usize::from(options.table_name.is_some())
+        + usize::from(options.source_range.is_some())
+        + usize::from(options.external_connection_name.is_some())
+        + usize::from(options.olap_connection_name.is_some())
+        + usize::from(options.consolidation_ranges.is_some());
+    if source_count != 1 {
+        return Err(napi::Error::from_reason(
+            "Pivot options require exactly one of tableName, sourceRange, externalConnectionName, olapConnectionName, or consolidationRanges",
+        ));
+    }
+
+    match (
+        options.table_name,
+        options.source_range,
+        options.external_connection_name,
+        options.olap_connection_name,
+        options.consolidation_ranges,
+    ) {
+        (Some(table_name), None, None, None, None) => {
+            builder = builder.table_source(table_name);
+        }
+        (None, Some(source_range), None, None, None) => {
+            let range = CellRange::parse(&source_range).map_err(|e| {
+                napi::Error::from_reason(format!("Invalid pivot source range: {e}"))
+            })?;
+            builder = if let Some(sheet) = options.source_sheet {
+                builder.source_range_on_sheet(sheet, range)
+            } else {
+                builder.source_range(range)
+            };
+        }
+        (None, None, Some(connection_name), None, None) => {
+            builder = builder.source(PivotSource::External {
+                connection_name,
+                command_text: options.external_command_text,
+            });
+        }
+        (None, None, None, Some(connection_name), None) => {
+            builder = builder.source(PivotSource::Olap {
+                connection_name,
+                cube: None,
+                command_text: None,
+            });
+        }
+        (None, None, None, None, Some(ranges)) => {
+            builder = builder.source(PivotSource::Consolidation {
+                ranges: build_pivot_consolidation_ranges_from_js(ranges)?,
+            });
+        }
+        _ => unreachable!("source_count validation accepts exactly one source"),
+    }
+
+    builder = builder
+        .target_address(&options.target)
+        .map_err(|e| napi::Error::from_reason(format!("Invalid pivot target: {e}")))?;
+    for field in options.rows.unwrap_or_default() {
+        builder = builder.row(field);
+    }
+    for field in options.columns.unwrap_or_default() {
+        builder = builder.column(field);
+    }
+    for field in options.pages.unwrap_or_default() {
+        builder = builder.page(field);
+    }
+    for field in options.row_fields.unwrap_or_default() {
+        builder = builder.row(build_pivot_field_from_js(field)?);
+    }
+    for field in options.column_fields.unwrap_or_default() {
+        builder = builder.column(build_pivot_field_from_js(field)?);
+    }
+    for field in options.page_fields.unwrap_or_default() {
+        builder = builder.page(build_pivot_field_from_js(field)?);
+    }
+    for measure in options.measures {
+        builder = builder.pivot_measure(build_pivot_measure_from_js(measure)?);
+    }
+    for filter in options.filters.unwrap_or_default() {
+        builder = builder.filter(build_pivot_filter_from_js(filter)?);
+    }
+    for calculated_field in options.calculated_fields.unwrap_or_default() {
+        builder = builder.calculated_field(calculated_field.name, calculated_field.formula);
+    }
+    for calculated_item in options.calculated_items.unwrap_or_default() {
+        builder = builder.calculated_item(
+            calculated_item.field,
+            pivot_value_from_js(calculated_item.item),
+            calculated_item.formula,
+        );
+    }
+    for grouping in options.groupings.unwrap_or_default() {
+        builder = builder.grouping(build_pivot_grouping_from_js(grouping)?);
+    }
+    if let Some(refresh_policy) = options.refresh_policy {
+        builder = builder.refresh_policy(build_pivot_refresh_policy_from_js(refresh_policy));
+    }
+    if let Some(layout) = options.layout {
+        builder = builder.layout(build_pivot_layout_from_js(layout)?);
+    }
+    if let Some(style) = options.style {
+        builder = builder.style(build_pivot_style_from_js(style));
+    }
+    if let Some(overwrite_policy) = options.overwrite_policy {
+        builder = builder.overwrite_policy(parse_pivot_overwrite_policy(&overwrite_policy)?);
+    }
+
+    builder.build().map_err(to_napi_err)
+}
+
+fn build_pivot_consolidation_ranges_from_js(
+    ranges: Vec<JsPivotConsolidationRangeOptions>,
+) -> Result<Vec<PivotSourceRange>> {
+    if ranges.is_empty() {
+        return Err(napi::Error::from_reason(
+            "Pivot consolidationRanges must contain at least one range",
+        ));
+    }
+    ranges
+        .into_iter()
+        .map(|range| {
+            let parsed = range
+                .range
+                .as_deref()
+                .map(|range_ref| {
+                    CellRange::parse(range_ref).map_err(|e| {
+                        napi::Error::from_reason(format!(
+                            "Invalid pivot consolidation range: {e}"
+                        ))
+                    })
+                })
+                .transpose()?;
+            if parsed.is_none()
+                && range.name.is_none()
+                && range.external_relationship_id.is_none()
+                && range.external_relationship_target.is_none()
+            {
+                return Err(napi::Error::from_reason(
+                    "Pivot consolidation range requires range, name, externalRelationshipId, or externalRelationshipTarget",
+                ));
+            }
+            let mut source_range = PivotSourceRange {
+                sheet: range.sheet,
+                range: parsed,
+                name: range.name,
+                external_relationship_id: range.external_relationship_id,
+                external_relationship_target: range.external_relationship_target,
+                page_items: Vec::new(),
+            };
+            if let Some(page_items) = range.page_items {
+                source_range = source_range.with_page_items(page_items);
+            }
+            Ok(source_range)
+        })
+        .collect()
+}
+
+fn build_workbook_connection_from_js(
+    options: JsWorkbookConnectionOptions,
+) -> Result<WorkbookConnection> {
+    let kind = options
+        .kind
+        .as_deref()
+        .unwrap_or("database")
+        .to_ascii_lowercase();
+    let mut connection = match kind.as_str() {
+        "database" | "db" => WorkbookConnection::database(
+            options.id,
+            options.name,
+            options.connection.ok_or_else(|| {
+                napi::Error::from_reason("database data connections require connection")
+            })?,
+        ),
+        "web" => {
+            let mut connection = WorkbookConnection::web(options.id, options.name, "");
+            connection.kind = WorkbookConnectionKind::Web {
+                url: options.url,
+                xml: options.xml.unwrap_or(false),
+                source_data: options.source_data.unwrap_or(false),
+                html_tables: options.html_tables.unwrap_or(false),
+                html_format: options.html_format,
+                post: options.post,
+                edit_page: options.edit_page,
+            };
+            connection
+        }
+        "text" => {
+            let mut connection = WorkbookConnection::text(
+                options.id,
+                options.name,
+                options.source_file.clone().unwrap_or_default(),
+            );
+            connection.kind = WorkbookConnectionKind::Text {
+                source_file: options.source_file,
+                delimiter: options.delimiter,
+                first_row: options.first_row.unwrap_or(1),
+                delimited: options.delimited.unwrap_or(true),
+                decimal: options.decimal,
+                thousands: options.thousands,
+            };
+            connection
+        }
+        "olap" => {
+            let mut connection = WorkbookConnection::olap(options.id, options.name);
+            connection.kind = WorkbookConnectionKind::Olap {
+                connection: options.connection,
+                command: None,
+                command_type: None,
+                local: options.local.unwrap_or(false),
+                local_connection: options.local_connection,
+                local_refresh: options.local_refresh.unwrap_or(true),
+                send_locale: options.send_locale.unwrap_or(false),
+                row_drill_count: options.row_drill_count,
+            };
+            connection
+        }
+        other => {
+            return Err(napi::Error::from_reason(format!(
+                "unknown data connection kind: {other}"
+            )))
+        }
+    };
+    if let Some(command) = options.command {
+        connection = connection.with_command(command);
+    }
+    if let Some(command_type) = options.command_type {
+        connection = connection.with_command_type(command_type);
+    }
+    if let Some(refresh_on_load) = options.refresh_on_load {
+        connection = connection.with_refresh_on_load(refresh_on_load);
+    }
+    if let Some(background) = options.background {
+        connection = connection.with_background(background);
+    }
+    if let Some(save_data) = options.save_data {
+        connection = connection.with_save_data(save_data);
+    }
+    Ok(connection)
+}
+
+fn build_pivot_field_from_js(options: JsPivotFieldOptions) -> Result<PivotField> {
+    let mut field = PivotField::new(options.field);
+    field.caption = options.caption;
+    if let Some(sort) = options.sort {
+        field.sort = parse_pivot_sort(&sort)?;
+    }
+    if let Some(measure) = options.sort_by_measure {
+        field.sort_by_measure = Some(build_pivot_measure_from_js(measure)?);
+    }
+    if let Some(subtotal) = options.subtotal {
+        field.subtotal = parse_pivot_subtotal(&subtotal)?;
+    }
+    field.subtotal_caption = options.subtotal_caption;
+    if let Some(subtotals) = options.subtotals {
+        let subtotals = subtotals
+            .into_iter()
+            .map(|subtotal| parse_pivot_subtotal(&subtotal))
+            .collect::<Result<Vec<_>>>()?;
+        field = field.with_subtotals(subtotals);
+    }
+    if let Some(values) = options.collapsed_items {
+        field.collapsed_items = values.into_iter().map(pivot_value_from_js).collect();
+    }
+    if let Some(show_empty_items) = options.show_empty_items {
+        field.show_empty_items = show_empty_items;
+    }
+    if let Some(value) = options.show_drop_downs {
+        field.show_drop_downs = value;
+    }
+    if let Some(value) = options.subtotal_top {
+        field.subtotal_top = value;
+    }
+    if let Some(value) = options.insert_blank_row {
+        field.insert_blank_row = value;
+    }
+    if let Some(value) = options.insert_page_break {
+        field.insert_page_break = value;
+    }
+    if let Some(value) = options.include_new_items_in_filter {
+        field.include_new_items_in_filter = value;
+    }
+    if let Some(value) = options.item_page_count {
+        field.item_page_count = value;
+    }
+    Ok(field)
+}
+
+fn build_pivot_refresh_policy_from_js(options: JsPivotRefreshPolicyOptions) -> PivotRefreshPolicy {
+    let mut policy = PivotRefreshPolicy::default();
+    if let Some(value) = options.refresh_on_open {
+        policy.refresh_on_open = value;
+    }
+    if let Some(value) = options.preserve_formatting {
+        policy.preserve_formatting = value;
+    }
+    if let Some(value) = options.background_query {
+        policy.background_query = value;
+    }
+    policy.missing_items_limit = options.missing_items_limit;
+    policy
+}
+
+fn build_pivot_layout_from_js(options: JsPivotLayoutOptions) -> Result<PivotLayout> {
+    let mut layout = PivotLayout::default();
+    if let Some(kind) = options.kind {
+        layout.kind = parse_pivot_layout_kind(&kind)?;
+    }
+    if let Some(value) = options.show_row_grand_totals {
+        layout.show_row_grand_totals = value;
+    }
+    if let Some(value) = options.show_column_grand_totals {
+        layout.show_column_grand_totals = value;
+    }
+    if let Some(value) = options.show_field_headers {
+        layout.show_field_headers = value;
+    }
+    if let Some(value) = options.repeat_item_labels {
+        layout.repeat_item_labels = value;
+    }
+    if let Some(value) = options.show_expand_collapse {
+        layout.show_expand_collapse = value;
+    }
+    if let Some(value) = options.print_drill_indicators {
+        layout.print_drill_indicators = value;
+    }
+    if let Some(value) = options.item_print_titles {
+        layout.item_print_titles = value;
+    }
+    if let Some(value) = options.field_print_titles {
+        layout.field_print_titles = value;
+    }
+    if let Some(value) = options.page_wrap {
+        layout.page_wrap = value;
+    }
+    if let Some(value) = options.page_over_then_down {
+        layout.page_over_then_down = value;
+    }
+    if let Some(value) = options.merge_item_labels {
+        layout.merge_item_labels = value;
+    }
+    if let Some(value) = options.data_caption {
+        layout.data_caption = value;
+    }
+    if let Some(value) = options.values_axis {
+        layout.values_axis = parse_pivot_values_axis(&value)?;
+    }
+    layout.values_axis_position = options.values_axis_position;
+    if let Some(value) = options.grand_total_caption {
+        layout.grand_total_caption = Some(value);
+    }
+    if let Some(value) = options.error_caption {
+        layout.error_caption = Some(value);
+    }
+    if let Some(value) = options.show_error {
+        layout.show_error = value;
+    }
+    if let Some(value) = options.missing_caption {
+        layout.missing_caption = Some(value);
+    }
+    if let Some(value) = options.show_missing {
+        layout.show_missing = value;
+    }
+    if let Some(value) = options.asterisk_totals {
+        layout.asterisk_totals = value;
+    }
+    if let Some(value) = options.show_items {
+        layout.show_items = value;
+    }
+    if let Some(value) = options.edit_data {
+        layout.edit_data = value;
+    }
+    if let Some(value) = options.disable_field_list {
+        layout.disable_field_list = value;
+    }
+    if let Some(value) = options.show_calculated_members {
+        layout.show_calculated_members = value;
+    }
+    if let Some(value) = options.visual_totals {
+        layout.visual_totals = value;
+    }
+    if let Some(value) = options.show_multiple_label {
+        layout.show_multiple_label = value;
+    }
+    if let Some(value) = options.show_data_drop_down {
+        layout.show_data_drop_down = value;
+    }
+    if let Some(value) = options.show_member_property_tips {
+        layout.show_member_property_tips = value;
+    }
+    if let Some(value) = options.show_data_tips {
+        layout.show_data_tips = value;
+    }
+    if let Some(value) = options.enable_wizard {
+        layout.enable_wizard = value;
+    }
+    if let Some(value) = options.enable_drill {
+        layout.enable_drill = value;
+    }
+    if let Some(value) = options.enable_field_properties {
+        layout.enable_field_properties = value;
+    }
+    if let Some(value) = options.subtotal_hidden_items {
+        layout.subtotal_hidden_items = value;
+    }
+    if let Some(value) = options.show_drop_zones {
+        layout.show_drop_zones = value;
+    }
+    if let Some(value) = options.indent {
+        layout.indent = value;
+    }
+    if let Some(value) = options.show_empty_rows {
+        layout.show_empty_rows = value;
+    }
+    if let Some(value) = options.show_empty_columns {
+        layout.show_empty_columns = value;
+    }
+    Ok(layout)
+}
+
+fn build_pivot_style_from_js(options: JsPivotStyleOptions) -> PivotStyle {
+    let mut style = PivotStyle::default();
+    if let Some(name) = options.name {
+        style.name = if name.is_empty() { None } else { Some(name) };
+    }
+    if let Some(value) = options.show_row_headers {
+        style.show_row_headers = value;
+    }
+    if let Some(value) = options.show_column_headers {
+        style.show_column_headers = value;
+    }
+    if let Some(value) = options.show_row_stripes {
+        style.show_row_stripes = value;
+    }
+    if let Some(value) = options.show_column_stripes {
+        style.show_column_stripes = value;
+    }
+    if let Some(value) = options.show_last_column {
+        style.show_last_column = value;
+    }
+    style
+}
+
+fn parse_pivot_layout_kind(value: &str) -> Result<PivotLayoutKind> {
+    Ok(match value {
+        "compact" => PivotLayoutKind::Compact,
+        "outline" => PivotLayoutKind::Outline,
+        "tabular" => PivotLayoutKind::Tabular,
+        other => {
+            return Err(napi::Error::from_reason(format!(
+                "Unsupported pivot layout kind: {other}"
+            )));
+        }
+    })
+}
+
+fn parse_pivot_values_axis(value: &str) -> Result<PivotValuesAxis> {
+    Ok(match value {
+        "columns" | "column" | "cols" => PivotValuesAxis::Columns,
+        "rows" | "row" => PivotValuesAxis::Rows,
+        other => {
+            return Err(napi::Error::from_reason(format!(
+                "Unsupported pivot values axis: {other}"
+            )));
+        }
+    })
+}
+
+fn parse_chart_type(value: Option<&str>) -> Result<ChartType> {
+    match value {
+        Some(value) => ChartType::from_name(value)
+            .ok_or_else(|| napi::Error::from_reason(format!("Unsupported chart type: {value}"))),
+        None => Ok(ChartType::ColumnClustered),
+    }
+}
+
+fn parse_pivot_overwrite_policy(value: &str) -> Result<PivotOverwritePolicy> {
+    Ok(match value {
+        "clearOwnedRange" | "clear_owned_range" | "clear" => PivotOverwritePolicy::ClearOwnedRange,
+        "overwrite" => PivotOverwritePolicy::Overwrite,
+        "failOnOccupied" | "fail_on_occupied" => PivotOverwritePolicy::FailOnOccupied,
+        other => {
+            return Err(napi::Error::from_reason(format!(
+                "Unsupported pivot overwrite policy: {other}"
+            )));
+        }
+    })
+}
+
+fn parse_pivot_sort(value: &str) -> Result<PivotSort> {
+    Ok(match value {
+        "none" | "manual" => PivotSort::None,
+        "ascending" | "asc" => PivotSort::Ascending,
+        "descending" | "desc" => PivotSort::Descending,
+        other => {
+            return Err(napi::Error::from_reason(format!(
+                "Unsupported pivot sort: {other}"
+            )))
+        }
+    })
+}
+
+fn parse_pivot_subtotal(value: &str) -> Result<PivotSubtotal> {
+    Ok(match value {
+        "automatic" | "auto" => PivotSubtotal::Automatic,
+        "none" => PivotSubtotal::None,
+        "sum" => PivotSubtotal::Sum,
+        "count" => PivotSubtotal::Count,
+        "count_numbers" | "countNumbers" | "countnumbers" | "count_nums" | "countNums"
+        | "countnums" => PivotSubtotal::CountNumbers,
+        "average" | "avg" => PivotSubtotal::Average,
+        "min" => PivotSubtotal::Min,
+        "max" => PivotSubtotal::Max,
+        "product" => PivotSubtotal::Product,
+        "std_dev" | "stdDev" | "stddev" => PivotSubtotal::StdDev,
+        "std_dev_p" | "stdDevP" | "stddevp" => PivotSubtotal::StdDevP,
+        "var" | "variance" => PivotSubtotal::Var,
+        "var_p" | "varP" | "varp" | "variance_p" | "varianceP" => PivotSubtotal::VarP,
+        other => {
+            return Err(napi::Error::from_reason(format!(
+                "Unsupported pivot subtotal: {other}"
+            )));
+        }
+    })
+}
+
+fn build_pivot_measure_from_js(options: JsPivotMeasureOptions) -> Result<PivotMeasure> {
+    let aggregate = parse_pivot_aggregate(options.aggregate.as_deref())?;
+    let mut measure = PivotMeasure::new(options.field, aggregate);
+    if let Some(name) = options.name {
+        measure = measure.with_name(name);
+    }
+    if let Some(show_as) = options.show_as {
+        measure = measure.with_show_as(parse_pivot_show_as(
+            &show_as,
+            options.base_field,
+            options.base_item,
+        )?);
+    }
+    if let Some(number_format) = options.number_format {
+        measure = measure.with_number_format(number_format);
+    }
+    Ok(measure)
+}
+
+fn build_pivot_filter_from_js(options: JsPivotFilterOptions) -> Result<PivotFilter> {
+    let kind = options.kind.unwrap_or_else(|| {
+        if options.items.is_some() {
+            "items".to_string()
+        } else {
+            "item".to_string()
+        }
+    });
+    match kind.as_str() {
+        "item" | "items" | "fieldItems" | "field_items" => {
+            let items = options
+                .items
+                .ok_or_else(|| napi::Error::from_reason("Pivot item filter requires items"))?;
+            Ok(PivotFilter::field_items(
+                options.field,
+                items.into_iter().map(PivotValue::from).collect::<Vec<_>>(),
+            ))
+        }
+        "label" => Ok(PivotFilter::Label {
+            field: options.field.into(),
+            operator: parse_pivot_filter_operator(options.operator.as_deref())?,
+            value: options
+                .text
+                .ok_or_else(|| napi::Error::from_reason("Pivot label filter requires text"))?,
+        }),
+        "labelBetween" | "label_between" | "captionBetween" | "caption_between" => {
+            Ok(PivotFilter::LabelBetween {
+                field: options.field.into(),
+                start: options.start_text.or(options.text).ok_or_else(|| {
+                    napi::Error::from_reason("Pivot label-between filter requires startText")
+                })?,
+                end: options.end_text.ok_or_else(|| {
+                    napi::Error::from_reason("Pivot label-between filter requires endText")
+                })?,
+                not_between: false,
+            })
+        }
+        "labelNotBetween" | "label_not_between" | "captionNotBetween" | "caption_not_between" => {
+            Ok(PivotFilter::LabelBetween {
+                field: options.field.into(),
+                start: options.start_text.or(options.text).ok_or_else(|| {
+                    napi::Error::from_reason("Pivot label-not-between filter requires startText")
+                })?,
+                end: options.end_text.ok_or_else(|| {
+                    napi::Error::from_reason("Pivot label-not-between filter requires endText")
+                })?,
+                not_between: true,
+            })
+        }
+        "value" => {
+            Ok(PivotFilter::Value {
+                field: options.field.into(),
+                measure: build_pivot_measure_from_js(options.measure.ok_or_else(|| {
+                    napi::Error::from_reason("Pivot value filter requires measure")
+                })?)?,
+                operator: parse_pivot_filter_operator(options.operator.as_deref())?,
+                value: options
+                    .value
+                    .ok_or_else(|| napi::Error::from_reason("Pivot value filter requires value"))?,
+            })
+        }
+        "valueBetween" | "value_between" | "valueRange" | "value_range" => {
+            Ok(PivotFilter::ValueBetween {
+                field: options.field.into(),
+                measure: build_pivot_measure_from_js(options.measure.ok_or_else(|| {
+                    napi::Error::from_reason("Pivot value-between filter requires measure")
+                })?)?,
+                start: options.start.or(options.value).ok_or_else(|| {
+                    napi::Error::from_reason("Pivot value-between filter requires start")
+                })?,
+                end: options.end.ok_or_else(|| {
+                    napi::Error::from_reason("Pivot value-between filter requires end")
+                })?,
+                not_between: false,
+            })
+        }
+        "valueNotBetween" | "value_not_between" | "valueNotRange" | "value_not_range" => {
+            Ok(PivotFilter::ValueBetween {
+                field: options.field.into(),
+                measure: build_pivot_measure_from_js(options.measure.ok_or_else(|| {
+                    napi::Error::from_reason("Pivot value-not-between filter requires measure")
+                })?)?,
+                start: options.start.or(options.value).ok_or_else(|| {
+                    napi::Error::from_reason("Pivot value-not-between filter requires start")
+                })?,
+                end: options.end.ok_or_else(|| {
+                    napi::Error::from_reason("Pivot value-not-between filter requires end")
+                })?,
+                not_between: true,
+            })
+        }
+        "date" => Ok(PivotFilter::Date {
+            field: options.field.into(),
+            operator: parse_pivot_filter_operator(options.operator.as_deref())?,
+            value: options
+                .value
+                .or(options.start)
+                .ok_or_else(|| napi::Error::from_reason("Pivot date filter requires value"))?,
+        }),
+        "dateBetween" | "date_between" | "dateRange" | "date_range" => {
+            Ok(PivotFilter::DateBetween {
+                field: options.field.into(),
+                start: options.start.or(options.value).ok_or_else(|| {
+                    napi::Error::from_reason("Pivot date-between filter requires start")
+                })?,
+                end: options.end.ok_or_else(|| {
+                    napi::Error::from_reason("Pivot date-between filter requires end")
+                })?,
+                not_between: false,
+            })
+        }
+        "dateNotBetween" | "date_not_between" | "dateNotRange" | "date_not_range" => {
+            Ok(PivotFilter::DateBetween {
+                field: options.field.into(),
+                start: options.start.or(options.value).ok_or_else(|| {
+                    napi::Error::from_reason("Pivot date-not-between filter requires start")
+                })?,
+                end: options.end.ok_or_else(|| {
+                    napi::Error::from_reason("Pivot date-not-between filter requires end")
+                })?,
+                not_between: true,
+            })
+        }
+        "datePeriod" | "date_period" | "period" => Ok(PivotFilter::DatePeriod {
+            field: options.field.into(),
+            period: parse_pivot_date_period(options.period.as_deref().ok_or_else(|| {
+                napi::Error::from_reason("Pivot date-period filter requires period")
+            })?)?,
+        }),
+        "topN" | "top_n" | "top" => {
+            Ok(PivotFilter::TopN {
+                field: options.field.into(),
+                measure: build_pivot_measure_from_js(options.measure.ok_or_else(|| {
+                    napi::Error::from_reason("Pivot top-N filter requires measure")
+                })?)?,
+                n: options
+                    .n
+                    .ok_or_else(|| napi::Error::from_reason("Pivot top-N filter requires n"))?,
+                top: options.top.unwrap_or(true),
+                percent: options.percent.unwrap_or(false),
+            })
+        }
+        other => Err(napi::Error::from_reason(format!(
+            "Unsupported pivot filter kind: {other}"
+        ))),
+    }
+}
+
+fn parse_pivot_date_period(value: &str) -> Result<PivotDatePeriod> {
+    Ok(match value {
+        "tomorrow" => PivotDatePeriod::Tomorrow,
+        "today" => PivotDatePeriod::Today,
+        "yesterday" => PivotDatePeriod::Yesterday,
+        "nextWeek" | "next_week" => PivotDatePeriod::NextWeek,
+        "thisWeek" | "this_week" => PivotDatePeriod::ThisWeek,
+        "lastWeek" | "last_week" => PivotDatePeriod::LastWeek,
+        "nextMonth" | "next_month" => PivotDatePeriod::NextMonth,
+        "thisMonth" | "this_month" => PivotDatePeriod::ThisMonth,
+        "lastMonth" | "last_month" => PivotDatePeriod::LastMonth,
+        "nextQuarter" | "next_quarter" => PivotDatePeriod::NextQuarter,
+        "thisQuarter" | "this_quarter" => PivotDatePeriod::ThisQuarter,
+        "lastQuarter" | "last_quarter" => PivotDatePeriod::LastQuarter,
+        "nextYear" | "next_year" => PivotDatePeriod::NextYear,
+        "thisYear" | "this_year" => PivotDatePeriod::ThisYear,
+        "lastYear" | "last_year" => PivotDatePeriod::LastYear,
+        "yearToDate" | "year_to_date" => PivotDatePeriod::YearToDate,
+        "Q1" | "quarter1" | "quarter_1" => PivotDatePeriod::Quarter(1),
+        "Q2" | "quarter2" | "quarter_2" => PivotDatePeriod::Quarter(2),
+        "Q3" | "quarter3" | "quarter_3" => PivotDatePeriod::Quarter(3),
+        "Q4" | "quarter4" | "quarter_4" => PivotDatePeriod::Quarter(4),
+        "M1" | "month1" | "month_1" => PivotDatePeriod::Month(1),
+        "M2" | "month2" | "month_2" => PivotDatePeriod::Month(2),
+        "M3" | "month3" | "month_3" => PivotDatePeriod::Month(3),
+        "M4" | "month4" | "month_4" => PivotDatePeriod::Month(4),
+        "M5" | "month5" | "month_5" => PivotDatePeriod::Month(5),
+        "M6" | "month6" | "month_6" => PivotDatePeriod::Month(6),
+        "M7" | "month7" | "month_7" => PivotDatePeriod::Month(7),
+        "M8" | "month8" | "month_8" => PivotDatePeriod::Month(8),
+        "M9" | "month9" | "month_9" => PivotDatePeriod::Month(9),
+        "M10" | "month10" | "month_10" => PivotDatePeriod::Month(10),
+        "M11" | "month11" | "month_11" => PivotDatePeriod::Month(11),
+        "M12" | "month12" | "month_12" => PivotDatePeriod::Month(12),
+        other => {
+            return Err(napi::Error::from_reason(format!(
+                "Unsupported pivot date period: {other}"
+            )))
+        }
+    })
+}
+
+fn build_pivot_grouping_from_js(options: JsPivotGroupingOptions) -> Result<PivotGrouping> {
+    match options.kind.as_str() {
+        "number" | "numeric" => Ok(PivotGrouping::Number {
+            field: options.field.into(),
+            start: options.start,
+            end: options.end,
+            interval: options.interval.ok_or_else(|| {
+                napi::Error::from_reason("Numeric pivot grouping requires interval")
+            })?,
+        }),
+        "date" => {
+            let units = options
+                .units
+                .ok_or_else(|| napi::Error::from_reason("Date pivot grouping requires units"))?
+                .iter()
+                .map(|unit| parse_pivot_date_group_unit(unit))
+                .collect::<Result<Vec<_>>>()?;
+            Ok(PivotGrouping::Date {
+                field: options.field.into(),
+                units,
+            })
+        }
+        "manual" | "items" | "item" => Ok(PivotGrouping::Manual {
+            field: options.field.into(),
+            groups: options
+                .groups
+                .ok_or_else(|| napi::Error::from_reason("Manual pivot grouping requires groups"))?
+                .into_iter()
+                .map(|group| PivotManualGroup {
+                    name: group.name,
+                    members: group.members.into_iter().map(pivot_value_from_js).collect(),
+                })
+                .collect(),
+        }),
+        other => Err(napi::Error::from_reason(format!(
+            "Unsupported pivot grouping kind: {other}"
+        ))),
+    }
+}
+
+fn parse_pivot_aggregate(value: Option<&str>) -> Result<PivotAggregate> {
+    let Some(value) = value else {
+        return Ok(PivotAggregate::Sum);
+    };
+    Ok(match value {
+        "sum" => PivotAggregate::Sum,
+        "count" => PivotAggregate::Count,
+        "countNumbers" | "countNums" => PivotAggregate::CountNumbers,
+        "average" | "avg" => PivotAggregate::Average,
+        "max" => PivotAggregate::Max,
+        "min" => PivotAggregate::Min,
+        "product" => PivotAggregate::Product,
+        "stdDev" => PivotAggregate::StdDev,
+        "stdDevP" | "stdDevp" => PivotAggregate::StdDevP,
+        "var" => PivotAggregate::Var,
+        "varP" | "varp" => PivotAggregate::VarP,
+        other => {
+            return Err(napi::Error::from_reason(format!(
+                "Unsupported pivot aggregate: {other}"
+            )));
+        }
+    })
+}
+
+fn parse_pivot_filter_operator(value: Option<&str>) -> Result<PivotFilterOperator> {
+    let value = value.ok_or_else(|| napi::Error::from_reason("Pivot filter requires operator"))?;
+    Ok(match value {
+        "equals" | "equal" | "eq" => PivotFilterOperator::Equals,
+        "notEquals" | "notEqual" | "ne" => PivotFilterOperator::NotEquals,
+        "lessThan" | "lt" => PivotFilterOperator::LessThan,
+        "lessThanOrEqual" | "lte" => PivotFilterOperator::LessThanOrEqual,
+        "greaterThan" | "gt" => PivotFilterOperator::GreaterThan,
+        "greaterThanOrEqual" | "gte" => PivotFilterOperator::GreaterThanOrEqual,
+        "beginsWith" => PivotFilterOperator::BeginsWith,
+        "doesNotBeginWith" | "notBeginsWith" => PivotFilterOperator::DoesNotBeginWith,
+        "endsWith" => PivotFilterOperator::EndsWith,
+        "doesNotEndWith" | "notEndsWith" => PivotFilterOperator::DoesNotEndWith,
+        "contains" => PivotFilterOperator::Contains,
+        "doesNotContain" | "notContains" => PivotFilterOperator::DoesNotContain,
+        other => {
+            return Err(napi::Error::from_reason(format!(
+                "Unsupported pivot filter operator: {other}"
+            )));
+        }
+    })
+}
+
+fn parse_pivot_date_group_unit(value: &str) -> Result<PivotDateGroupUnit> {
+    Ok(match value {
+        "seconds" => PivotDateGroupUnit::Seconds,
+        "minutes" => PivotDateGroupUnit::Minutes,
+        "hours" => PivotDateGroupUnit::Hours,
+        "days" => PivotDateGroupUnit::Days,
+        "months" => PivotDateGroupUnit::Months,
+        "quarters" => PivotDateGroupUnit::Quarters,
+        "years" => PivotDateGroupUnit::Years,
+        other => {
+            return Err(napi::Error::from_reason(format!(
+                "Unsupported pivot date grouping unit: {other}"
+            )));
+        }
+    })
+}
+
+fn parse_pivot_show_as(
+    value: &str,
+    base_field: Option<String>,
+    base_item: Option<Either3<f64, String, bool>>,
+) -> Result<PivotShowAs> {
+    Ok(match value {
+        "normal" => PivotShowAs::Normal,
+        "percentOfGrandTotal" | "percentOfTotal" => PivotShowAs::PercentOfGrandTotal,
+        "percentOfRowTotal" | "percentOfRow" => PivotShowAs::PercentOfRowTotal,
+        "percentOfColumnTotal" | "percentOfCol" => PivotShowAs::PercentOfColumnTotal,
+        "percentOfParentRowTotal" | "percentOfParentRow" => PivotShowAs::PercentOfParentRowTotal,
+        "percentOfParentColumnTotal" | "percentOfParentCol" => {
+            PivotShowAs::PercentOfParentColumnTotal
+        }
+        "percentOfParentTotal" | "percentOfParent" => PivotShowAs::PercentOfParentTotal {
+            base_field: require_pivot_base_field(value, base_field)?.into(),
+        },
+        "index" => PivotShowAs::Index,
+        "runningTotal" | "runTotal" => PivotShowAs::RunningTotal {
+            base_field: require_pivot_base_field(value, base_field)?.into(),
+        },
+        "differenceFrom" | "difference" => PivotShowAs::DifferenceFrom {
+            base_field: require_pivot_base_field(value, base_field)?.into(),
+            base_item: require_pivot_base_item(value, base_item)?,
+        },
+        "percentDifferenceFrom" | "percentDiff" => PivotShowAs::PercentDifferenceFrom {
+            base_field: require_pivot_base_field(value, base_field)?.into(),
+            base_item: require_pivot_base_item(value, base_item)?,
+        },
+        "rankAscending" => PivotShowAs::RankAscending {
+            base_field: require_pivot_base_field(value, base_field)?.into(),
+        },
+        "rankDescending" => PivotShowAs::RankDescending {
+            base_field: require_pivot_base_field(value, base_field)?.into(),
+        },
+        other => {
+            return Err(napi::Error::from_reason(format!(
+                "Unsupported pivot showAs mode: {other}"
+            )));
+        }
+    })
+}
+
+fn require_pivot_base_field(value: &str, base_field: Option<String>) -> Result<String> {
+    base_field.ok_or_else(|| {
+        napi::Error::from_reason(format!("pivot showAs mode {value} requires baseField"))
+    })
+}
+
+fn require_pivot_base_item(
+    value: &str,
+    base_item: Option<Either3<f64, String, bool>>,
+) -> Result<PivotValue> {
+    base_item.map(pivot_value_from_js).ok_or_else(|| {
+        napi::Error::from_reason(format!("pivot showAs mode {value} requires baseItem"))
+    })
+}
+
+fn pivot_value_from_js(value: Either3<f64, String, bool>) -> PivotValue {
+    match value {
+        Either3::A(number) => PivotValue::Number(number),
+        Either3::B(string) => PivotValue::String(string),
+        Either3::C(boolean) => PivotValue::Boolean(boolean),
+    }
+}
+
 /// A worksheet within a workbook.
 ///
 /// Worksheets contain cells organized in rows and columns. Each cell can
@@ -618,6 +1962,89 @@ impl Worksheet {
                 width: info.width,
                 height: info.height,
             }))
+        })
+    }
+
+    /// Number of pivot tables on the worksheet.
+    #[napi(getter)]
+    pub fn pivot_count(&self) -> Result<u32> {
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            u32::try_from(ws.pivot_table_count()).map_err(to_napi_err)
+        })
+    }
+
+    /// Pivot table names on the worksheet.
+    #[napi(getter)]
+    pub fn pivot_table_names(&self) -> Result<Vec<String>> {
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            Ok(ws
+                .pivot_tables()
+                .iter()
+                .map(|pivot| pivot.name.clone())
+                .collect())
+        })
+    }
+
+    /// Pivot table definitions on the worksheet.
+    #[napi(getter)]
+    pub fn pivot_tables(&self) -> Result<Vec<JsPivotTableDefinition>> {
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            Ok(ws.pivot_tables().iter().map(Into::into).collect())
+        })
+    }
+
+    /// Get a pivot table definition by name.
+    #[napi(js_name = "getPivotTable")]
+    pub fn get_pivot_table(&self, name: String) -> Result<Option<JsPivotTableDefinition>> {
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            Ok(ws.pivot_table_by_name(&name).map(Into::into))
+        })
+    }
+
+    /// Add a semantic pivot table definition to the worksheet.
+    #[napi]
+    pub fn add_pivot_table(&self, options: JsPivotTableOptions) -> Result<()> {
+        catch_panic(|| {
+            let pivot = build_pivot_table_from_js(options)?;
+            let mut wb = self.workbook.write().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet_mut(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            ws.add_pivot_table(pivot).map_err(to_napi_err)
+        })
+    }
+
+    /// Generate and add a PivotChart from a rendered pivot table.
+    #[napi(js_name = "addPivotChart")]
+    pub fn add_pivot_chart(&self, options: JsPivotChartOptions) -> Result<JsChart> {
+        catch_panic(|| {
+            let chart_type = parse_chart_type(options.chart_type.as_deref())?;
+            let mut wb = self.workbook.write().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet_mut(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            let anchor = duke_sheets::DrawingAnchor::default();
+            let chart = ws
+                .build_pivot_chart(&options.pivot_name, chart_type, anchor.clone())
+                .map_err(to_napi_err)?;
+            ws.add_chart(chart.clone(), anchor).map_err(to_napi_err)?;
+            Ok(JsChart::from(&chart))
         })
     }
 
@@ -1026,6 +2453,158 @@ impl Workbook {
                 wb.calculate().map_err(to_napi_err)?
             };
             Ok(CalculationStats { inner: stats })
+        })
+    }
+
+    /// Refresh all pivot tables in the workbook.
+    #[napi]
+    pub fn refresh_pivots(
+        &self,
+        options: Option<JsPivotRefreshOptions>,
+    ) -> Result<JsPivotRefreshStats> {
+        catch_panic(|| {
+            let mut wb = self.inner.write().map_err(to_napi_err)?;
+            let options = options.map(Into::into).unwrap_or_default();
+            wb.refresh_pivots_with_options(&options)
+                .map_err(to_napi_err)
+                .and_then(JsPivotRefreshStats::try_from)
+        })
+    }
+
+    /// Add a workbook-level database connection.
+    #[napi]
+    pub fn add_data_connection(&self, options: JsWorkbookConnectionOptions) -> Result<()> {
+        catch_panic(|| {
+            let mut wb = self.inner.write().map_err(to_napi_err)?;
+            wb.add_data_connection(build_workbook_connection_from_js(options)?)
+                .map_err(to_napi_err)
+        })
+    }
+
+    /// Number of workbook-level data connections.
+    #[napi(getter)]
+    pub fn data_connection_count(&self) -> Result<u32> {
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            u32::try_from(wb.data_connections().len()).map_err(to_napi_err)
+        })
+    }
+
+    /// Workbook-level data connection names.
+    #[napi(getter)]
+    pub fn data_connection_names(&self) -> Result<Vec<String>> {
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            Ok(wb
+                .data_connections()
+                .iter()
+                .map(|connection| connection.name.clone())
+                .collect())
+        })
+    }
+
+    /// Workbook-level data connection definitions.
+    #[napi(getter)]
+    pub fn data_connections(&self) -> Result<Vec<JsWorkbookConnectionDefinition>> {
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            Ok(wb.data_connections().iter().map(Into::into).collect())
+        })
+    }
+
+    /// Number of raw workbook extension elements preserved from the package.
+    #[napi(getter)]
+    pub fn workbook_extension_count(&self) -> Result<u32> {
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            u32::try_from(wb.workbook_extensions().len()).map_err(to_napi_err)
+        })
+    }
+
+    /// Raw workbook extension elements preserved from workbook.xml.
+    #[napi(getter)]
+    pub fn workbook_extensions(&self) -> Result<Vec<JsWorkbookExtension>> {
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            Ok(wb.workbook_extensions().iter().map(Into::into).collect())
+        })
+    }
+
+    /// Number of raw workbook-related extension package parts.
+    #[napi(getter)]
+    pub fn workbook_extension_part_count(&self) -> Result<u32> {
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            u32::try_from(wb.workbook_extension_parts().len()).map_err(to_napi_err)
+        })
+    }
+
+    /// Raw workbook-related extension package parts.
+    #[napi(getter)]
+    pub fn workbook_extension_parts(&self) -> Result<Vec<JsWorkbookExtensionPart>> {
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            Ok(wb
+                .workbook_extension_parts()
+                .iter()
+                .map(Into::into)
+                .collect())
+        })
+    }
+
+    /// Get a raw workbook extension package part by package path.
+    #[napi(js_name = "getWorkbookExtensionPart")]
+    pub fn get_workbook_extension_part(
+        &self,
+        path: String,
+    ) -> Result<Option<JsWorkbookExtensionPart>> {
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            Ok(wb
+                .workbook_extension_parts()
+                .iter()
+                .find(|part| part.path == path)
+                .map(Into::into))
+        })
+    }
+
+    /// Get a raw workbook extension package part by workbook relationship id.
+    #[napi(js_name = "getWorkbookExtensionPartByRelationshipId")]
+    pub fn get_workbook_extension_part_by_relationship_id(
+        &self,
+        relationship_id: String,
+    ) -> Result<Option<JsWorkbookExtensionPart>> {
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            Ok(wb
+                .workbook_extension_parts()
+                .iter()
+                .find(|part| part.relationship_id.as_deref() == Some(relationship_id.as_str()))
+                .map(Into::into))
+        })
+    }
+
+    /// Get a workbook-level data connection by name.
+    #[napi(js_name = "getDataConnection")]
+    pub fn get_data_connection(
+        &self,
+        name: String,
+    ) -> Result<Option<JsWorkbookConnectionDefinition>> {
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            Ok(wb.data_connection_by_name(&name).map(Into::into))
+        })
+    }
+
+    /// Get a workbook-level data connection by id.
+    #[napi(js_name = "getDataConnectionById")]
+    pub fn get_data_connection_by_id(
+        &self,
+        id: u32,
+    ) -> Result<Option<JsWorkbookConnectionDefinition>> {
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            Ok(wb.data_connection_by_id(id).map(Into::into))
         })
     }
 

@@ -3,6 +3,8 @@
 //! Opens a Compound File Binary (CFB/OLE2) container, reads the `Workbook`
 //! stream, parses BIFF8 records, and populates a `duke_sheets_core::Workbook`.
 
+mod pivot;
+
 use std::io::{Cursor, Read, Seek};
 use std::path::Path;
 
@@ -14,9 +16,10 @@ use duke_sheets_core::validation::{
 };
 use duke_sheets_core::worksheet::{Selection, SheetProtection};
 use duke_sheets_core::{
-    CellAddress, CellComment, CellError, CellRange, CellValue, Hyperlink, ProtectedRange, Style,
-    Workbook, WorkbookProtection, Worksheet,
+    CellAddress, CellComment, CellError, CellRange, CellValue, Hyperlink, PivotSource,
+    ProtectedRange, Style, Workbook, WorkbookProtection, Worksheet,
 };
+use ssfmt::DateSystem;
 
 use crate::biff::formula::token_parser::ParsedToken;
 use crate::biff::formula::{
@@ -336,6 +339,15 @@ impl XlsReader {
         let mut extern_sheet: Vec<ExternSheetEntry> = Vec::new();
         let mut extern_names: Vec<ExternName> = Vec::new();
         let mut names: Vec<NameRecord> = Vec::new();
+        let mut pivot_cache_sources: std::collections::HashMap<u16, Vec<PivotSource>> =
+            std::collections::HashMap::new();
+        let mut pivot_cache_consolidation_page_refs: std::collections::HashMap<u16, Vec<Vec<u16>>> =
+            std::collections::HashMap::new();
+        let mut pivot_cache_consolidation_page_names: std::collections::HashMap<u16, Vec<String>> =
+            std::collections::HashMap::new();
+        let mut pivot_cache_ids = std::collections::BTreeSet::new();
+        let mut pending_pivot_cache_num: Option<u16> = None;
+        let mut pending_consolidation_page_names: Option<(u16, usize)> = None;
         // Workbook-globals blip store, populated from MSODRAWINGGROUP
         // records. Indexed 1-based by the FOPT `pib` (picture blip id)
         // property referenced from picture SP_CONTAINERs.
@@ -453,6 +465,76 @@ impl XlsReader {
                         names.push(nr);
                     }
                 }
+                0x00D5 if in_globals => {
+                    if rec.data.len() >= 2 {
+                        let cache_num = u16::from_le_bytes([rec.data[0], rec.data[1]]);
+                        let cache_id = cache_num.saturating_sub(1);
+                        pivot_cache_ids.insert(cache_id);
+                        pending_pivot_cache_num = Some(cache_num);
+                    }
+                }
+                records::DCONREF | records::DCONNAME if in_globals => {
+                    if let Some(cache_num) = pending_pivot_cache_num {
+                        let source = pivot::parse_cache_source(rec.record_type, &rec.data);
+                        if let Some(source) = source {
+                            pivot_cache_sources
+                                .entry(cache_num.saturating_sub(1))
+                                .or_default()
+                                .push(source);
+                        }
+                    }
+                }
+                0x00D2 if in_globals => {
+                    if let Some(cache_num) = pending_pivot_cache_num {
+                        pivot_cache_consolidation_page_refs
+                            .entry(cache_num.saturating_sub(1))
+                            .or_default()
+                            .push(pivot::parse_consolidation_page_refs(&rec.data));
+                    }
+                }
+                0x00D1 if in_globals => {
+                    if let Some(cache_num) = pending_pivot_cache_num {
+                        if rec.data.len() >= 2 {
+                            let cache_id = cache_num.saturating_sub(1);
+                            let count = u16::from_le_bytes([rec.data[0], rec.data[1]]) as usize;
+                            pivot_cache_consolidation_page_names
+                                .entry(cache_id)
+                                .or_default()
+                                .clear();
+                            pending_consolidation_page_names =
+                                (count > 0).then_some((cache_id, count));
+                        }
+                    }
+                }
+                records::SXSTRING if in_globals => {
+                    if let Some((cache_id, remaining)) = pending_consolidation_page_names.as_mut() {
+                        let mut offset = 0usize;
+                        if let Ok(page_item) = read_unicode_string(&rec.data, &mut offset) {
+                            pivot_cache_consolidation_page_names
+                                .entry(*cache_id)
+                                .or_default()
+                                .push(page_item);
+                            *remaining = remaining.saturating_sub(1);
+                            if *remaining == 0 {
+                                pending_consolidation_page_names = None;
+                            }
+                            continue;
+                        }
+                    }
+                    if let Some(cache_num) = pending_pivot_cache_num {
+                        let mut offset = 0usize;
+                        if let Ok(command_text) = read_unicode_string(&rec.data, &mut offset) {
+                            pivot_cache_sources
+                                .entry(cache_num.saturating_sub(1))
+                                .or_default()
+                                .push(PivotSource::External {
+                                    connection_name: String::new(),
+                                    command_text: (!command_text.is_empty())
+                                        .then_some(command_text),
+                                });
+                        }
+                    }
+                }
                 records::MSODRAWINGGROUP if in_globals => {
                     msodrawinggroup_bytes.extend_from_slice(&rec.data);
                 }
@@ -472,6 +554,18 @@ impl XlsReader {
 
         // Build the resolved style table (one Style per XF record)
         let style_table = style_ctx.build_style_table();
+        pivot::apply_consolidation_page_items(
+            &mut pivot_cache_sources,
+            &pivot_cache_consolidation_page_refs,
+            &pivot_cache_consolidation_page_names,
+        );
+        let date_system = if date_mode_1904 {
+            DateSystem::Date1904
+        } else {
+            DateSystem::Date1900
+        };
+        let pivot_caches =
+            pivot::read_caches(&cfb, &pivot_cache_ids, &pivot_cache_sources, date_system)?;
 
         // Build the workbook
         let mut workbook = Workbook::empty();
@@ -571,6 +665,7 @@ impl XlsReader {
                     &formula_ctx,
                     af_range,
                     &blip_store,
+                    &pivot_caches,
                 )?;
             }
 
@@ -671,6 +766,7 @@ impl XlsReader {
         formula_ctx: &FormulaContext,
         auto_filter_range: Option<&CellRange>,
         blip_store: &[Option<BlipData>],
+        pivot_caches: &pivot::PivotCaches,
     ) -> XlsResult<()> {
         // We need to track the last FORMULA record to associate a STRING record
         let mut pending_formula_cell: Option<(u32, u16)> = None;
@@ -1109,8 +1205,22 @@ impl XlsReader {
             formula_ctx,
             ws,
         );
+        pivot::parse_sheet_tables(records, ws, pivot_caches, &style_ctx.formats)?;
 
         Ok(())
+    }
+
+    fn cell_error_from_biff_code(code: u8) -> CellError {
+        match code {
+            0x00 => CellError::Null,
+            0x07 => CellError::Div0,
+            0x0F => CellError::Value,
+            0x17 => CellError::Ref,
+            0x1D => CellError::Name,
+            0x24 => CellError::Num,
+            0x2A => CellError::Na,
+            _ => CellError::Value,
+        }
     }
 
     // ── Style application helper ─────────────────────────────────────────
@@ -1371,17 +1481,7 @@ impl XlsReader {
         let is_error = data.get(off).copied().unwrap_or(0);
 
         let cell_value = if is_error != 0 {
-            let err = match val {
-                0x00 => CellError::Null,
-                0x07 => CellError::Div0,
-                0x0F => CellError::Value,
-                0x17 => CellError::Ref,
-                0x1D => CellError::Name,
-                0x24 => CellError::Num,
-                0x2A => CellError::Na,
-                _ => CellError::Value,
-            };
-            CellValue::Error(err)
+            CellValue::Error(Self::cell_error_from_biff_code(val))
         } else {
             CellValue::Boolean(val != 0)
         };
@@ -4736,6 +4836,7 @@ mod tests {
             &formula_ctx,
             None,
             &[],
+            &pivot::PivotCaches::default(),
         )
         .unwrap();
         ws
@@ -5071,6 +5172,7 @@ mod tests {
                 &formula_ctx,
                 None,
                 &[],
+                &pivot::PivotCaches::default(),
             )
             .unwrap();
             ws

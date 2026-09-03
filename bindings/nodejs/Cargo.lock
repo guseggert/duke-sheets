@@ -440,6 +440,7 @@ dependencies = [
  "duke-sheets-crypto",
  "duke-sheets-csv",
  "duke-sheets-formula",
+ "duke-sheets-pivot",
  "duke-sheets-xls",
  "duke-sheets-xlsb",
  "duke-sheets-xlsx",
@@ -530,6 +531,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "duke-sheets-pivot"
+version = "0.1.0"
+dependencies = [
+ "ahash 0.8.12",
+ "chrono",
+ "duke-sheets-core",
+ "duke-sheets-formula",
+ "rayon",
+ "ssfmt",
+]
+
+[[package]]
 name = "duke-sheets-vml"
 version = "0.1.0"
 dependencies = [
@@ -547,8 +560,10 @@ dependencies = [
  "duke-sheets-core",
  "duke-sheets-crypto",
  "duke-sheets-formula",
+ "duke-sheets-pivot",
  "log",
  "md-5",
+ "ssfmt",
  "thiserror 1.0.69",
 ]
 
@@ -560,10 +575,12 @@ dependencies = [
  "duke-sheets-chart",
  "duke-sheets-core",
  "duke-sheets-formula",
+ "duke-sheets-pivot",
  "duke-sheets-vml",
  "encoding_rs",
  "log",
  "quick-xml",
+ "ssfmt",
  "thiserror 1.0.69",
  "zip",
 ]
@@ -577,10 +594,13 @@ dependencies = [
  "duke-sheets-core",
  "duke-sheets-crypto",
  "duke-sheets-formula",
+ "duke-sheets-pivot",
  "duke-sheets-vml",
  "duke-sheets-xls",
  "log",
  "quick-xml",
+ "rayon",
+ "ssfmt",
  "thiserror 1.0.69",
  "zip",
 ]

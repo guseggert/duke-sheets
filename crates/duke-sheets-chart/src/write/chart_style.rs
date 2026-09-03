@@ -69,7 +69,6 @@ fn push_reference(out: &mut Vec<u8>, name: &str, reference: &StyleReference) {
         None => out.extend_from_slice(b"/>"),
     }
 }
-
 fn push_font_reference(out: &mut Vec<u8>, reference: &FontReference) {
     let _ = write!(
         out,
@@ -248,4 +247,3 @@ mod tests {
         assert_eq!(parsed, style);
     }
 }
-

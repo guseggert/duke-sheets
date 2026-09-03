@@ -55,6 +55,1557 @@ pub struct WasmRowsOptions {
     pub skip_blank_values: Option<bool>,
 }
 
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub enum WasmPivotValueInput {
+    Number(f64),
+    String(String),
+    Boolean(bool),
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotMeasureOptions {
+    pub field: String,
+    pub aggregate: Option<String>,
+    pub name: Option<String>,
+    pub show_as: Option<String>,
+    pub base_field: Option<String>,
+    pub base_item: Option<WasmPivotValueInput>,
+    pub number_format: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotFilterOptions {
+    pub kind: Option<String>,
+    pub field: String,
+    pub items: Option<Vec<String>>,
+    pub operator: Option<String>,
+    pub text: Option<String>,
+    pub start_text: Option<String>,
+    pub end_text: Option<String>,
+    pub period: Option<String>,
+    pub measure: Option<WasmPivotMeasureOptions>,
+    pub value: Option<f64>,
+    pub start: Option<f64>,
+    pub end: Option<f64>,
+    pub n: Option<u32>,
+    pub top: Option<bool>,
+    pub percent: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotCalculatedFieldOptions {
+    pub name: String,
+    pub formula: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotCalculatedItemOptions {
+    pub field: String,
+    pub item: WasmPivotValueInput,
+    pub formula: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotManualGroupOptions {
+    pub name: String,
+    pub members: Vec<WasmPivotValueInput>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotGroupingOptions {
+    pub field: String,
+    pub kind: String,
+    pub start: Option<f64>,
+    pub end: Option<f64>,
+    pub interval: Option<f64>,
+    pub units: Option<Vec<String>>,
+    pub groups: Option<Vec<WasmPivotManualGroupOptions>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotFieldOptions {
+    pub field: String,
+    pub caption: Option<String>,
+    pub sort: Option<String>,
+    pub sort_by_measure: Option<WasmPivotMeasureOptions>,
+    pub subtotal: Option<String>,
+    pub subtotal_caption: Option<String>,
+    pub subtotals: Option<Vec<String>>,
+    pub collapsed_items: Option<Vec<WasmPivotValueInput>>,
+    pub show_empty_items: Option<bool>,
+    pub show_drop_downs: Option<bool>,
+    pub subtotal_top: Option<bool>,
+    pub insert_blank_row: Option<bool>,
+    pub insert_page_break: Option<bool>,
+    pub include_new_items_in_filter: Option<bool>,
+    pub item_page_count: Option<u32>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotRefreshPolicyOptions {
+    pub refresh_on_open: Option<bool>,
+    pub preserve_formatting: Option<bool>,
+    pub background_query: Option<bool>,
+    pub missing_items_limit: Option<u32>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotLayoutOptions {
+    pub kind: Option<String>,
+    pub show_row_grand_totals: Option<bool>,
+    pub show_column_grand_totals: Option<bool>,
+    pub show_field_headers: Option<bool>,
+    pub repeat_item_labels: Option<bool>,
+    pub show_expand_collapse: Option<bool>,
+    pub print_drill_indicators: Option<bool>,
+    pub item_print_titles: Option<bool>,
+    pub field_print_titles: Option<bool>,
+    pub page_wrap: Option<u32>,
+    pub page_over_then_down: Option<bool>,
+    pub merge_item_labels: Option<bool>,
+    pub data_caption: Option<String>,
+    pub values_axis: Option<String>,
+    pub values_axis_position: Option<u32>,
+    pub grand_total_caption: Option<String>,
+    pub error_caption: Option<String>,
+    pub show_error: Option<bool>,
+    pub missing_caption: Option<String>,
+    pub show_missing: Option<bool>,
+    pub asterisk_totals: Option<bool>,
+    pub show_items: Option<bool>,
+    pub edit_data: Option<bool>,
+    pub disable_field_list: Option<bool>,
+    pub show_calculated_members: Option<bool>,
+    pub visual_totals: Option<bool>,
+    pub show_multiple_label: Option<bool>,
+    pub show_data_drop_down: Option<bool>,
+    pub show_member_property_tips: Option<bool>,
+    pub show_data_tips: Option<bool>,
+    pub enable_wizard: Option<bool>,
+    pub enable_drill: Option<bool>,
+    pub enable_field_properties: Option<bool>,
+    pub subtotal_hidden_items: Option<bool>,
+    pub show_drop_zones: Option<bool>,
+    pub indent: Option<u32>,
+    pub show_empty_rows: Option<bool>,
+    pub show_empty_columns: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotStyleOptions {
+    pub name: Option<String>,
+    pub show_row_headers: Option<bool>,
+    pub show_column_headers: Option<bool>,
+    pub show_row_stripes: Option<bool>,
+    pub show_column_stripes: Option<bool>,
+    pub show_last_column: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotConsolidationRangeOptions {
+    pub sheet: Option<String>,
+    pub range: Option<String>,
+    pub name: Option<String>,
+    pub external_relationship_id: Option<String>,
+    pub external_relationship_target: Option<String>,
+    pub page_items: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotTableOptions {
+    pub name: String,
+    pub source_range: Option<String>,
+    pub source_sheet: Option<String>,
+    pub table_name: Option<String>,
+    pub external_connection_name: Option<String>,
+    pub external_command_text: Option<String>,
+    pub olap_connection_name: Option<String>,
+    pub consolidation_ranges: Option<Vec<WasmPivotConsolidationRangeOptions>>,
+    pub target: String,
+    pub rows: Option<Vec<String>>,
+    pub columns: Option<Vec<String>>,
+    pub pages: Option<Vec<String>>,
+    pub row_fields: Option<Vec<WasmPivotFieldOptions>>,
+    pub column_fields: Option<Vec<WasmPivotFieldOptions>>,
+    pub page_fields: Option<Vec<WasmPivotFieldOptions>>,
+    pub measures: Vec<WasmPivotMeasureOptions>,
+    pub filters: Option<Vec<WasmPivotFilterOptions>>,
+    pub calculated_fields: Option<Vec<WasmPivotCalculatedFieldOptions>>,
+    pub calculated_items: Option<Vec<WasmPivotCalculatedItemOptions>>,
+    pub groupings: Option<Vec<WasmPivotGroupingOptions>>,
+    pub refresh_policy: Option<WasmPivotRefreshPolicyOptions>,
+    pub layout: Option<WasmPivotLayoutOptions>,
+    pub style: Option<WasmPivotStyleOptions>,
+    pub overwrite_policy: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotChartOptions {
+    pub pivot_name: String,
+    pub chart_type: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotValue {
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub number: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub boolean: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl From<&core::PivotValue> for WasmPivotValue {
+    fn from(value: &core::PivotValue) -> Self {
+        match value {
+            core::PivotValue::Blank => Self {
+                kind: "blank".into(),
+                number: None,
+                text: None,
+                boolean: None,
+                error: None,
+            },
+            core::PivotValue::Boolean(value) => Self {
+                kind: "boolean".into(),
+                number: None,
+                text: None,
+                boolean: Some(*value),
+                error: None,
+            },
+            core::PivotValue::Number(value) => Self {
+                kind: "number".into(),
+                number: Some(*value),
+                text: None,
+                boolean: None,
+                error: None,
+            },
+            core::PivotValue::String(value) => Self {
+                kind: "string".into(),
+                number: None,
+                text: Some(value.clone()),
+                boolean: None,
+                error: None,
+            },
+            core::PivotValue::Error(value) => Self {
+                kind: "error".into(),
+                number: None,
+                text: None,
+                boolean: None,
+                error: Some(value.to_string()),
+            },
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotSourceRangeDefinition {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sheet: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub range: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_relationship_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_relationship_target: Option<String>,
+    pub page_items: Vec<String>,
+}
+
+impl From<&core::PivotSourceRange> for WasmPivotSourceRangeDefinition {
+    fn from(range: &core::PivotSourceRange) -> Self {
+        Self {
+            sheet: range.sheet.clone(),
+            range: range.range.map(|range| range.to_string()),
+            name: range.name.clone(),
+            external_relationship_id: range.external_relationship_id.clone(),
+            external_relationship_target: range.external_relationship_target.clone(),
+            page_items: range.page_items.clone(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotSourceDefinition {
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sheet: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub range: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub table_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ranges: Option<Vec<WasmPivotSourceRangeDefinition>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scenario_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cube: Option<String>,
+}
+
+impl From<&core::PivotSource> for WasmPivotSourceDefinition {
+    fn from(source: &core::PivotSource) -> Self {
+        match source {
+            core::PivotSource::WorksheetRange { sheet, range } => Self {
+                kind: "worksheetRange".into(),
+                sheet: sheet.clone(),
+                range: Some(range.to_string()),
+                table_name: None,
+                connection_name: None,
+                command_text: None,
+                ranges: None,
+                scenario_name: None,
+                cube: None,
+            },
+            core::PivotSource::Table { name } => Self {
+                kind: "table".into(),
+                sheet: None,
+                range: None,
+                table_name: Some(name.clone()),
+                connection_name: None,
+                command_text: None,
+                ranges: None,
+                scenario_name: None,
+                cube: None,
+            },
+            core::PivotSource::External {
+                connection_name,
+                command_text,
+            } => Self {
+                kind: "external".into(),
+                sheet: None,
+                range: None,
+                table_name: None,
+                connection_name: Some(connection_name.clone()),
+                command_text: command_text.clone(),
+                ranges: None,
+                scenario_name: None,
+                cube: None,
+            },
+            core::PivotSource::Consolidation { ranges } => Self {
+                kind: "consolidation".into(),
+                sheet: None,
+                range: None,
+                table_name: None,
+                connection_name: None,
+                command_text: None,
+                ranges: Some(ranges.iter().map(Into::into).collect()),
+                scenario_name: None,
+                cube: None,
+            },
+            core::PivotSource::Scenario { name } => Self {
+                kind: "scenario".into(),
+                sheet: None,
+                range: None,
+                table_name: None,
+                connection_name: None,
+                command_text: None,
+                ranges: None,
+                scenario_name: Some(name.clone()),
+                cube: None,
+            },
+            core::PivotSource::Olap {
+                connection_name,
+                cube,
+                command_text,
+            } => Self {
+                kind: "olap".into(),
+                sheet: None,
+                range: None,
+                table_name: None,
+                connection_name: Some(connection_name.clone()),
+                command_text: command_text.clone(),
+                ranges: None,
+                scenario_name: None,
+                cube: cube.clone(),
+            },
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotFieldDefinition {
+    pub field: String,
+    pub caption: Option<String>,
+    pub sort: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sort_by_measure: Option<WasmPivotMeasureDefinition>,
+    pub subtotal: String,
+    pub subtotal_caption: Option<String>,
+    pub subtotals: Vec<String>,
+    pub collapsed_items: Vec<WasmPivotValue>,
+    pub show_empty_items: bool,
+    pub show_drop_downs: bool,
+    pub subtotal_top: bool,
+    pub insert_blank_row: bool,
+    pub insert_page_break: bool,
+    pub include_new_items_in_filter: bool,
+    pub item_page_count: u32,
+}
+
+impl From<&core::PivotField> for WasmPivotFieldDefinition {
+    fn from(field: &core::PivotField) -> Self {
+        Self {
+            field: field.field.name.clone(),
+            caption: field.caption.clone(),
+            sort: pivot_sort_to_string(field.sort).into(),
+            sort_by_measure: field
+                .sort_by_measure
+                .as_ref()
+                .map(WasmPivotMeasureDefinition::from),
+            subtotal: pivot_subtotal_to_string(field.subtotal).into(),
+            subtotal_caption: field.subtotal_caption.clone(),
+            subtotals: field
+                .subtotals
+                .iter()
+                .map(|subtotal| pivot_subtotal_to_string(*subtotal).into())
+                .collect(),
+            collapsed_items: field
+                .collapsed_items
+                .iter()
+                .map(WasmPivotValue::from)
+                .collect(),
+            show_empty_items: field.show_empty_items,
+            show_drop_downs: field.show_drop_downs,
+            subtotal_top: field.subtotal_top,
+            insert_blank_row: field.insert_blank_row,
+            insert_page_break: field.insert_page_break,
+            include_new_items_in_filter: field.include_new_items_in_filter,
+            item_page_count: field.item_page_count,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotShowAsDefinition {
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_field: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_item: Option<WasmPivotValue>,
+}
+
+impl From<&core::PivotShowAs> for WasmPivotShowAsDefinition {
+    fn from(show_as: &core::PivotShowAs) -> Self {
+        match show_as {
+            core::PivotShowAs::Normal => Self {
+                kind: "normal".into(),
+                base_field: None,
+                base_item: None,
+            },
+            core::PivotShowAs::PercentOfGrandTotal => Self {
+                kind: "percentOfGrandTotal".into(),
+                base_field: None,
+                base_item: None,
+            },
+            core::PivotShowAs::PercentOfRowTotal => Self {
+                kind: "percentOfRowTotal".into(),
+                base_field: None,
+                base_item: None,
+            },
+            core::PivotShowAs::PercentOfColumnTotal => Self {
+                kind: "percentOfColumnTotal".into(),
+                base_field: None,
+                base_item: None,
+            },
+            core::PivotShowAs::PercentOfParentRowTotal => Self {
+                kind: "percentOfParentRowTotal".into(),
+                base_field: None,
+                base_item: None,
+            },
+            core::PivotShowAs::PercentOfParentColumnTotal => Self {
+                kind: "percentOfParentColumnTotal".into(),
+                base_field: None,
+                base_item: None,
+            },
+            core::PivotShowAs::PercentOfParentTotal { base_field } => Self {
+                kind: "percentOfParentTotal".into(),
+                base_field: Some(base_field.name.clone()),
+                base_item: None,
+            },
+            core::PivotShowAs::Index => Self {
+                kind: "index".into(),
+                base_field: None,
+                base_item: None,
+            },
+            core::PivotShowAs::RunningTotal { base_field } => Self {
+                kind: "runningTotal".into(),
+                base_field: Some(base_field.name.clone()),
+                base_item: None,
+            },
+            core::PivotShowAs::DifferenceFrom {
+                base_field,
+                base_item,
+            } => Self {
+                kind: "differenceFrom".into(),
+                base_field: Some(base_field.name.clone()),
+                base_item: Some(base_item.into()),
+            },
+            core::PivotShowAs::PercentDifferenceFrom {
+                base_field,
+                base_item,
+            } => Self {
+                kind: "percentDifferenceFrom".into(),
+                base_field: Some(base_field.name.clone()),
+                base_item: Some(base_item.into()),
+            },
+            core::PivotShowAs::RankAscending { base_field } => Self {
+                kind: "rankAscending".into(),
+                base_field: Some(base_field.name.clone()),
+                base_item: None,
+            },
+            core::PivotShowAs::RankDescending { base_field } => Self {
+                kind: "rankDescending".into(),
+                base_field: Some(base_field.name.clone()),
+                base_item: None,
+            },
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotMeasureDefinition {
+    pub field: String,
+    pub aggregate: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub caption: String,
+    pub show_as: WasmPivotShowAsDefinition,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub number_format: Option<String>,
+}
+
+impl From<&core::PivotMeasure> for WasmPivotMeasureDefinition {
+    fn from(measure: &core::PivotMeasure) -> Self {
+        Self {
+            field: measure.field.name.clone(),
+            aggregate: pivot_aggregate_to_string(measure.aggregate).into(),
+            name: measure.name.clone(),
+            caption: measure.caption(),
+            show_as: WasmPivotShowAsDefinition::from(&measure.show_as),
+            number_format: measure.number_format.clone(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotFilterDefinition {
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub items: Option<Vec<WasmPivotValue>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operator: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub period: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub measure: Option<WasmPivotMeasureDefinition>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub n: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub percent: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+impl From<&core::PivotFilter> for WasmPivotFilterDefinition {
+    fn from(filter: &core::PivotFilter) -> Self {
+        match filter {
+            core::PivotFilter::FieldItems {
+                field,
+                allowed_items,
+            } => Self {
+                kind: "fieldItems".into(),
+                field: Some(field.name.clone()),
+                items: Some(allowed_items.iter().map(Into::into).collect()),
+                operator: None,
+                text: None,
+                start_text: None,
+                end_text: None,
+                period: None,
+                measure: None,
+                value: None,
+                start: None,
+                end: None,
+                n: None,
+                top: None,
+                percent: None,
+                detail: None,
+            },
+            core::PivotFilter::Label {
+                field,
+                operator,
+                value,
+            } => Self {
+                kind: "label".into(),
+                field: Some(field.name.clone()),
+                items: None,
+                operator: Some(pivot_filter_operator_to_string(*operator).into()),
+                text: Some(value.clone()),
+                start_text: None,
+                end_text: None,
+                period: None,
+                measure: None,
+                value: None,
+                start: None,
+                end: None,
+                n: None,
+                top: None,
+                percent: None,
+                detail: None,
+            },
+            core::PivotFilter::LabelBetween {
+                field,
+                start,
+                end,
+                not_between,
+            } => Self {
+                kind: if *not_between {
+                    "labelNotBetween".into()
+                } else {
+                    "labelBetween".into()
+                },
+                field: Some(field.name.clone()),
+                items: None,
+                operator: None,
+                text: None,
+                start_text: Some(start.clone()),
+                end_text: Some(end.clone()),
+                period: None,
+                measure: None,
+                value: None,
+                start: None,
+                end: None,
+                n: None,
+                top: None,
+                percent: None,
+                detail: None,
+            },
+            core::PivotFilter::Date {
+                field,
+                operator,
+                value,
+            } => Self {
+                kind: "date".into(),
+                field: Some(field.name.clone()),
+                items: None,
+                operator: Some(pivot_filter_operator_to_string(*operator).into()),
+                text: None,
+                start_text: None,
+                end_text: None,
+                period: None,
+                measure: None,
+                value: Some(*value),
+                start: None,
+                end: None,
+                n: None,
+                top: None,
+                percent: None,
+                detail: None,
+            },
+            core::PivotFilter::DateBetween {
+                field,
+                start,
+                end,
+                not_between,
+            } => Self {
+                kind: if *not_between {
+                    "dateNotBetween".into()
+                } else {
+                    "dateBetween".into()
+                },
+                field: Some(field.name.clone()),
+                items: None,
+                operator: None,
+                text: None,
+                start_text: None,
+                end_text: None,
+                period: None,
+                measure: None,
+                value: None,
+                start: Some(*start),
+                end: Some(*end),
+                n: None,
+                top: None,
+                percent: None,
+                detail: None,
+            },
+            core::PivotFilter::DatePeriod { field, period } => Self {
+                kind: "datePeriod".into(),
+                field: Some(field.name.clone()),
+                items: None,
+                operator: None,
+                text: None,
+                start_text: None,
+                end_text: None,
+                period: Some(pivot_date_period_to_string(*period).into()),
+                measure: None,
+                value: None,
+                start: None,
+                end: None,
+                n: None,
+                top: None,
+                percent: None,
+                detail: None,
+            },
+            core::PivotFilter::Value {
+                field,
+                measure,
+                operator,
+                value,
+            } => Self {
+                kind: "value".into(),
+                field: Some(field.name.clone()),
+                items: None,
+                operator: Some(pivot_filter_operator_to_string(*operator).into()),
+                text: None,
+                start_text: None,
+                end_text: None,
+                period: None,
+                measure: Some(measure.into()),
+                value: Some(*value),
+                start: None,
+                end: None,
+                n: None,
+                top: None,
+                percent: None,
+                detail: None,
+            },
+            core::PivotFilter::ValueBetween {
+                field,
+                measure,
+                start,
+                end,
+                not_between,
+            } => Self {
+                kind: if *not_between {
+                    "valueNotBetween".into()
+                } else {
+                    "valueBetween".into()
+                },
+                field: Some(field.name.clone()),
+                items: None,
+                operator: None,
+                text: None,
+                start_text: None,
+                end_text: None,
+                period: None,
+                measure: Some(measure.into()),
+                value: None,
+                start: Some(*start),
+                end: Some(*end),
+                n: None,
+                top: None,
+                percent: None,
+                detail: None,
+            },
+            core::PivotFilter::TopN {
+                field,
+                measure,
+                n,
+                top,
+                percent,
+            } => Self {
+                kind: "topN".into(),
+                field: Some(field.name.clone()),
+                items: None,
+                operator: None,
+                text: None,
+                start_text: None,
+                end_text: None,
+                period: None,
+                measure: Some(measure.into()),
+                value: None,
+                start: None,
+                end: None,
+                n: Some(*n),
+                top: Some(*top),
+                percent: Some(*percent),
+                detail: None,
+            },
+            core::PivotFilter::Unsupported { kind, detail } => Self {
+                kind: kind.clone(),
+                field: None,
+                items: None,
+                operator: None,
+                text: None,
+                start_text: None,
+                end_text: None,
+                period: None,
+                measure: None,
+                value: None,
+                start: None,
+                end: None,
+                n: None,
+                top: None,
+                percent: None,
+                detail: detail.clone(),
+            },
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotCalculatedFieldDefinition {
+    pub name: String,
+    pub formula: String,
+}
+
+impl From<&core::PivotCalculatedField> for WasmPivotCalculatedFieldDefinition {
+    fn from(field: &core::PivotCalculatedField) -> Self {
+        Self {
+            name: field.name.clone(),
+            formula: field.formula.clone(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotCalculatedItemDefinition {
+    pub field: String,
+    pub item: WasmPivotValue,
+    pub formula: String,
+}
+
+impl From<&core::PivotCalculatedItem> for WasmPivotCalculatedItemDefinition {
+    fn from(item: &core::PivotCalculatedItem) -> Self {
+        Self {
+            field: item.field.name.clone(),
+            item: WasmPivotValue::from(&item.item),
+            formula: item.formula.clone(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotManualGroupDefinition {
+    pub name: String,
+    pub members: Vec<WasmPivotValue>,
+}
+
+impl From<&core::PivotManualGroup> for WasmPivotManualGroupDefinition {
+    fn from(group: &core::PivotManualGroup) -> Self {
+        Self {
+            name: group.name.clone(),
+            members: group.members.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotGroupingDefinition {
+    pub kind: String,
+    pub field: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interval: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub units: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub groups: Option<Vec<WasmPivotManualGroupDefinition>>,
+}
+
+impl From<&core::PivotGrouping> for WasmPivotGroupingDefinition {
+    fn from(grouping: &core::PivotGrouping) -> Self {
+        match grouping {
+            core::PivotGrouping::Number {
+                field,
+                start,
+                end,
+                interval,
+            } => Self {
+                kind: "number".into(),
+                field: field.name.clone(),
+                start: *start,
+                end: *end,
+                interval: Some(*interval),
+                units: None,
+                groups: None,
+            },
+            core::PivotGrouping::Date { field, units } => Self {
+                kind: "date".into(),
+                field: field.name.clone(),
+                start: None,
+                end: None,
+                interval: None,
+                units: Some(
+                    units
+                        .iter()
+                        .map(|unit| pivot_date_group_unit_to_string(*unit).into())
+                        .collect(),
+                ),
+                groups: None,
+            },
+            core::PivotGrouping::Manual { field, groups } => Self {
+                kind: "manual".into(),
+                field: field.name.clone(),
+                start: None,
+                end: None,
+                interval: None,
+                units: None,
+                groups: Some(groups.iter().map(Into::into).collect()),
+            },
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotLayoutDefinition {
+    pub kind: String,
+    pub show_row_grand_totals: bool,
+    pub show_column_grand_totals: bool,
+    pub show_field_headers: bool,
+    pub repeat_item_labels: bool,
+    pub show_expand_collapse: bool,
+    pub print_drill_indicators: bool,
+    pub item_print_titles: bool,
+    pub field_print_titles: bool,
+    pub page_wrap: u32,
+    pub page_over_then_down: bool,
+    pub merge_item_labels: bool,
+    pub data_caption: String,
+    pub values_axis: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub values_axis_position: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grand_total_caption: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_caption: Option<String>,
+    pub show_error: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub missing_caption: Option<String>,
+    pub show_missing: bool,
+    pub asterisk_totals: bool,
+    pub show_items: bool,
+    pub edit_data: bool,
+    pub disable_field_list: bool,
+    pub show_calculated_members: bool,
+    pub visual_totals: bool,
+    pub show_multiple_label: bool,
+    pub show_data_drop_down: bool,
+    pub show_member_property_tips: bool,
+    pub show_data_tips: bool,
+    pub enable_wizard: bool,
+    pub enable_drill: bool,
+    pub enable_field_properties: bool,
+    pub subtotal_hidden_items: bool,
+    pub show_drop_zones: bool,
+    pub indent: u32,
+    pub show_empty_rows: bool,
+    pub show_empty_columns: bool,
+}
+
+impl From<&core::PivotLayout> for WasmPivotLayoutDefinition {
+    fn from(layout: &core::PivotLayout) -> Self {
+        Self {
+            kind: pivot_layout_kind_to_string(layout.kind).into(),
+            show_row_grand_totals: layout.show_row_grand_totals,
+            show_column_grand_totals: layout.show_column_grand_totals,
+            show_field_headers: layout.show_field_headers,
+            repeat_item_labels: layout.repeat_item_labels,
+            show_expand_collapse: layout.show_expand_collapse,
+            print_drill_indicators: layout.print_drill_indicators,
+            item_print_titles: layout.item_print_titles,
+            field_print_titles: layout.field_print_titles,
+            page_wrap: layout.page_wrap,
+            page_over_then_down: layout.page_over_then_down,
+            merge_item_labels: layout.merge_item_labels,
+            data_caption: layout.data_caption.clone(),
+            values_axis: pivot_values_axis_to_string(layout.values_axis).into(),
+            values_axis_position: layout.values_axis_position,
+            grand_total_caption: layout.grand_total_caption.clone(),
+            error_caption: layout.error_caption.clone(),
+            show_error: layout.show_error,
+            missing_caption: layout.missing_caption.clone(),
+            show_missing: layout.show_missing,
+            asterisk_totals: layout.asterisk_totals,
+            show_items: layout.show_items,
+            edit_data: layout.edit_data,
+            disable_field_list: layout.disable_field_list,
+            show_calculated_members: layout.show_calculated_members,
+            visual_totals: layout.visual_totals,
+            show_multiple_label: layout.show_multiple_label,
+            show_data_drop_down: layout.show_data_drop_down,
+            show_member_property_tips: layout.show_member_property_tips,
+            show_data_tips: layout.show_data_tips,
+            enable_wizard: layout.enable_wizard,
+            enable_drill: layout.enable_drill,
+            enable_field_properties: layout.enable_field_properties,
+            subtotal_hidden_items: layout.subtotal_hidden_items,
+            show_drop_zones: layout.show_drop_zones,
+            indent: layout.indent,
+            show_empty_rows: layout.show_empty_rows,
+            show_empty_columns: layout.show_empty_columns,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotStyleDefinition {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub show_row_headers: bool,
+    pub show_column_headers: bool,
+    pub show_row_stripes: bool,
+    pub show_column_stripes: bool,
+    pub show_last_column: bool,
+}
+
+impl From<&core::PivotStyle> for WasmPivotStyleDefinition {
+    fn from(style: &core::PivotStyle) -> Self {
+        Self {
+            name: style.name.clone(),
+            show_row_headers: style.show_row_headers,
+            show_column_headers: style.show_column_headers,
+            show_row_stripes: style.show_row_stripes,
+            show_column_stripes: style.show_column_stripes,
+            show_last_column: style.show_last_column,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotRefreshPolicyDefinition {
+    pub refresh_on_open: bool,
+    pub preserve_formatting: bool,
+    pub background_query: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub missing_items_limit: Option<u32>,
+}
+
+impl From<&core::PivotRefreshPolicy> for WasmPivotRefreshPolicyDefinition {
+    fn from(policy: &core::PivotRefreshPolicy) -> Self {
+        Self {
+            refresh_on_open: policy.refresh_on_open,
+            preserve_formatting: policy.preserve_formatting,
+            background_query: policy.background_query,
+            missing_items_limit: policy.missing_items_limit,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotRefreshStatusDefinition {
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+impl From<&core::PivotRefreshStatus> for WasmPivotRefreshStatusDefinition {
+    fn from(status: &core::PivotRefreshStatus) -> Self {
+        match status {
+            core::PivotRefreshStatus::NotRefreshed => Self {
+                kind: "notRefreshed".into(),
+                message: None,
+            },
+            core::PivotRefreshStatus::Succeeded => Self {
+                kind: "succeeded".into(),
+                message: None,
+            },
+            core::PivotRefreshStatus::Failed { message } => Self {
+                kind: "failed".into(),
+                message: Some(message.clone()),
+            },
+            core::PivotRefreshStatus::External => Self {
+                kind: "external".into(),
+                message: None,
+            },
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotTableDefinition {
+    pub id: u32,
+    pub name: String,
+    pub source: WasmPivotSourceDefinition,
+    pub target: String,
+    pub rows: Vec<WasmPivotFieldDefinition>,
+    pub columns: Vec<WasmPivotFieldDefinition>,
+    pub page_fields: Vec<WasmPivotFieldDefinition>,
+    pub filters: Vec<WasmPivotFilterDefinition>,
+    pub calculated_fields: Vec<WasmPivotCalculatedFieldDefinition>,
+    pub calculated_items: Vec<WasmPivotCalculatedItemDefinition>,
+    pub measures: Vec<WasmPivotMeasureDefinition>,
+    pub groupings: Vec<WasmPivotGroupingDefinition>,
+    pub layout: WasmPivotLayoutDefinition,
+    pub style: WasmPivotStyleDefinition,
+    pub refresh_policy: WasmPivotRefreshPolicyDefinition,
+    pub overwrite_policy: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rendered_range: Option<String>,
+    pub refresh_status: WasmPivotRefreshStatusDefinition,
+    pub extension_count: usize,
+}
+
+impl From<&core::PivotTable> for WasmPivotTableDefinition {
+    fn from(pivot: &core::PivotTable) -> Self {
+        Self {
+            id: pivot.id,
+            name: pivot.name.clone(),
+            source: WasmPivotSourceDefinition::from(&pivot.source),
+            target: pivot.target.to_string(),
+            rows: pivot.rows.iter().map(Into::into).collect(),
+            columns: pivot.columns.iter().map(Into::into).collect(),
+            page_fields: pivot.page_fields.iter().map(Into::into).collect(),
+            filters: pivot.filters.iter().map(Into::into).collect(),
+            calculated_fields: pivot.calculated_fields.iter().map(Into::into).collect(),
+            calculated_items: pivot.calculated_items.iter().map(Into::into).collect(),
+            measures: pivot.measures.iter().map(Into::into).collect(),
+            groupings: pivot.groupings.iter().map(Into::into).collect(),
+            layout: WasmPivotLayoutDefinition::from(&pivot.layout),
+            style: WasmPivotStyleDefinition::from(&pivot.style),
+            refresh_policy: WasmPivotRefreshPolicyDefinition::from(&pivot.refresh_policy),
+            overwrite_policy: pivot_overwrite_policy_to_string(pivot.overwrite_policy).into(),
+            rendered_range: pivot.rendered_range.map(|range| range.to_string()),
+            refresh_status: WasmPivotRefreshStatusDefinition::from(&pivot.refresh_status),
+            extension_count: pivot.extensions.len(),
+        }
+    }
+}
+
+fn pivot_sort_to_string(sort: core::PivotSort) -> &'static str {
+    match sort {
+        core::PivotSort::None => "none",
+        core::PivotSort::Ascending => "ascending",
+        core::PivotSort::Descending => "descending",
+    }
+}
+
+fn pivot_subtotal_to_string(subtotal: core::PivotSubtotal) -> &'static str {
+    match subtotal {
+        core::PivotSubtotal::Automatic => "automatic",
+        core::PivotSubtotal::None => "none",
+        core::PivotSubtotal::Sum => "sum",
+        core::PivotSubtotal::Count => "count",
+        core::PivotSubtotal::CountNumbers => "countNumbers",
+        core::PivotSubtotal::Average => "average",
+        core::PivotSubtotal::Min => "min",
+        core::PivotSubtotal::Max => "max",
+        core::PivotSubtotal::Product => "product",
+        core::PivotSubtotal::StdDev => "stdDev",
+        core::PivotSubtotal::StdDevP => "stdDevP",
+        core::PivotSubtotal::Var => "var",
+        core::PivotSubtotal::VarP => "varP",
+    }
+}
+
+fn pivot_aggregate_to_string(aggregate: core::PivotAggregate) -> &'static str {
+    match aggregate {
+        core::PivotAggregate::Sum => "sum",
+        core::PivotAggregate::Count => "count",
+        core::PivotAggregate::CountNumbers => "countNumbers",
+        core::PivotAggregate::Average => "average",
+        core::PivotAggregate::Max => "max",
+        core::PivotAggregate::Min => "min",
+        core::PivotAggregate::Product => "product",
+        core::PivotAggregate::StdDev => "stdDev",
+        core::PivotAggregate::StdDevP => "stdDevP",
+        core::PivotAggregate::Var => "var",
+        core::PivotAggregate::VarP => "varP",
+    }
+}
+
+fn pivot_filter_operator_to_string(operator: core::PivotFilterOperator) -> &'static str {
+    match operator {
+        core::PivotFilterOperator::Equals => "equals",
+        core::PivotFilterOperator::NotEquals => "notEquals",
+        core::PivotFilterOperator::LessThan => "lessThan",
+        core::PivotFilterOperator::LessThanOrEqual => "lessThanOrEqual",
+        core::PivotFilterOperator::GreaterThan => "greaterThan",
+        core::PivotFilterOperator::GreaterThanOrEqual => "greaterThanOrEqual",
+        core::PivotFilterOperator::BeginsWith => "beginsWith",
+        core::PivotFilterOperator::DoesNotBeginWith => "doesNotBeginWith",
+        core::PivotFilterOperator::EndsWith => "endsWith",
+        core::PivotFilterOperator::DoesNotEndWith => "doesNotEndWith",
+        core::PivotFilterOperator::Contains => "contains",
+        core::PivotFilterOperator::DoesNotContain => "doesNotContain",
+    }
+}
+
+fn pivot_date_period_to_string(period: core::PivotDatePeriod) -> &'static str {
+    match period {
+        core::PivotDatePeriod::Tomorrow => "tomorrow",
+        core::PivotDatePeriod::Today => "today",
+        core::PivotDatePeriod::Yesterday => "yesterday",
+        core::PivotDatePeriod::NextWeek => "nextWeek",
+        core::PivotDatePeriod::ThisWeek => "thisWeek",
+        core::PivotDatePeriod::LastWeek => "lastWeek",
+        core::PivotDatePeriod::NextMonth => "nextMonth",
+        core::PivotDatePeriod::ThisMonth => "thisMonth",
+        core::PivotDatePeriod::LastMonth => "lastMonth",
+        core::PivotDatePeriod::NextQuarter => "nextQuarter",
+        core::PivotDatePeriod::ThisQuarter => "thisQuarter",
+        core::PivotDatePeriod::LastQuarter => "lastQuarter",
+        core::PivotDatePeriod::NextYear => "nextYear",
+        core::PivotDatePeriod::ThisYear => "thisYear",
+        core::PivotDatePeriod::LastYear => "lastYear",
+        core::PivotDatePeriod::YearToDate => "yearToDate",
+        core::PivotDatePeriod::Quarter(1) => "Q1",
+        core::PivotDatePeriod::Quarter(2) => "Q2",
+        core::PivotDatePeriod::Quarter(3) => "Q3",
+        core::PivotDatePeriod::Quarter(4) => "Q4",
+        core::PivotDatePeriod::Month(1) => "M1",
+        core::PivotDatePeriod::Month(2) => "M2",
+        core::PivotDatePeriod::Month(3) => "M3",
+        core::PivotDatePeriod::Month(4) => "M4",
+        core::PivotDatePeriod::Month(5) => "M5",
+        core::PivotDatePeriod::Month(6) => "M6",
+        core::PivotDatePeriod::Month(7) => "M7",
+        core::PivotDatePeriod::Month(8) => "M8",
+        core::PivotDatePeriod::Month(9) => "M9",
+        core::PivotDatePeriod::Month(10) => "M10",
+        core::PivotDatePeriod::Month(11) => "M11",
+        core::PivotDatePeriod::Month(12) => "M12",
+        core::PivotDatePeriod::Month(_) | core::PivotDatePeriod::Quarter(_) => "unknown",
+    }
+}
+
+fn pivot_date_group_unit_to_string(unit: core::PivotDateGroupUnit) -> &'static str {
+    match unit {
+        core::PivotDateGroupUnit::Seconds => "seconds",
+        core::PivotDateGroupUnit::Minutes => "minutes",
+        core::PivotDateGroupUnit::Hours => "hours",
+        core::PivotDateGroupUnit::Days => "days",
+        core::PivotDateGroupUnit::Months => "months",
+        core::PivotDateGroupUnit::Quarters => "quarters",
+        core::PivotDateGroupUnit::Years => "years",
+    }
+}
+
+fn pivot_layout_kind_to_string(kind: core::PivotLayoutKind) -> &'static str {
+    match kind {
+        core::PivotLayoutKind::Compact => "compact",
+        core::PivotLayoutKind::Outline => "outline",
+        core::PivotLayoutKind::Tabular => "tabular",
+    }
+}
+
+fn pivot_values_axis_to_string(axis: core::PivotValuesAxis) -> &'static str {
+    match axis {
+        core::PivotValuesAxis::Columns => "columns",
+        core::PivotValuesAxis::Rows => "rows",
+    }
+}
+
+fn pivot_overwrite_policy_to_string(policy: core::PivotOverwritePolicy) -> &'static str {
+    match policy {
+        core::PivotOverwritePolicy::ClearOwnedRange => "clearOwnedRange",
+        core::PivotOverwritePolicy::Overwrite => "overwrite",
+        core::PivotOverwritePolicy::FailOnOccupied => "failOnOccupied",
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmWorkbookConnectionOptions {
+    pub id: u32,
+    pub name: String,
+    pub kind: Option<String>,
+    pub connection: Option<String>,
+    pub command: Option<String>,
+    pub command_type: Option<u32>,
+    pub url: Option<String>,
+    pub xml: Option<bool>,
+    pub source_data: Option<bool>,
+    pub html_tables: Option<bool>,
+    pub html_format: Option<String>,
+    pub post: Option<String>,
+    pub edit_page: Option<String>,
+    pub source_file: Option<String>,
+    pub delimiter: Option<String>,
+    pub first_row: Option<u32>,
+    pub delimited: Option<bool>,
+    pub decimal: Option<String>,
+    pub thousands: Option<String>,
+    pub local: Option<bool>,
+    pub local_connection: Option<String>,
+    pub local_refresh: Option<bool>,
+    pub send_locale: Option<bool>,
+    pub row_drill_count: Option<u32>,
+    pub refresh_on_load: Option<bool>,
+    pub background: Option<bool>,
+    pub save_data: Option<bool>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmWorkbookConnectionDefinition {
+    pub id: u32,
+    pub name: String,
+    pub kind: String,
+    pub refreshed_version: u8,
+    pub refresh_on_load: bool,
+    pub background: bool,
+    pub save_data: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command_type: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xml: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_data: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub html_tables: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub html_format: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub post: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edit_page: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delimiter: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_row: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delimited: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decimal: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thousands: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_connection: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_refresh: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub send_locale: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub row_drill_count: Option<u32>,
+}
+
+impl From<&core::WorkbookConnection> for WasmWorkbookConnectionDefinition {
+    fn from(connection: &core::WorkbookConnection) -> Self {
+        let mut definition = Self {
+            id: connection.id,
+            name: connection.name.clone(),
+            kind: workbook_connection_kind_name(&connection.kind).into(),
+            refreshed_version: connection.refreshed_version,
+            refresh_on_load: connection.refresh_on_load,
+            background: connection.background,
+            save_data: connection.save_data,
+            connection: None,
+            command: None,
+            command_type: None,
+            url: None,
+            xml: None,
+            source_data: None,
+            html_tables: None,
+            html_format: None,
+            post: None,
+            edit_page: None,
+            source_file: None,
+            delimiter: None,
+            first_row: None,
+            delimited: None,
+            decimal: None,
+            thousands: None,
+            local: None,
+            local_connection: None,
+            local_refresh: None,
+            send_locale: None,
+            row_drill_count: None,
+        };
+        match &connection.kind {
+            core::WorkbookConnectionKind::Database {
+                connection,
+                command,
+                command_type,
+            } => {
+                definition.connection = Some(connection.clone());
+                definition.command = command.clone();
+                definition.command_type = *command_type;
+            }
+            core::WorkbookConnectionKind::Olap {
+                connection,
+                command,
+                command_type,
+                local,
+                local_connection,
+                local_refresh,
+                send_locale,
+                row_drill_count,
+            } => {
+                definition.connection = connection.clone();
+                definition.command = command.clone();
+                definition.command_type = *command_type;
+                definition.local = Some(*local);
+                definition.local_connection = local_connection.clone();
+                definition.local_refresh = Some(*local_refresh);
+                definition.send_locale = Some(*send_locale);
+                definition.row_drill_count = *row_drill_count;
+            }
+            core::WorkbookConnectionKind::Web {
+                url,
+                xml,
+                source_data,
+                html_tables,
+                html_format,
+                post,
+                edit_page,
+            } => {
+                definition.url = url.clone();
+                definition.xml = Some(*xml);
+                definition.source_data = Some(*source_data);
+                definition.html_tables = Some(*html_tables);
+                definition.html_format = html_format.clone();
+                definition.post = post.clone();
+                definition.edit_page = edit_page.clone();
+            }
+            core::WorkbookConnectionKind::Text {
+                source_file,
+                delimiter,
+                first_row,
+                delimited,
+                decimal,
+                thousands,
+            } => {
+                definition.source_file = source_file.clone();
+                definition.delimiter = delimiter.clone();
+                definition.first_row = Some(*first_row);
+                definition.delimited = Some(*delimited);
+                definition.decimal = decimal.clone();
+                definition.thousands = thousands.clone();
+            }
+        }
+        definition
+    }
+}
+
+fn workbook_connection_kind_name(kind: &core::WorkbookConnectionKind) -> &'static str {
+    match kind {
+        core::WorkbookConnectionKind::Database { .. } => "database",
+        core::WorkbookConnectionKind::Olap { .. } => "olap",
+        core::WorkbookConnectionKind::Web { .. } => "web",
+        core::WorkbookConnectionKind::Text { .. } => "text",
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmWorkbookExtension {
+    pub uri: String,
+    pub payload: Vec<u8>,
+}
+
+impl From<&core::WorkbookExtension> for WasmWorkbookExtension {
+    fn from(extension: &core::WorkbookExtension) -> Self {
+        Self {
+            uri: extension.uri.clone(),
+            payload: extension.payload.clone(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmWorkbookExtensionPart {
+    pub path: String,
+    pub content_type: String,
+    pub relationship_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relationship_id: Option<String>,
+    pub payload: Vec<u8>,
+}
+
+impl From<&core::WorkbookExtensionPart> for WasmWorkbookExtensionPart {
+    fn from(part: &core::WorkbookExtensionPart) -> Self {
+        Self {
+            path: part.path.clone(),
+            content_type: part.content_type.clone(),
+            relationship_type: part.relationship_type.clone(),
+            relationship_id: part.relationship_id.clone(),
+            payload: part.payload.clone(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotRefreshStats {
+    pub pivot_count: usize,
+    pub pivots_refreshed: usize,
+    pub source_rows: usize,
+    pub output_cells: usize,
+    pub cache_hits: usize,
+    pub cache_misses: usize,
+}
+
+impl From<duke_sheets::PivotRefreshStats> for WasmPivotRefreshStats {
+    fn from(stats: duke_sheets::PivotRefreshStats) -> Self {
+        Self {
+            pivot_count: stats.pivot_count,
+            pivots_refreshed: stats.pivots_refreshed,
+            source_rows: stats.source_rows,
+            output_cells: stats.output_cells,
+            cache_hits: stats.cache_hits,
+            cache_misses: stats.cache_misses,
+        }
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WasmImageInfo {
@@ -2642,6 +4193,22 @@ impl From<&duke_sheets_chart::ChartAxis> for WasmChartAxis {
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
+pub struct WasmPivotChartSource {
+    pub name: String,
+    pub format_id: u32,
+}
+
+impl From<&duke_sheets_chart::PivotChartSource> for WasmPivotChartSource {
+    fn from(s: &duke_sheets_chart::PivotChartSource) -> Self {
+        Self {
+            name: s.name.clone(),
+            format_id: s.format_id,
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct WasmChart {
     pub chart_type: String,
     pub title: Option<String>,
@@ -2666,6 +4233,7 @@ pub struct WasmChart {
     pub show_negative_bubbles: Option<bool>,
     pub auto_title_deleted: Option<bool>,
     pub rounded_corners: Option<bool>,
+    pub pivot_source: Option<WasmPivotChartSource>,
     pub show_dlbls_over_max: Option<bool>,
     pub wireframe: Option<bool>,
     pub radar_style: Option<String>,
@@ -2720,6 +4288,7 @@ impl From<&duke_sheets_chart::Chart> for WasmChart {
             show_negative_bubbles: c.show_negative_bubbles,
             auto_title_deleted: c.auto_title_deleted,
             rounded_corners: c.rounded_corners,
+            pivot_source: c.pivot_source.as_ref().map(WasmPivotChartSource::from),
             show_dlbls_over_max: c.show_dlbls_over_max,
             wireframe: c.wireframe,
             radar_style: c.radar_style.clone(),

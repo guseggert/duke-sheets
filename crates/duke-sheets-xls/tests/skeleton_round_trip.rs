@@ -1,15 +1,28 @@
 #![allow(clippy::approx_constant)]
-//! Round-trip tests for the XLS skeleton writer.
-//!
-//! Build an empty `Workbook`, write it to BIFF8 bytes, read it back
-//! through `XlsReader`, and confirm the structure (sheet count, sheet
-//! names) round-trips. The skeleton writer doesn't yet emit cells,
-//! formatting, or formulas — those land in subsequent slices.
+//! Round-trip and CFB envelope tests for the XLS writer.
 
 use std::io::Cursor;
 
 use duke_sheets_core::Workbook;
 use duke_sheets_xls::{XlsReader, XlsWriter};
+
+const EXCEL_WORKBOOK_ROOT_CLSID: [u8; 16] = [
+    0x20, 0x08, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x46,
+];
+
+#[test]
+fn writer_emits_excel_workbook_root_clsid() {
+    let bytes = XlsWriter::write_to_bytes(&Workbook::new()).expect("serialize workbook");
+    let first_dir_sector =
+        u32::from_le_bytes(bytes[48..52].try_into().expect("directory sector")) as usize;
+    let root_entry = (1 + first_dir_sector) * 512;
+
+    assert_eq!(
+        &bytes[root_entry + 80..root_entry + 96],
+        &EXCEL_WORKBOOK_ROOT_CLSID
+    );
+}
 
 #[test]
 fn empty_default_workbook_round_trips_via_reader() {
@@ -71,7 +84,8 @@ fn writes_cfb_v3_envelope() {
 #[test]
 fn special_and_unicode_sheet_names_round_trip() {
     let mut wb = Workbook::new();
-    wb.rename_worksheet(0, "First & Last").expect("rename Sheet1");
+    wb.rename_worksheet(0, "First & Last")
+        .expect("rename Sheet1");
     wb.add_worksheet_with_name("with 'apostrophe'")
         .expect("apostrophe sheet");
     wb.add_worksheet_with_name("日本語データ")
@@ -108,7 +122,7 @@ fn write_to_bytes_then_read_file_round_trips() {
 
 /// Probe whether LibreOffice's loadenv accepts our skeleton output.
 /// Useful for empirical viability checks during writer development.
-/// `#[ignore]`-gated because it needs a running LO container.
+/// The test harness auto-starts the LibreOffice container.
 #[test]
 fn lo_can_open_skeleton_workbook() {
     duke_sheets_test_harness::lo::ensure_lo();
@@ -127,12 +141,10 @@ fn lo_can_open_skeleton_workbook() {
         .build()
         .unwrap();
     let outcome: Result<i32, String> = rt.block_on(async {
-        let mut bridge = duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect(
-            "127.0.0.1",
-            2002,
-        )
-        .await
-        .map_err(|e| format!("connect: {e}"))?;
+        let mut bridge =
+            duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect("127.0.0.1", 2002)
+                .await
+                .map_err(|e| format!("connect: {e}"))?;
         let mut wb = bridge
             .open_workbook(&path)
             .await
@@ -169,12 +181,10 @@ fn lo_can_read_cell_values_we_emit() {
         .build()
         .unwrap();
     let outcome: Result<(f64, f64), String> = rt.block_on(async {
-        let mut bridge = duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect(
-            "127.0.0.1",
-            2002,
-        )
-        .await
-        .map_err(|e| format!("connect: {e}"))?;
+        let mut bridge =
+            duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect("127.0.0.1", 2002)
+                .await
+                .map_err(|e| format!("connect: {e}"))?;
         let mut wb = bridge
             .open_workbook(&path)
             .await

@@ -17,7 +17,9 @@ use duke_sheets_core::rich_text::{RichTextRun, RunFont};
 use duke_sheets_core::style::Color;
 use duke_sheets_core::validation::{DataValidation, ValidationOperator, ValidationType};
 use duke_sheets_core::worksheet::{PageOrientation, SheetProtection, SheetVisibility};
-use duke_sheets_core::{CellAddress, CellRange, CellValue, Hyperlink, Workbook};
+use duke_sheets_core::{
+    CellAddress, CellRange, CellValue, Hyperlink, Workbook,
+};
 use duke_sheets_excel_com::{ChainStep, SheetRef};
 use excel_com_protocol::ResponseData;
 use serde_json::json;
@@ -235,32 +237,32 @@ const FUNCTION_ARITY_FORMULAS: &[(&str, &str, f64)] = &[
     // Additional verified fixed-arity functions (see commit "Expand XLS
     // fixed-arity coverage" for the Excel-COM probe that confirmed each
     // one emits PtgFunc rather than PtgFuncVar).
-    ("B21", "=POWER(A1,2)", 16.0),    // iftab=337
-    ("B22", "=CHAR(65)", 0.0),        // iftab=111, cached not asserted exactly
-    ("B23", "=YEAR(A5)", 2020.0),     // iftab=69
-    ("B24", "=MONTH(A5)", 1.0),       // iftab=68
-    ("B25", "=DAY(A5)", 1.0),         // iftab=67
-    ("B26", "=DATE(2020,1,1)", 0.0),  // iftab=65
-    ("B27", "=DEGREES(A1)", 0.0),     // iftab=343
-    ("B28", "=RADIANS(A1)", 0.0),     // iftab=342
-    ("B29", "=ISBLANK(A1)", 0.0),     // iftab=129
-    ("B30", "=ISTEXT(A3)", 1.0),      // iftab=127
-    ("B31", "=ISNUMBER(A1)", 1.0),    // iftab=128
-    ("B32", "=ISLOGICAL(A4)", 1.0),   // iftab=198
-    ("B33", "=ISNONTEXT(A1)", 1.0),   // iftab=190
-    ("B34", "=ISREF(A1)", 1.0),       // iftab=105 (R-class arg 0)
-    ("B35", "=ISERR(A1)", 0.0),       // iftab=126
-    ("B36", "=T(A3)", 0.0),           // iftab=130 (R-class arg 0)
-    ("B37", "=N(A1)", 4.0),           // iftab=131 (R-class arg 0)
-    ("B38", "=TYPE(A1)", 1.0),        // iftab=86
-    ("B39", "=ERROR.TYPE(A1)", 0.0),  // iftab=261
-    ("B40", "=COUNTBLANK(A1)", 0.0),  // iftab=347 (R-class arg 0)
-    ("B41", "=FACT(5)", 120.0),       // iftab=184
-    ("B42", "=CODE(A3)", 104.0),      // iftab=121
-    ("B43", "=HOUR(A5)", 0.0),        // iftab=71
-    ("B44", "=MINUTE(A5)", 0.0),      // iftab=72
-    ("B45", "=SECOND(A5)", 0.0),      // iftab=73
-    ("B46", "=TIME(1,2,3)", 0.0),     // iftab=66 (fixed 3-arg → PtgFunc)
+    ("B21", "=POWER(A1,2)", 16.0),   // iftab=337
+    ("B22", "=CHAR(65)", 0.0),       // iftab=111, cached not asserted exactly
+    ("B23", "=YEAR(A5)", 2020.0),    // iftab=69
+    ("B24", "=MONTH(A5)", 1.0),      // iftab=68
+    ("B25", "=DAY(A5)", 1.0),        // iftab=67
+    ("B26", "=DATE(2020,1,1)", 0.0), // iftab=65
+    ("B27", "=DEGREES(A1)", 0.0),    // iftab=343
+    ("B28", "=RADIANS(A1)", 0.0),    // iftab=342
+    ("B29", "=ISBLANK(A1)", 0.0),    // iftab=129
+    ("B30", "=ISTEXT(A3)", 1.0),     // iftab=127
+    ("B31", "=ISNUMBER(A1)", 1.0),   // iftab=128
+    ("B32", "=ISLOGICAL(A4)", 1.0),  // iftab=198
+    ("B33", "=ISNONTEXT(A1)", 1.0),  // iftab=190
+    ("B34", "=ISREF(A1)", 1.0),      // iftab=105 (R-class arg 0)
+    ("B35", "=ISERR(A1)", 0.0),      // iftab=126
+    ("B36", "=T(A3)", 0.0),          // iftab=130 (R-class arg 0)
+    ("B37", "=N(A1)", 4.0),          // iftab=131 (R-class arg 0)
+    ("B38", "=TYPE(A1)", 1.0),       // iftab=86
+    ("B39", "=ERROR.TYPE(A1)", 0.0), // iftab=261
+    ("B40", "=COUNTBLANK(A1)", 0.0), // iftab=347 (R-class arg 0)
+    ("B41", "=FACT(5)", 120.0),      // iftab=184
+    ("B42", "=CODE(A3)", 104.0),     // iftab=121
+    ("B43", "=HOUR(A5)", 0.0),       // iftab=71
+    ("B44", "=MINUTE(A5)", 0.0),     // iftab=72
+    ("B45", "=SECOND(A5)", 0.0),     // iftab=73
+    ("B46", "=TIME(1,2,3)", 0.0),    // iftab=66 (fixed 3-arg → PtgFunc)
     // Variable-arity → PtgFuncVar
     ("B6", "=ROW(A1)", 1.0),         // iftab=8 (var, ref arg)
     ("B17", "=SUM(A1:A2)", 1.0),     // iftab=4 (PtgAttrSum form, R-class operand)
@@ -327,14 +329,14 @@ const VOLATILE_FORMULAS: &[(&str, &str, f64)] = &[
     ("B4", "=OFFSET(A1,0,0)", 4.0), // iftab=78, variable args, ref-class arg 0
     // INDIRECT is volatile.
     ("B5", "=INDIRECT(\"A1\")", 4.0), // iftab=148, variable args
-    //
-    // RANDBETWEEN (iftab=464) and INFO (iftab=244) — both fixed for runtime/
-    // writer volatile-flag drift in the FunctionDef unification — are NOT in
-    // this batch because Excel re-save behaviour is environment-dependent
-    // (RANDBETWEEN was Analysis ToolPak before Excel 2010 and depending on
-    // the bridge's Excel version may resolve to #N/A on recalc; INFO returns
-    // host-OS-specific strings). Regression coverage for those bugs lives in
-    // duke-sheets-xls's xls_formula_round_trip.rs as token-level unit tests.
+                                      //
+                                      // RANDBETWEEN (iftab=464) and INFO (iftab=244) — both fixed for runtime/
+                                      // writer volatile-flag drift in the FunctionDef unification — are NOT in
+                                      // this batch because Excel re-save behaviour is environment-dependent
+                                      // (RANDBETWEEN was Analysis ToolPak before Excel 2010 and depending on
+                                      // the bridge's Excel version may resolve to #N/A on recalc; INFO returns
+                                      // host-OS-specific strings). Regression coverage for those bugs lives in
+                                      // duke-sheets-xls's xls_formula_round_trip.rs as token-level unit tests.
 ];
 
 fn volatile_function_workbook() -> Workbook {
