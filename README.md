@@ -78,6 +78,8 @@ conditional formatting, data validations, merged regions, page setup, and more.
 
 ## Python
 
+Requires Python 3.9 or newer.
+
 ```bash
 pip install duke-sheets
 ```
