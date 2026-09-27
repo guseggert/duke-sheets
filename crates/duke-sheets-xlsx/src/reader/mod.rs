@@ -686,6 +686,49 @@ fn decrypt_ooxml_envelope(
     )?)
 }
 
+/// Position of the next `<row>` and `<c>` within `<sheetData>`.
+///
+/// Both elements may omit their `r` attribute (ECMA-376 Part 1 §18.3.1.73,
+/// §18.3.1.4). A row without `r` follows the previous row and a cell without
+/// `r` follows the previous cell in its row, starting from A1.
+#[derive(Debug, Default)]
+struct SheetDataCursor {
+    /// 0-based index of the current row; `None` before the first `<row>`.
+    row: Option<u32>,
+    /// 0-based column taken by the next cell without `r`.
+    next_col: u16,
+}
+
+impl SheetDataCursor {
+    /// Enter a `<row>` given its parsed 1-based `r`, returning its 0-based index.
+    fn start_row(&mut self, explicit_row: Option<u32>) -> u32 {
+        let row = match explicit_row {
+            Some(r) => r.saturating_sub(1),
+            None => self.row.map_or(0, |r| r.saturating_add(1)),
+        };
+        self.row = Some(row);
+        self.next_col = 0;
+        row
+    }
+
+    /// Resolve a `<c>` from its `r` attribute, or from its position in the row
+    /// when `r` is absent. Returns `None` if `r` is not a valid A1 reference.
+    fn place_cell(&mut self, explicit_ref: Option<&str>) -> Option<CellAddress> {
+        let addr = match explicit_ref {
+            Some(cell_ref) => match CellAddress::parse(cell_ref) {
+                Ok(addr) => addr,
+                Err(e) => {
+                    log::warn!("Skipping cell with invalid reference '{}': {}", cell_ref, e);
+                    return None;
+                }
+            },
+            None => CellAddress::new(self.row.unwrap_or(0), self.next_col),
+        };
+        self.next_col = addr.col.saturating_add(1);
+        Some(addr)
+    }
+}
+
 impl XlsxReader {
     /// Read a workbook from a file path
     pub fn read_file<P: AsRef<Path>>(path: P) -> XlsxResult<Workbook> {
@@ -1404,7 +1447,10 @@ impl XlsxReader {
 
         let mut buf = Vec::new();
 
+        let mut sheet_data_cursor = SheetDataCursor::default();
+
         // Current cell state
+        let mut current_cell_addr: Option<CellAddress> = None;
         let mut current_cell_ref: Option<String> = None;
         let mut current_cell_type: Option<String> = None;
         let mut current_cell_style: Option<u32> = None;
@@ -1954,22 +2000,20 @@ impl XlsxReader {
                                     _ => {}
                                 }
                             }
-                            if let Some(r) = row_num {
-                                let row_idx = r.saturating_sub(1); // 1-based to 0-based
-                                if custom_height {
-                                    if let Some(h) = ht {
-                                        worksheet.set_row_height(row_idx, h);
-                                    }
+                            let row_idx = sheet_data_cursor.start_row(row_num);
+                            if custom_height {
+                                if let Some(h) = ht {
+                                    worksheet.set_row_height(row_idx, h);
                                 }
-                                if hidden {
-                                    worksheet.set_row_hidden(row_idx, true);
-                                }
-                                if let Some(level) = outline_level {
-                                    worksheet.set_row_outline_level(row_idx, level);
-                                }
-                                if collapsed {
-                                    worksheet.set_row_collapsed(row_idx, true);
-                                }
+                            }
+                            if hidden {
+                                worksheet.set_row_hidden(row_idx, true);
+                            }
+                            if let Some(level) = outline_level {
+                                worksheet.set_row_outline_level(row_idx, level);
+                            }
+                            if collapsed {
+                                worksheet.set_row_collapsed(row_idx, true);
                             }
                         }
                         b"c" => {
@@ -1981,6 +2025,7 @@ impl XlsxReader {
                             current_value = None;
                             current_formula = None;
                             current_formula_state = CellFormulaState::default();
+                            has_inline_runs = false;
 
                             for attr in e.attributes().flatten() {
                                 match attr.key.local_name().as_ref() {
@@ -2006,6 +2051,11 @@ impl XlsxReader {
                                     }
                                     _ => {}
                                 }
+                            }
+                            current_cell_addr =
+                                sheet_data_cursor.place_cell(current_cell_ref.as_deref());
+                            if current_cell_ref.is_none() {
+                                current_cell_ref = current_cell_addr.map(|a| a.to_a1_string());
                             }
                         }
                         b"v" if in_cell => in_value = true,
@@ -2128,79 +2178,67 @@ impl XlsxReader {
                         }
                         b"c" => {
                             // Process the cell
-                            if let Some(ref cell_ref) = current_cell_ref {
+                            if let (Some(addr), Some(cell_ref)) =
+                                (current_cell_addr, current_cell_ref.as_deref())
+                            {
                                 if has_inline_runs {
                                     // Inline rich text - set directly, bypassing process_cell
-                                    if let Ok(addr) = CellAddress::parse(cell_ref) {
-                                        let runs = std::mem::take(&mut inline_runs);
-                                        let resolved_formula = resolve_cell_formula(
-                                            cell_ref,
-                                            current_formula.as_deref(),
-                                            &current_formula_state,
-                                            &mut shared_formula_masters,
-                                        );
-                                        if let Some(f) = resolved_formula {
-                                            let formula_text = if f.starts_with('=') {
-                                                f
-                                            } else {
-                                                format!("={}", f)
-                                            };
-                                            if let Err(e) = worksheet
-                                                .set_formula_with_cached_value_at(
-                                                    addr.row,
-                                                    addr.col,
-                                                    &formula_text,
-                                                    CellValue::rich_text(runs),
-                                                )
-                                            {
-                                                log::warn!(
-                                                    "Skipping rich text formula {}: {}",
-                                                    cell_ref,
-                                                    e
-                                                );
-                                            }
-                                        } else if let Err(e) = worksheet.set_cell_value_at(
+                                    let runs = std::mem::take(&mut inline_runs);
+                                    let resolved_formula = resolve_cell_formula(
+                                        cell_ref,
+                                        current_formula.as_deref(),
+                                        &current_formula_state,
+                                        &mut shared_formula_masters,
+                                    );
+                                    if let Some(f) = resolved_formula {
+                                        let formula_text = if f.starts_with('=') {
+                                            f
+                                        } else {
+                                            format!("={}", f)
+                                        };
+                                        if let Err(e) = worksheet.set_formula_with_cached_value_at(
                                             addr.row,
                                             addr.col,
+                                            &formula_text,
                                             CellValue::rich_text(runs),
                                         ) {
                                             log::warn!(
-                                                "Skipping rich text cell {}: {}",
+                                                "Skipping rich text formula {}: {}",
                                                 cell_ref,
                                                 e
                                             );
                                         }
-                                        // Apply style
-                                        if let Some(s) = current_cell_style {
-                                            if s != 0 {
-                                                if let Some(style) = cell_styles.get(s as usize) {
-                                                    if let Err(e) = worksheet.set_cell_style_at(
-                                                        addr.row, addr.col, style,
-                                                    ) {
-                                                        log::warn!(
-                                                            "Cell {}: failed to apply style: {}",
-                                                            cell_ref,
-                                                            e
-                                                        );
-                                                    }
+                                    } else if let Err(e) = worksheet.set_cell_value_at(
+                                        addr.row,
+                                        addr.col,
+                                        CellValue::rich_text(runs),
+                                    ) {
+                                        log::warn!("Skipping rich text cell {}: {}", cell_ref, e);
+                                    }
+                                    // Apply style
+                                    if let Some(s) = current_cell_style {
+                                        if s != 0 {
+                                            if let Some(style) = cell_styles.get(s as usize) {
+                                                if let Err(e) = worksheet
+                                                    .set_cell_style_at(addr.row, addr.col, style)
+                                                {
+                                                    log::warn!(
+                                                        "Cell {}: failed to apply style: {}",
+                                                        cell_ref,
+                                                        e
+                                                    );
                                                 }
                                             }
                                         }
                                     }
-                                    has_inline_runs = false;
                                 } else {
                                     if let Some(cm) = current_cell_cm {
-                                        if let Ok(addr) = CellAddress::parse(cell_ref) {
-                                            match cm {
-                                                1 => {
-                                                    dynamic_array_anchors.push((addr.row, addr.col))
-                                                }
-                                                2 => {
-                                                    dynamic_array_ghosts
-                                                        .insert((addr.row, addr.col));
-                                                }
-                                                _ => {}
+                                        match cm {
+                                            1 => dynamic_array_anchors.push((addr.row, addr.col)),
+                                            2 => {
+                                                dynamic_array_ghosts.insert((addr.row, addr.col));
                                             }
+                                            _ => {}
                                         }
                                     }
                                     let resolved_formula = resolve_cell_formula(
@@ -2211,7 +2249,7 @@ impl XlsxReader {
                                     );
                                     Self::process_cell(
                                         worksheet,
-                                        cell_ref,
+                                        addr,
                                         current_cell_type.as_deref(),
                                         current_value.as_deref(),
                                         resolved_formula.as_deref(),
@@ -2816,22 +2854,20 @@ impl XlsxReader {
                                     _ => {}
                                 }
                             }
-                            if let Some(r) = row_num {
-                                let row_idx = r.saturating_sub(1);
-                                if custom_height {
-                                    if let Some(h) = ht {
-                                        worksheet.set_row_height(row_idx, h);
-                                    }
+                            let row_idx = sheet_data_cursor.start_row(row_num);
+                            if custom_height {
+                                if let Some(h) = ht {
+                                    worksheet.set_row_height(row_idx, h);
                                 }
-                                if hidden {
-                                    worksheet.set_row_hidden(row_idx, true);
-                                }
-                                if let Some(level) = outline_level {
-                                    worksheet.set_row_outline_level(row_idx, level);
-                                }
-                                if collapsed {
-                                    worksheet.set_row_collapsed(row_idx, true);
-                                }
+                            }
+                            if hidden {
+                                worksheet.set_row_hidden(row_idx, true);
+                            }
+                            if let Some(level) = outline_level {
+                                worksheet.set_row_outline_level(row_idx, level);
+                            }
+                            if collapsed {
+                                worksheet.set_row_collapsed(row_idx, true);
                             }
                         }
                         b"col" => {
@@ -2935,10 +2971,10 @@ impl XlsxReader {
                                 }
                             }
 
-                            if let Some(cell_ref) = cell_ref {
+                            if let Some(addr) = sheet_data_cursor.place_cell(cell_ref.as_deref()) {
                                 Self::process_cell(
                                     worksheet,
-                                    &cell_ref,
+                                    addr,
                                     cell_type.as_deref(),
                                     None,
                                     None,
@@ -3797,7 +3833,7 @@ impl XlsxReader {
     #[allow(clippy::too_many_arguments)]
     fn process_cell(
         worksheet: &mut duke_sheets_core::Worksheet,
-        cell_ref: &str,
+        addr: CellAddress,
         cell_type: Option<&str>,
         value: Option<&str>,
         formula: Option<&str>,
@@ -3805,14 +3841,6 @@ impl XlsxReader {
         shared_strings: &[SharedStringEntry],
         styles: &[Style],
     ) -> XlsxResult<()> {
-        let addr = match CellAddress::parse(cell_ref) {
-            Ok(a) => a,
-            Err(e) => {
-                log::warn!("Skipping cell with invalid reference '{}': {}", cell_ref, e);
-                return Ok(());
-            }
-        };
-
         // Apply formula or value
         if let Some(f) = formula {
             // Parse cached value (if any) from the <v> element.
@@ -3853,7 +3881,7 @@ impl XlsxReader {
                 &formula_text,
                 cached.unwrap_or(CellValue::Empty),
             ) {
-                log::warn!("Skipping formula cell {}: {}", cell_ref, e);
+                log::warn!("Skipping formula cell {}: {}", addr, e);
                 return Ok(());
             }
         } else if let Some(value) = value {
@@ -3865,7 +3893,7 @@ impl XlsxReader {
                         None => {
                             log::warn!(
                                     "Cell {}: shared string index {} out of bounds (max {}), using #REF!",
-                                    cell_ref, idx, shared_strings.len()
+                                    addr, idx, shared_strings.len()
                                 );
                             CellValue::Error(CellError::Ref)
                         }
@@ -3873,7 +3901,7 @@ impl XlsxReader {
                     Err(_) => {
                         log::warn!(
                             "Cell {}: invalid shared string index '{}', using #REF!",
-                            cell_ref,
+                            addr,
                             value
                         );
                         CellValue::Error(CellError::Ref)
@@ -3899,7 +3927,7 @@ impl XlsxReader {
             };
 
             if let Err(e) = worksheet.set_cell_value_at(addr.row, addr.col, cell_value) {
-                log::warn!("Skipping cell {}: {}", cell_ref, e);
+                log::warn!("Skipping cell {}: {}", addr, e);
                 return Ok(());
             }
         } else if matches!(cell_type, Some("str") | Some("inlineStr")) {
@@ -3907,7 +3935,7 @@ impl XlsxReader {
             if let Err(e) =
                 worksheet.set_cell_value_at(addr.row, addr.col, CellValue::String("".into()))
             {
-                log::warn!("Skipping cell {}: {}", cell_ref, e);
+                log::warn!("Skipping cell {}: {}", addr, e);
                 return Ok(());
             }
         }
@@ -3918,13 +3946,13 @@ impl XlsxReader {
                 match styles.get(s as usize) {
                     Some(style) => {
                         if let Err(e) = worksheet.set_cell_style_at(addr.row, addr.col, style) {
-                            log::warn!("Cell {}: failed to apply style: {}", cell_ref, e);
+                            log::warn!("Cell {}: failed to apply style: {}", addr, e);
                         }
                     }
                     None => {
                         log::warn!(
                             "Cell {}: style index {} out of bounds (max {}), using default",
-                            cell_ref,
+                            addr,
                             s,
                             styles.len()
                         );
@@ -4194,6 +4222,86 @@ mod tests {
         assert!(sheet.is_row_collapsed(1));
         assert_eq!(sheet.column_outline_level(2), 3);
         assert!(sheet.is_column_collapsed(2));
+    }
+
+    // features: Omitted row and cell references (`r`)
+    #[test]
+    fn test_read_cells_without_r_follow_previous_cell_in_row() {
+        let sheet_xml = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="3">
+      <c/>
+      <c t="inlineStr"><is><t>Label</t></is></c>
+      <c t="n"><v>42.5</v></c>
+      <c r="F3" t="inlineStr"><is><t>explicit</t></is></c>
+      <c t="inlineStr"><is><r><t>rich</t></r></is></c>
+    </row>
+  </sheetData>
+</worksheet>"#;
+
+        let bytes = build_single_sheet_xlsx(sheet_xml);
+        let workbook = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        assert_eq!(sheet.get_value_at(2, 1).as_string(), Some("Label"));
+        assert_eq!(sheet.get_value_at(2, 2).as_number(), Some(42.5));
+        assert_eq!(sheet.get_value_at(2, 5).as_string(), Some("explicit"));
+        let rich = sheet.get_value_at(2, 6);
+        assert!(rich.is_rich_text());
+        assert_eq!(rich.to_string(), "rich");
+    }
+
+    // features: Omitted row and cell references (`r`)
+    #[test]
+    fn test_read_rows_without_r_follow_previous_row() {
+        let sheet_xml = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row><c t="str"><v>Key</v></c><c t="str"><v>Value</v></c></row>
+    <row/>
+    <row ht="30" customHeight="1"><c t="str"><v>1001</v></c><c t="n"><v>12.5</v></c></row>
+    <row r="7"><c t="n"><v>7</v></c></row>
+    <row hidden="1"><c t="n"><v>8</v></c></row>
+  </sheetData>
+</worksheet>"#;
+
+        let bytes = build_single_sheet_xlsx(sheet_xml);
+        let workbook = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        assert_eq!(sheet.get_value_at(0, 0).as_string(), Some("Key"));
+        assert_eq!(sheet.get_value_at(0, 1).as_string(), Some("Value"));
+        assert_eq!(sheet.get_value_at(2, 0).as_string(), Some("1001"));
+        assert_eq!(sheet.get_value_at(2, 1).as_number(), Some(12.5));
+        assert_eq!(sheet.row_height(2), 30.0);
+        assert_eq!(sheet.get_value_at(6, 0).as_number(), Some(7.0));
+        assert_eq!(sheet.get_value_at(7, 0).as_number(), Some(8.0));
+        assert!(sheet.is_row_hidden(7));
+        assert_eq!(
+            sheet.used_range().map(|r| r.to_string()),
+            Some("A1:B8".to_string())
+        );
+    }
+
+    // features: Omitted row and cell references (`r`)
+    #[test]
+    fn test_read_shared_formula_on_cells_without_r() {
+        let sheet_xml = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row><c><v>1</v></c><c><f t="shared" si="0" ref="B1:B2">A1*2</f><v>2</v></c></row>
+    <row><c><v>3</v></c><c><f t="shared" si="0"/><v>6</v></c></row>
+  </sheetData>
+</worksheet>"#;
+
+        let bytes = build_single_sheet_xlsx(sheet_xml);
+        let workbook = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        assert_eq!(sheet.get_formula_at(0, 1), Some("=A1*2"));
+        assert_eq!(sheet.get_formula_at(1, 1), Some("=A2*2"));
+        assert_eq!(sheet.get_value_at(1, 1).as_number(), Some(6.0));
     }
 
     #[test]

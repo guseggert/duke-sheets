@@ -27,6 +27,7 @@
 | Phonetic hint (`ph`) | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | §18.3.1.4 |
 | Large row/column indices | R✔ W● | R✖ W✖ | R✔ W● | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_large_indices`, `cell_values_round_trip::large_row_and_column_indices_round_trip` | - | XLSX writer has in-process round-trip; Excel parity pending. XLS writer has in-process round-trip; Excel parity pending. |
 | Sparse data (non-contiguous cells) | R✔ W● | R✔ W● | R✔ W● | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_sparse_data`, `cell_values_round_trip::cells_round_trip_when_set_in_scrambled_order`, `duke-sheets-xlsb::writer::tests::mixed_cell_types` | - | XLSX writer has in-process round-trip; Excel parity pending. XLSB writer has in-process round-trip; Excel parity pending. XLS writer has in-process round-trip; Excel parity pending. |
+| Omitted row and cell references (`r`) | R✔ W- | R- W- | R- W- | R- W- | `duke-sheets-xlsx::reader::tests::test_read_cells_without_r_follow_previous_cell_in_row`, `duke-sheets-xlsx::reader::tests::test_read_rows_without_r_follow_previous_row`, `duke-sheets-xlsx::reader::tests::test_read_shared_formula_on_cells_without_r` | §18.3.1.4, §18.3.1.73 | A row without `r` follows the previous row and a cell without `r` follows the previous cell in its row. The writer always emits `r`. |
 
 ## Formulas
 
