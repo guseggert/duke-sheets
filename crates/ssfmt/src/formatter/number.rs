@@ -409,9 +409,19 @@ fn format_number_as_integer(
         adjusted_value = adjusted_value.saturating_mul(100);
     }
 
-    // Apply thousands scaling (integer division)
-    for _ in 0..analysis.thousands_scale {
-        adjusted_value /= 1000;
+    // Apply thousands scaling in a single division, rounding half away from zero
+    // like Excel (the value is already non-negative). Dividing once per comma
+    // would truncate: 1,500,000 with "0,," must show 2, not 1.
+    if analysis.thousands_scale > 0 {
+        adjusted_value = match u32::try_from(analysis.thousands_scale)
+            .ok()
+            .and_then(|scale| 1000_i64.checked_pow(scale))
+        {
+            Some(divisor) => {
+                adjusted_value / divisor + i64::from(adjusted_value % divisor * 2 >= divisor)
+            }
+            None => 0,
+        };
     }
 
     // For integers, decimal places should be zero unless explicitly formatted
