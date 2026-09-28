@@ -721,6 +721,7 @@ dependencies = [
  "duke-sheets-csv",
  "duke-sheets-formula",
  "duke-sheets-libreoffice",
+ "duke-sheets-pivot",
  "duke-sheets-test-harness",
  "duke-sheets-xls",
  "duke-sheets-xlsb",
@@ -879,6 +880,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "duke-sheets-pivot"
+version = "0.1.0"
+dependencies = [
+ "ahash 0.8.12",
+ "chrono",
+ "duke-sheets-core",
+ "duke-sheets-formula",
+ "pretty_assertions",
+ "rayon",
+ "ssfmt",
+]
+
+[[package]]
 name = "duke-sheets-test-harness"
 version = "0.1.0"
 
@@ -901,10 +915,12 @@ dependencies = [
  "duke-sheets-crypto",
  "duke-sheets-formula",
  "duke-sheets-libreoffice",
+ "duke-sheets-pivot",
  "duke-sheets-test-harness",
  "log",
  "md-5",
  "pretty_assertions",
+ "ssfmt",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
@@ -918,12 +934,14 @@ dependencies = [
  "duke-sheets-chart",
  "duke-sheets-core",
  "duke-sheets-formula",
+ "duke-sheets-pivot",
  "duke-sheets-vml",
  "encoding_rs",
  "log",
  "pretty_assertions",
  "proptest",
  "quick-xml 0.37.5",
+ "ssfmt",
  "tempfile",
  "thiserror 1.0.69",
  "zip",
@@ -939,6 +957,7 @@ dependencies = [
  "duke-sheets-crypto",
  "duke-sheets-formula",
  "duke-sheets-libreoffice",
+ "duke-sheets-pivot",
  "duke-sheets-test-harness",
  "duke-sheets-vml",
  "duke-sheets-xls",
@@ -946,6 +965,8 @@ dependencies = [
  "log",
  "pretty_assertions",
  "quick-xml 0.37.5",
+ "rayon",
+ "ssfmt",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",

@@ -10,6 +10,7 @@ use crate::error::XlsbResult;
 use duke_sheets_core::named_range::NameScope;
 use duke_sheets_core::worksheet::SheetVisibility;
 use duke_sheets_core::{CellAddress, Workbook};
+use duke_sheets_pivot::FormatPivotPlan;
 
 pub(crate) fn write_workbook<W: Write + Seek>(
     zip: &mut ZipWriter<W>,
@@ -18,6 +19,8 @@ pub(crate) fn write_workbook<W: Write + Seek>(
     has_formulas: bool,
     xlfn_names: &HashMap<String, u32>,
     external_names: &[String],
+    pivot_plan: &FormatPivotPlan,
+    pivot_cache_rids: &[String],
 ) -> XlsbResult<()> {
     zip.start_file("xl/workbook.bin", *options)?;
     let mut buf = Vec::new();
@@ -85,6 +88,7 @@ pub(crate) fn write_workbook<W: Write + Seek>(
         ps.print_area.is_some() || ps.repeat_rows.is_some() || ps.repeat_cols.is_some()
     });
 
+    let sheet_ixti_offset = u16::from(!external_names.is_empty());
     if has_formulas || has_user_names || has_print_settings {
         write_extern_sheet(&mut rw, workbook.sheet_count(), external_names)?;
     }
@@ -94,18 +98,40 @@ pub(crate) fn write_workbook<W: Write + Seek>(
     }
 
     if has_user_names {
-        write_user_name_records(&mut rw, workbook, xlfn_names)?;
+        write_user_name_records(&mut rw, workbook, xlfn_names, sheet_ixti_offset)?;
     }
 
     if has_print_settings {
-        write_print_name_records(&mut rw, workbook, xlfn_names)?;
+        write_print_name_records(&mut rw, workbook, xlfn_names, sheet_ixti_offset)?;
     }
+
+    write_pivot_cache_ids(&mut rw, pivot_plan, pivot_cache_rids)?;
 
     rw.write_record(0x0084, &[])?; // BrtEndBook
 
     drop(rw);
     zip.write_all(&buf)?;
     Ok(())
+}
+
+fn write_pivot_cache_ids<W: Write>(
+    rw: &mut RecordWriter<W>,
+    pivot_plan: &FormatPivotPlan,
+    pivot_cache_rids: &[String],
+) -> std::io::Result<()> {
+    if pivot_plan.caches.is_empty() {
+        return Ok(());
+    }
+
+    rw.write_record(records::BRT_BEGIN_PIVOT_CACHE_IDS, &[])?;
+    for (cache, rel_id) in pivot_plan.caches.iter().zip(pivot_cache_rids) {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&((cache.cache_num - 1) as u32).to_le_bytes());
+        payload.extend_from_slice(&encode_wide_str(rel_id));
+        rw.write_record(records::BRT_PIVOT_CACHE_ID, &payload)?;
+        rw.write_record(records::BRT_END_PIVOT_CACHE_ID, &[])?;
+    }
+    rw.write_record(records::BRT_END_PIVOT_CACHE_IDS, &[])
 }
 
 fn write_file_version<W: Write>(rw: &mut RecordWriter<W>) -> std::io::Result<()> {
@@ -167,6 +193,7 @@ fn write_user_name_records<W: Write>(
     rw: &mut RecordWriter<W>,
     workbook: &Workbook,
     xlfn_names: &HashMap<String, u32>,
+    sheet_ixti_offset: u16,
 ) -> std::io::Result<()> {
     let sheet_names: Vec<String> = (0..workbook.sheet_count())
         .map(|i| workbook.worksheet(i).unwrap().name().to_string())
@@ -176,6 +203,7 @@ fn write_user_name_records<W: Write>(
     // here would warn-and-skip.
     let compile_ctx = CompileContext {
         sheet_names,
+        sheet_ixti_offset,
         xlfn_names: xlfn_names.clone(),
         defined_names: Vec::new(),
         defined_name_classes: Vec::new(),
@@ -225,12 +253,14 @@ fn write_print_name_records<W: Write>(
     rw: &mut RecordWriter<W>,
     workbook: &Workbook,
     xlfn_names: &HashMap<String, u32>,
+    sheet_ixti_offset: u16,
 ) -> std::io::Result<()> {
     let sheet_names: Vec<String> = (0..workbook.sheet_count())
         .map(|i| workbook.worksheet(i).unwrap().name().to_string())
         .collect();
     let compile_ctx = CompileContext {
         sheet_names,
+        sheet_ixti_offset,
         xlfn_names: xlfn_names.clone(),
         defined_names: Vec::new(),
         defined_name_classes: Vec::new(),

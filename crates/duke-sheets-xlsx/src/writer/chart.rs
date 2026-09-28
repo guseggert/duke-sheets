@@ -1,6 +1,8 @@
-use std::io::{Seek, Write};
+use std::io::{Cursor, Seek, Write};
 
-use duke_sheets_chart::Chart;
+use duke_sheets_chart::{Chart, PivotChartSource};
+use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
+use quick_xml::Writer;
 
 use super::XlsxResult;
 
@@ -10,9 +12,38 @@ pub(super) fn write_chart_part<W: Write + Seek>(
     chart_num: usize,
 ) -> XlsxResult<()> {
     let path = format!("xl/charts/chart{}.xml", chart_num);
-    let bytes = duke_sheets_chart::write::chart_part_bytes(chart)?;
+    let mut bytes = duke_sheets_chart::write::chart_part_bytes(chart)?;
+    if let Some(source) = &chart.pivot_source {
+        insert_pivot_source(&mut bytes, source)?;
+    }
     zip.start_file(&path, zip::write::SimpleFileOptions::default())?;
     zip.write_all(&bytes)?;
+    Ok(())
+}
+
+fn insert_pivot_source(bytes: &mut Vec<u8>, source: &PivotChartSource) -> XlsxResult<()> {
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    writer.write_event(Event::Start(BytesStart::new("c:pivotSource")))?;
+    writer
+        .create_element("c:name")
+        .write_text_content(BytesText::new(&source.name))?;
+    let format_id = source.format_id.to_string();
+    writer
+        .create_element("c:fmtId")
+        .with_attribute(("val", format_id.as_str()))
+        .write_empty()?;
+    writer.write_event(Event::End(BytesEnd::new("c:pivotSource")))?;
+
+    let marker = b"<c:chart>";
+    let position = bytes
+        .windows(marker.len())
+        .position(|window| window == marker)
+        .ok_or_else(|| {
+            crate::error::XlsxError::InvalidFormat(
+                "generated chart has no c:chart element".to_string(),
+            )
+        })?;
+    bytes.splice(position..position, writer.into_inner().into_inner());
     Ok(())
 }
 
@@ -23,7 +54,8 @@ mod tests {
 
     use duke_sheets_chart::{
         Axis, AxisPosition, AxisType, Chart, ChartColor, ChartLine, ChartLines,
-        ChartShapeProperties, ChartType, DataLabels, DataReference, DataSeries, UpDownBars,
+        ChartShapeProperties, ChartType, DataLabels, DataReference, DataSeries, PivotChartSource,
+        UpDownBars,
     };
 
     use super::write_chart_part;
@@ -106,6 +138,27 @@ mod tests {
             .get("chartSpace")
             .expect("chartSpace extLst lost");
         assert!(std::str::from_utf8(cs).unwrap().contains("cs-ext"));
+    }
+
+    // features: PivotChart
+    #[test]
+    fn test_pivot_source_roundtrip() {
+        let mut chart = Chart::new(ChartType::ColumnClustered);
+        chart.pivot_source = Some(PivotChartSource::new("SalesPivot").with_format_id(4));
+        chart
+            .series
+            .push(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$3")));
+
+        let written = chart_xml_after_write(&chart);
+        assert!(written.contains(
+            "<c:pivotSource><c:name>SalesPivot</c:name><c:fmtId val=\"4\"/></c:pivotSource>"
+        ));
+        let pivot_pos = written.find("<c:pivotSource>").unwrap();
+        let chart_pos = written.find("<c:chart>").unwrap();
+        assert!(pivot_pos < chart_pos);
+
+        let reparsed = roundtrip_chart(&chart);
+        assert_eq!(reparsed.pivot_source, chart.pivot_source);
     }
 
     #[test]

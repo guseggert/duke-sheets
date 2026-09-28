@@ -197,3 +197,626 @@ class TestNamedRanges:
         wb = duke_sheets.Workbook()
         result = wb.get_named_range("NotDefined")
         assert result is None
+
+
+class TestPivotTables:
+    """Test pivot table authoring through the Python binding."""
+
+    def test_pivot_table_definitions(self):
+        """Should expose semantic pivot table definitions."""
+        import duke_sheets
+
+        wb = duke_sheets.Workbook()
+        sheet = wb.get_sheet(0)
+        sheet.add_pivot_table(
+            {
+                "name": "SalesPivot",
+                "source_range": "A1:D4",
+                "target": "E1",
+                "row_fields": [
+                    {
+                        "field": "Region",
+                        "sort": "descending",
+                        "sort_by_measure": {
+                            "field": "Revenue",
+                            "aggregate": "sum",
+                            "name": "Revenue",
+                        },
+                        "subtotal": "sum",
+                        "subtotals": ["sum", "average", "max"],
+                        "show_drop_downs": False,
+                        "subtotal_top": False,
+                        "insert_blank_row": True,
+                        "insert_page_break": True,
+                        "include_new_items_in_filter": True,
+                        "item_page_count": 25,
+                    }
+                ],
+                "columns": ["Quarter"],
+                "measures": [
+                    {
+                        "field": "Revenue",
+                        "aggregate": "sum",
+                        "name": "Revenue",
+                        "show_as": "percentOfGrandTotal",
+                        "number_format": "0.0%",
+                    }
+                ],
+                "filters": [
+                    {
+                        "kind": "label",
+                        "field": "Region",
+                        "operator": "beginsWith",
+                        "text": "E",
+                    },
+                    {
+                        "kind": "label_between",
+                        "field": "Region",
+                        "start_text": "East",
+                        "end_text": "North",
+                    },
+                    {
+                        "kind": "value_between",
+                        "field": "Region",
+                        "measure": {
+                            "field": "Revenue",
+                            "aggregate": "sum",
+                            "name": "Revenue",
+                        },
+                        "start": 10,
+                        "end": 30,
+                    },
+                    {
+                        "kind": "date_between",
+                        "field": "Date",
+                        "start": 45292,
+                        "end": 45322,
+                    },
+                    {
+                        "kind": "date_period",
+                        "field": "Date",
+                        "period": "this_month",
+                    },
+                ],
+                "calculated_fields": [{"name": "Margin", "formula": "=Revenue*0.2"}],
+                "calculated_items": [
+                    {"field": "Region", "item": "Combined", "formula": "East+West"}
+                ],
+                "refresh_policy": {"refresh_on_open": True, "missing_items_limit": 25},
+                "layout": {
+                    "kind": "tabular",
+                    "repeat_item_labels": True,
+                    "page_wrap": 2,
+                    "page_over_then_down": True,
+                    "merge_item_labels": True,
+                    "data_caption": "Metrics",
+                    "values_axis": "rows",
+                    "values_axis_position": 1,
+                    "grand_total_caption": "Overall",
+                    "error_caption": "ERR",
+                    "show_error": True,
+                    "missing_caption": "N/A",
+                    "show_missing": False,
+                    "asterisk_totals": True,
+                    "show_items": False,
+                    "edit_data": True,
+                    "disable_field_list": True,
+                    "show_calculated_members": False,
+                    "visual_totals": False,
+                    "show_multiple_label": False,
+                    "show_data_drop_down": False,
+                    "show_member_property_tips": False,
+                    "show_data_tips": False,
+                    "enable_wizard": False,
+                    "enable_drill": False,
+                    "enable_field_properties": False,
+                    "subtotal_hidden_items": True,
+                    "show_drop_zones": False,
+                    "indent": 3,
+                    "show_empty_rows": True,
+                    "show_empty_columns": True,
+                },
+                "overwrite_policy": "fail_on_occupied",
+            }
+        )
+
+        pivot = sheet.get_pivot_table("SalesPivot")
+        assert pivot is not None
+        assert sheet.pivot_tables == [pivot]
+        assert pivot["source"]["kind"] == "worksheet_range"
+        assert pivot["source"]["range"] == "A1:D4"
+        assert pivot["target"] == "E1"
+        assert pivot["rows"][0]["field"] == "Region"
+        assert pivot["rows"][0]["sort"] == "descending"
+        assert pivot["rows"][0]["sort_by_measure"]["field"] == "Revenue"
+        assert pivot["rows"][0]["sort_by_measure"]["aggregate"] == "sum"
+        assert pivot["rows"][0]["sort_by_measure"]["caption"] == "Revenue"
+        assert pivot["rows"][0]["subtotal"] == "sum"
+        assert pivot["rows"][0]["subtotals"] == ["sum", "average", "max"]
+        assert pivot["rows"][0]["show_drop_downs"] is False
+        assert pivot["rows"][0]["subtotal_top"] is False
+        assert pivot["rows"][0]["insert_blank_row"] is True
+        assert pivot["rows"][0]["insert_page_break"] is True
+        assert pivot["rows"][0]["include_new_items_in_filter"] is True
+        assert pivot["rows"][0]["item_page_count"] == 25
+        assert pivot["columns"][0]["field"] == "Quarter"
+        assert pivot["measures"][0]["field"] == "Revenue"
+        assert pivot["measures"][0]["aggregate"] == "sum"
+        assert pivot["measures"][0]["caption"] == "Revenue"
+        assert pivot["measures"][0]["number_format"] == "0.0%"
+        assert pivot["measures"][0]["show_as"]["kind"] == "percent_of_grand_total"
+        assert pivot["filters"][0]["kind"] == "label"
+        assert pivot["filters"][0]["operator"] == "begins_with"
+        assert pivot["filters"][1] == {
+            "kind": "label_between",
+            "field": "Region",
+            "start_text": "East",
+            "end_text": "North",
+        }
+        assert pivot["filters"][2]["kind"] == "value_between"
+        assert pivot["filters"][2]["field"] == "Region"
+        assert pivot["filters"][2]["measure"]["field"] == "Revenue"
+        assert pivot["filters"][2]["start"] == 10.0
+        assert pivot["filters"][2]["end"] == 30.0
+        assert pivot["filters"][3] == {
+            "kind": "date_between",
+            "field": "Date",
+            "start": 45292.0,
+            "end": 45322.0,
+        }
+        assert pivot["filters"][4] == {
+            "kind": "date_period",
+            "field": "Date",
+            "period": "this_month",
+        }
+        assert pivot["calculated_fields"][0] == {
+            "name": "Margin",
+            "formula": "=Revenue*0.2",
+        }
+        assert pivot["calculated_items"][0] == {
+            "field": "Region",
+            "item": {"kind": "string", "text": "Combined"},
+            "formula": "East+West",
+        }
+        assert pivot["layout"]["kind"] == "tabular"
+        assert pivot["layout"]["repeat_item_labels"] is True
+        assert pivot["layout"]["page_wrap"] == 2
+        assert pivot["layout"]["page_over_then_down"] is True
+        assert pivot["layout"]["merge_item_labels"] is True
+        assert pivot["layout"]["data_caption"] == "Metrics"
+        assert pivot["layout"]["values_axis"] == "rows"
+        assert pivot["layout"]["values_axis_position"] == 1
+        assert pivot["layout"]["grand_total_caption"] == "Overall"
+        assert pivot["layout"]["error_caption"] == "ERR"
+        assert pivot["layout"]["show_error"] is True
+        assert pivot["layout"]["missing_caption"] == "N/A"
+        assert pivot["layout"]["show_missing"] is False
+        assert pivot["layout"]["asterisk_totals"] is True
+        assert pivot["layout"]["show_items"] is False
+        assert pivot["layout"]["edit_data"] is True
+        assert pivot["layout"]["disable_field_list"] is True
+        assert pivot["layout"]["show_calculated_members"] is False
+        assert pivot["layout"]["visual_totals"] is False
+        assert pivot["layout"]["show_multiple_label"] is False
+        assert pivot["layout"]["show_data_drop_down"] is False
+        assert pivot["layout"]["show_member_property_tips"] is False
+        assert pivot["layout"]["show_data_tips"] is False
+        assert pivot["layout"]["enable_wizard"] is False
+        assert pivot["layout"]["enable_drill"] is False
+        assert pivot["layout"]["enable_field_properties"] is False
+        assert pivot["layout"]["subtotal_hidden_items"] is True
+        assert pivot["layout"]["show_drop_zones"] is False
+        assert pivot["layout"]["indent"] == 3
+        assert pivot["layout"]["show_empty_rows"] is True
+        assert pivot["layout"]["show_empty_columns"] is True
+        assert pivot["refresh_policy"]["refresh_on_open"] is True
+        assert pivot["refresh_policy"]["missing_items_limit"] == 25
+        assert pivot["overwrite_policy"] == "fail_on_occupied"
+        assert pivot["refresh_status"]["kind"] == "not_refreshed"
+        assert sheet.get_pivot_table("Missing") is None
+
+    def test_external_pivot_database_connection_roundtrip(self, temp_dir):
+        """Should save and read external pivot database connection metadata."""
+        import os
+
+        import duke_sheets
+
+        path = os.path.join(temp_dir, "external_pivot.xlsx")
+        wb = duke_sheets.Workbook()
+        wb.add_data_connection(
+            {
+                "id": 7,
+                "name": "SalesConnection",
+                "connection": "Provider=MSDASQL;DSN=Sales;",
+                "command": "select Region, Revenue from Sales",
+                "refresh_on_load": True,
+            }
+        )
+        assert wb.data_connection_count == 1
+        assert wb.data_connection_names == ["SalesConnection"]
+
+        sheet = wb.get_sheet(0)
+        sheet.add_pivot_table(
+            {
+                "name": "ExternalSales",
+                "external_connection_name": "SalesConnection",
+                "external_command_text": "select Region, Revenue from Sales",
+                "target": "A1",
+                "rows": ["Region"],
+                "measures": [
+                    {"field": "Revenue", "aggregate": "sum", "name": "Revenue"}
+                ],
+            }
+        )
+        assert sheet.pivot_count == 1
+
+        wb.save(path)
+        roundtrip = duke_sheets.Workbook.open(path)
+        assert roundtrip.data_connection_count == 1
+        assert roundtrip.data_connection_names == ["SalesConnection"]
+        assert roundtrip.get_sheet(0).pivot_table_names == ["ExternalSales"]
+
+    def test_non_database_data_connection_roundtrip(self, temp_dir):
+        """Should save and read web, text, and OLAP connection metadata."""
+        import os
+
+        import duke_sheets
+
+        path = os.path.join(temp_dir, "data_connections.xlsx")
+        wb = duke_sheets.Workbook()
+        wb.add_data_connection(
+            {
+                "id": 8,
+                "name": "WebSales",
+                "kind": "web",
+                "url": "https://example.test/sales.html",
+                "source_data": True,
+                "html_tables": True,
+            }
+        )
+        wb.add_data_connection(
+            {
+                "id": 9,
+                "name": "CsvSales",
+                "kind": "text",
+                "source_file": "/data/sales.csv",
+                "delimiter": "|",
+                "first_row": 2,
+            }
+        )
+        wb.add_data_connection(
+            {
+                "id": 10,
+                "name": "CubeSales",
+                "kind": "olap",
+                "local": True,
+                "local_connection": "CubeFile=cube.cub",
+                "send_locale": True,
+            }
+        )
+        assert wb.data_connection_names == ["WebSales", "CsvSales", "CubeSales"]
+        assert [connection["kind"] for connection in wb.data_connections] == [
+            "web",
+            "text",
+            "olap",
+        ]
+        assert wb.get_data_connection("CsvSales") == {
+            "id": 9,
+            "name": "CsvSales",
+            "kind": "text",
+            "refreshed_version": 7,
+            "refresh_on_load": False,
+            "background": False,
+            "save_data": False,
+            "source_file": "/data/sales.csv",
+            "delimiter": "|",
+            "first_row": 2,
+            "delimited": True,
+            "decimal": None,
+            "thousands": None,
+        }
+        assert wb.get_data_connection_by_id(10)["local_connection"] == "CubeFile=cube.cub"
+        assert wb.get_data_connection("Missing") is None
+
+        wb.save(path)
+        roundtrip = duke_sheets.Workbook.open(path)
+        assert roundtrip.data_connection_count == 3
+        assert roundtrip.data_connection_names == ["WebSales", "CsvSales", "CubeSales"]
+        assert [connection["kind"] for connection in roundtrip.data_connections] == [
+            "web",
+            "text",
+            "olap",
+        ]
+        assert roundtrip.get_data_connection("WebSales")["url"] == (
+            "https://example.test/sales.html"
+        )
+        assert roundtrip.get_data_connection_by_id(10)["send_locale"] is True
+
+    def test_workbook_extension_parts_roundtrip(self, temp_dir):
+        """Should expose preserved workbook extension package parts."""
+        import os
+        import zipfile
+
+        import duke_sheets
+
+        base_path = os.path.join(temp_dir, "base.xlsx")
+        path = os.path.join(temp_dir, "extensions.xlsx")
+        out_path = os.path.join(temp_dir, "extensions_roundtrip.xlsx")
+        slicer_payload = (
+            b'<x14:slicerCacheDefinition '
+            b'xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" '
+            b'name="Slicer_Region"/>'
+        )
+        extension_uri = "{05C60535-1F16-4fd2-B633-F4F36F0B64E0}"
+
+        duke_sheets.Workbook().save(base_path)
+        with zipfile.ZipFile(base_path, "r") as src:
+            entries = {info.filename: src.read(info.filename) for info in src.infolist()}
+
+        workbook_xml = entries["xl/workbook.xml"].decode("utf-8")
+        workbook_ext = (
+            f'<extLst><ext uri="{extension_uri}" '
+            'xmlns:x15="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main">'
+            '<x15:workbookPr chartTrackingRefBase="1"/></ext></extLst>'
+        )
+        entries["xl/workbook.xml"] = workbook_xml.replace(
+            "</workbook>",
+            f"{workbook_ext}</workbook>",
+        ).encode("utf-8")
+
+        rels_xml = entries["xl/_rels/workbook.xml.rels"].decode("utf-8")
+        entries["xl/_rels/workbook.xml.rels"] = rels_xml.replace(
+            "</Relationships>",
+            '<Relationship Id="rIdSlicer1" '
+            'Type="http://schemas.microsoft.com/office/2007/relationships/slicerCache" '
+            'Target="slicerCaches/slicerCache1.xml"/></Relationships>',
+        ).encode("utf-8")
+
+        content_types_xml = entries["[Content_Types].xml"].decode("utf-8")
+        entries["[Content_Types].xml"] = content_types_xml.replace(
+            "</Types>",
+            '<Override PartName="/xl/slicerCaches/slicerCache1.xml" '
+            'ContentType="application/vnd.ms-excel.slicerCache+xml"/></Types>',
+        ).encode("utf-8")
+        entries["xl/slicerCaches/slicerCache1.xml"] = slicer_payload
+
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as dst:
+            for name, payload in entries.items():
+                dst.writestr(name, payload)
+
+        wb = duke_sheets.Workbook.open(path)
+        assert wb.workbook_extension_count == 1
+        assert wb.workbook_extension_part_count == 1
+        assert wb.workbook_extensions[0]["uri"] == extension_uri
+        assert b"chartTrackingRefBase" in wb.workbook_extensions[0]["payload"]
+
+        part = wb.get_workbook_extension_part("xl/slicerCaches/slicerCache1.xml")
+        assert part == wb.get_workbook_extension_part_by_relationship_id("rIdSlicer1")
+        assert part["content_type"] == "application/vnd.ms-excel.slicerCache+xml"
+        assert part["relationship_id"] == "rIdSlicer1"
+        assert part["payload"] == slicer_payload
+        assert wb.get_workbook_extension_part("xl/slicerCaches/missing.xml") is None
+        assert wb.get_workbook_extension_part_by_relationship_id("rIdMissing") is None
+
+        wb.save(out_path)
+        roundtrip = duke_sheets.Workbook.open(out_path)
+        assert roundtrip.workbook_extension_count == 1
+        assert roundtrip.workbook_extension_part_count == 1
+        assert roundtrip.get_workbook_extension_part_by_relationship_id("rIdSlicer1")[
+            "payload"
+        ] == slicer_payload
+
+    def test_olap_pivot_roundtrip(self, temp_dir):
+        """Should save and read OLAP pivot source metadata."""
+        import os
+
+        import duke_sheets
+
+        path = os.path.join(temp_dir, "olap_pivot.xlsx")
+        wb = duke_sheets.Workbook()
+        wb.add_data_connection(
+            {
+                "id": 10,
+                "name": "CubeSales",
+                "kind": "olap",
+                "local": True,
+                "local_connection": "CubeFile=cube.cub",
+            }
+        )
+
+        sheet = wb.get_sheet(0)
+        sheet.add_pivot_table(
+            {
+                "name": "OlapSales",
+                "olap_connection_name": "CubeSales",
+                "target": "A1",
+                "rows": ["Region"],
+                "measures": [
+                    {"field": "Revenue", "aggregate": "sum", "name": "Revenue"}
+                ],
+            }
+        )
+        assert sheet.pivot_count == 1
+
+        wb.save(path)
+        roundtrip = duke_sheets.Workbook.open(path)
+        assert roundtrip.data_connection_names == ["CubeSales"]
+        assert roundtrip.get_sheet(0).pivot_table_names == ["OlapSales"]
+
+    def test_consolidation_pivot_roundtrip(self, temp_dir):
+        """Should save and read consolidation pivot source metadata."""
+        import os
+
+        import duke_sheets
+
+        path = os.path.join(temp_dir, "consolidation_pivot.xlsx")
+        wb = duke_sheets.Workbook()
+        wb.add_sheet("North")
+        wb.add_sheet("South")
+        for name, region, revenue in [
+            ("North", "North", 10.0),
+            ("South", "South", 20.0),
+        ]:
+            source = wb.get_sheet(name)
+            source.set_cell("A1", "Region")
+            source.set_cell("B1", "Revenue")
+            source.set_cell("A2", region)
+            source.set_cell("B2", revenue)
+
+        sheet = wb.get_sheet(0)
+        sheet.add_pivot_table(
+            {
+                "name": "ConsolidatedSales",
+                "consolidation_ranges": [
+                    {
+                        "sheet": "North",
+                        "range": "A1:B4",
+                        "name": "NorthPlan",
+                        "page_items": ["FY2025", "Plan"],
+                    },
+                    {
+                        "sheet": "South",
+                        "range": "A1:B4",
+                        "name": "SouthActual",
+                        "page_items": ["FY2025", "Actual"],
+                    },
+                ],
+                "target": "A1",
+                "rows": ["Region"],
+                "measures": [
+                    {"field": "Revenue", "aggregate": "sum", "name": "Revenue"}
+                ],
+            }
+        )
+        assert sheet.pivot_count == 1
+
+        wb.save(path)
+        roundtrip = duke_sheets.Workbook.open(path)
+        assert roundtrip.get_sheet(0).pivot_table_names == ["ConsolidatedSales"]
+
+    def test_refresh_manual_grouping_from_options(self):
+        """Should refresh a manually grouped pivot from semantic options."""
+        import duke_sheets
+
+        wb = duke_sheets.Workbook()
+        sheet = wb.get_sheet(0)
+        sheet.set_cell("A1", "Region")
+        sheet.set_cell("B1", "Revenue")
+        sheet.set_cell("A2", "East")
+        sheet.set_cell("B2", 10.0)
+        sheet.set_cell("A3", "West")
+        sheet.set_cell("B3", 20.0)
+        sheet.set_cell("A4", "South")
+        sheet.set_cell("B4", 5.0)
+
+        sheet.add_pivot_table(
+            {
+                "name": "ManualGroupedRegions",
+                "source_range": "A1:B4",
+                "target": "D1",
+                "rows": ["Region"],
+                "measures": [
+                    {"field": "Revenue", "aggregate": "sum", "name": "Revenue"}
+                ],
+                "groupings": [
+                    {
+                        "kind": "manual",
+                        "field": "Region",
+                        "groups": [{"name": "Coastal", "members": ["East", "West"]}],
+                    }
+                ],
+            }
+        )
+
+        assert sheet.pivot_count == 1
+        assert sheet.pivot_table_names == ["ManualGroupedRegions"]
+
+        stats = wb.refresh_pivots(max_threads=1)
+
+        assert stats["pivot_count"] == 1
+        assert stats["pivots_refreshed"] == 1
+        assert sheet.get_cell("D2").as_text() == "Coastal"
+        assert sheet.get_cell("E2").as_number() == 30.0
+        assert sheet.get_cell("D3").as_text() == "South"
+        assert sheet.get_cell("E3").as_number() == 5.0
+        assert sheet.get_cell("E4").as_number() == 35.0
+
+    def test_refresh_relative_date_period_from_options(self):
+        """Should refresh a relative date-period pivot from semantic options."""
+        import duke_sheets
+
+        wb = duke_sheets.Workbook()
+        sheet = wb.get_sheet(0)
+        sheet.set_cell("A1", "Date")
+        sheet.set_cell("B1", "Region")
+        sheet.set_cell("C1", "Revenue")
+        sheet.set_cell("A2", 45292)
+        sheet.set_cell("B2", "East")
+        sheet.set_cell("C2", 10.0)
+        sheet.set_cell("A3", 45323)
+        sheet.set_cell("B3", "North")
+        sheet.set_cell("C3", 30.0)
+        sheet.set_cell("A4", 45337)
+        sheet.set_cell("B4", "West")
+        sheet.set_cell("C4", 40.0)
+
+        sheet.add_pivot_table(
+            {
+                "name": "ThisMonthSales",
+                "source_range": "A1:C4",
+                "target": "E1",
+                "rows": ["Region"],
+                "measures": [
+                    {"field": "Revenue", "aggregate": "sum", "name": "Revenue"}
+                ],
+                "filters": [
+                    {"kind": "date_period", "field": "Date", "period": "this_month"}
+                ],
+            }
+        )
+
+        stats = wb.refresh_pivots(today=45332)
+
+        assert stats["pivots_refreshed"] == 1
+        assert sheet.get_cell("E2").as_text() == "North"
+        assert sheet.get_cell("F2").as_number() == 30.0
+        assert sheet.get_cell("E3").as_text() == "West"
+        assert sheet.get_cell("F3").as_number() == 40.0
+        assert sheet.get_cell("F4").as_number() == 70.0
+
+    def test_add_pivot_chart_from_refreshed_pivot(self):
+        """Should generate a PivotChart from a refreshed pivot."""
+        import duke_sheets
+
+        wb = duke_sheets.Workbook()
+        sheet = wb.get_sheet(0)
+        sheet.set_cell("A1", "Region")
+        sheet.set_cell("B1", "Revenue")
+        sheet.set_cell("A2", "East")
+        sheet.set_cell("B2", 10.0)
+        sheet.set_cell("A3", "West")
+        sheet.set_cell("B3", 20.0)
+
+        sheet.add_pivot_table(
+            {
+                "name": "SalesPivot",
+                "source_range": "A1:B3",
+                "target": "D1",
+                "rows": ["Region"],
+                "measures": [
+                    {"field": "Revenue", "aggregate": "sum", "name": "Revenue"}
+                ],
+            }
+        )
+        wb.refresh_pivots()
+
+        chart = sheet.add_pivot_chart("SalesPivot", "barClustered")
+
+        assert chart.chart_type == "BarClustered"
+        assert chart.pivot_source.name == "SalesPivot"
+        assert chart.pivot_source.format_id == 0
+        assert len(chart.series) == 1
+        assert chart.series[0].values.ref_type == "formula"
+        assert chart.series[0].categories.ref_type == "formula"
+        assert sheet.chart_count == 1
+        assert sheet.charts[0].chart.pivot_source.name == "SalesPivot"

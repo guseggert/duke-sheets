@@ -37,6 +37,7 @@ pub(crate) struct XlsxStyleTable {
     cell_style_xfs: Vec<Style>,
     named_styles: Vec<NamedCellStyle>,
     cell_xf_ids: Vec<u32>,
+    custom_num_fmt_ids: HashMap<String, u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -222,6 +223,9 @@ impl XlsxStyleTable {
             });
         }
 
+        let custom_num_fmt_ids =
+            custom_num_fmt_ids_for_workbook(workbook, &styles, &cell_style_xfs);
+
         Self {
             styles,
             sheet_maps,
@@ -230,6 +234,7 @@ impl XlsxStyleTable {
             cell_style_xfs,
             named_styles,
             cell_xf_ids,
+            custom_num_fmt_ids,
         }
     }
 
@@ -243,6 +248,10 @@ impl XlsxStyleTable {
     /// Get the DXF ID for a conditional format rule, if it has a format defined
     pub(crate) fn dxf_id_for(&self, sheet_index: usize, rule_index: usize) -> Option<u32> {
         self.dxf_map.get(&(sheet_index, rule_index)).copied()
+    }
+
+    pub(crate) fn custom_num_fmt_id(&self, code: &str) -> Option<u32> {
+        self.custom_num_fmt_ids.get(code).copied()
     }
 
     pub(crate) fn write_styles_xml(&self, w: &mut XmlWriter) -> XlsxResult<()> {
@@ -271,17 +280,12 @@ impl XlsxStyleTable {
         borders.push(default_border.clone());
         border_ids.insert(default_border, 0);
 
-        // Custom number formats
-        let mut numfmt_ids: HashMap<String, u32> = HashMap::new();
-        let mut numfmts: Vec<(u32, String)> = Vec::new();
-        let mut next_numfmt_id: u32 = 164;
-
         // Resolve component IDs for each style
         let mut resolved: Vec<ResolvedXfIds> = Vec::with_capacity(self.styles.len());
         let mut resolved_cell_style_xfs: Vec<ResolvedXfIds> =
             Vec::with_capacity(self.cell_style_xfs.len());
 
-        let mut resolve_ids_for_style = |style: &Style| -> ResolvedXfIds {
+        let mut resolve_ids_for_style = |style: &Style| -> XlsxResult<ResolvedXfIds> {
             let font_id = match font_ids.get(&style.font) {
                 Some(&id) => id,
                 None => {
@@ -319,32 +323,24 @@ impl XlsxStyleTable {
             let num_fmt_id = match &style.number_format {
                 NumberFormat::General => 0,
                 NumberFormat::BuiltIn(id) => *id,
-                NumberFormat::Custom(code) => {
-                    if let Some(&id) = numfmt_ids.get(code) {
-                        id
-                    } else {
-                        let id = next_numfmt_id;
-                        next_numfmt_id += 1;
-                        numfmt_ids.insert(code.clone(), id);
-                        numfmts.push((id, code.clone()));
-                        id
-                    }
-                }
+                NumberFormat::Custom(code) => self.custom_num_fmt_id(code).ok_or_else(|| {
+                    XlsxError::InvalidFormat(format!("custom number format not registered: {code}"))
+                })?,
             };
 
-            ResolvedXfIds {
+            Ok(ResolvedXfIds {
                 font_id,
                 fill_id,
                 border_id,
                 num_fmt_id,
-            }
+            })
         };
 
         for style in &self.styles {
-            resolved.push(resolve_ids_for_style(style));
+            resolved.push(resolve_ids_for_style(style)?);
         }
         for style in &self.cell_style_xfs {
-            resolved_cell_style_xfs.push(resolve_ids_for_style(style));
+            resolved_cell_style_xfs.push(resolve_ids_for_style(style)?);
         }
 
         // Write XML
@@ -353,6 +349,7 @@ impl XlsxStyleTable {
         w.write_event(Event::Start(root))?;
 
         // numFmts
+        let numfmts = sorted_custom_num_fmts(&self.custom_num_fmt_ids);
         if !numfmts.is_empty() {
             let count = numfmts.len().to_string();
             let mut tag = BytesStart::new("numFmts");
@@ -469,6 +466,58 @@ impl XlsxStyleTable {
         w.write_event(Event::End(BytesEnd::new("styleSheet")))?;
         Ok(())
     }
+}
+
+fn custom_num_fmt_ids_for_workbook(
+    workbook: &Workbook,
+    styles: &[Style],
+    cell_style_xfs: &[Style],
+) -> HashMap<String, u32> {
+    let mut ids = HashMap::new();
+    let mut next_id = 164u32;
+
+    for style in styles.iter().chain(cell_style_xfs.iter()) {
+        register_custom_num_fmt(&style.number_format, &mut ids, &mut next_id);
+    }
+
+    for worksheet in workbook.worksheets() {
+        for pivot in worksheet.pivot_tables() {
+            for measure in &pivot.measures {
+                if let Some(code) = &measure.number_format {
+                    register_custom_num_fmt_code(code, &mut ids, &mut next_id);
+                }
+            }
+        }
+    }
+
+    ids
+}
+
+fn register_custom_num_fmt(
+    format: &NumberFormat,
+    ids: &mut HashMap<String, u32>,
+    next_id: &mut u32,
+) {
+    if let NumberFormat::Custom(code) = format {
+        register_custom_num_fmt_code(code, ids, next_id);
+    }
+}
+
+fn register_custom_num_fmt_code(code: &str, ids: &mut HashMap<String, u32>, next_id: &mut u32) {
+    ids.entry(code.to_string()).or_insert_with(|| {
+        let id = *next_id;
+        *next_id += 1;
+        id
+    });
+}
+
+fn sorted_custom_num_fmts(ids: &HashMap<String, u32>) -> Vec<(u32, String)> {
+    let mut numfmts = ids
+        .iter()
+        .map(|(code, id)| (*id, code.clone()))
+        .collect::<Vec<_>>();
+    numfmts.sort_by_key(|(id, _)| *id);
+    numfmts
 }
 
 /// Write a color element (e.g. `<fgColor>`, `<color>`, `<bgColor>`) to the writer.
@@ -942,6 +991,7 @@ pub(crate) struct ParsedStyles {
     pub named_styles: Vec<NamedCellStyle>,
     pub cell_xf_xf_ids: Vec<u32>,
     pub dxf_styles: Vec<Style>,
+    pub num_fmts: HashMap<u32, String>,
 }
 
 impl ParsedStyles {
@@ -1953,6 +2003,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
         named_styles,
         cell_xf_xf_ids,
         dxf_styles,
+        num_fmts: numfmts,
     })
 }
 

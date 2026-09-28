@@ -10,7 +10,9 @@ description = "XLSB (Excel Binary Workbook) reader/writer for duke-sheets"
 [dependencies]
 duke-sheets-core.workspace = true
 duke-sheets-formula.workspace = true
+duke-sheets-pivot.workspace = true
 duke-sheets-chart = { workspace = true, features = ["parse", "write"] }
+ssfmt.workspace = true
 duke-sheets-vml.workspace = true
 zip.workspace = true
 quick-xml.workspace = true
@@ -18,6 +20,10 @@ thiserror.workspace = true
 chrono.workspace = true
 log.workspace = true
 encoding_rs = "0.8"
+
+[features]
+default = []
+parallel = ["duke-sheets-pivot/parallel"]
 
 [dev-dependencies]
 tempfile.workspace = true

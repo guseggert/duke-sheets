@@ -208,6 +208,501 @@ describe("Workbook", () => {
   });
 });
 
+describe("PivotTables", () => {
+  it("exposes pivot table definitions", () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+
+    sheet.addPivotTable({
+      name: "SalesPivot",
+      sourceRange: "A1:D4",
+      target: "E1",
+      rowFields: [
+        {
+          field: "Region",
+          sort: "descending",
+          subtotal: "sum",
+          subtotals: ["sum", "average", "max"],
+          showDropDowns: false,
+          subtotalTop: false,
+          insertBlankRow: true,
+          insertPageBreak: true,
+          includeNewItemsInFilter: true,
+          itemPageCount: 25,
+        },
+      ],
+      columns: ["Quarter"],
+      measures: [
+        {
+          field: "Revenue",
+          aggregate: "sum",
+          name: "Revenue",
+          showAs: "percentOfGrandTotal",
+          numberFormat: "0.0%",
+        },
+      ],
+      filters: [
+        { kind: "label", field: "Region", operator: "beginsWith", text: "E" },
+        { kind: "labelBetween", field: "Region", startText: "East", endText: "North" },
+        {
+          kind: "valueBetween",
+          field: "Region",
+          measure: { field: "Revenue", aggregate: "sum", name: "Revenue" },
+          start: 10,
+          end: 30,
+        },
+        { kind: "dateBetween", field: "Date", start: 45292, end: 45322 },
+        { kind: "datePeriod", field: "Date", period: "thisMonth" },
+      ],
+      calculatedFields: [{ name: "Margin", formula: "=Revenue*0.2" }],
+      calculatedItems: [{ field: "Region", item: "Combined", formula: "East+West" }],
+      refreshPolicy: { refreshOnOpen: true, missingItemsLimit: 25 },
+      layout: {
+        kind: "tabular",
+        repeatItemLabels: true,
+        pageWrap: 2,
+        pageOverThenDown: true,
+        mergeItemLabels: true,
+        dataCaption: "Metrics",
+        valuesAxis: "rows",
+        valuesAxisPosition: 1,
+        grandTotalCaption: "Overall",
+        errorCaption: "ERR",
+        showError: true,
+        missingCaption: "N/A",
+        showMissing: false,
+        asteriskTotals: true,
+        showItems: false,
+        editData: true,
+        disableFieldList: true,
+        showCalculatedMembers: false,
+        visualTotals: false,
+        showMultipleLabel: false,
+        showDataDropDown: false,
+        showMemberPropertyTips: false,
+        showDataTips: false,
+        enableWizard: false,
+        enableDrill: false,
+        enableFieldProperties: false,
+        subtotalHiddenItems: true,
+        showDropZones: false,
+        indent: 3,
+        showEmptyRows: true,
+        showEmptyColumns: true,
+      },
+      overwritePolicy: "failOnOccupied",
+    });
+
+    const pivot = sheet.getPivotTable("SalesPivot");
+    expect(pivot).not.toBeNull();
+    expect(sheet.pivotTables).toEqual([pivot]);
+    expect(pivot?.source).toMatchObject({ kind: "worksheetRange", range: "A1:D4" });
+    expect(pivot?.target).toBe("E1");
+    expect(pivot?.rows[0]).toMatchObject({
+      field: "Region",
+      sort: "descending",
+      subtotal: "sum",
+      subtotals: ["sum", "average", "max"],
+      showDropDowns: false,
+      subtotalTop: false,
+      insertBlankRow: true,
+      insertPageBreak: true,
+      includeNewItemsInFilter: true,
+      itemPageCount: 25,
+    });
+    expect(pivot?.columns[0].field).toBe("Quarter");
+    expect(pivot?.measures[0]).toMatchObject({
+      field: "Revenue",
+      aggregate: "sum",
+      caption: "Revenue",
+      numberFormat: "0.0%",
+    });
+    expect(pivot?.measures[0].showAs.kind).toBe("percentOfGrandTotal");
+    expect(pivot?.filters[0]).toMatchObject({
+      kind: "label",
+      field: "Region",
+      operator: "beginsWith",
+      text: "E",
+    });
+    expect(pivot?.filters[1]).toMatchObject({
+      kind: "labelBetween",
+      field: "Region",
+      startText: "East",
+      endText: "North",
+    });
+    expect(pivot?.filters[2]).toMatchObject({
+      kind: "valueBetween",
+      field: "Region",
+      start: 10,
+      end: 30,
+    });
+    expect(pivot?.filters[3]).toMatchObject({
+      kind: "dateBetween",
+      field: "Date",
+      start: 45292,
+      end: 45322,
+    });
+    expect(pivot?.filters[4]).toMatchObject({
+      kind: "datePeriod",
+      field: "Date",
+      period: "thisMonth",
+    });
+    expect(pivot?.calculatedFields[0]).toEqual({ name: "Margin", formula: "=Revenue*0.2" });
+    expect(pivot?.calculatedItems[0]).toMatchObject({
+      field: "Region",
+      item: { kind: "string", text: "Combined" },
+      formula: "East+West",
+    });
+    expect(pivot?.layout).toMatchObject({
+      kind: "tabular",
+      repeatItemLabels: true,
+      pageWrap: 2,
+      pageOverThenDown: true,
+      mergeItemLabels: true,
+      dataCaption: "Metrics",
+      valuesAxis: "rows",
+      valuesAxisPosition: 1,
+      grandTotalCaption: "Overall",
+      errorCaption: "ERR",
+      showError: true,
+      missingCaption: "N/A",
+      showMissing: false,
+      asteriskTotals: true,
+      showItems: false,
+      editData: true,
+      disableFieldList: true,
+      showCalculatedMembers: false,
+      visualTotals: false,
+      showMultipleLabel: false,
+      showDataDropDown: false,
+      showMemberPropertyTips: false,
+      showDataTips: false,
+      enableWizard: false,
+      enableDrill: false,
+      enableFieldProperties: false,
+      subtotalHiddenItems: true,
+      showDropZones: false,
+      indent: 3,
+      showEmptyRows: true,
+      showEmptyColumns: true,
+    });
+    expect(pivot?.refreshPolicy).toMatchObject({ refreshOnOpen: true, missingItemsLimit: 25 });
+    expect(pivot?.overwritePolicy).toBe("failOnOccupied");
+    expect(pivot?.refreshStatus.kind).toBe("notRefreshed");
+    expect(sheet.getPivotTable("Missing")).toBeNull();
+  });
+
+  it("adds an external pivot backed by a database connection", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "duke-"));
+    const filePath = path.join(tmpDir, "external-pivot.xlsx");
+
+    try {
+      const wb = new Workbook();
+      wb.addDataConnection({
+        id: 7,
+        name: "SalesConnection",
+        connection: "Provider=MSDASQL;DSN=Sales;",
+        command: "select Region, Revenue from Sales",
+        refreshOnLoad: true,
+      });
+      expect(wb.dataConnectionCount).toBe(1);
+      expect(wb.dataConnectionNames).toEqual(["SalesConnection"]);
+
+      const sheet = wb.getSheet(0);
+      sheet.addPivotTable({
+        name: "ExternalSales",
+        externalConnectionName: "SalesConnection",
+        externalCommandText: "select Region, Revenue from Sales",
+        target: "A1",
+        rows: ["Region"],
+        measures: [{ field: "Revenue", aggregate: "sum", name: "Revenue" }],
+      });
+      expect(sheet.pivotCount).toBe(1);
+
+      wb.save(filePath);
+      const roundtrip = Workbook.open(filePath);
+      expect(roundtrip.dataConnectionCount).toBe(1);
+      expect(roundtrip.dataConnectionNames).toEqual(["SalesConnection"]);
+      expect(roundtrip.getSheet(0).pivotTableNames).toEqual(["ExternalSales"]);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("adds non-database data connections", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "duke-"));
+    const filePath = path.join(tmpDir, "data-connections.xlsx");
+
+    try {
+      const wb = new Workbook();
+      wb.addDataConnection({
+        id: 8,
+        name: "WebSales",
+        kind: "web",
+        url: "https://example.test/sales.html",
+        sourceData: true,
+        htmlTables: true,
+      });
+      wb.addDataConnection({
+        id: 9,
+        name: "CsvSales",
+        kind: "text",
+        sourceFile: "/data/sales.csv",
+        delimiter: "|",
+        firstRow: 2,
+      });
+      wb.addDataConnection({
+        id: 10,
+        name: "CubeSales",
+        kind: "olap",
+        local: true,
+        localConnection: "CubeFile=cube.cub",
+        sendLocale: true,
+      });
+
+      expect(wb.dataConnectionNames).toEqual(["WebSales", "CsvSales", "CubeSales"]);
+      expect(wb.dataConnections.map((connection) => connection.kind)).toEqual([
+        "web",
+        "text",
+        "olap",
+      ]);
+      expect(wb.getDataConnection("CsvSales")).toMatchObject({
+        id: 9,
+        kind: "text",
+        sourceFile: "/data/sales.csv",
+        delimiter: "|",
+        firstRow: 2,
+        delimited: true,
+      });
+      expect(wb.getDataConnectionById(10)).toMatchObject({
+        name: "CubeSales",
+        kind: "olap",
+        local: true,
+        localConnection: "CubeFile=cube.cub",
+        localRefresh: true,
+        sendLocale: true,
+      });
+      expect(wb.getDataConnection("Missing")).toBeNull();
+      wb.save(filePath);
+
+      const roundtrip = Workbook.open(filePath);
+      expect(roundtrip.dataConnectionCount).toBe(3);
+      expect(roundtrip.dataConnectionNames).toEqual(["WebSales", "CsvSales", "CubeSales"]);
+      expect(roundtrip.dataConnections.map((connection) => connection.kind)).toEqual([
+        "web",
+        "text",
+        "olap",
+      ]);
+      expect(roundtrip.getDataConnection("WebSales")).toMatchObject({
+        id: 8,
+        kind: "web",
+        url: "https://example.test/sales.html",
+        sourceData: true,
+        htmlTables: true,
+      });
+      expect(roundtrip.getDataConnectionById(10)).toMatchObject({
+        name: "CubeSales",
+        kind: "olap",
+        local: true,
+        localConnection: "CubeFile=cube.cub",
+        sendLocale: true,
+      });
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("adds an OLAP pivot backed by an OLAP connection", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "duke-"));
+    const filePath = path.join(tmpDir, "olap-pivot.xlsx");
+
+    try {
+      const wb = new Workbook();
+      wb.addDataConnection({
+        id: 10,
+        name: "CubeSales",
+        kind: "olap",
+        local: true,
+        localConnection: "CubeFile=cube.cub",
+      });
+
+      const sheet = wb.getSheet(0);
+      sheet.addPivotTable({
+        name: "OlapSales",
+        olapConnectionName: "CubeSales",
+        target: "A1",
+        rows: ["Region"],
+        measures: [{ field: "Revenue", aggregate: "sum", name: "Revenue" }],
+      });
+
+      expect(sheet.pivotCount).toBe(1);
+      wb.save(filePath);
+
+      const roundtrip = Workbook.open(filePath);
+      expect(roundtrip.dataConnectionNames).toEqual(["CubeSales"]);
+      expect(roundtrip.getSheet(0).pivotTableNames).toEqual(["OlapSales"]);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("adds a consolidation pivot with page labels", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "duke-"));
+    const filePath = path.join(tmpDir, "consolidation-pivot.xlsx");
+
+    try {
+      const wb = new Workbook();
+      wb.addSheet("North");
+      wb.addSheet("South");
+      for (const [name, region, revenue] of [
+        ["North", "North", 10],
+        ["South", "South", 20],
+      ] as const) {
+        const source = wb.getSheet(name);
+        source.setCell("A1", "Region");
+        source.setCell("B1", "Revenue");
+        source.setCell("A2", region);
+        source.setCell("B2", revenue);
+      }
+      const sheet = wb.getSheet(0);
+      sheet.addPivotTable({
+        name: "ConsolidatedSales",
+        consolidationRanges: [
+          {
+            sheet: "North",
+            range: "A1:B4",
+            name: "NorthPlan",
+            pageItems: ["FY2025", "Plan"],
+          },
+          {
+            sheet: "South",
+            range: "A1:B4",
+            name: "SouthActual",
+            pageItems: ["FY2025", "Actual"],
+          },
+        ],
+        target: "A1",
+        rows: ["Region"],
+        measures: [{ field: "Revenue", aggregate: "sum", name: "Revenue" }],
+      });
+
+      expect(sheet.pivotCount).toBe(1);
+      wb.save(filePath);
+
+      const roundtrip = Workbook.open(filePath);
+      expect(roundtrip.getSheet(0).pivotTableNames).toEqual(["ConsolidatedSales"]);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refreshes a manually grouped pivot from semantic options", () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    sheet.setCell("A1", "Region");
+    sheet.setCell("B1", "Revenue");
+    sheet.setCell("A2", "East");
+    sheet.setCell("B2", 10);
+    sheet.setCell("A3", "West");
+    sheet.setCell("B3", 20);
+    sheet.setCell("A4", "South");
+    sheet.setCell("B4", 5);
+
+    sheet.addPivotTable({
+      name: "ManualGroupedRegions",
+      sourceRange: "A1:B4",
+      target: "D1",
+      rows: ["Region"],
+      measures: [{ field: "Revenue", aggregate: "sum", name: "Revenue" }],
+      groupings: [
+        {
+          kind: "manual",
+          field: "Region",
+          groups: [{ name: "Coastal", members: ["East", "West"] }],
+        },
+      ],
+    });
+
+    expect(sheet.pivotCount).toBe(1);
+    expect(sheet.pivotTableNames).toEqual(["ManualGroupedRegions"]);
+
+    const stats = wb.refreshPivots({ maxThreads: 1 });
+
+    expect(stats.pivotCount).toBe(1);
+    expect(stats.pivotsRefreshed).toBe(1);
+    expect(sheet.getCell("D2").asText()).toBe("Coastal");
+    expect(sheet.getCell("E2").asNumber()).toBe(30);
+    expect(sheet.getCell("D3").asText()).toBe("South");
+    expect(sheet.getCell("E3").asNumber()).toBe(5);
+    expect(sheet.getCell("E4").asNumber()).toBe(35);
+  });
+
+  it("refreshes a relative date-period pivot from semantic options", () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    sheet.setCell("A1", "Date");
+    sheet.setCell("B1", "Region");
+    sheet.setCell("C1", "Revenue");
+    sheet.setCell("A2", 45292);
+    sheet.setCell("B2", "East");
+    sheet.setCell("C2", 10);
+    sheet.setCell("A3", 45323);
+    sheet.setCell("B3", "North");
+    sheet.setCell("C3", 30);
+    sheet.setCell("A4", 45337);
+    sheet.setCell("B4", "West");
+    sheet.setCell("C4", 40);
+
+    sheet.addPivotTable({
+      name: "ThisMonthSales",
+      sourceRange: "A1:C4",
+      target: "E1",
+      rows: ["Region"],
+      measures: [{ field: "Revenue", aggregate: "sum", name: "Revenue" }],
+      filters: [{ kind: "datePeriod", field: "Date", period: "thisMonth" }],
+    });
+
+    const stats = wb.refreshPivots({ today: 45332 });
+
+    expect(stats.pivotsRefreshed).toBe(1);
+    expect(sheet.getCell("E2").asText()).toBe("North");
+    expect(sheet.getCell("F2").asNumber()).toBe(30);
+    expect(sheet.getCell("E3").asText()).toBe("West");
+    expect(sheet.getCell("F3").asNumber()).toBe(40);
+    expect(sheet.getCell("F4").asNumber()).toBe(70);
+  });
+
+  it("generates a PivotChart from a refreshed pivot", () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    sheet.setCell("A1", "Region");
+    sheet.setCell("B1", "Revenue");
+    sheet.setCell("A2", "East");
+    sheet.setCell("B2", 10);
+    sheet.setCell("A3", "West");
+    sheet.setCell("B3", 20);
+
+    sheet.addPivotTable({
+      name: "SalesPivot",
+      sourceRange: "A1:B3",
+      target: "D1",
+      rows: ["Region"],
+      measures: [{ field: "Revenue", aggregate: "sum", name: "Revenue" }],
+    });
+    wb.refreshPivots();
+
+    const chart = sheet.addPivotChart({ pivotName: "SalesPivot", chartType: "barClustered" });
+
+    expect(chart.chartType).toBe("BarClustered");
+    expect(chart.pivotSource).toMatchObject({ name: "SalesPivot", formatId: 0 });
+    expect(chart.series).toHaveLength(1);
+    expect(chart.series[0].values.refType).toBe("formula");
+    expect(chart.series[0].categories?.refType).toBe("formula");
+    expect(sheet.charts).toHaveLength(1);
+    expect(sheet.charts[0].chart?.pivotSource?.name).toBe("SalesPivot");
+  });
+});
+
 // Worksheet Tests
 
 describe("Worksheet", () => {

@@ -61,7 +61,7 @@ impl Default for ExcelBridgeConfig {
         Self {
             addr: "127.0.0.1:9876".parse().unwrap(),
             connect_timeout: Duration::from_secs(10),
-            read_timeout: Duration::from_secs(30),
+            read_timeout: Duration::from_secs(120),
         }
     }
 }
@@ -319,7 +319,23 @@ impl ExcelBridge {
             0,
             vec![cs_prop("Workbooks")],
             "Open",
-            vec![serde_json::Value::from(windows_path)],
+            vec![
+                serde_json::Value::from(windows_path),
+                serde_json::json!(0), // UpdateLinks: never prompt to update external links.
+                serde_json::Value::Bool(false), // ReadOnly.
+                serde_json::Value::Null, // Format.
+                serde_json::Value::Null, // Password.
+                serde_json::Value::Null, // WriteResPassword.
+                serde_json::Value::Bool(true), // IgnoreReadOnlyRecommended.
+                serde_json::Value::Null, // Origin.
+                serde_json::Value::Null, // Delimiter.
+                serde_json::Value::Null, // Editable.
+                serde_json::Value::Bool(false), // Notify.
+                serde_json::Value::Null, // Converter.
+                serde_json::Value::Bool(false), // AddToMru.
+                serde_json::Value::Null, // Local.
+                serde_json::json!(0), // CorruptLoad: normal load.
+            ],
         )?;
         let handle = extract_handle(data)?;
         Ok(Workbook::new(self, handle))
@@ -343,10 +359,20 @@ impl ExcelBridge {
             "Open",
             vec![
                 serde_json::Value::from(windows_path),
-                serde_json::Value::Null,
-                serde_json::Value::Null,
-                serde_json::Value::Null,
+                serde_json::json!(0),           // UpdateLinks.
+                serde_json::Value::Bool(false), // ReadOnly.
+                serde_json::Value::Null,        // Format.
                 serde_json::Value::from(password),
+                serde_json::Value::Null,        // WriteResPassword.
+                serde_json::Value::Bool(true),  // IgnoreReadOnlyRecommended.
+                serde_json::Value::Null,        // Origin.
+                serde_json::Value::Null,        // Delimiter.
+                serde_json::Value::Null,        // Editable.
+                serde_json::Value::Bool(false), // Notify.
+                serde_json::Value::Null,        // Converter.
+                serde_json::Value::Bool(false), // AddToMru.
+                serde_json::Value::Null,        // Local.
+                serde_json::json!(0),           // CorruptLoad: normal load.
             ],
         )?;
         let handle = extract_handle(data)?;
@@ -451,6 +477,16 @@ impl ExcelBridge {
             vec![
                 serde_json::Value::from(path),
                 serde_json::Value::from(format),
+                serde_json::Value::Null,        // Password.
+                serde_json::Value::Null,        // WriteResPassword.
+                serde_json::Value::Bool(false), // ReadOnlyRecommended.
+                serde_json::Value::Bool(false), // CreateBackup.
+                serde_json::json!(1),           // AccessMode: xlNoChange.
+                serde_json::json!(2),           // ConflictResolution: xlLocalSessionChanges.
+                serde_json::Value::Bool(false), // AddToMru.
+                serde_json::Value::Null,        // TextCodepage.
+                serde_json::Value::Null,        // TextVisualLayout.
+                serde_json::Value::Bool(false), // Local.
             ],
         )?;
         Ok(())
@@ -473,6 +509,15 @@ impl ExcelBridge {
                 serde_json::Value::from(path),
                 serde_json::Value::from(format),
                 serde_json::Value::from(password),
+                serde_json::Value::Null,        // WriteResPassword.
+                serde_json::Value::Bool(false), // ReadOnlyRecommended.
+                serde_json::Value::Bool(false), // CreateBackup.
+                serde_json::json!(1),           // AccessMode: xlNoChange.
+                serde_json::json!(2),           // ConflictResolution: xlLocalSessionChanges.
+                serde_json::Value::Bool(false), // AddToMru.
+                serde_json::Value::Null,        // TextCodepage.
+                serde_json::Value::Null,        // TextVisualLayout.
+                serde_json::Value::Bool(false), // Local.
             ],
         )?;
         Ok(())

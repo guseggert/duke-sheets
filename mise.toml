@@ -320,21 +320,42 @@ run = """
 #!/bin/bash
 set -e
 WINRM="python3 tools/vm/winrm-exec.py"
+HOST_EXE="/tmp/duke-sheets-excel/ExcelBridgeServer.exe"
+REMOTE_EXE="C:\\tools\\ExcelBridgeServer.exe"
+HOST_HTTP_PORT="$DUKE_BRIDGE_HTTP_PORT"
+if [ -z "$HOST_HTTP_PORT" ]; then
+    HOST_HTTP_PORT=18765
+fi
 
 echo "Stopping bridge on VM..."
-$WINRM -ps 'Stop-ScheduledTask -TaskName "ExcelBridgeServer" -ErrorAction SilentlyContinue; Start-Sleep 2'
+$WINRM -ps 'Stop-ScheduledTask -TaskName "ExcelBridgeServer" -ErrorAction SilentlyContinue; Stop-Process -Name ExcelBridgeServer -Force -ErrorAction SilentlyContinue; Stop-Process -Name EXCEL -Force -ErrorAction SilentlyContinue; Start-Sleep 2'
 
-echo "Copying new exe from SMB share..."
-$WINRM -ps 'Copy-Item "\\\\10.0.2.4\\qemu\\ExcelBridgeServer.exe" "C:\\tools\\ExcelBridgeServer.exe" -Force'
+echo "Serving bridge exe to VM over HTTP..."
+python3 -m http.server "$HOST_HTTP_PORT" --bind 0.0.0.0 --directory "$(dirname "$HOST_EXE")" >/tmp/duke-sheets-bridge-http.log 2>&1 &
+http_pid=$!
+trap 'kill "$http_pid" 2>/dev/null || true' EXIT
+sleep 1
+
+echo "Copying new exe from host HTTP server..."
+$WINRM -ps "New-Item -ItemType Directory -Path 'C:\\tools' -Force | Out-Null; \\$ProgressPreference = 'SilentlyContinue'; Invoke-WebRequest -UseBasicParsing -Uri 'http://10.0.2.2:$HOST_HTTP_PORT/ExcelBridgeServer.exe' -OutFile '$REMOTE_EXE'"
 
 echo "Starting bridge..."
 $WINRM -ps 'Start-ScheduledTask -TaskName "ExcelBridgeServer"; Start-Sleep 2; (Get-ScheduledTask -TaskName "ExcelBridgeServer").State'
 
 echo "Verifying bridge is reachable..."
-if echo '{"id":1,"cmd":"Init","params":{}}' | ncat -w 5 localhost 9876 2>/dev/null | grep -q '"ok"'; then
+ready=0
+for attempt in {1..30}; do
+    if echo '{"id":1,"cmd":"Ping"}' | ncat -w 1 localhost 9876 2>/dev/null | grep -q '"ok"'; then
+        ready=1
+        break
+    fi
+    sleep 1
+done
+if [ "$ready" = 1 ]; then
     echo "Bridge is up and responding!"
 else
-    echo "WARNING: Bridge may not be ready yet (Init check failed)"
+    echo "ERROR: Bridge did not answer Ping within 30s"
+    exit 1
 fi
 """
 

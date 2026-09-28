@@ -2,11 +2,15 @@
 mod tests {
     use std::io::{Cursor, Write};
 
-    use duke_sheets_core::CellValue;
+    use duke_sheets_core::{
+        CellRange, CellValue, PivotAggregate, PivotFilter, PivotSource, PivotTable, PivotValue,
+        PivotValuesAxis, Workbook,
+    };
     use zip::write::SimpleFileOptions;
 
     use crate::biff12::{build_record, records};
     use crate::reader::XlsbReader;
+    use crate::writer::XlsbWriter;
 
     fn utf16le(s: &str) -> Vec<u8> {
         s.encode_utf16().flat_map(|c| c.to_le_bytes()).collect()
@@ -215,6 +219,12 @@ mod tests {
         buf
     }
 
+    fn write_xlsb(workbook: &Workbook) -> Vec<u8> {
+        let mut buf = Vec::new();
+        XlsbWriter::write(workbook, Cursor::new(&mut buf)).unwrap();
+        buf
+    }
+
     #[test]
     fn read_single_sheet_with_numbers() {
         let ws_data = build_worksheet_bin(&[
@@ -240,6 +250,136 @@ mod tests {
         assert_eq!(ws.get_value_at(0, 1), CellValue::Number(2.5));
         assert_eq!(ws.get_value_at(1, 0), CellValue::Number(3.0));
         assert_eq!(ws.get_value_at(1, 1), CellValue::Empty);
+    }
+
+    #[test]
+    fn reads_writer_pivot_table_semantics() {
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_cell_value("A1", "Segment").unwrap();
+        ws.set_cell_value("B1", "Region").unwrap();
+        ws.set_cell_value("C1", "Quarter").unwrap();
+        ws.set_cell_value("D1", "Revenue").unwrap();
+        ws.set_cell_value("E1", "Units").unwrap();
+        ws.set_cell_value("A2", "Online").unwrap();
+        ws.set_cell_value("B2", "East").unwrap();
+        ws.set_cell_value("C2", "Q1").unwrap();
+        ws.set_cell_value("D2", 10.0).unwrap();
+        ws.set_cell_value("E2", 2.0).unwrap();
+        ws.set_cell_value("A3", "Retail").unwrap();
+        ws.set_cell_value("B3", "East").unwrap();
+        ws.set_cell_value("C3", "Q2").unwrap();
+        ws.set_cell_value("D3", 20.0).unwrap();
+        ws.set_cell_value("E3", 4.0).unwrap();
+        ws.set_cell_value("A4", "Online").unwrap();
+        ws.set_cell_value("B4", "West").unwrap();
+        ws.set_cell_value("C4", "Q1").unwrap();
+        ws.set_cell_value("D4", 30.0).unwrap();
+        ws.set_cell_value("E4", 6.0).unwrap();
+
+        let mut pivot = PivotTable::builder("RevenuePivot")
+            .source_range(CellRange::parse("A1:E4").unwrap())
+            .target_address("G2")
+            .unwrap()
+            .page("Segment")
+            .row("Region")
+            .column("Quarter")
+            .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+            .named_measure("Units", PivotAggregate::Average, "Average Units")
+            .filter(PivotFilter::field_items("Segment", ["Online"]))
+            .build()
+            .unwrap();
+        pivot.layout.values_axis = PivotValuesAxis::Columns;
+        pivot.layout.values_axis_position = Some(1);
+        wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+
+        let bytes = write_xlsb(&wb);
+        let read = XlsbReader::read(Cursor::new(bytes)).unwrap();
+        let ws = read.worksheet(0).unwrap();
+        assert_eq!(ws.pivot_tables().len(), 1);
+
+        let pivot = &ws.pivot_tables()[0];
+        assert_eq!(pivot.name, "RevenuePivot");
+        assert_eq!(pivot.target.to_a1_string(), "G2");
+        assert_eq!(
+            pivot.source,
+            PivotSource::range_on_sheet("Sheet1", CellRange::parse("A1:E4").unwrap())
+        );
+        assert_eq!(pivot.rows[0].field.name, "Region");
+        assert_eq!(pivot.columns[0].field.name, "Quarter");
+        assert_eq!(pivot.page_fields[0].field.name, "Segment");
+        assert_eq!(pivot.style.name.as_deref(), Some("PivotStyleMedium9"));
+        assert_eq!(pivot.layout.values_axis, PivotValuesAxis::Columns);
+        assert_eq!(pivot.layout.values_axis_position, Some(1));
+        assert_eq!(pivot.measures.len(), 2);
+        assert_eq!(pivot.measures[0].field.name, "Revenue");
+        assert_eq!(pivot.measures[0].aggregate, PivotAggregate::Sum);
+        assert_eq!(pivot.measures[0].name.as_deref(), Some("Total Revenue"));
+        assert_eq!(pivot.measures[1].field.name, "Units");
+        assert_eq!(pivot.measures[1].aggregate, PivotAggregate::Average);
+        assert_eq!(pivot.measures[1].name.as_deref(), Some("Average Units"));
+        assert!(pivot.filters.iter().any(|filter| matches!(
+            filter,
+            PivotFilter::FieldItems {
+                field,
+                allowed_items,
+            } if field.name == "Segment"
+                && allowed_items == &vec![PivotValue::String("Online".to_string())]
+        )));
+        let cache_info = pivot.cache_info().expect("cache diagnostics");
+        assert_eq!(
+            cache_info.source_kind,
+            duke_sheets_core::PivotCacheSourceKind::Worksheet
+        );
+        assert_eq!(cache_info.record_count, Some(3));
+    }
+
+    #[test]
+    fn reads_shared_pivot_cache_once_across_sheets() {
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_cell_value("A1", "Region").unwrap();
+        ws.set_cell_value("B1", "Revenue").unwrap();
+        ws.set_cell_value("A2", "East").unwrap();
+        ws.set_cell_value("B2", 10.0).unwrap();
+        ws.set_cell_value("A3", "West").unwrap();
+        ws.set_cell_value("B3", 20.0).unwrap();
+        let second_sheet = wb.add_worksheet().unwrap();
+
+        let first = PivotTable::builder("SalesPivotA")
+            .source_range_on_sheet("Sheet1", CellRange::parse("A1:B3").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .measure("Revenue", PivotAggregate::Sum)
+            .build()
+            .unwrap();
+        let second = PivotTable::builder("SalesPivotB")
+            .source_range_on_sheet("Sheet1", CellRange::parse("A1:B3").unwrap())
+            .target_address("A1")
+            .unwrap()
+            .row("Region")
+            .measure("Revenue", PivotAggregate::Sum)
+            .build()
+            .unwrap();
+        wb.worksheet_mut(0).unwrap().add_pivot_table(first).unwrap();
+        wb.worksheet_mut(second_sheet)
+            .unwrap()
+            .add_pivot_table(second)
+            .unwrap();
+
+        let bytes = write_xlsb(&wb);
+        let (read, definition_parses, records_parses) =
+            XlsbReader::read_with_pivot_cache_parse_counts(Cursor::new(bytes)).unwrap();
+
+        let first_pivots = read.worksheet(0).unwrap().pivot_tables();
+        let second_pivots = read.worksheet(1).unwrap().pivot_tables();
+        assert_eq!(first_pivots.len(), 1);
+        assert_eq!(second_pivots.len(), 1);
+        assert_eq!(first_pivots[0].name, "SalesPivotA");
+        assert_eq!(second_pivots[0].name, "SalesPivotB");
+        assert_eq!(definition_parses, 1);
+        assert_eq!(records_parses, 1);
     }
 
     #[test]

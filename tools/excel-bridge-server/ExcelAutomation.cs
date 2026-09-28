@@ -28,9 +28,7 @@ public sealed class ComObjectStore : IDisposable
         var type = Type.GetTypeFromProgID("Excel.Application")
             ?? throw new InvalidOperationException("Excel.Application not found. Is Excel installed?");
         dynamic app = Activator.CreateInstance(type)!;
-        app.Visible = false;
-        app.DisplayAlerts = false;
-        app.ScreenUpdating = false;
+        ApplyApplicationDefaults(app);
         _handles[0] = app;
         Console.Error.WriteLine("[excel-bridge] Excel.Application created (handle 0)");
     }
@@ -167,6 +165,35 @@ public sealed class ComObjectStore : IDisposable
         return type.InvokeMember(name,
             System.Reflection.BindingFlags.GetProperty,
             null, obj, new[] { index });
+    }
+
+    private static void ApplyApplicationDefaults(dynamic app)
+    {
+        SetOptionalProperty(app, "Visible", false);
+        SetOptionalProperty(app, "DisplayAlerts", false);
+        SetOptionalProperty(app, "AlertBeforeOverwriting", false);
+        SetOptionalProperty(app, "AskToUpdateLinks", false);
+        SetOptionalProperty(app, "EnableEvents", false);
+        SetOptionalProperty(app, "ScreenUpdating", false);
+        SetOptionalProperty(app, "UserControl", false);
+        // msoAutomationSecurityForceDisable. Avoid macro prompts when opening
+        // fixtures; unsupported Office builds simply ignore the best-effort set.
+        SetOptionalProperty(app, "AutomationSecurity", 3);
+    }
+
+    private static void SetOptionalProperty(dynamic obj, string name, object? value)
+    {
+        try
+        {
+            var type = (Type)obj.GetType();
+            type.InvokeMember(name,
+                System.Reflection.BindingFlags.SetProperty,
+                null, obj, new[] { value });
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[excel-bridge] Could not set {name}: {ex.Message}");
+        }
     }
 
     public void Dispose()

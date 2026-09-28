@@ -97,6 +97,9 @@ class Program
         {
             switch (req.Cmd)
             {
+                case "Ping":
+                    return (Response.Ok(id, new ValueData("pong")), false);
+
                 case "Init":
                     store.InitExcel();
                     return (Response.Ok(id), false);

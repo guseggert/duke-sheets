@@ -663,7 +663,8 @@ impl SectionBuilder {
                     is_hijri = true;
                 }
                 FormatPart::DatePart(DatePart::SubSecond(precision)) => {
-                    max_subsecond_precision = Some(max_subsecond_precision.unwrap_or(0).max(*precision));
+                    max_subsecond_precision =
+                        Some(max_subsecond_precision.unwrap_or(0).max(*precision));
                     if smallest_time_unit < TimeUnit::Subseconds {
                         smallest_time_unit = TimeUnit::Subseconds;
                     }
@@ -698,8 +699,14 @@ impl SectionBuilder {
 
         // Determine format type if not already set
         if format_type == FormatType::General {
-            let has_date = self.parts.iter().any(|p| matches!(p, FormatPart::DatePart(_)));
-            let has_number = self.parts.iter().any(|p| matches!(p, FormatPart::Digit(_) | FormatPart::DecimalPoint));
+            let has_date = self
+                .parts
+                .iter()
+                .any(|p| matches!(p, FormatPart::DatePart(_)));
+            let has_number = self
+                .parts
+                .iter()
+                .any(|p| matches!(p, FormatPart::Digit(_) | FormatPart::DecimalPoint));
 
             if has_date || has_ampm || has_elapsed_time {
                 format_type = FormatType::DateTime;
@@ -749,7 +756,9 @@ impl SectionBuilder {
                     let mut count = 0;
                     for i in denom_start..self.parts.len() {
                         match &self.parts[i] {
-                            FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) if s.len() == 1 && s.chars().next().unwrap().is_ascii_digit() => {
+                            FormatPart::Literal(s) | FormatPart::EscapedLiteral(s)
+                                if s.len() == 1 && s.chars().next().unwrap().is_ascii_digit() =>
+                            {
                                 // Single digit literal like "1", "6"
                                 num_str.push_str(s);
                                 count += 1;
@@ -804,7 +813,10 @@ impl SectionBuilder {
                             // Mixed fraction: has space between integer and numerator (e.g., "# ??/??")
                             // Improper fraction: no space, all digits before slash are numerator (e.g., "#0#00??/??")
                             let has_space_before_numerator = num_start > 0 && {
-                                if let Some(FormatPart::Literal(s) | FormatPart::EscapedLiteral(s)) = self.parts.get(num_start - 1) {
+                                if let Some(
+                                    FormatPart::Literal(s) | FormatPart::EscapedLiteral(s),
+                                ) = self.parts.get(num_start - 1)
+                                {
                                     s == " "
                                 } else {
                                     false
@@ -812,14 +824,15 @@ impl SectionBuilder {
                             };
 
                             // For improper fractions, combine int_digits and num_digits into numerator
-                            let (final_int_digits, final_num_digits) = if !has_space_before_numerator && !int_digits.is_empty() {
-                                // Improper fraction: ALL digits before slash are numerator digits
-                                int_digits.extend(num_digits);
-                                (Vec::new(), int_digits)
-                            } else {
-                                // Mixed fraction: keep them separate
-                                (int_digits, num_digits)
-                            };
+                            let (final_int_digits, final_num_digits) =
+                                if !has_space_before_numerator && !int_digits.is_empty() {
+                                    // Improper fraction: ALL digits before slash are numerator digits
+                                    int_digits.extend(num_digits);
+                                    (Vec::new(), int_digits)
+                                } else {
+                                    // Mixed fraction: keep them separate
+                                    (int_digits, num_digits)
+                                };
 
                             // Check for spaces before slash (between numerator and slash)
                             let space_before_slash = if num_start > 0 && slash_pos > num_start {
@@ -903,16 +916,21 @@ impl SectionBuilder {
                 // Check if there are consecutive Zero digit placeholders after it
                 let mut zero_count = 0;
                 let mut j = i + 1;
-                while j < self.parts.len() && matches!(&self.parts[j], FormatPart::Digit(DigitPlaceholder::Zero)) {
+                while j < self.parts.len()
+                    && matches!(&self.parts[j], FormatPart::Digit(DigitPlaceholder::Zero))
+                {
                     zero_count += 1;
                     j += 1;
                 }
 
                 // If we found zeros after the decimal point, check if there are date/time parts before
                 if zero_count > 0 {
-                    let has_date_parts = new_parts.iter().any(|p| matches!(p,
-                        FormatPart::DatePart(_) | FormatPart::AmPm(_) | FormatPart::Elapsed(_)
-                    ));
+                    let has_date_parts = new_parts.iter().any(|p| {
+                        matches!(
+                            p,
+                            FormatPart::DatePart(_) | FormatPart::AmPm(_) | FormatPart::Elapsed(_)
+                        )
+                    });
 
                     if has_date_parts {
                         // Convert to subsecond formatting
@@ -935,7 +953,8 @@ impl SectionBuilder {
     /// Find position of "/" literal starting from index
     fn find_slash_position(&self, start: usize) -> Option<usize> {
         for i in start..self.parts.len() {
-            if matches!(&self.parts[i], FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) if s == "/") {
+            if matches!(&self.parts[i], FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) if s == "/")
+            {
                 return Some(i);
             }
         }
@@ -972,7 +991,11 @@ impl SectionBuilder {
     }
 
     /// Collect integer part before numerator (digits before a space typically)
-    fn collect_integer_part(&self, end: usize, new_parts: &mut Vec<FormatPart>) -> Vec<DigitPlaceholder> {
+    fn collect_integer_part(
+        &self,
+        end: usize,
+        new_parts: &mut Vec<FormatPart>,
+    ) -> Vec<DigitPlaceholder> {
         let mut int_digits = Vec::new();
 
         // Scan backwards from end to find digit placeholders
@@ -996,7 +1019,9 @@ impl SectionBuilder {
                 Some(FormatPart::ThousandsSeparator) if !int_digits.is_empty() => {
                     // Allow thousands separator in integer part
                 }
-                Some(FormatPart::Literal(_) | FormatPart::EscapedLiteral(_)) if int_digits.is_empty() => {
+                Some(FormatPart::Literal(_) | FormatPart::EscapedLiteral(_))
+                    if int_digits.is_empty() =>
+                {
                     // Haven't started collecting digits yet, and it's not a space, keep this part
                 }
                 _ => {

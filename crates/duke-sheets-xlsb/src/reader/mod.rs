@@ -1,5 +1,7 @@
 mod comments;
+pub(crate) mod connections;
 mod drawing;
+mod pivot;
 pub(crate) mod shared_strings;
 pub(crate) mod styles;
 mod table;
@@ -32,6 +34,14 @@ pub(crate) struct SheetRel {
 
 pub struct XlsbReader;
 
+struct XlsbReadOutput {
+    workbook: Workbook,
+    #[cfg(test)]
+    pivot_cache_definition_parse_count: usize,
+    #[cfg(test)]
+    pivot_cache_records_parse_count: usize,
+}
+
 impl XlsbReader {
     pub fn read_file<P: AsRef<Path>>(path: P) -> XlsbResult<Workbook> {
         let file = std::fs::File::open(path.as_ref())?;
@@ -39,6 +49,22 @@ impl XlsbReader {
     }
 
     pub fn read<R: Read + Seek>(reader: R) -> XlsbResult<Workbook> {
+        Ok(Self::read_inner(reader)?.workbook)
+    }
+
+    #[cfg(test)]
+    fn read_with_pivot_cache_parse_counts<R: Read + Seek>(
+        reader: R,
+    ) -> XlsbResult<(Workbook, usize, usize)> {
+        let output = Self::read_inner(reader)?;
+        Ok((
+            output.workbook,
+            output.pivot_cache_definition_parse_count,
+            output.pivot_cache_records_parse_count,
+        ))
+    }
+
+    fn read_inner<R: Read + Seek>(reader: R) -> XlsbResult<XlsbReadOutput> {
         let mut archive = zip::ZipArchive::new(reader)
             .map_err(|e| XlsbError::InvalidFormat(format!("not a valid ZIP: {e}")))?;
 
@@ -48,6 +74,15 @@ impl XlsbReader {
         let shared_strings = shared_strings::read_shared_strings(&mut archive, &styles_data.fonts)?;
         let relationships = workbook::read_relationships(&mut archive)?;
         let props = workbook::read_workbook(&mut archive, &relationships)?;
+        let data_connections = connections::read_connections(
+            &mut archive,
+            relationships.connections_path.as_deref(),
+            &props.formula_ctx,
+        )?;
+        let data_connections_by_id = data_connections
+            .iter()
+            .map(|connection| (connection.id, connection.clone()))
+            .collect::<HashMap<_, _>>();
 
         // Load theme palette from xl/theme/theme1.xml (XML even in XLSB)
         let theme_path = relationships
@@ -69,6 +104,9 @@ impl XlsbReader {
         }
         wb.settings_mut().date_1904 = props.date_1904;
         wb.set_workbook_protection(props.workbook_protection.clone());
+        for connection in data_connections {
+            wb.add_data_connection(connection)?;
+        }
 
         for entry in &props.sheets {
             wb.add_worksheet_with_name_unchecked(&entry.name);
@@ -95,6 +133,14 @@ impl XlsbReader {
         }
 
         apply_print_settings(&props, &mut wb);
+
+        let date_system = if props.date_1904 {
+            ssfmt::DateSystem::Date1904
+        } else {
+            ssfmt::DateSystem::Date1900
+        };
+        let mut pivot_read_context =
+            pivot::PivotReadContext::new(date_system, &data_connections_by_id);
 
         for (i, entry) in props.sheets.iter().enumerate() {
             if entry.path.is_empty() {
@@ -176,6 +222,21 @@ impl XlsbReader {
                     wb.worksheet_mut(i).unwrap().add_table(t);
                 }
             }
+
+            for pivot in pivot::read_pivot_tables_for_sheet(
+                &mut archive,
+                &entry.path,
+                &sheet_rels,
+                &styles_data.numfmts,
+                &mut pivot_read_context,
+            )? {
+                wb.worksheet_mut(i)
+                    .unwrap()
+                    .add_pivot_table(pivot)
+                    .map_err(|e| {
+                        XlsbError::InvalidFormat(format!("invalid XLSB pivot table: {e}"))
+                    })?;
+            }
         }
 
         if !dxf_styles.is_empty() {
@@ -195,7 +256,13 @@ impl XlsbReader {
             wb.add_worksheet_with_name_unchecked("Sheet1");
         }
 
-        Ok(wb)
+        Ok(XlsbReadOutput {
+            workbook: wb,
+            #[cfg(test)]
+            pivot_cache_definition_parse_count: pivot_read_context.cache_definition_parse_count(),
+            #[cfg(test)]
+            pivot_cache_records_parse_count: pivot_read_context.cache_records_parse_count(),
+        })
     }
 }
 
@@ -286,7 +353,7 @@ fn parse_print_titles_formula(
     (rows, cols)
 }
 
-fn resolve_rel_path(base_path: &str, rel_target: &str) -> String {
+pub(crate) fn resolve_rel_path(base_path: &str, rel_target: &str) -> String {
     if rel_target.starts_with('/') {
         return rel_target.trim_start_matches('/').to_string();
     }

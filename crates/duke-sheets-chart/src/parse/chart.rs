@@ -11,8 +11,8 @@ use crate::{
     ChartLine, ChartLines, ChartShapeProperties, ChartType, ChartTypeGroup, CrossBetween,
     DataLabelPosition, DataLabels, DataPoint, DataReference, DataSeries, DisplayBlanksAs,
     ErrorBarDirection, ErrorBarType, ErrorBars, ErrorValueType, Layout, Legend, LegendPosition,
-    ManualLayout, Marker, MarkerSymbol, NumberFormat, TickLabelPosition, TickMark, Trendline,
-    TrendlineType, UpDownBars, View3D,
+    ManualLayout, Marker, MarkerSymbol, NumberFormat, PivotChartSource, TickLabelPosition, TickMark,
+    Trendline, TrendlineType, UpDownBars, View3D,
 };
 
 /// Parsed chart data before anchor assignment.
@@ -43,6 +43,7 @@ struct ParsedChart {
     radar_style: Option<String>,
     auto_title_deleted: Option<bool>,
     rounded_corners: Option<bool>,
+    pivot_source: Option<PivotChartSource>,
     show_dlbls_over_max: Option<bool>,
     wireframe: Option<bool>,
     drop_lines: Option<ChartLines>,
@@ -93,6 +94,7 @@ pub fn parse_chart_xml<R: Read>(reader: R) -> ChartParseResult<Chart> {
     chart.radar_style = parsed.radar_style;
     chart.auto_title_deleted = parsed.auto_title_deleted;
     chart.rounded_corners = parsed.rounded_corners;
+    chart.pivot_source = parsed.pivot_source;
     chart.show_dlbls_over_max = parsed.show_dlbls_over_max;
     chart.wireframe = parsed.wireframe;
     chart.drop_lines = parsed.drop_lines;
@@ -159,6 +161,10 @@ struct ChartParser {
     radar_style: Option<String>,
     wireframe: Option<bool>,
     in_chart_space: bool,
+    in_pivot_source: bool,
+    in_pivot_source_name: bool,
+    pivot_source_name: String,
+    pivot_source_format_id: Option<u32>,
     group_series: Vec<DataSeries>,
     group_data_labels: Option<DataLabels>,
     group_axis_ids: Vec<u32>,
@@ -339,6 +345,7 @@ impl ChartParser {
                 radar_style: None,
                 auto_title_deleted: None,
                 rounded_corners: None,
+                pivot_source: None,
                 show_dlbls_over_max: None,
                 wireframe: None,
                 drop_lines: None,
@@ -365,6 +372,10 @@ impl ChartParser {
             radar_style: None,
             wireframe: None,
             in_chart_space: false,
+            in_pivot_source: false,
+            in_pivot_source_name: false,
+            pivot_source_name: String::new(),
+            pivot_source_format_id: None,
             group_series: Vec::new(),
             group_data_labels: None,
             group_axis_ids: Vec::new(),
@@ -556,6 +567,7 @@ impl ChartParser {
                 ExtLstDest::ChartSpace => {
                     self.result.raw_extensions.insert("chartSpace".into(), raw);
                 }
+                ExtLstDest::Ignore => {}
             }
         }
     }
@@ -576,6 +588,12 @@ impl ChartParser {
 
         match tag {
         b"chartSpace" => self.in_chart_space = true,
+        b"pivotSource" if self.in_chart_space && !self.in_chart => {
+            self.in_pivot_source = true;
+            self.pivot_source_name.clear();
+            self.pivot_source_format_id = None;
+        }
+        b"name" if self.in_pivot_source => self.in_pivot_source_name = true,
         b"chart" if !self.in_chart => self.in_chart = true,
         b"plotArea" if self.in_chart => self.in_plot_area = true,
         b"title"
@@ -918,7 +936,9 @@ impl ChartParser {
             }
         }
         b"extLst" => {
-            self.ext_dest = if self.in_ser {
+            self.ext_dest = if self.in_pivot_source {
+                ExtLstDest::Ignore
+            } else if self.in_ser {
                 ExtLstDest::Series
             } else if self.in_cat_ax || self.in_val_ax || self.in_ser_ax {
                 ExtLstDest::Axis
@@ -1142,6 +1162,9 @@ impl ChartParser {
         b"roundedCorners" if self.in_chart_space && !self.in_chart => {
             self.result.rounded_corners = get_val_bool(e);
         }
+        b"fmtId" if self.in_pivot_source => {
+            self.pivot_source_format_id = get_val_u32(e);
+        }
         b"dispBlanksAs" if self.in_chart && !self.in_plot_area => {
             self.result.display_blanks_as =
                 get_val_attr(e).and_then(|s| match s.as_str() {
@@ -1255,6 +1278,8 @@ impl ChartParser {
             push_text(&mut self.trendline_name, text_str);
         } else if self.in_dlbls_separator {
             push_text(&mut self.dlbls.separator, text_str);
+        } else if self.in_pivot_source_name {
+            self.pivot_source_name.push_str(text_str);
         }
     }
     }
@@ -1357,6 +1382,16 @@ impl ChartParser {
 
         match tag {
         b"chart" => self.in_chart = false,
+        b"name" if self.in_pivot_source_name => self.in_pivot_source_name = false,
+        b"pivotSource" if self.in_pivot_source => {
+            if !self.pivot_source_name.is_empty() {
+                self.result.pivot_source = Some(PivotChartSource {
+                    name: self.pivot_source_name.clone(),
+                    format_id: self.pivot_source_format_id.unwrap_or(0),
+                });
+            }
+            self.in_pivot_source = false;
+        }
         b"plotArea" => self.in_plot_area = false,
         b"view3D" if self.in_view_3d => {
             self.result.view_3d = Some(self.view_3d.clone());
@@ -1913,6 +1948,7 @@ enum ExtLstDest {
     Chart,
     PlotArea,
     ChartSpace,
+    Ignore,
 }
 
 fn resolve_chart_type(
@@ -2095,6 +2131,34 @@ mod tests {
 
     fn parse_chart_xml_str(xml: &str) -> Chart {
         parse_chart_xml(Cursor::new(xml.as_bytes())).unwrap()
+    }
+
+    #[test]
+    fn test_parse_pivot_source() {
+        let xml = r#"<?xml version="1.0"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+  <c:pivotSource>
+    <c:name>SalesPivot</c:name>
+    <c:fmtId val="4"/>
+  </c:pivotSource>
+  <c:chart>
+    <c:plotArea>
+      <c:barChart>
+        <c:barDir val="col"/>
+        <c:grouping val="clustered"/>
+      </c:barChart>
+    </c:plotArea>
+  </c:chart>
+</c:chartSpace>"#;
+
+        let chart = parse_chart_xml_str(xml);
+        assert_eq!(
+            chart.pivot_source,
+            Some(PivotChartSource {
+                name: "SalesPivot".into(),
+                format_id: 4,
+            })
+        );
     }
 
     #[test]

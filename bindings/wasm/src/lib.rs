@@ -7,9 +7,17 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
-use duke_sheets::{CalculationOptions, FormulaValue, WorkbookCalculationExt};
+use duke_sheets::{
+    CalculationOptions, ChartType, FormulaValue, PivotRefreshOptions, WorkbookCalculationExt,
+    WorkbookPivotExt,
+};
 use duke_sheets_core::{
-    CellAddress, CellError, CellRange, CellValue as CoreCellValue, Workbook as CoreWorkbook,
+    CellAddress, CellError, CellRange, CellValue as CoreCellValue, PivotAggregate,
+    PivotDateGroupUnit, PivotDatePeriod, PivotField, PivotFilter, PivotFilterOperator,
+    PivotGrouping, PivotLayout, PivotLayoutKind, PivotManualGroup, PivotMeasure,
+    PivotOverwritePolicy, PivotRefreshPolicy, PivotShowAs, PivotSort, PivotSource,
+    PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable, PivotValue, PivotValuesAxis,
+    Workbook as CoreWorkbook, WorkbookConnection, WorkbookConnectionKind,
 };
 use duke_sheets_xlsb::XlsbWriter;
 use duke_sheets_xlsx::XlsxWriter;
@@ -191,6 +199,583 @@ export class RowIterator implements IterableIterator<JsRow> {
   constructor(ws: Worksheet, opts?: JsRowsOptions, maxRow?: number);
   [Symbol.iterator](): RowIterator;
   next(): IteratorResult<JsRow>;
+}
+
+export interface PivotMeasureOptions {
+  field: string;
+  aggregate?: "sum" | "count" | "countNumbers" | "average" | "max" | "min" | "product" | "stdDev" | "stdDevP" | "var" | "varP";
+  name?: string;
+  showAs?: "normal" | "percentOfGrandTotal" | "percentOfRowTotal" | "percentOfColumnTotal" | "percentOfParentRowTotal" | "percentOfParentRow" | "percentOfParentColumnTotal" | "percentOfParentCol" | "percentOfParentTotal" | "percentOfParent" | "index" | "runningTotal" | "runTotal" | "differenceFrom" | "difference" | "percentDifferenceFrom" | "percentDiff" | "rankAscending" | "rankDescending";
+  baseField?: string;
+  baseItem?: string | number | boolean;
+  numberFormat?: string;
+}
+
+export interface PivotItemFilterOptions {
+  kind?: "item" | "items" | "fieldItems" | "field_items";
+  field: string;
+  items: string[];
+}
+
+export type PivotFilterOperator =
+  | "equals"
+  | "equal"
+  | "eq"
+  | "notEquals"
+  | "notEqual"
+  | "ne"
+  | "lessThan"
+  | "lt"
+  | "lessThanOrEqual"
+  | "lte"
+  | "greaterThan"
+  | "gt"
+  | "greaterThanOrEqual"
+  | "gte"
+  | "beginsWith"
+  | "doesNotBeginWith"
+  | "notBeginsWith"
+  | "endsWith"
+  | "doesNotEndWith"
+  | "notEndsWith"
+  | "contains"
+  | "doesNotContain"
+  | "notContains";
+
+export interface PivotLabelFilterOptions {
+  kind: "label";
+  field: string;
+  operator: PivotFilterOperator;
+  text: string;
+}
+
+export interface PivotLabelBetweenFilterOptions {
+  kind: "labelBetween" | "label_between" | "captionBetween" | "caption_between" | "labelNotBetween" | "label_not_between" | "captionNotBetween" | "caption_not_between";
+  field: string;
+  startText: string;
+  endText: string;
+}
+
+export interface PivotValueFilterOptions {
+  kind: "value";
+  field: string;
+  measure: PivotMeasureOptions;
+  operator: PivotFilterOperator;
+  value: number;
+}
+
+export interface PivotValueBetweenFilterOptions {
+  kind: "valueBetween" | "value_between" | "valueRange" | "value_range" | "valueNotBetween" | "value_not_between" | "valueNotRange" | "value_not_range";
+  field: string;
+  measure: PivotMeasureOptions;
+  start: number;
+  end: number;
+}
+
+export interface PivotDateFilterOptions {
+  kind: "date";
+  field: string;
+  operator: PivotFilterOperator;
+  value: number;
+}
+
+export interface PivotDateBetweenFilterOptions {
+  kind: "dateBetween" | "date_between" | "dateRange" | "date_range" | "dateNotBetween" | "date_not_between" | "dateNotRange" | "date_not_range";
+  field: string;
+  start: number;
+  end: number;
+}
+
+export interface PivotDatePeriodFilterOptions {
+  kind: "datePeriod" | "date_period" | "period";
+  field: string;
+  period: string;
+}
+
+export interface PivotTopNFilterOptions {
+  kind: "topN" | "top_n" | "top";
+  field: string;
+  measure: PivotMeasureOptions;
+  n: number;
+  top?: boolean;
+  percent?: boolean;
+}
+
+export type PivotFilterOptions =
+  | PivotItemFilterOptions
+  | PivotLabelFilterOptions
+  | PivotLabelBetweenFilterOptions
+  | PivotValueFilterOptions
+  | PivotValueBetweenFilterOptions
+  | PivotDateFilterOptions
+  | PivotDateBetweenFilterOptions
+  | PivotDatePeriodFilterOptions
+  | PivotTopNFilterOptions;
+
+export interface PivotCalculatedFieldOptions {
+  name: string;
+  formula: string;
+}
+
+export type PivotValueInput = string | number | boolean;
+
+export interface PivotCalculatedItemOptions {
+  field: string;
+  item: PivotValueInput;
+  formula: string;
+}
+
+export interface PivotManualGroupOptions {
+  name: string;
+  members: PivotValueInput[];
+}
+
+export interface PivotGroupingOptions {
+  field: string;
+  kind: "number" | "numeric" | "date" | "manual" | "items" | "item";
+  start?: number;
+  end?: number;
+  interval?: number;
+  units?: Array<"seconds" | "minutes" | "hours" | "days" | "months" | "quarters" | "years">;
+  groups?: PivotManualGroupOptions[];
+}
+
+export interface PivotFieldOptions {
+  field: string;
+  caption?: string;
+  sort?: "none" | "manual" | "ascending" | "asc" | "descending" | "desc";
+  sortByMeasure?: PivotMeasureOptions;
+  subtotalCaption?: string;
+  subtotal?:
+    | "automatic"
+    | "auto"
+    | "none"
+    | "sum"
+    | "count"
+    | "count_numbers"
+    | "countNumbers"
+    | "countnumbers"
+    | "count_nums"
+    | "countNums"
+    | "countnums"
+    | "average"
+    | "avg"
+    | "min"
+    | "max"
+    | "product"
+    | "std_dev"
+    | "stdDev"
+    | "stddev"
+    | "std_dev_p"
+    | "stdDevP"
+    | "stddevp"
+    | "var"
+    | "variance"
+    | "var_p"
+    | "varP"
+    | "varp"
+    | "variance_p"
+    | "varianceP";
+  subtotals?: string[];
+  collapsedItems?: PivotValueInput[];
+  showEmptyItems?: boolean;
+  showDropDowns?: boolean;
+  subtotalTop?: boolean;
+  insertBlankRow?: boolean;
+  insertPageBreak?: boolean;
+  includeNewItemsInFilter?: boolean;
+  itemPageCount?: number;
+}
+
+export interface PivotRefreshPolicyOptions {
+  refreshOnOpen?: boolean;
+  preserveFormatting?: boolean;
+  backgroundQuery?: boolean;
+  missingItemsLimit?: number;
+}
+
+export interface PivotLayoutOptions {
+  kind?: "compact" | "outline" | "tabular";
+  showRowGrandTotals?: boolean;
+  showColumnGrandTotals?: boolean;
+  showFieldHeaders?: boolean;
+  repeatItemLabels?: boolean;
+  showExpandCollapse?: boolean;
+  printDrillIndicators?: boolean;
+  itemPrintTitles?: boolean;
+  fieldPrintTitles?: boolean;
+  pageWrap?: number;
+  pageOverThenDown?: boolean;
+  mergeItemLabels?: boolean;
+  dataCaption?: string;
+  valuesAxis?: "columns" | "rows";
+  valuesAxisPosition?: number;
+  grandTotalCaption?: string;
+  errorCaption?: string;
+  showError?: boolean;
+  missingCaption?: string;
+  showMissing?: boolean;
+  asteriskTotals?: boolean;
+  showItems?: boolean;
+  editData?: boolean;
+  disableFieldList?: boolean;
+  showCalculatedMembers?: boolean;
+  visualTotals?: boolean;
+  showMultipleLabel?: boolean;
+  showDataDropDown?: boolean;
+  showMemberPropertyTips?: boolean;
+  showDataTips?: boolean;
+  enableWizard?: boolean;
+  enableDrill?: boolean;
+  enableFieldProperties?: boolean;
+  subtotalHiddenItems?: boolean;
+  showDropZones?: boolean;
+  indent?: number;
+  showEmptyRows?: boolean;
+  showEmptyColumns?: boolean;
+}
+
+export interface PivotStyleOptions {
+  name?: string;
+  showRowHeaders?: boolean;
+  showColumnHeaders?: boolean;
+  showRowStripes?: boolean;
+  showColumnStripes?: boolean;
+  showLastColumn?: boolean;
+}
+
+export interface PivotConsolidationRangeOptions {
+  sheet?: string;
+  range?: string;
+  name?: string;
+  externalRelationshipId?: string;
+  externalRelationshipTarget?: string;
+  pageItems?: string[];
+}
+
+export interface PivotTableOptions {
+  name: string;
+  sourceRange?: string;
+  sourceSheet?: string;
+  tableName?: string;
+  externalConnectionName?: string;
+  externalCommandText?: string;
+  olapConnectionName?: string;
+  consolidationRanges?: PivotConsolidationRangeOptions[];
+  target: string;
+  rows?: string[];
+  columns?: string[];
+  pages?: string[];
+  rowFields?: PivotFieldOptions[];
+  columnFields?: PivotFieldOptions[];
+  pageFields?: PivotFieldOptions[];
+  measures: PivotMeasureOptions[];
+  filters?: PivotFilterOptions[];
+  calculatedFields?: PivotCalculatedFieldOptions[];
+  calculatedItems?: PivotCalculatedItemOptions[];
+  groupings?: PivotGroupingOptions[];
+  refreshPolicy?: PivotRefreshPolicyOptions;
+  layout?: PivotLayoutOptions;
+  style?: PivotStyleOptions;
+  overwritePolicy?: "clearOwnedRange" | "clear_owned_range" | "clear" | "overwrite" | "failOnOccupied" | "fail_on_occupied";
+}
+
+export interface PivotChartOptions {
+  pivotName: string;
+  chartType?: "columnClustered" | "columnStacked" | "columnPercentStacked" | "barClustered" | "barStacked" | "barPercentStacked" | "line" | "lineStacked" | "pie" | "pieExploded" | "doughnut" | "area" | "areaStacked" | "areaPercentStacked" | "scatterMarkers" | "scatterSmooth" | "scatterLines" | "bubble" | "radar" | "stock" | "surface" | string;
+}
+
+export interface PivotValue {
+  kind: "blank" | "boolean" | "number" | "string" | "error";
+  number?: number;
+  text?: string;
+  boolean?: boolean;
+  error?: string;
+}
+
+export interface PivotSourceRangeDefinition {
+  sheet?: string;
+  range?: string;
+  name?: string;
+  externalRelationshipId?: string;
+  externalRelationshipTarget?: string;
+  pageItems: string[];
+}
+
+export interface PivotSourceDefinition {
+  kind: "worksheetRange" | "table" | "external" | "consolidation" | "scenario" | "olap";
+  sheet?: string;
+  range?: string;
+  tableName?: string;
+  connectionName?: string;
+  commandText?: string;
+  ranges?: PivotSourceRangeDefinition[];
+  scenarioName?: string;
+  cube?: string;
+}
+
+export interface PivotFieldDefinition {
+  field: string;
+  caption?: string;
+  sort: "none" | "ascending" | "descending";
+  sortByMeasure?: PivotMeasureDefinition;
+  subtotal: "automatic" | "none" | "sum" | "count" | "countNumbers" | "average" | "min" | "max" | "product" | "stdDev" | "stdDevP" | "var" | "varP";
+  subtotalCaption?: string;
+  subtotals: string[];
+  collapsedItems: PivotValue[];
+  showEmptyItems: boolean;
+  showDropDowns: boolean;
+  subtotalTop: boolean;
+  insertBlankRow: boolean;
+  insertPageBreak: boolean;
+  includeNewItemsInFilter: boolean;
+  itemPageCount: number;
+}
+
+export interface PivotShowAsDefinition {
+  kind: "normal" | "percentOfGrandTotal" | "percentOfRowTotal" | "percentOfColumnTotal" | "percentOfParentRowTotal" | "percentOfParentColumnTotal" | "percentOfParentTotal" | "index" | "runningTotal" | "differenceFrom" | "percentDifferenceFrom" | "rankAscending" | "rankDescending";
+  baseField?: string;
+  baseItem?: PivotValue;
+}
+
+export interface PivotMeasureDefinition {
+  field: string;
+  aggregate: "sum" | "count" | "countNumbers" | "average" | "max" | "min" | "product" | "stdDev" | "stdDevP" | "var" | "varP";
+  name?: string;
+  caption: string;
+  showAs: PivotShowAsDefinition;
+  numberFormat?: string;
+}
+
+export interface PivotFilterDefinition {
+  kind: string;
+  field?: string;
+  items?: PivotValue[];
+  operator?: PivotFilterOperator;
+  text?: string;
+  period?: string;
+  measure?: PivotMeasureDefinition;
+  value?: number;
+  start?: number;
+  end?: number;
+  n?: number;
+  top?: boolean;
+  percent?: boolean;
+  detail?: string;
+}
+
+export interface PivotCalculatedFieldDefinition {
+  name: string;
+  formula: string;
+}
+
+export interface PivotCalculatedItemDefinition {
+  field: string;
+  item: PivotValue;
+  formula: string;
+}
+
+export interface PivotManualGroupDefinition {
+  name: string;
+  members: PivotValue[];
+}
+
+export interface PivotGroupingDefinition {
+  kind: "number" | "date" | "manual";
+  field: string;
+  start?: number;
+  end?: number;
+  interval?: number;
+  units?: PivotDateGroupUnit[];
+  groups?: PivotManualGroupDefinition[];
+}
+
+export interface PivotLayoutDefinition {
+  kind: "compact" | "outline" | "tabular";
+  showRowGrandTotals: boolean;
+  showColumnGrandTotals: boolean;
+  showFieldHeaders: boolean;
+  repeatItemLabels: boolean;
+  showExpandCollapse: boolean;
+  printDrillIndicators: boolean;
+  itemPrintTitles: boolean;
+  fieldPrintTitles: boolean;
+  pageWrap: number;
+  pageOverThenDown: boolean;
+  mergeItemLabels: boolean;
+  dataCaption: string;
+  valuesAxis: "columns" | "rows";
+  valuesAxisPosition?: number;
+  grandTotalCaption?: string;
+  errorCaption?: string;
+  showError: boolean;
+  missingCaption?: string;
+  showMissing: boolean;
+  asteriskTotals: boolean;
+  showItems: boolean;
+  editData: boolean;
+  disableFieldList: boolean;
+  showCalculatedMembers: boolean;
+  visualTotals: boolean;
+  showMultipleLabel: boolean;
+  showDataDropDown: boolean;
+  showMemberPropertyTips: boolean;
+  showDataTips: boolean;
+  enableWizard: boolean;
+  enableDrill: boolean;
+  enableFieldProperties: boolean;
+  subtotalHiddenItems: boolean;
+  showDropZones: boolean;
+  indent: number;
+  showEmptyRows: boolean;
+  showEmptyColumns: boolean;
+}
+
+export interface PivotStyleDefinition {
+  name?: string;
+  showRowHeaders: boolean;
+  showColumnHeaders: boolean;
+  showRowStripes: boolean;
+  showColumnStripes: boolean;
+  showLastColumn: boolean;
+}
+
+export interface PivotRefreshPolicyDefinition {
+  refreshOnOpen: boolean;
+  preserveFormatting: boolean;
+  backgroundQuery: boolean;
+  missingItemsLimit?: number;
+}
+
+export interface PivotRefreshStatusDefinition {
+  kind: "notRefreshed" | "succeeded" | "failed" | "external";
+  message?: string;
+}
+
+export interface PivotTableDefinition {
+  id: number;
+  name: string;
+  source: PivotSourceDefinition;
+  target: string;
+  rows: PivotFieldDefinition[];
+  columns: PivotFieldDefinition[];
+  pageFields: PivotFieldDefinition[];
+  filters: PivotFilterDefinition[];
+  calculatedFields: PivotCalculatedFieldDefinition[];
+  calculatedItems: PivotCalculatedItemDefinition[];
+  measures: PivotMeasureDefinition[];
+  groupings: PivotGroupingDefinition[];
+  layout: PivotLayoutDefinition;
+  style: PivotStyleDefinition;
+  refreshPolicy: PivotRefreshPolicyDefinition;
+  overwritePolicy: "clearOwnedRange" | "overwrite" | "failOnOccupied";
+  renderedRange?: string;
+  refreshStatus: PivotRefreshStatusDefinition;
+  extensionCount: number;
+}
+
+export interface DataConnectionOptions {
+  id: number;
+  name: string;
+  kind?: "database" | "db" | "web" | "text" | "olap";
+  connection?: string;
+  command?: string;
+  commandType?: number;
+  url?: string;
+  xml?: boolean;
+  sourceData?: boolean;
+  htmlTables?: boolean;
+  htmlFormat?: string;
+  post?: string;
+  editPage?: string;
+  sourceFile?: string;
+  delimiter?: string;
+  firstRow?: number;
+  delimited?: boolean;
+  decimal?: string;
+  thousands?: string;
+  local?: boolean;
+  localConnection?: string;
+  localRefresh?: boolean;
+  sendLocale?: boolean;
+  rowDrillCount?: number;
+  refreshOnLoad?: boolean;
+  background?: boolean;
+  saveData?: boolean;
+}
+
+export interface DataConnectionDefinition {
+  id: number;
+  name: string;
+  kind: "database" | "web" | "text" | "olap";
+  refreshedVersion: number;
+  refreshOnLoad: boolean;
+  background: boolean;
+  saveData: boolean;
+  connection?: string;
+  command?: string;
+  commandType?: number;
+  url?: string;
+  xml?: boolean;
+  sourceData?: boolean;
+  htmlTables?: boolean;
+  htmlFormat?: string;
+  post?: string;
+  editPage?: string;
+  sourceFile?: string;
+  delimiter?: string;
+  firstRow?: number;
+  delimited?: boolean;
+  decimal?: string;
+  thousands?: string;
+  local?: boolean;
+  localConnection?: string;
+  localRefresh?: boolean;
+  sendLocale?: boolean;
+  rowDrillCount?: number;
+}
+
+export interface WorkbookExtension {
+  uri: string;
+  payload: number[];
+}
+
+export interface WorkbookExtensionPart {
+  path: string;
+  contentType: string;
+  relationshipType: string;
+  relationshipId?: string;
+  payload: number[];
+}
+
+export interface PivotRefreshStats {
+  pivotCount: number;
+  pivotsRefreshed: number;
+  sourceRows: number;
+  outputCells: number;
+  cacheHits: number;
+  cacheMisses: number;
+}
+
+export interface PivotRefreshOptions {
+  maxThreads?: number;
+  today?: number;
+}
+
+export interface Workbook {
+  readonly dataConnectionCount: number;
+  readonly dataConnectionNames: string[];
+  readonly dataConnections: DataConnectionDefinition[];
+  readonly workbookExtensionCount: number;
+  readonly workbookExtensions: WorkbookExtension[];
+  readonly workbookExtensionPartCount: number;
+  readonly workbookExtensionParts: WorkbookExtensionPart[];
+  getDataConnection(name: string): DataConnectionDefinition | null;
+  getDataConnectionById(id: number): DataConnectionDefinition | null;
+  getWorkbookExtensionPart(path: string): WorkbookExtensionPart | null;
+  getWorkbookExtensionPartByRelationshipId(relationshipId: string): WorkbookExtensionPart | null;
+  addDataConnection(options: DataConnectionOptions): void;
+  refreshPivots(options?: PivotRefreshOptions): PivotRefreshStats;
 }
 
 export interface DrawingMeta {
@@ -471,6 +1056,7 @@ export interface Chart {
   showNegativeBubbles?: boolean;
   autoTitleDeleted?: boolean;
   roundedCorners?: boolean;
+  pivotSource?: { name: string; formatId: number };
   showDlblsOverMax?: boolean;
   wireframe?: boolean;
   radarStyle?: string;
@@ -693,6 +1279,12 @@ export interface Worksheet {
   setCellStyle(address: string, style: StyleInput): void;
   setCellStyleAt(row: number, col: number, style: StyleInput): void;
   setRangeStyle(range: string, style: StyleInput): void;
+  readonly pivotCount: number;
+  readonly pivotTableNames: string[];
+  readonly pivotTables: PivotTableDefinition[];
+  getPivotTable(name: string): PivotTableDefinition | null;
+  addPivotTable(options: PivotTableOptions): void;
+  addPivotChart(options: PivotChartOptions): Chart;
   readonly drawings: Drawing[];
   readonly formControls: FormControlDrawing[];
   readonly formControlCount: number;
@@ -739,6 +1331,13 @@ struct JsCalculationOptions {
     max_threads: Option<usize>,
 }
 
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct JsPivotRefreshOptions {
+    max_threads: Option<usize>,
+    today: Option<f64>,
+}
+
 /// Wrapper to make `js_sys::Function` implement Send + Sync.
 /// SAFETY: WASM is single-threaded, so Send + Sync are no-ops.
 struct SendSyncFunction(js_sys::Function);
@@ -776,6 +1375,926 @@ pub(crate) fn to_js_value<T: Serialize>(value: &T) -> Result<JsValue, JsError> {
     value
         .serialize(&serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true))
         .map_err(to_js_error)
+}
+
+fn build_pivot_table_from_wasm(options: WasmPivotTableOptions) -> Result<PivotTable, JsError> {
+    let mut builder = PivotTable::builder(options.name);
+    if options.external_command_text.is_some() && options.external_connection_name.is_none() {
+        return Err(JsError::new(
+            "Pivot options require externalConnectionName when externalCommandText is set",
+        ));
+    }
+    let source_count = usize::from(options.table_name.is_some())
+        + usize::from(options.source_range.is_some())
+        + usize::from(options.external_connection_name.is_some())
+        + usize::from(options.olap_connection_name.is_some())
+        + usize::from(options.consolidation_ranges.is_some());
+    if source_count != 1 {
+        return Err(JsError::new(
+            "Pivot options require exactly one of tableName, sourceRange, externalConnectionName, olapConnectionName, or consolidationRanges",
+        ));
+    }
+
+    match (
+        options.table_name,
+        options.source_range,
+        options.external_connection_name,
+        options.olap_connection_name,
+        options.consolidation_ranges,
+    ) {
+        (Some(table_name), None, None, None, None) => {
+            builder = builder.table_source(table_name);
+        }
+        (None, Some(source_range), None, None, None) => {
+            let range = CellRange::parse(&source_range)
+                .map_err(|e| JsError::new(&format!("Invalid pivot source range: {e}")))?;
+            builder = if let Some(sheet) = options.source_sheet {
+                builder.source_range_on_sheet(sheet, range)
+            } else {
+                builder.source_range(range)
+            };
+        }
+        (None, None, Some(connection_name), None, None) => {
+            builder = builder.source(PivotSource::External {
+                connection_name,
+                command_text: options.external_command_text,
+            });
+        }
+        (None, None, None, Some(connection_name), None) => {
+            builder = builder.source(PivotSource::Olap {
+                connection_name,
+                cube: None,
+                command_text: None,
+            });
+        }
+        (None, None, None, None, Some(ranges)) => {
+            builder = builder.source(PivotSource::Consolidation {
+                ranges: build_pivot_consolidation_ranges_from_wasm(ranges)?,
+            });
+        }
+        _ => unreachable!("source_count validation accepts exactly one source"),
+    }
+
+    builder = builder
+        .target_address(&options.target)
+        .map_err(|e| JsError::new(&format!("Invalid pivot target: {e}")))?;
+    for field in options.rows.unwrap_or_default() {
+        builder = builder.row(field);
+    }
+    for field in options.columns.unwrap_or_default() {
+        builder = builder.column(field);
+    }
+    for field in options.pages.unwrap_or_default() {
+        builder = builder.page(field);
+    }
+    for field in options.row_fields.unwrap_or_default() {
+        builder = builder.row(build_pivot_field_from_wasm(field)?);
+    }
+    for field in options.column_fields.unwrap_or_default() {
+        builder = builder.column(build_pivot_field_from_wasm(field)?);
+    }
+    for field in options.page_fields.unwrap_or_default() {
+        builder = builder.page(build_pivot_field_from_wasm(field)?);
+    }
+    for measure in options.measures {
+        builder = builder.pivot_measure(build_pivot_measure_from_wasm(measure)?);
+    }
+    for filter in options.filters.unwrap_or_default() {
+        builder = builder.filter(build_pivot_filter_from_wasm(filter)?);
+    }
+    for calculated_field in options.calculated_fields.unwrap_or_default() {
+        builder = builder.calculated_field(calculated_field.name, calculated_field.formula);
+    }
+    for calculated_item in options.calculated_items.unwrap_or_default() {
+        builder = builder.calculated_item(
+            calculated_item.field,
+            pivot_value_from_wasm(calculated_item.item),
+            calculated_item.formula,
+        );
+    }
+    for grouping in options.groupings.unwrap_or_default() {
+        builder = builder.grouping(build_pivot_grouping_from_wasm(grouping)?);
+    }
+    if let Some(refresh_policy) = options.refresh_policy {
+        builder = builder.refresh_policy(build_pivot_refresh_policy_from_wasm(refresh_policy));
+    }
+    if let Some(layout) = options.layout {
+        builder = builder.layout(build_pivot_layout_from_wasm(layout)?);
+    }
+    if let Some(style) = options.style {
+        builder = builder.style(build_pivot_style_from_wasm(style));
+    }
+    if let Some(overwrite_policy) = options.overwrite_policy {
+        builder = builder.overwrite_policy(parse_pivot_overwrite_policy(&overwrite_policy)?);
+    }
+
+    builder.build().map_err(to_js_error)
+}
+
+fn build_pivot_consolidation_ranges_from_wasm(
+    ranges: Vec<WasmPivotConsolidationRangeOptions>,
+) -> Result<Vec<PivotSourceRange>, JsError> {
+    if ranges.is_empty() {
+        return Err(JsError::new(
+            "Pivot consolidationRanges must contain at least one range",
+        ));
+    }
+    ranges
+        .into_iter()
+        .map(|range| {
+            let parsed = range
+                .range
+                .as_deref()
+                .map(|range_ref| {
+                    CellRange::parse(range_ref).map_err(|e| {
+                        JsError::new(&format!("Invalid pivot consolidation range: {e}"))
+                    })
+                })
+                .transpose()?;
+            if parsed.is_none()
+                && range.name.is_none()
+                && range.external_relationship_id.is_none()
+                && range.external_relationship_target.is_none()
+            {
+                return Err(JsError::new(
+                    "Pivot consolidation range requires range, name, externalRelationshipId, or externalRelationshipTarget",
+                ));
+            }
+            let mut source_range = PivotSourceRange {
+                sheet: range.sheet,
+                range: parsed,
+                name: range.name,
+                external_relationship_id: range.external_relationship_id,
+                external_relationship_target: range.external_relationship_target,
+                page_items: Vec::new(),
+            };
+            if let Some(page_items) = range.page_items {
+                source_range = source_range.with_page_items(page_items);
+            }
+            Ok(source_range)
+        })
+        .collect()
+}
+
+fn build_workbook_connection_from_wasm(
+    options: WasmWorkbookConnectionOptions,
+) -> Result<WorkbookConnection, JsError> {
+    let kind = options
+        .kind
+        .as_deref()
+        .unwrap_or("database")
+        .to_ascii_lowercase();
+    let mut connection = match kind.as_str() {
+        "database" | "db" => WorkbookConnection::database(
+            options.id,
+            options.name,
+            options
+                .connection
+                .ok_or_else(|| JsError::new("database data connections require connection"))?,
+        ),
+        "web" => {
+            let mut connection = WorkbookConnection::web(options.id, options.name, "");
+            connection.kind = WorkbookConnectionKind::Web {
+                url: options.url,
+                xml: options.xml.unwrap_or(false),
+                source_data: options.source_data.unwrap_or(false),
+                html_tables: options.html_tables.unwrap_or(false),
+                html_format: options.html_format,
+                post: options.post,
+                edit_page: options.edit_page,
+            };
+            connection
+        }
+        "text" => {
+            let mut connection = WorkbookConnection::text(
+                options.id,
+                options.name,
+                options.source_file.clone().unwrap_or_default(),
+            );
+            connection.kind = WorkbookConnectionKind::Text {
+                source_file: options.source_file,
+                delimiter: options.delimiter,
+                first_row: options.first_row.unwrap_or(1),
+                delimited: options.delimited.unwrap_or(true),
+                decimal: options.decimal,
+                thousands: options.thousands,
+            };
+            connection
+        }
+        "olap" => {
+            let mut connection = WorkbookConnection::olap(options.id, options.name);
+            connection.kind = WorkbookConnectionKind::Olap {
+                connection: options.connection,
+                command: None,
+                command_type: None,
+                local: options.local.unwrap_or(false),
+                local_connection: options.local_connection,
+                local_refresh: options.local_refresh.unwrap_or(true),
+                send_locale: options.send_locale.unwrap_or(false),
+                row_drill_count: options.row_drill_count,
+            };
+            connection
+        }
+        other => {
+            return Err(JsError::new(&format!(
+                "unknown data connection kind: {other}"
+            )))
+        }
+    };
+    if let Some(command) = options.command {
+        connection = connection.with_command(command);
+    }
+    if let Some(command_type) = options.command_type {
+        connection = connection.with_command_type(command_type);
+    }
+    if let Some(refresh_on_load) = options.refresh_on_load {
+        connection = connection.with_refresh_on_load(refresh_on_load);
+    }
+    if let Some(background) = options.background {
+        connection = connection.with_background(background);
+    }
+    if let Some(save_data) = options.save_data {
+        connection = connection.with_save_data(save_data);
+    }
+    Ok(connection)
+}
+
+fn build_pivot_field_from_wasm(options: WasmPivotFieldOptions) -> Result<PivotField, JsError> {
+    let mut field = PivotField::new(options.field);
+    field.caption = options.caption;
+    if let Some(sort) = options.sort {
+        field.sort = parse_pivot_sort(&sort)?;
+    }
+    if let Some(measure) = options.sort_by_measure {
+        field.sort_by_measure = Some(build_pivot_measure_from_wasm(measure)?);
+    }
+    if let Some(subtotal) = options.subtotal {
+        field.subtotal = parse_pivot_subtotal(&subtotal)?;
+    }
+    field.subtotal_caption = options.subtotal_caption;
+    if let Some(subtotals) = options.subtotals {
+        let subtotals = subtotals
+            .into_iter()
+            .map(|subtotal| parse_pivot_subtotal(&subtotal))
+            .collect::<Result<Vec<_>, _>>()?;
+        field = field.with_subtotals(subtotals);
+    }
+    if let Some(values) = options.collapsed_items {
+        field.collapsed_items = values.into_iter().map(pivot_value_from_wasm).collect();
+    }
+    if let Some(show_empty_items) = options.show_empty_items {
+        field.show_empty_items = show_empty_items;
+    }
+    if let Some(value) = options.show_drop_downs {
+        field.show_drop_downs = value;
+    }
+    if let Some(value) = options.subtotal_top {
+        field.subtotal_top = value;
+    }
+    if let Some(value) = options.insert_blank_row {
+        field.insert_blank_row = value;
+    }
+    if let Some(value) = options.insert_page_break {
+        field.insert_page_break = value;
+    }
+    if let Some(value) = options.include_new_items_in_filter {
+        field.include_new_items_in_filter = value;
+    }
+    if let Some(value) = options.item_page_count {
+        field.item_page_count = value;
+    }
+    Ok(field)
+}
+
+fn build_pivot_refresh_policy_from_wasm(
+    options: WasmPivotRefreshPolicyOptions,
+) -> PivotRefreshPolicy {
+    let mut policy = PivotRefreshPolicy::default();
+    if let Some(value) = options.refresh_on_open {
+        policy.refresh_on_open = value;
+    }
+    if let Some(value) = options.preserve_formatting {
+        policy.preserve_formatting = value;
+    }
+    if let Some(value) = options.background_query {
+        policy.background_query = value;
+    }
+    policy.missing_items_limit = options.missing_items_limit;
+    policy
+}
+
+fn build_pivot_layout_from_wasm(options: WasmPivotLayoutOptions) -> Result<PivotLayout, JsError> {
+    let mut layout = PivotLayout::default();
+    if let Some(kind) = options.kind {
+        layout.kind = parse_pivot_layout_kind(&kind)?;
+    }
+    if let Some(value) = options.show_row_grand_totals {
+        layout.show_row_grand_totals = value;
+    }
+    if let Some(value) = options.show_column_grand_totals {
+        layout.show_column_grand_totals = value;
+    }
+    if let Some(value) = options.show_field_headers {
+        layout.show_field_headers = value;
+    }
+    if let Some(value) = options.repeat_item_labels {
+        layout.repeat_item_labels = value;
+    }
+    if let Some(value) = options.show_expand_collapse {
+        layout.show_expand_collapse = value;
+    }
+    if let Some(value) = options.print_drill_indicators {
+        layout.print_drill_indicators = value;
+    }
+    if let Some(value) = options.item_print_titles {
+        layout.item_print_titles = value;
+    }
+    if let Some(value) = options.field_print_titles {
+        layout.field_print_titles = value;
+    }
+    if let Some(value) = options.page_wrap {
+        layout.page_wrap = value;
+    }
+    if let Some(value) = options.page_over_then_down {
+        layout.page_over_then_down = value;
+    }
+    if let Some(value) = options.merge_item_labels {
+        layout.merge_item_labels = value;
+    }
+    if let Some(value) = options.data_caption {
+        layout.data_caption = value;
+    }
+    if let Some(value) = options.values_axis {
+        layout.values_axis = parse_pivot_values_axis(&value)?;
+    }
+    layout.values_axis_position = options.values_axis_position;
+    if let Some(value) = options.grand_total_caption {
+        layout.grand_total_caption = Some(value);
+    }
+    if let Some(value) = options.error_caption {
+        layout.error_caption = Some(value);
+    }
+    if let Some(value) = options.show_error {
+        layout.show_error = value;
+    }
+    if let Some(value) = options.missing_caption {
+        layout.missing_caption = Some(value);
+    }
+    if let Some(value) = options.show_missing {
+        layout.show_missing = value;
+    }
+    if let Some(value) = options.asterisk_totals {
+        layout.asterisk_totals = value;
+    }
+    if let Some(value) = options.show_items {
+        layout.show_items = value;
+    }
+    if let Some(value) = options.edit_data {
+        layout.edit_data = value;
+    }
+    if let Some(value) = options.disable_field_list {
+        layout.disable_field_list = value;
+    }
+    if let Some(value) = options.show_calculated_members {
+        layout.show_calculated_members = value;
+    }
+    if let Some(value) = options.visual_totals {
+        layout.visual_totals = value;
+    }
+    if let Some(value) = options.show_multiple_label {
+        layout.show_multiple_label = value;
+    }
+    if let Some(value) = options.show_data_drop_down {
+        layout.show_data_drop_down = value;
+    }
+    if let Some(value) = options.show_member_property_tips {
+        layout.show_member_property_tips = value;
+    }
+    if let Some(value) = options.show_data_tips {
+        layout.show_data_tips = value;
+    }
+    if let Some(value) = options.enable_wizard {
+        layout.enable_wizard = value;
+    }
+    if let Some(value) = options.enable_drill {
+        layout.enable_drill = value;
+    }
+    if let Some(value) = options.enable_field_properties {
+        layout.enable_field_properties = value;
+    }
+    if let Some(value) = options.subtotal_hidden_items {
+        layout.subtotal_hidden_items = value;
+    }
+    if let Some(value) = options.show_drop_zones {
+        layout.show_drop_zones = value;
+    }
+    if let Some(value) = options.indent {
+        layout.indent = value;
+    }
+    if let Some(value) = options.show_empty_rows {
+        layout.show_empty_rows = value;
+    }
+    if let Some(value) = options.show_empty_columns {
+        layout.show_empty_columns = value;
+    }
+    Ok(layout)
+}
+
+fn build_pivot_style_from_wasm(options: WasmPivotStyleOptions) -> PivotStyle {
+    let mut style = PivotStyle::default();
+    if let Some(name) = options.name {
+        style.name = if name.is_empty() { None } else { Some(name) };
+    }
+    if let Some(value) = options.show_row_headers {
+        style.show_row_headers = value;
+    }
+    if let Some(value) = options.show_column_headers {
+        style.show_column_headers = value;
+    }
+    if let Some(value) = options.show_row_stripes {
+        style.show_row_stripes = value;
+    }
+    if let Some(value) = options.show_column_stripes {
+        style.show_column_stripes = value;
+    }
+    if let Some(value) = options.show_last_column {
+        style.show_last_column = value;
+    }
+    style
+}
+
+fn parse_pivot_layout_kind(value: &str) -> Result<PivotLayoutKind, JsError> {
+    Ok(match value {
+        "compact" => PivotLayoutKind::Compact,
+        "outline" => PivotLayoutKind::Outline,
+        "tabular" => PivotLayoutKind::Tabular,
+        other => {
+            return Err(JsError::new(&format!(
+                "Unsupported pivot layout kind: {other}"
+            )))
+        }
+    })
+}
+
+fn parse_chart_type(value: Option<&str>) -> Result<ChartType, JsError> {
+    match value {
+        Some(value) => ChartType::from_name(value)
+            .ok_or_else(|| JsError::new(&format!("Unsupported chart type: {value}"))),
+        None => Ok(ChartType::ColumnClustered),
+    }
+}
+
+fn parse_pivot_values_axis(value: &str) -> Result<PivotValuesAxis, JsError> {
+    Ok(match value {
+        "columns" | "column" | "cols" => PivotValuesAxis::Columns,
+        "rows" | "row" => PivotValuesAxis::Rows,
+        other => {
+            return Err(JsError::new(&format!(
+                "Unsupported pivot values axis: {other}"
+            )));
+        }
+    })
+}
+
+fn parse_pivot_overwrite_policy(value: &str) -> Result<PivotOverwritePolicy, JsError> {
+    Ok(match value {
+        "clearOwnedRange" | "clear_owned_range" | "clear" => PivotOverwritePolicy::ClearOwnedRange,
+        "overwrite" => PivotOverwritePolicy::Overwrite,
+        "failOnOccupied" | "fail_on_occupied" => PivotOverwritePolicy::FailOnOccupied,
+        other => {
+            return Err(JsError::new(&format!(
+                "Unsupported pivot overwrite policy: {other}"
+            )));
+        }
+    })
+}
+
+fn parse_pivot_sort(value: &str) -> Result<PivotSort, JsError> {
+    Ok(match value {
+        "none" | "manual" => PivotSort::None,
+        "ascending" | "asc" => PivotSort::Ascending,
+        "descending" | "desc" => PivotSort::Descending,
+        other => return Err(JsError::new(&format!("Unsupported pivot sort: {other}"))),
+    })
+}
+
+fn parse_pivot_subtotal(value: &str) -> Result<PivotSubtotal, JsError> {
+    Ok(match value {
+        "automatic" | "auto" => PivotSubtotal::Automatic,
+        "none" => PivotSubtotal::None,
+        "sum" => PivotSubtotal::Sum,
+        "count" => PivotSubtotal::Count,
+        "count_numbers" | "countNumbers" | "countnumbers" | "count_nums" | "countNums"
+        | "countnums" => PivotSubtotal::CountNumbers,
+        "average" | "avg" => PivotSubtotal::Average,
+        "min" => PivotSubtotal::Min,
+        "max" => PivotSubtotal::Max,
+        "product" => PivotSubtotal::Product,
+        "std_dev" | "stdDev" | "stddev" => PivotSubtotal::StdDev,
+        "std_dev_p" | "stdDevP" | "stddevp" => PivotSubtotal::StdDevP,
+        "var" | "variance" => PivotSubtotal::Var,
+        "var_p" | "varP" | "varp" | "variance_p" | "varianceP" => PivotSubtotal::VarP,
+        other => {
+            return Err(JsError::new(&format!(
+                "Unsupported pivot subtotal: {other}"
+            )));
+        }
+    })
+}
+
+fn build_pivot_measure_from_wasm(
+    options: WasmPivotMeasureOptions,
+) -> Result<PivotMeasure, JsError> {
+    let aggregate = parse_pivot_aggregate(options.aggregate.as_deref())?;
+    let mut measure = PivotMeasure::new(options.field, aggregate);
+    if let Some(name) = options.name {
+        measure = measure.with_name(name);
+    }
+    if let Some(show_as) = options.show_as {
+        measure = measure.with_show_as(parse_pivot_show_as(
+            &show_as,
+            options.base_field,
+            options.base_item,
+        )?);
+    }
+    if let Some(number_format) = options.number_format {
+        measure = measure.with_number_format(number_format);
+    }
+    Ok(measure)
+}
+
+fn build_pivot_filter_from_wasm(options: WasmPivotFilterOptions) -> Result<PivotFilter, JsError> {
+    let kind = options.kind.unwrap_or_else(|| {
+        if options.items.is_some() {
+            "items".to_string()
+        } else {
+            "item".to_string()
+        }
+    });
+    match kind.as_str() {
+        "item" | "items" | "fieldItems" | "field_items" => {
+            let items = options
+                .items
+                .ok_or_else(|| JsError::new("Pivot item filter requires items"))?;
+            Ok(PivotFilter::field_items(
+                options.field,
+                items.into_iter().map(PivotValue::from).collect::<Vec<_>>(),
+            ))
+        }
+        "label" => Ok(PivotFilter::Label {
+            field: options.field.into(),
+            operator: parse_pivot_filter_operator(options.operator.as_deref())?,
+            value: options
+                .text
+                .ok_or_else(|| JsError::new("Pivot label filter requires text"))?,
+        }),
+        "labelBetween" | "label_between" | "captionBetween" | "caption_between" => {
+            Ok(PivotFilter::LabelBetween {
+                field: options.field.into(),
+                start: options
+                    .start_text
+                    .or(options.text)
+                    .ok_or_else(|| JsError::new("Pivot label-between filter requires startText"))?,
+                end: options
+                    .end_text
+                    .ok_or_else(|| JsError::new("Pivot label-between filter requires endText"))?,
+                not_between: false,
+            })
+        }
+        "labelNotBetween" | "label_not_between" | "captionNotBetween" | "caption_not_between" => {
+            Ok(PivotFilter::LabelBetween {
+                field: options.field.into(),
+                start: options.start_text.or(options.text).ok_or_else(|| {
+                    JsError::new("Pivot label-not-between filter requires startText")
+                })?,
+                end: options.end_text.ok_or_else(|| {
+                    JsError::new("Pivot label-not-between filter requires endText")
+                })?,
+                not_between: true,
+            })
+        }
+        "value" => Ok(PivotFilter::Value {
+            field: options.field.into(),
+            measure: build_pivot_measure_from_wasm(
+                options
+                    .measure
+                    .ok_or_else(|| JsError::new("Pivot value filter requires measure"))?,
+            )?,
+            operator: parse_pivot_filter_operator(options.operator.as_deref())?,
+            value: options
+                .value
+                .ok_or_else(|| JsError::new("Pivot value filter requires value"))?,
+        }),
+        "valueBetween" | "value_between" | "valueRange" | "value_range" => {
+            Ok(PivotFilter::ValueBetween {
+                field: options.field.into(),
+                measure: build_pivot_measure_from_wasm(
+                    options.measure.ok_or_else(|| {
+                        JsError::new("Pivot value-between filter requires measure")
+                    })?,
+                )?,
+                start: options
+                    .start
+                    .or(options.value)
+                    .ok_or_else(|| JsError::new("Pivot value-between filter requires start"))?,
+                end: options
+                    .end
+                    .ok_or_else(|| JsError::new("Pivot value-between filter requires end"))?,
+                not_between: false,
+            })
+        }
+        "valueNotBetween" | "value_not_between" | "valueNotRange" | "value_not_range" => {
+            Ok(PivotFilter::ValueBetween {
+                field: options.field.into(),
+                measure: build_pivot_measure_from_wasm(options.measure.ok_or_else(|| {
+                    JsError::new("Pivot value-not-between filter requires measure")
+                })?)?,
+                start: options
+                    .start
+                    .or(options.value)
+                    .ok_or_else(|| JsError::new("Pivot value-not-between filter requires start"))?,
+                end: options
+                    .end
+                    .ok_or_else(|| JsError::new("Pivot value-not-between filter requires end"))?,
+                not_between: true,
+            })
+        }
+        "date" => Ok(PivotFilter::Date {
+            field: options.field.into(),
+            operator: parse_pivot_filter_operator(options.operator.as_deref())?,
+            value: options
+                .value
+                .or(options.start)
+                .ok_or_else(|| JsError::new("Pivot date filter requires value"))?,
+        }),
+        "dateBetween" | "date_between" | "dateRange" | "date_range" => {
+            Ok(PivotFilter::DateBetween {
+                field: options.field.into(),
+                start: options
+                    .start
+                    .or(options.value)
+                    .ok_or_else(|| JsError::new("Pivot date-between filter requires start"))?,
+                end: options
+                    .end
+                    .ok_or_else(|| JsError::new("Pivot date-between filter requires end"))?,
+                not_between: false,
+            })
+        }
+        "dateNotBetween" | "date_not_between" | "dateNotRange" | "date_not_range" => {
+            Ok(PivotFilter::DateBetween {
+                field: options.field.into(),
+                start: options
+                    .start
+                    .or(options.value)
+                    .ok_or_else(|| JsError::new("Pivot date-not-between filter requires start"))?,
+                end: options
+                    .end
+                    .ok_or_else(|| JsError::new("Pivot date-not-between filter requires end"))?,
+                not_between: true,
+            })
+        }
+        "datePeriod" | "date_period" | "period" => Ok(PivotFilter::DatePeriod {
+            field: options.field.into(),
+            period: parse_pivot_date_period(
+                options
+                    .period
+                    .as_deref()
+                    .ok_or_else(|| JsError::new("Pivot date-period filter requires period"))?,
+            )?,
+        }),
+        "topN" | "top_n" | "top" => Ok(PivotFilter::TopN {
+            field: options.field.into(),
+            measure: build_pivot_measure_from_wasm(
+                options
+                    .measure
+                    .ok_or_else(|| JsError::new("Pivot top-N filter requires measure"))?,
+            )?,
+            n: options
+                .n
+                .ok_or_else(|| JsError::new("Pivot top-N filter requires n"))?,
+            top: options.top.unwrap_or(true),
+            percent: options.percent.unwrap_or(false),
+        }),
+        other => Err(JsError::new(&format!(
+            "Unsupported pivot filter kind: {other}"
+        ))),
+    }
+}
+
+fn parse_pivot_date_period(value: &str) -> Result<PivotDatePeriod, JsError> {
+    Ok(match value {
+        "tomorrow" => PivotDatePeriod::Tomorrow,
+        "today" => PivotDatePeriod::Today,
+        "yesterday" => PivotDatePeriod::Yesterday,
+        "nextWeek" | "next_week" => PivotDatePeriod::NextWeek,
+        "thisWeek" | "this_week" => PivotDatePeriod::ThisWeek,
+        "lastWeek" | "last_week" => PivotDatePeriod::LastWeek,
+        "nextMonth" | "next_month" => PivotDatePeriod::NextMonth,
+        "thisMonth" | "this_month" => PivotDatePeriod::ThisMonth,
+        "lastMonth" | "last_month" => PivotDatePeriod::LastMonth,
+        "nextQuarter" | "next_quarter" => PivotDatePeriod::NextQuarter,
+        "thisQuarter" | "this_quarter" => PivotDatePeriod::ThisQuarter,
+        "lastQuarter" | "last_quarter" => PivotDatePeriod::LastQuarter,
+        "nextYear" | "next_year" => PivotDatePeriod::NextYear,
+        "thisYear" | "this_year" => PivotDatePeriod::ThisYear,
+        "lastYear" | "last_year" => PivotDatePeriod::LastYear,
+        "yearToDate" | "year_to_date" => PivotDatePeriod::YearToDate,
+        "Q1" | "quarter1" | "quarter_1" => PivotDatePeriod::Quarter(1),
+        "Q2" | "quarter2" | "quarter_2" => PivotDatePeriod::Quarter(2),
+        "Q3" | "quarter3" | "quarter_3" => PivotDatePeriod::Quarter(3),
+        "Q4" | "quarter4" | "quarter_4" => PivotDatePeriod::Quarter(4),
+        "M1" | "month1" | "month_1" => PivotDatePeriod::Month(1),
+        "M2" | "month2" | "month_2" => PivotDatePeriod::Month(2),
+        "M3" | "month3" | "month_3" => PivotDatePeriod::Month(3),
+        "M4" | "month4" | "month_4" => PivotDatePeriod::Month(4),
+        "M5" | "month5" | "month_5" => PivotDatePeriod::Month(5),
+        "M6" | "month6" | "month_6" => PivotDatePeriod::Month(6),
+        "M7" | "month7" | "month_7" => PivotDatePeriod::Month(7),
+        "M8" | "month8" | "month_8" => PivotDatePeriod::Month(8),
+        "M9" | "month9" | "month_9" => PivotDatePeriod::Month(9),
+        "M10" | "month10" | "month_10" => PivotDatePeriod::Month(10),
+        "M11" | "month11" | "month_11" => PivotDatePeriod::Month(11),
+        "M12" | "month12" | "month_12" => PivotDatePeriod::Month(12),
+        other => {
+            return Err(JsError::new(&format!(
+                "Unsupported pivot date period: {other}"
+            )))
+        }
+    })
+}
+
+fn build_pivot_grouping_from_wasm(
+    options: WasmPivotGroupingOptions,
+) -> Result<PivotGrouping, JsError> {
+    match options.kind.as_str() {
+        "number" | "numeric" => Ok(PivotGrouping::Number {
+            field: options.field.into(),
+            start: options.start,
+            end: options.end,
+            interval: options
+                .interval
+                .ok_or_else(|| JsError::new("Numeric pivot grouping requires interval"))?,
+        }),
+        "date" => {
+            let units = options
+                .units
+                .ok_or_else(|| JsError::new("Date pivot grouping requires units"))?
+                .iter()
+                .map(|unit| parse_pivot_date_group_unit(unit))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(PivotGrouping::Date {
+                field: options.field.into(),
+                units,
+            })
+        }
+        "manual" | "items" | "item" => Ok(PivotGrouping::Manual {
+            field: options.field.into(),
+            groups: options
+                .groups
+                .ok_or_else(|| JsError::new("Manual pivot grouping requires groups"))?
+                .into_iter()
+                .map(|group| PivotManualGroup {
+                    name: group.name,
+                    members: group
+                        .members
+                        .into_iter()
+                        .map(pivot_value_from_wasm)
+                        .collect(),
+                })
+                .collect(),
+        }),
+        other => Err(JsError::new(&format!(
+            "Unsupported pivot grouping kind: {other}"
+        ))),
+    }
+}
+
+fn parse_pivot_aggregate(value: Option<&str>) -> Result<PivotAggregate, JsError> {
+    let Some(value) = value else {
+        return Ok(PivotAggregate::Sum);
+    };
+    Ok(match value {
+        "sum" => PivotAggregate::Sum,
+        "count" => PivotAggregate::Count,
+        "countNumbers" | "countNums" => PivotAggregate::CountNumbers,
+        "average" | "avg" => PivotAggregate::Average,
+        "max" => PivotAggregate::Max,
+        "min" => PivotAggregate::Min,
+        "product" => PivotAggregate::Product,
+        "stdDev" => PivotAggregate::StdDev,
+        "stdDevP" | "stdDevp" => PivotAggregate::StdDevP,
+        "var" => PivotAggregate::Var,
+        "varP" | "varp" => PivotAggregate::VarP,
+        other => {
+            return Err(JsError::new(&format!(
+                "Unsupported pivot aggregate: {other}"
+            )))
+        }
+    })
+}
+
+fn parse_pivot_filter_operator(value: Option<&str>) -> Result<PivotFilterOperator, JsError> {
+    let value = value.ok_or_else(|| JsError::new("Pivot filter requires operator"))?;
+    Ok(match value {
+        "equals" | "equal" | "eq" => PivotFilterOperator::Equals,
+        "notEquals" | "notEqual" | "ne" => PivotFilterOperator::NotEquals,
+        "lessThan" | "lt" => PivotFilterOperator::LessThan,
+        "lessThanOrEqual" | "lte" => PivotFilterOperator::LessThanOrEqual,
+        "greaterThan" | "gt" => PivotFilterOperator::GreaterThan,
+        "greaterThanOrEqual" | "gte" => PivotFilterOperator::GreaterThanOrEqual,
+        "beginsWith" => PivotFilterOperator::BeginsWith,
+        "doesNotBeginWith" | "notBeginsWith" => PivotFilterOperator::DoesNotBeginWith,
+        "endsWith" => PivotFilterOperator::EndsWith,
+        "doesNotEndWith" | "notEndsWith" => PivotFilterOperator::DoesNotEndWith,
+        "contains" => PivotFilterOperator::Contains,
+        "doesNotContain" | "notContains" => PivotFilterOperator::DoesNotContain,
+        other => {
+            return Err(JsError::new(&format!(
+                "Unsupported pivot filter operator: {other}"
+            )));
+        }
+    })
+}
+
+fn parse_pivot_date_group_unit(value: &str) -> Result<PivotDateGroupUnit, JsError> {
+    Ok(match value {
+        "seconds" => PivotDateGroupUnit::Seconds,
+        "minutes" => PivotDateGroupUnit::Minutes,
+        "hours" => PivotDateGroupUnit::Hours,
+        "days" => PivotDateGroupUnit::Days,
+        "months" => PivotDateGroupUnit::Months,
+        "quarters" => PivotDateGroupUnit::Quarters,
+        "years" => PivotDateGroupUnit::Years,
+        other => {
+            return Err(JsError::new(&format!(
+                "Unsupported pivot date grouping unit: {other}"
+            )));
+        }
+    })
+}
+
+fn parse_pivot_show_as(
+    value: &str,
+    base_field: Option<String>,
+    base_item: Option<WasmPivotValueInput>,
+) -> Result<PivotShowAs, JsError> {
+    Ok(match value {
+        "normal" => PivotShowAs::Normal,
+        "percentOfGrandTotal" | "percentOfTotal" => PivotShowAs::PercentOfGrandTotal,
+        "percentOfRowTotal" | "percentOfRow" => PivotShowAs::PercentOfRowTotal,
+        "percentOfColumnTotal" | "percentOfCol" => PivotShowAs::PercentOfColumnTotal,
+        "percentOfParentRowTotal" | "percentOfParentRow" => PivotShowAs::PercentOfParentRowTotal,
+        "percentOfParentColumnTotal" | "percentOfParentCol" => {
+            PivotShowAs::PercentOfParentColumnTotal
+        }
+        "percentOfParentTotal" | "percentOfParent" => PivotShowAs::PercentOfParentTotal {
+            base_field: require_pivot_base_field(value, base_field)?.into(),
+        },
+        "index" => PivotShowAs::Index,
+        "runningTotal" | "runTotal" => PivotShowAs::RunningTotal {
+            base_field: require_pivot_base_field(value, base_field)?.into(),
+        },
+        "differenceFrom" | "difference" => PivotShowAs::DifferenceFrom {
+            base_field: require_pivot_base_field(value, base_field)?.into(),
+            base_item: require_pivot_base_item(value, base_item)?,
+        },
+        "percentDifferenceFrom" | "percentDiff" => PivotShowAs::PercentDifferenceFrom {
+            base_field: require_pivot_base_field(value, base_field)?.into(),
+            base_item: require_pivot_base_item(value, base_item)?,
+        },
+        "rankAscending" => PivotShowAs::RankAscending {
+            base_field: require_pivot_base_field(value, base_field)?.into(),
+        },
+        "rankDescending" => PivotShowAs::RankDescending {
+            base_field: require_pivot_base_field(value, base_field)?.into(),
+        },
+        other => {
+            return Err(JsError::new(&format!(
+                "Unsupported pivot showAs mode: {other}"
+            )))
+        }
+    })
+}
+
+fn require_pivot_base_field(value: &str, base_field: Option<String>) -> Result<String, JsError> {
+    base_field.ok_or_else(|| JsError::new(&format!("pivot showAs mode {value} requires baseField")))
+}
+
+fn require_pivot_base_item(
+    value: &str,
+    base_item: Option<WasmPivotValueInput>,
+) -> Result<PivotValue, JsError> {
+    base_item
+        .map(pivot_value_from_wasm)
+        .ok_or_else(|| JsError::new(&format!("pivot showAs mode {value} requires baseItem")))
+}
+
+fn pivot_value_from_wasm(value: WasmPivotValueInput) -> PivotValue {
+    match value {
+        WasmPivotValueInput::Number(number) => PivotValue::Number(number),
+        WasmPivotValueInput::String(string) => PivotValue::String(string),
+        WasmPivotValueInput::Boolean(boolean) => PivotValue::Boolean(boolean),
+    }
 }
 
 fn cell_error_to_string(e: &CellError) -> &'static str {
@@ -1189,6 +2708,83 @@ impl Worksheet {
             None => Ok(JsValue::NULL),
         }
     }
+
+    #[wasm_bindgen(getter, js_name = pivotCount)]
+    pub fn pivot_count(&self) -> Result<usize, JsError> {
+        let wb = self.workbook.borrow();
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        Ok(ws.pivot_table_count())
+    }
+
+    #[wasm_bindgen(getter, js_name = pivotTableNames)]
+    pub fn pivot_table_names(&self) -> Result<Vec<String>, JsError> {
+        let wb = self.workbook.borrow();
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        Ok(ws
+            .pivot_tables()
+            .iter()
+            .map(|pivot| pivot.name.clone())
+            .collect())
+    }
+
+    #[wasm_bindgen(getter, js_name = pivotTables)]
+    pub fn pivot_tables(&self) -> Result<JsValue, JsError> {
+        let wb = self.workbook.borrow();
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        let pivots = ws
+            .pivot_tables()
+            .iter()
+            .map(WasmPivotTableDefinition::from)
+            .collect::<Vec<_>>();
+        to_js_value(&pivots)
+    }
+
+    #[wasm_bindgen(js_name = getPivotTable)]
+    pub fn get_pivot_table(&self, name: &str) -> Result<JsValue, JsError> {
+        let wb = self.workbook.borrow();
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        match ws.pivot_table_by_name(name) {
+            Some(pivot) => to_js_value(&WasmPivotTableDefinition::from(pivot)),
+            None => Ok(JsValue::NULL),
+        }
+    }
+
+    #[wasm_bindgen(js_name = addPivotTable)]
+    pub fn add_pivot_table(&self, options: JsValue) -> Result<(), JsError> {
+        let options: WasmPivotTableOptions =
+            serde_wasm_bindgen::from_value(options).map_err(to_js_error)?;
+        let pivot = build_pivot_table_from_wasm(options)?;
+        let mut wb = self.workbook.borrow_mut();
+        let ws = wb
+            .worksheet_mut(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        ws.add_pivot_table(pivot).map_err(to_js_error)
+    }
+
+    #[wasm_bindgen(js_name = addPivotChart)]
+    pub fn add_pivot_chart(&self, options: JsValue) -> Result<JsValue, JsError> {
+        let options: WasmPivotChartOptions =
+            serde_wasm_bindgen::from_value(options).map_err(to_js_error)?;
+        let chart_type = parse_chart_type(options.chart_type.as_deref())?;
+        let mut wb = self.workbook.borrow_mut();
+        let ws = wb
+            .worksheet_mut(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        let anchor = duke_sheets::DrawingAnchor::default();
+        let chart = ws
+            .build_pivot_chart(&options.pivot_name, chart_type, anchor.clone())
+            .map_err(to_js_error)?;
+        ws.add_chart(chart.clone(), anchor).map_err(to_js_error)?;
+        to_js_value(&WasmChart::from(&chart))
+    }
 }
 
 #[wasm_bindgen]
@@ -1517,6 +3113,141 @@ impl Workbook {
         };
         let stats = wb.calculate_with_options(&options).map_err(to_js_error)?;
         to_js_value(&WasmCalculationStats::from(&stats))
+    }
+
+    #[wasm_bindgen(js_name = refreshPivots)]
+    pub fn refresh_pivots(&self, options: Option<JsValue>) -> Result<JsValue, JsError> {
+        let options = if let Some(options) = options {
+            let options: JsPivotRefreshOptions =
+                serde_wasm_bindgen::from_value(options).map_err(to_js_error)?;
+            PivotRefreshOptions {
+                max_threads: options.max_threads,
+                today: options.today,
+            }
+        } else {
+            PivotRefreshOptions::default()
+        };
+        let mut wb = self.inner.borrow_mut();
+        let stats = wb
+            .refresh_pivots_with_options(&options)
+            .map_err(to_js_error)?;
+        to_js_value(&WasmPivotRefreshStats::from(stats))
+    }
+
+    #[wasm_bindgen(js_name = addDataConnection)]
+    pub fn add_data_connection(&self, options: JsValue) -> Result<(), JsError> {
+        let options: WasmWorkbookConnectionOptions =
+            serde_wasm_bindgen::from_value(options).map_err(to_js_error)?;
+        let mut wb = self.inner.borrow_mut();
+        wb.add_data_connection(build_workbook_connection_from_wasm(options)?)
+            .map_err(to_js_error)
+    }
+
+    #[wasm_bindgen(getter, js_name = dataConnectionCount)]
+    pub fn data_connection_count(&self) -> usize {
+        let wb = self.inner.borrow();
+        wb.data_connections().len()
+    }
+
+    #[wasm_bindgen(getter, js_name = dataConnectionNames)]
+    pub fn data_connection_names(&self) -> Vec<String> {
+        let wb = self.inner.borrow();
+        wb.data_connections()
+            .iter()
+            .map(|connection| connection.name.clone())
+            .collect()
+    }
+
+    #[wasm_bindgen(getter, js_name = dataConnections)]
+    pub fn data_connections(&self) -> Result<JsValue, JsError> {
+        let wb = self.inner.borrow();
+        let connections = wb
+            .data_connections()
+            .iter()
+            .map(WasmWorkbookConnectionDefinition::from)
+            .collect::<Vec<_>>();
+        to_js_value(&connections)
+    }
+
+    #[wasm_bindgen(getter, js_name = workbookExtensionCount)]
+    pub fn workbook_extension_count(&self) -> usize {
+        let wb = self.inner.borrow();
+        wb.workbook_extensions().len()
+    }
+
+    #[wasm_bindgen(getter, js_name = workbookExtensions)]
+    pub fn workbook_extensions(&self) -> Result<JsValue, JsError> {
+        let wb = self.inner.borrow();
+        let extensions = wb
+            .workbook_extensions()
+            .iter()
+            .map(WasmWorkbookExtension::from)
+            .collect::<Vec<_>>();
+        to_js_value(&extensions)
+    }
+
+    #[wasm_bindgen(getter, js_name = workbookExtensionPartCount)]
+    pub fn workbook_extension_part_count(&self) -> usize {
+        let wb = self.inner.borrow();
+        wb.workbook_extension_parts().len()
+    }
+
+    #[wasm_bindgen(getter, js_name = workbookExtensionParts)]
+    pub fn workbook_extension_parts(&self) -> Result<JsValue, JsError> {
+        let wb = self.inner.borrow();
+        let parts = wb
+            .workbook_extension_parts()
+            .iter()
+            .map(WasmWorkbookExtensionPart::from)
+            .collect::<Vec<_>>();
+        to_js_value(&parts)
+    }
+
+    #[wasm_bindgen(js_name = getWorkbookExtensionPart)]
+    pub fn get_workbook_extension_part(&self, path: &str) -> Result<JsValue, JsError> {
+        let wb = self.inner.borrow();
+        match wb
+            .workbook_extension_parts()
+            .iter()
+            .find(|part| part.path == path)
+        {
+            Some(part) => to_js_value(&WasmWorkbookExtensionPart::from(part)),
+            None => Ok(JsValue::NULL),
+        }
+    }
+
+    #[wasm_bindgen(js_name = getWorkbookExtensionPartByRelationshipId)]
+    pub fn get_workbook_extension_part_by_relationship_id(
+        &self,
+        relationship_id: &str,
+    ) -> Result<JsValue, JsError> {
+        let wb = self.inner.borrow();
+        match wb
+            .workbook_extension_parts()
+            .iter()
+            .find(|part| part.relationship_id.as_deref() == Some(relationship_id))
+        {
+            Some(part) => to_js_value(&WasmWorkbookExtensionPart::from(part)),
+            None => Ok(JsValue::NULL),
+        }
+    }
+
+    #[wasm_bindgen(js_name = getDataConnection)]
+    pub fn get_data_connection(&self, name: &str) -> Result<JsValue, JsError> {
+        let wb = self.inner.borrow();
+        match wb.data_connection_by_name(name) {
+            Some(connection) => to_js_value(&WasmWorkbookConnectionDefinition::from(connection)),
+            None => Ok(JsValue::NULL),
+        }
+    }
+
+    #[wasm_bindgen(js_name = getDataConnectionById)]
+    pub fn get_data_connection_by_id(&self, id: u32) -> Result<JsValue, JsError> {
+        let wb = self.inner.borrow();
+        match wb.data_connection_by_id(id) {
+            Some(connection) => to_js_value(&WasmWorkbookConnectionDefinition::from(connection)),
+            None => Ok(JsValue::NULL),
+        }
     }
 
     #[wasm_bindgen(js_name = defineName)]

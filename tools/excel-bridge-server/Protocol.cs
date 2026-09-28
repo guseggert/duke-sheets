@@ -2,7 +2,7 @@
 //
 // Wire format: newline-delimited JSON (NDJSON), one object per line.
 //
-// Commands: Init, Get, Set, Invoke, Navigate, Release, Shutdown, plus the
+// Commands: Ping, Init, Get, Set, Invoke, Navigate, Release, Shutdown, plus the
 // VM file primitives PutFile, GetFile, DeleteFile, CreateDir.
 // All Excel-specific knowledge lives in the client - the server is a thin
 // COM object navigator.
@@ -82,6 +82,9 @@ public static class ProtocolHelpers
             // reject otherwise.
             JsonValueKind.Number => NumberToComValue(el),
             JsonValueKind.String => el.GetString(),
+            JsonValueKind.Array => el.EnumerateArray()
+                .Select(JsonToComValue)
+                .ToArray(),
             _ => null,
         };
     }

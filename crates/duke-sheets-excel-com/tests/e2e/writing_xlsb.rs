@@ -10,6 +10,11 @@
 //! All tests are batched into one process to amortise the per-test
 //! VM round-trip cost (~15-25s of warm-VM time per test).
 
+use crate::{
+    atp_all_formulas, cleanup_fixture, ensure_vm_temp_dir, excel_bridge, pull_file_from_vm,
+    roundtrip_through_excel_xlsb, roundtrip_through_excel_xlsb_bytes,
+    temp_fixture_xlsb, xlsb_formula_ptg_streams_for_compare,
+};
 use duke_sheets_core::auto_filter::{AutoFilter, ColumnFilter, FilterColumn, Top10Filter};
 use duke_sheets_core::conditional_format::{CfOperator, CfRuleType, ConditionalFormatRule};
 use duke_sheets_core::rich_text::{RichTextRun, RunFont};
@@ -17,12 +22,10 @@ use duke_sheets_core::style::Color;
 use duke_sheets_core::table::{Table, TableColumn, TableStyleInfo};
 use duke_sheets_core::validation::{DataValidation, ValidationOperator, ValidationType};
 use duke_sheets_core::worksheet::{PageOrientation, SheetProtection, SheetVisibility};
-use duke_sheets_core::{CellAddress, CellRange, CellValue, Hyperlink, Workbook};
-
-use crate::{
-    atp_all_formulas, cleanup_fixture, ensure_vm_temp_dir, excel_bridge, pull_file_from_vm,
-    roundtrip_through_excel_xlsb, roundtrip_through_excel_xlsb_bytes, temp_fixture_xlsb,
-    xlsb_formula_ptg_streams_for_compare,
+use duke_sheets_core::{
+    CellAddress, CellRange, CellValue, Hyperlink, Workbook, WorkbookConnection,
+    WorkbookConnectionCredentials, WorkbookConnectionKind, WorkbookConnectionParameter,
+    WorkbookConnectionParameterValue,
 };
 
 fn range(start: &str, end: &str) -> CellRange {
@@ -32,32 +35,41 @@ fn range(start: &str, end: &str) -> CellRange {
     )
 }
 
+fn zip_has_entry(bytes: &[u8], name: &str) -> bool {
+    let reader = std::io::Cursor::new(bytes);
+    let Ok(mut zip) = zip::ZipArchive::new(reader) else {
+        return false;
+    };
+    let exists = zip.by_name(name).is_ok();
+    exists
+}
+
 /// Formulas exercising the XLSB formula compiler's operand-class threading,
 /// volatile prefix, fixed-arity allow-list, IF/CHOOSE short-circuit, and
 /// reference-class function tokens. Verified byte-for-byte against Excel's
 /// native XLSB emission.
 const XLSB_FORMULA_FORMULAS: &[(&str, &str, f64)] = &[
-    ("B1", "=ABS(A1)", 2.0),           // value-class ref arg; PtgFunc
-    ("B2", "=SUM(A1,A2)", 5.0),        // R-class cell refs in aggregator
-    ("B3", "=SUM(A1:A3)", 9.0),        // single-arg SUM → PtgAttrSum, R-area
-    ("B4", "=VLOOKUP(A1,A1:A3,1)", 2.0), // not on allow-list → PtgFuncVar
-    ("B5", "=NOW()", 45000.0),         // volatile prefix
-    ("B6", "=IF(A1>0,1,2)", 1.0),      // PtgAttrIf 3-arg
-    ("B7", "=IF(A1>0,A1)", 2.0),       // PtgAttrIf 2-arg
-    ("B8", "=CHOOSE(A1,10,20)", 20.0), // PtgAttrChoose
-    ("B9", "=SUM(IF(A1>0,A1,A2))", 2.0), // nested IF R-class in SUM
-    ("B10", "=SUM(OFFSET(A1,0,0))", 2.0), // OFFSET R-class + volatile
-    ("B11", "=INDEX(A1:A3,1)", 2.0),   // INDEX arg0 R-class, V token
-    ("B12", "=+A1", 2.0),              // PtgUplus
-    ("B13", "=(A1+A2)*2", 10.0),       // PtgParen
-    ("B14", "=((A1))", 2.0),           // nested PtgParen
-    ("B15", "=SUM({1,2,3})", 6.0),     // array constant: PtgArray(A) + rgcb
-    ("B16", "=SUM({1,2;3,4})", 10.0),  // 2x2 array constant
+    ("B1", "=ABS(A1)", 2.0),                   // value-class ref arg; PtgFunc
+    ("B2", "=SUM(A1,A2)", 5.0),                // R-class cell refs in aggregator
+    ("B3", "=SUM(A1:A3)", 9.0),                // single-arg SUM → PtgAttrSum, R-area
+    ("B4", "=VLOOKUP(A1,A1:A3,1)", 2.0),       // not on allow-list → PtgFuncVar
+    ("B5", "=NOW()", 45000.0),                 // volatile prefix
+    ("B6", "=IF(A1>0,1,2)", 1.0),              // PtgAttrIf 3-arg
+    ("B7", "=IF(A1>0,A1)", 2.0),               // PtgAttrIf 2-arg
+    ("B8", "=CHOOSE(A1,10,20)", 20.0),         // PtgAttrChoose
+    ("B9", "=SUM(IF(A1>0,A1,A2))", 2.0),       // nested IF R-class in SUM
+    ("B10", "=SUM(OFFSET(A1,0,0))", 2.0),      // OFFSET R-class + volatile
+    ("B11", "=INDEX(A1:A3,1)", 2.0),           // INDEX arg0 R-class, V token
+    ("B12", "=+A1", 2.0),                      // PtgUplus
+    ("B13", "=(A1+A2)*2", 10.0),               // PtgParen
+    ("B14", "=((A1))", 2.0),                   // nested PtgParen
+    ("B15", "=SUM({1,2,3})", 6.0),             // array constant: PtgArray(A) + rgcb
+    ("B16", "=SUM({1,2;3,4})", 10.0),          // 2x2 array constant
     ("B17", "=COUNTA({\"ab\",\"cde\"})", 2.0), // SerAr string elements (u16 cch)
-    ("B18", "=COUNT({1,TRUE,3})", 2.0), // SerAr bool element (1 byte, no pad)
-    ("B19", "=COUNT({1,#N/A,3})", 2.0), // SerAr error element (1 byte + 3 reserved)
-    ("B20", "=SUM(-A1)", -2.0),        // unary operand class under R-forced arg
-    ("B21", "=-A1+A2", 1.0),           // unary minus on a ref at value position
+    ("B18", "=COUNT({1,TRUE,3})", 2.0),        // SerAr bool element (1 byte, no pad)
+    ("B19", "=COUNT({1,#N/A,3})", 2.0),        // SerAr error element (1 byte + 3 reserved)
+    ("B20", "=SUM(-A1)", -2.0),                // unary operand class under R-forced arg
+    ("B21", "=-A1+A2", 1.0),                   // unary minus on a ref at value position
 ];
 
 fn xlsb_formula_workbook() -> Workbook {
@@ -169,6 +181,220 @@ fn excel_authored_xlsb_atp_bytes() -> Vec<u8> {
         .unwrap_or_else(|e| panic!("read {}: {e}", fixture.host_path.display()));
     cleanup_fixture(&fixture);
     bytes
+}
+
+fn xlsb_basic_data_connections_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+
+    let mut region_param = WorkbookConnectionParameter::value(
+        "RegionParam",
+        WorkbookConnectionParameterValue::String("East".to_string()),
+    );
+    region_param.sql_type = 12;
+    let database =
+        WorkbookConnection::database(7, "SalesConnection", "Provider=MSDASQL;DSN=Sales;")
+            .with_command("select Region, Revenue from Sales")
+            .with_command_type(2)
+            .with_source_file("connections/sales.dsn")
+            .with_odc_file("connections/sales.odc")
+            .with_description("Sales warehouse")
+            .with_keep_alive(true)
+            .with_interval(30)
+            .with_reconnection_method(2)
+            .with_background(true)
+            .with_save_data(true)
+            .with_save_password(true)
+            .with_credentials(WorkbookConnectionCredentials::Stored)
+            .with_single_sign_on_id("sales-sso")
+            .with_parameter(region_param);
+    wb.add_data_connection(database).unwrap();
+
+    let mut web = WorkbookConnection::web(8, "WebSales", "http://127.0.0.1/duke-sheets/sales");
+    web.kind = WorkbookConnectionKind::Web {
+        url: Some("http://127.0.0.1/duke-sheets/sales".to_string()),
+        xml: false,
+        source_data: true,
+        html_tables: true,
+        html_format: Some("all".to_string()),
+        post: Some("region=all".to_string()),
+        edit_page: Some("http://127.0.0.1/duke-sheets/edit".to_string()),
+    };
+    wb.add_data_connection(web.with_parameter(WorkbookConnectionParameter::prompt(
+        "Region",
+        "Choose region",
+    )))
+    .unwrap();
+
+    let mut text = WorkbookConnection::text(9, "CsvSales", r"C:\temp\sales.csv");
+    text.kind = WorkbookConnectionKind::Text {
+        source_file: Some(r"C:\temp\sales.csv".to_string()),
+        delimiter: Some(",".to_string()),
+        first_row: 2,
+        delimited: true,
+        decimal: Some(".".to_string()),
+        thousands: Some(",".to_string()),
+    };
+    wb.add_data_connection(text).unwrap();
+
+    wb
+}
+
+pub(super) fn xlsb_olap_connection_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    let mut connection = WorkbookConnection::olap(10, "CubeSales").with_connection_type(5);
+    connection.kind = WorkbookConnectionKind::Olap {
+        connection: Some("Provider=MSOLAP;Data Source=olapserver;".to_string()),
+        command: Some("SalesCube".to_string()),
+        command_type: Some(1),
+        local: false,
+        local_connection: None,
+        local_refresh: true,
+        send_locale: true,
+        row_drill_count: Some(1000),
+    };
+    wb.add_data_connection(connection).unwrap();
+    wb
+}
+
+// features: Data connections (basic)
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xlsb_basic_data_connection_metadata() {
+    let (result, _writer_bytes, excel_bytes) =
+        roundtrip_through_excel_xlsb_bytes(&xlsb_basic_data_connections_workbook());
+
+    assert!(zip_has_entry(&excel_bytes, "xl/connections.bin"));
+
+    let database = result
+        .data_connection_by_name("SalesConnection")
+        .expect("database connection after Excel re-save");
+    assert_eq!(
+        database.source_file.as_deref(),
+        Some("connections/sales.dsn")
+    );
+    assert_eq!(database.odc_file.as_deref(), Some("connections/sales.odc"));
+    assert_eq!(database.description.as_deref(), Some("Sales warehouse"));
+    assert_eq!(database.interval, 30);
+    assert_eq!(database.reconnection_method, 2);
+    assert!(database.keep_alive);
+    assert!(database.background);
+    assert!(database.save_data);
+    assert!(database.save_password);
+    assert_eq!(
+        database.credentials,
+        Some(WorkbookConnectionCredentials::Stored)
+    );
+    assert_eq!(database.single_sign_on_id.as_deref(), Some("sales-sso"));
+    match &database.kind {
+        WorkbookConnectionKind::Database {
+            connection,
+            command,
+            command_type,
+        } => {
+            assert_eq!(connection, "Provider=MSDASQL;DSN=Sales;");
+            assert_eq!(
+                command.as_deref(),
+                Some("select Region, Revenue from Sales")
+            );
+            assert_eq!(*command_type, Some(2));
+        }
+        other => panic!("unexpected database connection kind: {other:?}"),
+    }
+    assert_eq!(database.parameters.len(), 1);
+    assert_eq!(database.parameters[0].name.as_deref(), Some("RegionParam"));
+    assert_eq!(
+        database.parameters[0].value,
+        WorkbookConnectionParameterValue::String("East".to_string())
+    );
+
+    let web = result
+        .data_connection_by_name("WebSales")
+        .expect("web connection after Excel re-save");
+    match &web.kind {
+        WorkbookConnectionKind::Web {
+            url,
+            xml,
+            source_data,
+            html_tables,
+            html_format,
+            post,
+            edit_page,
+        } => {
+            assert_eq!(url.as_deref(), Some("http://127.0.0.1/duke-sheets/sales"));
+            assert!(!*xml);
+            assert!(*source_data);
+            assert!(*html_tables);
+            assert_eq!(html_format.as_deref(), Some("all"));
+            assert_eq!(post.as_deref(), Some("region=all"));
+            assert_eq!(
+                edit_page.as_deref(),
+                Some("http://127.0.0.1/duke-sheets/edit")
+            );
+        }
+        other => panic!("unexpected web connection kind: {other:?}"),
+    }
+    assert_eq!(web.parameters.len(), 1);
+    assert_eq!(web.parameters[0].name.as_deref(), Some("Region"));
+    assert_eq!(web.parameters[0].prompt.as_deref(), Some("Choose region"));
+
+    let text = result
+        .data_connection_by_name("CsvSales")
+        .expect("text connection after Excel re-save");
+    match &text.kind {
+        WorkbookConnectionKind::Text {
+            source_file,
+            delimiter,
+            first_row,
+            delimited,
+            decimal,
+            thousands,
+        } => {
+            assert_eq!(source_file.as_deref(), Some(r"C:\temp\sales.csv"));
+            assert_eq!(delimiter.as_deref(), Some(","));
+            assert_eq!(*first_row, 2);
+            assert!(*delimited);
+            assert_eq!(decimal.as_deref(), Some("."));
+            assert_eq!(thousands.as_deref(), Some(","));
+        }
+        other => panic!("unexpected text connection kind: {other:?}"),
+    }
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xlsb_olap_connection_metadata() {
+    let (result, _writer_bytes, excel_bytes) =
+        roundtrip_through_excel_xlsb_bytes(&xlsb_olap_connection_workbook());
+
+    assert!(zip_has_entry(&excel_bytes, "xl/connections.bin"));
+    let connection = result
+        .data_connection_by_name("CubeSales")
+        .expect("CubeSales connection after Excel re-save");
+    match &connection.kind {
+        WorkbookConnectionKind::Olap {
+            connection,
+            command,
+            command_type,
+            local,
+            local_connection,
+            local_refresh,
+            send_locale,
+            row_drill_count,
+        } => {
+            assert_eq!(
+                connection.as_deref(),
+                Some("Provider=MSOLAP;Data Source=olapserver;")
+            );
+            assert_eq!(command.as_deref(), Some("SalesCube"));
+            assert_eq!(*command_type, Some(1));
+            assert!(!*local);
+            assert_eq!(local_connection.as_deref(), None);
+            assert!(*local_refresh);
+            assert!(*send_locale);
+            assert_eq!(*row_drill_count, Some(1000));
+        }
+        other => panic!("unexpected connection kind: {other:?}"),
+    }
 }
 
 #[test]

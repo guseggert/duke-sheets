@@ -17,7 +17,11 @@ use crate::opc::{
 };
 use crate::styles::{roundtrip_theme_data_for, XlsxStyleTable};
 use duke_sheets_core::style::Color;
-use duke_sheets_core::{CellAddress, CellRange, SheetSlot, Workbook};
+use duke_sheets_core::{
+    CellAddress, CellRange, SheetSlot, Workbook, WorkbookConnectionCredentials,
+    WorkbookConnectionParameter, WorkbookConnectionParameterType, WorkbookConnectionParameterValue,
+};
+use duke_sheets_pivot::plan::{plan_format_pivots, FormatPivotPlan};
 use form_controls::radio_head_flags;
 
 mod chart;
@@ -28,10 +32,27 @@ mod data_validation;
 mod drawing;
 pub(crate) mod form_controls;
 mod manifest;
+mod pivot;
 mod tables;
 
 const NS_SPREADSHEET: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 const NS_DOC_RELS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+const RT_PIVOT_TABLE: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotTable";
+const RT_PIVOT_CACHE_DEFINITION: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition";
+const RT_PIVOT_CACHE_RECORDS: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheRecords";
+const RT_CONNECTIONS: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/connections";
+const CT_PIVOT_TABLE: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotTable+xml";
+const CT_PIVOT_CACHE_DEFINITION: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml";
+const CT_PIVOT_CACHE_RECORDS: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheRecords+xml";
+const CT_CONNECTIONS: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml";
 
 const DEFAULT_THEME_XML: &str = r#"<?xml version="1.0"?>
 <a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Office Theme">
@@ -319,6 +340,97 @@ const DEFAULT_THEME_XML: &str = r#"<?xml version="1.0"?>
 /// Alias for the XML writer backed by an in-memory buffer.
 pub(super) type XmlWriter = Writer<Cursor<Vec<u8>>>;
 
+fn bool_xml(value: bool) -> &'static str {
+    if value {
+        "1"
+    } else {
+        "0"
+    }
+}
+
+fn connection_credentials_attr(credentials: WorkbookConnectionCredentials) -> &'static str {
+    match credentials {
+        WorkbookConnectionCredentials::Integrated => "integrated",
+        WorkbookConnectionCredentials::None => "none",
+        WorkbookConnectionCredentials::Stored => "stored",
+        WorkbookConnectionCredentials::Prompt => "prompt",
+    }
+}
+
+fn connection_parameter_type_attr(parameter_type: WorkbookConnectionParameterType) -> &'static str {
+    match parameter_type {
+        WorkbookConnectionParameterType::Prompt => "prompt",
+        WorkbookConnectionParameterType::Value => "value",
+        WorkbookConnectionParameterType::Cell => "cell",
+    }
+}
+
+fn write_connection_parameters(
+    w: &mut XmlWriter,
+    parameters: &[WorkbookConnectionParameter],
+) -> XlsxResult<()> {
+    if parameters.is_empty() {
+        return Ok(());
+    }
+
+    let count = parameters.len().to_string();
+    let mut tag = BytesStart::new("parameters");
+    tag.push_attribute(("count", count.as_str()));
+    w.write_event(Event::Start(tag))?;
+    for parameter in parameters {
+        write_connection_parameter(w, parameter)?;
+    }
+    w.write_event(Event::End(BytesEnd::new("parameters")))?;
+    Ok(())
+}
+
+fn write_connection_parameter(
+    w: &mut XmlWriter,
+    parameter: &WorkbookConnectionParameter,
+) -> XlsxResult<()> {
+    let sql_type = parameter.sql_type.to_string();
+    let parameter_type = connection_parameter_type_attr(parameter.parameter_type);
+    let refresh_on_change = bool_xml(parameter.refresh_on_change);
+    let mut tag = BytesStart::new("parameter");
+    if let Some(name) = &parameter.name {
+        tag.push_attribute(("name", name.as_str()));
+    }
+    tag.push_attribute(("sqlType", sql_type.as_str()));
+    tag.push_attribute(("parameterType", parameter_type));
+    tag.push_attribute(("refreshOnChange", refresh_on_change));
+    if let Some(prompt) = &parameter.prompt {
+        tag.push_attribute(("prompt", prompt.as_str()));
+    }
+
+    let bool_value;
+    let double_value;
+    let integer_value;
+    match &parameter.value {
+        WorkbookConnectionParameterValue::None => {}
+        WorkbookConnectionParameterValue::Boolean(value) => {
+            bool_value = bool_xml(*value);
+            tag.push_attribute(("boolean", bool_value));
+        }
+        WorkbookConnectionParameterValue::Double(value) => {
+            double_value = value.to_string();
+            tag.push_attribute(("double", double_value.as_str()));
+        }
+        WorkbookConnectionParameterValue::Integer(value) => {
+            integer_value = value.to_string();
+            tag.push_attribute(("integer", integer_value.as_str()));
+        }
+        WorkbookConnectionParameterValue::String(value) => {
+            tag.push_attribute(("string", value.as_str()));
+        }
+        WorkbookConnectionParameterValue::Cell(value) => {
+            tag.push_attribute(("cell", value.as_str()));
+        }
+    }
+
+    w.write_event(Event::Empty(tag))?;
+    Ok(())
+}
+
 /// Shared string table - maps string content to SST index.
 pub(super) struct SharedStringTable {
     strings: Vec<String>,
@@ -349,11 +461,9 @@ fn plan_raw_part(
         .iter()
         .find(|plan| plan.path.eq_ignore_ascii_case(&path))
     {
-        Some(existing) if existing.content_type != content_type => {
-            Err(XlsxError::InvalidFormat(format!(
-                "conflicting content types for raw part {path}"
-            )))
-        }
+        Some(existing) if existing.content_type != content_type => Err(XlsxError::InvalidFormat(
+            format!("conflicting content types for raw part {path}"),
+        )),
         Some(_) => Ok(()),
         None => {
             plans.push(RawPartPlan { path, content_type });
@@ -499,6 +609,26 @@ pub(super) fn write_xml_part<W: Write + Seek>(
     build(&mut w)?;
     zip.write_all(&w.into_inner().into_inner())?;
     Ok(())
+}
+
+fn write_raw_part<W: Write + Seek>(
+    zip: &mut zip::ZipWriter<W>,
+    path: &str,
+    payload: &[u8],
+) -> XlsxResult<()> {
+    let options = zip::write::SimpleFileOptions::default();
+    zip.start_file(zip_part_path(path), options)?;
+    zip.write_all(payload)?;
+    Ok(())
+}
+
+fn zip_part_path(path: &str) -> &str {
+    path.strip_prefix('/').unwrap_or(path)
+}
+
+fn workbook_relationship_target(path: &str) -> &str {
+    let path = path.strip_prefix('/').unwrap_or(path);
+    path.strip_prefix("xl/").unwrap_or(path)
 }
 
 impl SharedStringTable {
@@ -849,6 +979,8 @@ impl XlsxWriter {
             }
         }
 
+        let mut pivot_plan = plan_format_pivots(workbook)?;
+        pivot::avoid_preserved_part_collisions(&mut pivot_plan, workbook);
         // Raw drawing entries can carry preserved media parts
         // (xl/media/imageN.ext). Reserve their numbers so generated
         // media filenames never collide, and collect their content
@@ -925,7 +1057,7 @@ impl XlsxWriter {
         // chart_ex_numbering: (sheet_idx, chartex_in_sheet_idx, global_chartex_num)
         // drawing_numbering: (sheet_idx, drawing_num)
         let mut chart_numbering: Vec<(usize, usize, usize)> = Vec::new();
-        let mut global_chart_num = claimed.chart + 1;
+        let mut global_chart_num = claimed.chart.max(claimed.style) + 1;
         let mut chart_ex_numbering: Vec<(usize, usize, usize)> = Vec::new();
         let mut global_chart_ex_num = claimed.chart_ex + 1;
         // (sheet_idx, image_idx_in_sheet, global_image_num). Image
@@ -987,6 +1119,7 @@ impl XlsxWriter {
             total_ctrl_props,
             &sst,
             &table_numbering,
+            &pivot_plan,
             &drawing_numbering,
             &chart_numbering,
             &chart_ex_numbering,
@@ -998,7 +1131,11 @@ impl XlsxWriter {
             needs_metadata,
         )?;
         // Write xl/workbook.xml
-        Self::write_workbook_xml(&mut zip, workbook)?;
+        Self::write_workbook_xml(&mut zip, workbook, &pivot_plan)?;
+
+        if !workbook.data_connections().is_empty() {
+            Self::write_connections_xml(&mut zip, workbook)?;
+        }
 
         // Write xl/styles.xml
         Self::write_styles_xml(&mut zip, &style_table)?;
@@ -1028,6 +1165,11 @@ impl XlsxWriter {
                 .filter(|(si, _, _)| *si == i)
                 .map(|(_, _, gn)| *gn)
                 .collect();
+            let sheet_pivot_parts: Vec<_> = pivot_plan
+                .tables
+                .iter()
+                .filter(|part| part.sheet_index == i)
+                .collect();
 
             let drawing_num = drawing_numbering
                 .iter()
@@ -1047,6 +1189,7 @@ impl XlsxWriter {
                 &style_table,
                 &sst,
                 &sheet_table_globals,
+                &pivot_plan,
                 drawing_num,
                 ctrl_prop_start,
             )?;
@@ -1084,6 +1227,14 @@ impl XlsxWriter {
             // Write table part XML files for this sheet
             for (local_idx, &global_num) in sheet_table_globals.iter().enumerate() {
                 tables::write_table_part(&mut zip, sheet, local_idx, global_num)?;
+            }
+            for part in &sheet_pivot_parts {
+                let cache_part = pivot_plan
+                    .caches
+                    .iter()
+                    .find(|cache_part| cache_part.cache_num == part.cache_num)
+                    .ok_or_else(|| XlsxError::InvalidFormat("pivot cache part not found".into()))?;
+                pivot::write_pivot_table_part(&mut zip, workbook, part, cache_part, &style_table)?;
             }
 
             // Write drawing and chart XML files for this sheet
@@ -1200,6 +1351,15 @@ impl XlsxWriter {
             }
         }
 
+        for cache_part in &pivot_plan.caches {
+            pivot::write_pivot_cache_definition_part(&mut zip, workbook, &pivot_plan, cache_part)?;
+            pivot::write_pivot_cache_records_part(&mut zip, workbook, &pivot_plan, cache_part)?;
+        }
+
+        for part in workbook.workbook_extension_parts() {
+            write_raw_part(&mut zip, &part.path, &part.payload)?;
+        }
+
         // Write chart sheets and their drawings/charts
         for (i, cs) in workbook.chartsheets().iter().enumerate() {
             let cs_dn = cs_drawing_numbering
@@ -1283,6 +1443,7 @@ impl XlsxWriter {
         total_ctrl_props: usize,
         sst: &SharedStringTable,
         table_numbering: &[(usize, usize, usize)],
+        pivot_plan: &FormatPivotPlan,
         drawing_numbering: &[(usize, usize)],
         chart_numbering: &[(usize, usize, usize)],
         chart_ex_numbering: &[(usize, usize, usize)],
@@ -1332,6 +1493,56 @@ impl XlsxWriter {
         }
         for &(_, _, global_num) in table_numbering {
             manifest.register_part(&format!("xl/tables/table{global_num}.xml"), CT_TABLE)?;
+        }
+        for part in &pivot_plan.tables {
+            manifest.register_part(
+                &format!("xl/pivotTables/pivotTable{}.xml", part.table_num),
+                CT_PIVOT_TABLE,
+            )?;
+        }
+        for part in &pivot_plan.caches {
+            manifest.register_part(
+                &format!("xl/pivotCache/pivotCacheDefinition{}.xml", part.cache_num),
+                CT_PIVOT_CACHE_DEFINITION,
+            )?;
+            manifest.register_part(
+                &format!("xl/pivotCache/pivotCacheRecords{}.xml", part.cache_num),
+                CT_PIVOT_CACHE_RECORDS,
+            )?;
+        }
+        if !workbook.data_connections().is_empty() {
+            manifest.register_part("xl/connections.xml", CT_CONNECTIONS)?;
+        }
+        for part in workbook.workbook_extension_parts() {
+            manifest.register_raw_part(&part.path, &part.content_type)?;
+        }
+        for part in &pivot_plan.tables {
+            manifest.register_relationship(
+                Some(&format!("xl/pivotTables/pivotTable{}.xml", part.table_num)),
+                "rId1",
+                RT_PIVOT_CACHE_DEFINITION,
+                &format!("../pivotCache/pivotCacheDefinition{}.xml", part.cache_num),
+                false,
+            )?;
+        }
+        for part in &pivot_plan.caches {
+            let source = format!("xl/pivotCache/pivotCacheDefinition{}.xml", part.cache_num);
+            manifest.register_relationship(
+                Some(&source),
+                "rId1",
+                RT_PIVOT_CACHE_RECORDS,
+                &format!("pivotCacheRecords{}.xml", part.cache_num),
+                false,
+            )?;
+            for (id, target) in pivot::consolidation_external_relationships(&part.source)? {
+                manifest.register_relationship(
+                    Some(&source),
+                    &id,
+                    pivot::RT_EXTERNAL_LINK_PATH,
+                    &target,
+                    true,
+                )?;
+            }
         }
         for &(_, drawing_num) in drawing_numbering.iter().chain(cs_drawing_numbering.iter()) {
             manifest.register_part(&format!("xl/drawings/drawing{drawing_num}.xml"), CT_DRAWING)?;
@@ -1561,12 +1772,47 @@ impl XlsxWriter {
                 false,
             )?;
         }
+        if !workbook.data_connections().is_empty() {
+            manifest.register_relationship(
+                Some("xl/workbook.xml"),
+                "rIdConnections",
+                RT_CONNECTIONS,
+                "connections.xml",
+                false,
+            )?;
+        }
+        for cache_part in &pivot_plan.caches {
+            manifest.register_relationship(
+                Some("xl/workbook.xml"),
+                &pivot::workbook_cache_rid(cache_part.cache_num),
+                RT_PIVOT_CACHE_DEFINITION,
+                &format!(
+                    "pivotCache/pivotCacheDefinition{}.xml",
+                    cache_part.cache_num
+                ),
+                false,
+            )?;
+        }
+        for (index, part) in workbook.workbook_extension_parts().iter().enumerate() {
+            let relationship_id = part
+                .relationship_id
+                .clone()
+                .unwrap_or_else(|| format!("rIdWorkbookExt{}", index + 1));
+            manifest.register_preserved_relationship(
+                Some("xl/workbook.xml"),
+                &relationship_id,
+                &part.relationship_type,
+                workbook_relationship_target(&part.path),
+                false,
+            )?;
+        }
         Ok(manifest)
     }
 
     fn write_workbook_xml<W: Write + Seek>(
         zip: &mut zip::ZipWriter<W>,
         workbook: &Workbook,
+        pivot_plan: &FormatPivotPlan,
     ) -> XlsxResult<()> {
         write_xml_part(zip, "xl/workbook.xml", |w| {
             let mut tag = BytesStart::new("workbook");
@@ -1704,7 +1950,240 @@ impl XlsxWriter {
                     .write_empty()?;
             }
 
+            if !pivot_plan.caches.is_empty() {
+                w.write_event(Event::Start(BytesStart::new("pivotCaches")))?;
+                for cache_part in &pivot_plan.caches {
+                    let cache_id = cache_part.cache_num.to_string();
+                    let rid = pivot::workbook_cache_rid(cache_part.cache_num);
+                    w.create_element("pivotCache")
+                        .with_attribute(("cacheId", cache_id.as_str()))
+                        .with_attribute(("r:id", rid.as_str()))
+                        .write_empty()?;
+                }
+                w.write_event(Event::End(BytesEnd::new("pivotCaches")))?;
+            }
+
+            Self::write_workbook_extensions(w, workbook)?;
+
             w.write_event(Event::End(BytesEnd::new("workbook")))?;
+            Ok(())
+        })
+    }
+
+    fn write_workbook_extensions(w: &mut XmlWriter, workbook: &Workbook) -> XlsxResult<()> {
+        if workbook
+            .workbook_extensions()
+            .iter()
+            .all(|extension| extension.payload.is_empty())
+        {
+            return Ok(());
+        }
+
+        w.write_event(Event::Start(BytesStart::new("extLst")))?;
+        for extension in workbook.workbook_extensions() {
+            if !extension.payload.is_empty() {
+                w.get_mut().write_all(&extension.payload)?;
+            }
+        }
+        w.write_event(Event::End(BytesEnd::new("extLst")))?;
+        Ok(())
+    }
+
+    fn write_connections_xml<W: Write + Seek>(
+        zip: &mut zip::ZipWriter<W>,
+        workbook: &Workbook,
+    ) -> XlsxResult<()> {
+        use duke_sheets_core::WorkbookConnectionKind;
+
+        write_xml_part(zip, "xl/connections.xml", |w| {
+            let mut root = BytesStart::new("connections");
+            root.push_attribute(("xmlns", NS_SPREADSHEET));
+            w.write_event(Event::Start(root))?;
+
+            for connection in workbook.data_connections() {
+                let id = connection.id.to_string();
+                let refreshed_version = connection.refreshed_version.to_string();
+                let min_refreshable_version = (connection.min_refreshable_version != 0)
+                    .then(|| connection.min_refreshable_version.to_string());
+                let interval = (connection.interval != 0).then(|| connection.interval.to_string());
+                let reconnection_method = (connection.reconnection_method != 1)
+                    .then(|| connection.reconnection_method.to_string());
+                let connection_type = connection.connection_type.map(|value| value.to_string());
+                let refresh_on_load = bool_xml(connection.refresh_on_load);
+                let background = bool_xml(connection.background);
+                let save_data = bool_xml(connection.save_data);
+                let mut tag = BytesStart::new("connection");
+                tag.push_attribute(("id", id.as_str()));
+                tag.push_attribute(("name", connection.name.as_str()));
+                if let Some(source_file) = &connection.source_file {
+                    tag.push_attribute(("sourceFile", source_file.as_str()));
+                }
+                if let Some(odc_file) = &connection.odc_file {
+                    tag.push_attribute(("odcFile", odc_file.as_str()));
+                }
+                if connection.keep_alive {
+                    tag.push_attribute(("keepAlive", "1"));
+                }
+                if let Some(interval) = interval.as_deref() {
+                    tag.push_attribute(("interval", interval));
+                }
+                if let Some(description) = &connection.description {
+                    tag.push_attribute(("description", description.as_str()));
+                }
+                if let Some(connection_type) = connection_type.as_deref() {
+                    tag.push_attribute(("type", connection_type));
+                }
+                if let Some(reconnection_method) = reconnection_method.as_deref() {
+                    tag.push_attribute(("reconnectionMethod", reconnection_method));
+                }
+                tag.push_attribute(("refreshedVersion", refreshed_version.as_str()));
+                if let Some(min_refreshable_version) = min_refreshable_version.as_deref() {
+                    tag.push_attribute(("minRefreshableVersion", min_refreshable_version));
+                }
+                if connection.save_password {
+                    tag.push_attribute(("savePassword", "1"));
+                }
+                if connection.new_connection {
+                    tag.push_attribute(("new", "1"));
+                }
+                if connection.deleted {
+                    tag.push_attribute(("deleted", "1"));
+                }
+                if connection.only_use_connection_file {
+                    tag.push_attribute(("onlyUseConnectionFile", "1"));
+                }
+                tag.push_attribute(("refreshOnLoad", refresh_on_load));
+                tag.push_attribute(("background", background));
+                tag.push_attribute(("saveData", save_data));
+                if let Some(credentials) = connection.credentials {
+                    tag.push_attribute(("credentials", connection_credentials_attr(credentials)));
+                }
+                if let Some(single_sign_on_id) = &connection.single_sign_on_id {
+                    tag.push_attribute(("singleSignOnId", single_sign_on_id.as_str()));
+                }
+                w.write_event(Event::Start(tag))?;
+
+                match &connection.kind {
+                    WorkbookConnectionKind::Database {
+                        connection,
+                        command,
+                        command_type,
+                    } => {
+                        let command_type = command_type.map(|value| value.to_string());
+                        let mut db_pr = BytesStart::new("dbPr");
+                        db_pr.push_attribute(("connection", connection.as_str()));
+                        if let Some(command) = command {
+                            db_pr.push_attribute(("command", command.as_str()));
+                        }
+                        if let Some(command_type) = command_type.as_deref() {
+                            db_pr.push_attribute(("commandType", command_type));
+                        }
+                        w.write_event(Event::Empty(db_pr))?;
+                    }
+                    WorkbookConnectionKind::Olap {
+                        connection,
+                        command,
+                        command_type,
+                        local,
+                        local_connection,
+                        local_refresh,
+                        send_locale,
+                        row_drill_count,
+                    } => {
+                        let local = bool_xml(*local);
+                        let local_refresh = bool_xml(*local_refresh);
+                        let send_locale = bool_xml(*send_locale);
+                        let row_drill_count = row_drill_count.map(|value| value.to_string());
+                        let command_type = command_type.map(|value| value.to_string());
+                        if connection.is_some() || command.is_some() || command_type.is_some() {
+                            let mut db_pr = BytesStart::new("dbPr");
+                            if let Some(connection) = connection {
+                                db_pr.push_attribute(("connection", connection.as_str()));
+                            }
+                            if let Some(command) = command {
+                                db_pr.push_attribute(("command", command.as_str()));
+                            }
+                            if let Some(command_type) = command_type.as_deref() {
+                                db_pr.push_attribute(("commandType", command_type));
+                            }
+                            w.write_event(Event::Empty(db_pr))?;
+                        }
+                        let mut olap_pr = BytesStart::new("olapPr");
+                        olap_pr.push_attribute(("local", local));
+                        olap_pr.push_attribute(("localRefresh", local_refresh));
+                        olap_pr.push_attribute(("sendLocale", send_locale));
+                        if let Some(local_connection) = local_connection {
+                            olap_pr.push_attribute(("localConnection", local_connection.as_str()));
+                        }
+                        if let Some(row_drill_count) = row_drill_count.as_deref() {
+                            olap_pr.push_attribute(("rowDrillCount", row_drill_count));
+                        }
+                        w.write_event(Event::Empty(olap_pr))?;
+                    }
+                    WorkbookConnectionKind::Web {
+                        url,
+                        xml,
+                        source_data,
+                        html_tables,
+                        html_format,
+                        post,
+                        edit_page,
+                    } => {
+                        let xml = bool_xml(*xml);
+                        let source_data = bool_xml(*source_data);
+                        let html_tables = bool_xml(*html_tables);
+                        let mut web_pr = BytesStart::new("webPr");
+                        web_pr.push_attribute(("xml", xml));
+                        web_pr.push_attribute(("sourceData", source_data));
+                        web_pr.push_attribute(("htmlTables", html_tables));
+                        if let Some(url) = url {
+                            web_pr.push_attribute(("url", url.as_str()));
+                        }
+                        if let Some(html_format) = html_format {
+                            web_pr.push_attribute(("htmlFormat", html_format.as_str()));
+                        }
+                        if let Some(post) = post {
+                            web_pr.push_attribute(("post", post.as_str()));
+                        }
+                        if let Some(edit_page) = edit_page {
+                            web_pr.push_attribute(("editPage", edit_page.as_str()));
+                        }
+                        w.write_event(Event::Empty(web_pr))?;
+                    }
+                    WorkbookConnectionKind::Text {
+                        source_file,
+                        delimiter,
+                        first_row,
+                        delimited,
+                        decimal,
+                        thousands,
+                    } => {
+                        let first_row = first_row.to_string();
+                        let delimited = bool_xml(*delimited);
+                        let mut text_pr = BytesStart::new("textPr");
+                        text_pr.push_attribute(("firstRow", first_row.as_str()));
+                        text_pr.push_attribute(("delimited", delimited));
+                        if let Some(source_file) = source_file {
+                            text_pr.push_attribute(("sourceFile", source_file.as_str()));
+                        }
+                        if let Some(delimiter) = delimiter {
+                            text_pr.push_attribute(("delimiter", delimiter.as_str()));
+                        }
+                        if let Some(decimal) = decimal {
+                            text_pr.push_attribute(("decimal", decimal.as_str()));
+                        }
+                        if let Some(thousands) = thousands {
+                            text_pr.push_attribute(("thousands", thousands.as_str()));
+                        }
+                        w.write_event(Event::Empty(text_pr))?;
+                    }
+                }
+
+                write_connection_parameters(w, &connection.parameters)?;
+                w.write_event(Event::End(BytesEnd::new("connection")))?;
+            }
+
+            w.write_event(Event::End(BytesEnd::new("connections")))?;
             Ok(())
         })
     }
@@ -1775,7 +2254,9 @@ impl XlsxWriter {
         if let Some(ref part) = chart.color_style {
             let color_path = format!("xl/charts/colors{}.xml", chart_num);
             zip.start_file(&color_path, options)?;
-            zip.write_all(&duke_sheets_chart::write::chart_color_style_part_bytes(part))?;
+            zip.write_all(&duke_sheets_chart::write::chart_color_style_part_bytes(
+                part,
+            ))?;
         }
         Ok(())
     }
@@ -2033,6 +2514,7 @@ impl XlsxWriter {
         style_table: &XlsxStyleTable,
         sst: &SharedStringTable,
         sheet_table_globals: &[usize],
+        pivot_plan: &FormatPivotPlan,
         drawing_num: Option<usize>,
         ctrl_prop_start: usize,
     ) -> XlsxResult<Vec<WorksheetRelationship>> {
@@ -2205,6 +2687,29 @@ impl XlsxWriter {
                     w.write_event(Event::Empty(part))?;
                 }
                 w.write_event(Event::End(BytesEnd::new("tableParts")))?;
+            }
+
+            let sheet_pivot_parts = pivot_plan
+                .tables
+                .iter()
+                .filter(|part| part.sheet_index == index)
+                .collect::<Vec<_>>();
+            if !sheet_pivot_parts.is_empty() {
+                w.write_event(Event::Start(BytesStart::new("pivotTableDefinitions")))?;
+                for part in sheet_pivot_parts {
+                    let rid = format!("rId{}", rels.len() + 1);
+                    let target = format!("../pivotTables/pivotTable{}.xml", part.table_num);
+                    rels.push(WorksheetRelationship {
+                        id: rid.clone(),
+                        rel_type: RT_PIVOT_TABLE,
+                        target,
+                        target_mode: None,
+                    });
+                    let mut el = BytesStart::new("pivotTableDefinition");
+                    el.push_attribute(("r:id", rid.as_str()));
+                    w.write_event(Event::Empty(el))?;
+                }
+                w.write_event(Event::End(BytesEnd::new("pivotTableDefinitions")))?;
             }
 
             w.write_event(Event::End(BytesEnd::new("worksheet")))?;
@@ -3487,7 +3992,10 @@ impl XlsxWriter {
 mod tests {
     use super::*;
     use crate::reader::XlsxReader;
-    use duke_sheets_core::{CellRange, ConditionalFormatRule, Hyperlink, SplitPanes};
+    use duke_sheets_core::{
+        CellRange, ConditionalFormatRule, Hyperlink, SplitPanes, WorkbookConnection,
+        WorkbookConnectionKind, WorkbookExtension, WorkbookExtensionPart,
+    };
     use std::io::Read;
 
     fn read_zip_entry(bytes: Vec<u8>, path: &str) -> String {
@@ -3943,6 +4451,222 @@ mod tests {
         assert!(rels.contains("/table\""), "missing table rel type");
     }
 
+
+    // features: Slicers; Timelines
+    #[test]
+    fn test_writer_round_trips_workbook_extension_parts() {
+        const RT_SLICER_CACHE: &str =
+            "http://schemas.microsoft.com/office/2007/relationships/slicerCache";
+        const RT_TIMELINE_CACHE: &str =
+            "http://schemas.microsoft.com/office/2011/relationships/timelineCache";
+        const CT_SLICER_CACHE: &str = "application/vnd.ms-excel.slicerCache+xml";
+        const CT_TIMELINE_CACHE: &str = "application/vnd.ms-excel.timelineCache+xml";
+
+        let mut wb = Workbook::new();
+        wb.workbook_extensions_mut().push(WorkbookExtension {
+            uri: "{A8765BA9-456A-4DAB-B4F3-ACF838C121DE}".to_string(),
+            payload: br#"<ext uri="{A8765BA9-456A-4DAB-B4F3-ACF838C121DE}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:slicerCaches><x14:slicerCache r:id="rIdSlicerCache1"/></x14:slicerCaches></ext>"#.to_vec(),
+        });
+        wb.workbook_extensions_mut().push(WorkbookExtension {
+            uri: "{7E03D99C-DC04-49d9-9315-930204A7B6E9}".to_string(),
+            payload: br#"<ext uri="{7E03D99C-DC04-49d9-9315-930204A7B6E9}" xmlns:x15="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main"><x15:timelineRefs><x15:timelineRef r:id="rIdTimelineCache1"/></x15:timelineRefs></ext>"#.to_vec(),
+        });
+        wb.workbook_extension_parts_mut().push(
+            WorkbookExtensionPart::new(
+                "xl/slicerCaches/slicerCache1.xml",
+                CT_SLICER_CACHE,
+                RT_SLICER_CACHE,
+                br#"<slicerCacheDefinition xmlns="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" name="RegionSlicer"/>"#.to_vec(),
+            )
+            .with_relationship_id("rIdSlicerCache1"),
+        );
+        wb.workbook_extension_parts_mut().push(
+            WorkbookExtensionPart::new(
+                "xl/timelineCaches/timelineCache1.xml",
+                CT_TIMELINE_CACHE,
+                RT_TIMELINE_CACHE,
+                br#"<timelineCacheDefinition xmlns="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main" name="OrderDateTimeline"/>"#.to_vec(),
+            )
+            .with_relationship_id("rIdTimelineCache1"),
+        );
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let content_types = read_zip_entry(bytes.clone(), "[Content_Types].xml");
+        assert!(content_types.contains("/xl/slicerCaches/slicerCache1.xml"));
+        assert!(content_types.contains(CT_SLICER_CACHE));
+        assert!(content_types.contains("/xl/timelineCaches/timelineCache1.xml"));
+        assert!(content_types.contains(CT_TIMELINE_CACHE));
+
+        let workbook_xml = read_zip_entry(bytes.clone(), "xl/workbook.xml");
+        assert!(workbook_xml.contains("<extLst>"));
+        assert!(workbook_xml.contains("x14:slicerCaches"));
+        assert!(workbook_xml.contains("x15:timelineRefs"));
+
+        let workbook_rels = read_zip_entry(bytes.clone(), "xl/_rels/workbook.xml.rels");
+        assert!(workbook_rels.contains(RT_SLICER_CACHE));
+        assert!(workbook_rels.contains("Target=\"slicerCaches/slicerCache1.xml\""));
+        assert!(workbook_rels.contains(RT_TIMELINE_CACHE));
+        assert!(workbook_rels.contains("Target=\"timelineCaches/timelineCache1.xml\""));
+
+        let slicer_part = read_zip_entry(bytes.clone(), "xl/slicerCaches/slicerCache1.xml");
+        assert!(slicer_part.contains("RegionSlicer"));
+        let timeline_part = read_zip_entry(bytes.clone(), "xl/timelineCaches/timelineCache1.xml");
+        assert!(timeline_part.contains("OrderDateTimeline"));
+
+        let wb2 = XlsxReader::read(Cursor::new(bytes)).expect("read workbook");
+        assert_eq!(wb2.workbook_extensions().len(), 2);
+        assert_eq!(wb2.workbook_extension_parts().len(), 2);
+        assert_eq!(
+            wb2.workbook_extension_parts()[0].relationship_id.as_deref(),
+            Some("rIdSlicerCache1")
+        );
+        assert_eq!(
+            wb2.workbook_extension_parts()[0].content_type,
+            CT_SLICER_CACHE
+        );
+        assert!(
+            std::str::from_utf8(&wb2.workbook_extension_parts()[0].payload)
+                .unwrap()
+                .contains("RegionSlicer")
+        );
+        assert_eq!(
+            wb2.workbook_extension_parts()[1].relationship_id.as_deref(),
+            Some("rIdTimelineCache1")
+        );
+        assert_eq!(
+            wb2.workbook_extension_parts()[1].content_type,
+            CT_TIMELINE_CACHE
+        );
+
+        let mut second = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb2, &mut second).expect("write workbook again");
+        let second_bytes = second.into_inner();
+        let second_rels = read_zip_entry(second_bytes.clone(), "xl/_rels/workbook.xml.rels");
+        assert!(second_rels.contains("rIdSlicerCache1"));
+        assert!(second_rels.contains("rIdTimelineCache1"));
+        assert!(
+            read_zip_entry(second_bytes, "xl/slicerCaches/slicerCache1.xml")
+                .contains("RegionSlicer")
+        );
+    }
+
+    // features: Data connections (basic)
+    #[test]
+    fn test_writer_round_trips_basic_non_database_connections() {
+        let mut wb = Workbook::new();
+        let mut web = WorkbookConnection::web(8, "WebSales", "https://example.test/sales.html");
+        web.kind = WorkbookConnectionKind::Web {
+            url: Some("https://example.test/sales.html".to_string()),
+            xml: false,
+            source_data: true,
+            html_tables: true,
+            html_format: Some("all".to_string()),
+            post: Some("region=all".to_string()),
+            edit_page: None,
+        };
+        wb.add_data_connection(web).unwrap();
+
+        let mut text = WorkbookConnection::text(9, "CsvSales", "/data/sales.csv");
+        text.kind = WorkbookConnectionKind::Text {
+            source_file: Some("/data/sales.csv".to_string()),
+            delimiter: Some("|".to_string()),
+            first_row: 2,
+            delimited: true,
+            decimal: Some(".".to_string()),
+            thousands: Some(",".to_string()),
+        };
+        wb.add_data_connection(text).unwrap();
+
+        let mut olap = WorkbookConnection::olap(10, "CubeSales").with_connection_type(5);
+        olap.kind = WorkbookConnectionKind::Olap {
+            connection: Some("Provider=MSOLAP;Data Source=olapserver;".to_string()),
+            command: Some("SalesCube".to_string()),
+            command_type: Some(1),
+            local: true,
+            local_connection: Some("CubeFile=cube.cub".to_string()),
+            local_refresh: false,
+            send_locale: true,
+            row_drill_count: Some(1000),
+        };
+        wb.add_data_connection(olap).unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let connections = read_zip_entry(bytes.clone(), "xl/connections.xml");
+        assert!(connections.contains(r#"<webPr xml="0" sourceData="1" htmlTables="1" url="https://example.test/sales.html" htmlFormat="all" post="region=all"/>"#));
+        assert!(connections.contains(r#"<textPr firstRow="2" delimited="1" sourceFile="/data/sales.csv" delimiter="|" decimal="." thousands=","/>"#));
+        assert!(connections.contains(r#"<dbPr connection="Provider=MSOLAP;Data Source=olapserver;" command="SalesCube" commandType="1"/>"#));
+        assert!(connections.contains(r#"<olapPr local="1" localRefresh="0" sendLocale="1" localConnection="CubeFile=cube.cub" rowDrillCount="1000"/>"#));
+
+        let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        assert_eq!(roundtrip.data_connections().len(), 3);
+        match &roundtrip.data_connections()[0].kind {
+            WorkbookConnectionKind::Web {
+                url,
+                source_data,
+                html_tables,
+                html_format,
+                post,
+                ..
+            } => {
+                assert_eq!(url.as_deref(), Some("https://example.test/sales.html"));
+                assert!(*source_data);
+                assert!(*html_tables);
+                assert_eq!(html_format.as_deref(), Some("all"));
+                assert_eq!(post.as_deref(), Some("region=all"));
+            }
+            other => panic!("unexpected connection kind: {other:?}"),
+        }
+        match &roundtrip.data_connections()[1].kind {
+            WorkbookConnectionKind::Text {
+                source_file,
+                delimiter,
+                first_row,
+                delimited,
+                decimal,
+                thousands,
+            } => {
+                assert_eq!(source_file.as_deref(), Some("/data/sales.csv"));
+                assert_eq!(delimiter.as_deref(), Some("|"));
+                assert_eq!(*first_row, 2);
+                assert!(*delimited);
+                assert_eq!(decimal.as_deref(), Some("."));
+                assert_eq!(thousands.as_deref(), Some(","));
+            }
+            other => panic!("unexpected connection kind: {other:?}"),
+        }
+        match &roundtrip.data_connections()[2].kind {
+            WorkbookConnectionKind::Olap {
+                connection,
+                command,
+                command_type,
+                local,
+                local_connection,
+                local_refresh,
+                send_locale,
+                row_drill_count,
+            } => {
+                assert_eq!(
+                    connection.as_deref(),
+                    Some("Provider=MSOLAP;Data Source=olapserver;")
+                );
+                assert_eq!(command.as_deref(), Some("SalesCube"));
+                assert_eq!(*command_type, Some(1));
+                assert!(*local);
+                assert_eq!(local_connection.as_deref(), Some("CubeFile=cube.cub"));
+                assert!(!*local_refresh);
+                assert!(*send_locale);
+                assert_eq!(*row_drill_count, Some(1000));
+            }
+            other => panic!("unexpected connection kind: {other:?}"),
+        }
+    }
+
     #[test]
     fn test_writer_emits_table_with_totals_row() {
         use duke_sheets_core::table::{Table, TableColumn, TotalsRowFunction};
@@ -4046,15 +4770,18 @@ mod tests {
 
         // Read the handcrafted XLSX.
         let mut wb = XlsxReader::read(Cursor::new(&xlsx_buf)).unwrap();
-        wb.worksheet_mut(0).unwrap().add_form_control(
-            duke_sheets_core::FormControl::new(duke_sheets_core::FormControlKind::Checkbox {
-                caption: "linked".into(),
-                state: duke_sheets_core::CheckState::Checked,
-                cell_link: Some("$A$1".into()),
-                no_3d: false,
-            }),
-            duke_sheets_chart::DrawingAnchor::default(),
-        ).unwrap();
+        wb.worksheet_mut(0)
+            .unwrap()
+            .add_form_control(
+                duke_sheets_core::FormControl::new(duke_sheets_core::FormControlKind::Checkbox {
+                    caption: "linked".into(),
+                    state: duke_sheets_core::CheckState::Checked,
+                    cell_link: Some("$A$1".into()),
+                    no_3d: false,
+                }),
+                duke_sheets_chart::DrawingAnchor::default(),
+            )
+            .unwrap();
         let snapshot = wb.synchronized_for_save().unwrap();
 
         // Write a linked-cell-synchronized snapshot back out.
@@ -4170,7 +4897,9 @@ mod tests {
         chart.title = Some("Pie Chart".to_string());
         let s = DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$3")).with_name("Slices");
         chart.add_series(s);
-        sheet.add_chart(chart, duke_sheets_chart::DrawingAnchor::default()).unwrap();
+        sheet
+            .add_chart(chart, duke_sheets_chart::DrawingAnchor::default())
+            .unwrap();
 
         let mut out = Cursor::new(Vec::new());
         XlsxWriter::write(&wb, &mut out).unwrap();
@@ -4196,7 +4925,9 @@ mod tests {
         let s = DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$5"))
             .with_categories(DataReference::formula("Sheet1!$A$1:$A$5"));
         chart.add_series(s);
-        sheet.add_chart(chart, duke_sheets_chart::DrawingAnchor::default()).unwrap();
+        sheet
+            .add_chart(chart, duke_sheets_chart::DrawingAnchor::default())
+            .unwrap();
 
         let mut out = Cursor::new(Vec::new());
         XlsxWriter::write(&wb, &mut out).unwrap();
@@ -4230,12 +4961,16 @@ mod tests {
         c1.title = Some("Line Chart".to_string());
         c1.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
         c1.legend = Some(Legend::new(LegendPosition::Right));
-        sheet.add_chart(c1, duke_sheets_chart::DrawingAnchor::default()).unwrap();
+        sheet
+            .add_chart(c1, duke_sheets_chart::DrawingAnchor::default())
+            .unwrap();
 
         let mut c2 = Chart::new(ChartType::BarClustered);
         c2.title = Some("Bar Chart".to_string());
         c2.add_series(DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$5")));
-        sheet.add_chart(c2, duke_sheets_chart::DrawingAnchor::default()).unwrap();
+        sheet
+            .add_chart(c2, duke_sheets_chart::DrawingAnchor::default())
+            .unwrap();
 
         let mut out = Cursor::new(Vec::new());
         XlsxWriter::write(&wb, &mut out).unwrap();
@@ -4245,10 +4980,7 @@ mod tests {
         let wb2_sheet = wb2.worksheet(0).unwrap();
         assert_eq!(wb2_sheet.chart_count(), 2);
 
-        let types: Vec<&ChartType> = wb2_sheet
-            .charts()
-            .map(|c| &c.payload.chart_type)
-            .collect();
+        let types: Vec<&ChartType> = wb2_sheet.charts().map(|c| &c.payload.chart_type).collect();
         assert!(types.contains(&&ChartType::Line));
         assert!(types.contains(&&ChartType::BarClustered));
     }
@@ -4260,7 +4992,9 @@ mod tests {
         let mut wb = Workbook::new();
         let sheet = wb.worksheet_mut(0).unwrap();
         let chart = Chart::new(ChartType::Area);
-        sheet.add_chart(chart, duke_sheets_chart::DrawingAnchor::default()).unwrap();
+        sheet
+            .add_chart(chart, duke_sheets_chart::DrawingAnchor::default())
+            .unwrap();
 
         let mut out = Cursor::new(Vec::new());
         XlsxWriter::write(&wb, &mut out).unwrap();
@@ -4282,10 +5016,14 @@ mod tests {
 
         let mut good = Chart::new(ChartType::Line);
         good.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-        sheet.add_chart(good, duke_sheets_chart::DrawingAnchor::default()).unwrap();
+        sheet
+            .add_chart(good, duke_sheets_chart::DrawingAnchor::default())
+            .unwrap();
 
         let unsupported = Chart::new(ChartType::Unsupported("c:ofPieChart".into()));
-        sheet.add_chart(unsupported, duke_sheets_chart::DrawingAnchor::default()).unwrap();
+        sheet
+            .add_chart(unsupported, duke_sheets_chart::DrawingAnchor::default())
+            .unwrap();
 
         let mut out = Cursor::new(Vec::new());
         XlsxWriter::write(&wb, &mut out).unwrap();
@@ -4325,7 +5063,9 @@ mod tests {
 
         let mut chart = Chart::new(ChartType::ColumnClustered);
         chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$B$2:$B$3")));
-        sheet.add_chart(chart, duke_sheets_chart::DrawingAnchor::default()).unwrap();
+        sheet
+            .add_chart(chart, duke_sheets_chart::DrawingAnchor::default())
+            .unwrap();
 
         let mut out = Cursor::new(Vec::new());
         XlsxWriter::write(&wb, &mut out).unwrap();
@@ -4349,7 +5089,9 @@ mod tests {
         let sheet = wb.worksheet_mut(0).unwrap();
         let mut chart = Chart::new(ChartType::Line);
         chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
-        sheet.add_chart(chart, duke_sheets_chart::DrawingAnchor::default()).unwrap();
+        sheet
+            .add_chart(chart, duke_sheets_chart::DrawingAnchor::default())
+            .unwrap();
 
         let mut out = Cursor::new(Vec::new());
         XlsxWriter::write(&wb, &mut out).unwrap();
@@ -4368,14 +5110,20 @@ mod tests {
         assert!(ct.contains(CT_CHART), "wrong chart content type");
 
         let sheet_rels = read_zip_entry(bytes.clone(), "xl/worksheets/_rels/sheet1.xml.rels");
-        assert!(sheet_rels.contains(RelationshipKind::Drawing.uri()), "missing drawing rel type");
+        assert!(
+            sheet_rels.contains(RelationshipKind::Drawing.uri()),
+            "missing drawing rel type"
+        );
         assert!(
             sheet_rels.contains("../drawings/drawing1.xml"),
             "missing drawing target"
         );
 
         let drawing_rels = read_zip_entry(bytes.clone(), "xl/drawings/_rels/drawing1.xml.rels");
-        assert!(drawing_rels.contains(RelationshipKind::Chart.uri()), "missing chart rel type");
+        assert!(
+            drawing_rels.contains(RelationshipKind::Chart.uri()),
+            "missing chart rel type"
+        );
         assert!(
             drawing_rels.contains("../charts/chart1.xml"),
             "missing chart target"

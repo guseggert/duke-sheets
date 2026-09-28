@@ -3,10 +3,10 @@
 use std::collections::HashMap;
 use std::sync::RwLock;
 
-use duke_sheets_chart::Chart;
-use duke_sheets_chart::ChartEx;
-use duke_sheets_chart::DrawingAnchor;
-use duke_sheets_chart::EmbeddedImage;
+use duke_sheets_chart::{
+    Chart, ChartEx, ChartType, DataReference, DataSeries, DrawingAnchor, EmbeddedImage,
+    PivotChartSource,
+};
 
 use crate::auto_filter::AutoFilter;
 use crate::cell::view::CellView;
@@ -21,6 +21,7 @@ use crate::error::{Error, Result};
 use crate::form_control::{radio_groups, CheckState, FormControl, FormControlKind};
 use crate::hyperlink::Hyperlink;
 use crate::locale::Locale;
+use crate::pivot::PivotTable;
 use crate::protection::{hash_legacy_protection_password, ProtectedRange};
 use crate::style::Style;
 use crate::table::Table;
@@ -74,6 +75,8 @@ pub struct Worksheet {
     conditional_formats: Vec<ConditionalFormatRule>,
     /// Tables (ListObjects)
     tables: Vec<Table>,
+    /// Pivot tables anchored on this worksheet
+    pivot_tables: Vec<PivotTable>,
     /// Drawing objects (images, charts, shapes, form controls,
     /// comments, groups, raw fragments) in z-order, back to front.
     drawings: Vec<DrawingObject>,
@@ -124,6 +127,7 @@ impl Clone for Worksheet {
             data_validations: self.data_validations.clone(),
             conditional_formats: self.conditional_formats.clone(),
             tables: self.tables.clone(),
+            pivot_tables: self.pivot_tables.clone(),
             drawings: self.drawings.clone(),
             auto_filter: self.auto_filter.clone(),
             row_breaks: self.row_breaks.clone(),
@@ -172,6 +176,16 @@ pub struct ImageInfo {
     pub height: Option<f64>,
 }
 
+fn quote_formula_sheet_name(name: &str) -> String {
+    if !name.chars().next().is_some_and(|c| c.is_ascii_digit())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        name.to_string()
+    } else {
+        format!("'{}'", name.replace('\'', "''"))
+    }
+}
+
 impl Worksheet {
     /// Create a new worksheet with the given name
     pub fn new<S: Into<String>>(name: S) -> Self {
@@ -192,6 +206,7 @@ impl Worksheet {
             data_validations: Vec::new(),
             conditional_formats: Vec::new(),
             tables: Vec::new(),
+            pivot_tables: Vec::new(),
             drawings: Vec::new(),
             auto_filter: None,
             row_breaks: Vec::new(),
@@ -1410,6 +1425,172 @@ impl Worksheet {
     /// Get the number of tables.
     pub fn table_count(&self) -> usize {
         self.tables.len()
+    }
+
+    /// Add a pivot table to this worksheet.
+    ///
+    /// If the pivot table ID is `0`, the worksheet assigns the next available
+    /// worksheet-local ID. Pivot table names must be unique within a worksheet.
+    pub fn add_pivot_table(&mut self, mut pivot_table: PivotTable) -> Result<()> {
+        if pivot_table.name.trim().is_empty() {
+            return Err(Error::other("pivot table name cannot be empty"));
+        }
+
+        if self
+            .pivot_tables
+            .iter()
+            .any(|p| p.name.eq_ignore_ascii_case(&pivot_table.name))
+        {
+            return Err(Error::other(format!(
+                "pivot table name already exists: {}",
+                pivot_table.name
+            )));
+        }
+
+        if pivot_table.id == 0 {
+            pivot_table.id = self
+                .pivot_tables
+                .iter()
+                .map(|p| p.id)
+                .max()
+                .unwrap_or(0)
+                .saturating_add(1);
+        } else if self.pivot_tables.iter().any(|p| p.id == pivot_table.id) {
+            return Err(Error::other(format!(
+                "pivot table id already exists: {}",
+                pivot_table.id
+            )));
+        }
+
+        self.pivot_tables.push(pivot_table);
+        self.mutation_count += 1;
+        Ok(())
+    }
+
+    /// Get all pivot tables.
+    pub fn pivot_tables(&self) -> &[PivotTable] {
+        &self.pivot_tables
+    }
+
+    /// Get a mutable reference to all pivot tables.
+    pub fn pivot_tables_mut(&mut self) -> &mut Vec<PivotTable> {
+        self.mutation_count += 1;
+        &mut self.pivot_tables
+    }
+
+    /// Get a pivot table by name.
+    pub fn pivot_table_by_name(&self, name: &str) -> Option<&PivotTable> {
+        self.pivot_tables
+            .iter()
+            .find(|pivot| pivot.name.eq_ignore_ascii_case(name))
+    }
+
+    /// Get a mutable pivot table by name.
+    pub fn pivot_table_by_name_mut(&mut self, name: &str) -> Option<&mut PivotTable> {
+        let index = self
+            .pivot_tables
+            .iter()
+            .position(|pivot| pivot.name.eq_ignore_ascii_case(name))?;
+        self.mutation_count += 1;
+        self.pivot_tables.get_mut(index)
+    }
+
+    /// Get the number of pivot tables.
+    pub fn pivot_table_count(&self) -> usize {
+        self.pivot_tables.len()
+    }
+
+    /// Remove a pivot table by name.
+    pub fn remove_pivot_table(&mut self, name: &str) -> Option<PivotTable> {
+        let index = self
+            .pivot_tables
+            .iter()
+            .position(|pivot| pivot.name.eq_ignore_ascii_case(name))?;
+        self.mutation_count += 1;
+        Some(self.pivot_tables.remove(index))
+    }
+
+    /// Clear all pivot tables from this worksheet.
+    pub fn clear_pivot_tables(&mut self) {
+        if !self.pivot_tables.is_empty() {
+            self.mutation_count += 1;
+        }
+        self.pivot_tables.clear();
+    }
+
+    /// Build a PivotChart from a rendered pivot table range.
+    ///
+    /// The generated chart keeps a `pivotSource` link to the pivot table and
+    /// uses the rendered pivot range for chart series: the first row supplies
+    /// series captions, the first column supplies categories, and each
+    /// remaining column becomes one value series.
+    pub fn build_pivot_chart(
+        &self,
+        pivot_name: &str,
+        chart_type: ChartType,
+        _anchor: DrawingAnchor,
+    ) -> Result<Chart> {
+        let pivot = self
+            .pivot_table_by_name(pivot_name)
+            .ok_or_else(|| Error::other(format!("Pivot table not found: {pivot_name}")))?;
+        let range = pivot.rendered_range.ok_or_else(|| {
+            Error::other(format!(
+                "Pivot table {pivot_name} does not have a rendered range"
+            ))
+        })?;
+
+        if range.row_count() < 2 || range.col_count() < 2 {
+            return Err(Error::other(format!(
+                "Pivot table {pivot_name} rendered range must include headers and values"
+            )));
+        }
+
+        let mut chart = Chart::new(chart_type).with_title(pivot.name.clone());
+        chart.pivot_source = Some(PivotChartSource::new(pivot.name.clone()));
+
+        let category_ref = self.chart_formula_range(
+            range.start.row + 1,
+            range.start.col,
+            range.end.row,
+            range.start.col,
+        );
+        for col in range.start.col + 1..=range.end.col {
+            let header_ref = self.chart_formula_range(range.start.row, col, range.start.row, col);
+            let values_ref = self.chart_formula_range(range.start.row + 1, col, range.end.row, col);
+            chart.add_series(
+                DataSeries::new(DataReference::formula(values_ref))
+                    .with_name(header_ref)
+                    .with_categories(DataReference::formula(category_ref.clone())),
+            );
+        }
+
+        Ok(chart)
+    }
+
+    /// Add a PivotChart generated from a rendered pivot table range.
+    pub fn add_pivot_chart(
+        &mut self,
+        pivot_name: &str,
+        chart_type: ChartType,
+        anchor: DrawingAnchor,
+    ) -> Result<()> {
+        let chart = self.build_pivot_chart(pivot_name, chart_type, anchor.clone())?;
+        self.add_chart(chart, anchor)?;
+        Ok(())
+    }
+
+    fn chart_formula_range(
+        &self,
+        start_row: u32,
+        start_col: u16,
+        end_row: u32,
+        end_col: u16,
+    ) -> String {
+        let range = CellRange::new(
+            CellAddress::absolute(start_row, start_col),
+            CellAddress::absolute(end_row, end_col),
+        );
+        format!("{}!{}", quote_formula_sheet_name(&self.name), range)
     }
 
     /// All drawing objects, in z-order (back to front).
@@ -3055,6 +3236,114 @@ mod tests {
         // Can't merge overlapping
         let range2 = CellRange::parse("B2:D4").unwrap();
         assert!(ws.merge_cells(&range2).is_err());
+    }
+
+    // features: PivotChart
+    #[test]
+    fn test_build_pivot_chart_from_rendered_range() {
+        let mut ws = Worksheet::new("Pivot Output");
+        let mut pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:C4").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row("Region")
+            .named_measure("Revenue", crate::pivot::PivotAggregate::Sum, "Revenue")
+            .named_measure("Margin", crate::pivot::PivotAggregate::Sum, "Margin")
+            .build()
+            .unwrap();
+        pivot.rendered_range = Some(CellRange::parse("E1:G4").unwrap());
+        ws.add_pivot_table(pivot).unwrap();
+
+        let chart = ws
+            .build_pivot_chart(
+                "salespivot",
+                ChartType::ColumnClustered,
+                DrawingAnchor::default(),
+            )
+            .unwrap();
+        assert_eq!(chart.title.as_deref(), Some("SalesPivot"));
+        assert_eq!(chart.pivot_source.as_ref().unwrap().name, "SalesPivot");
+        assert_eq!(chart.series.len(), 2);
+        assert_eq!(chart.series[0].name.as_deref(), Some("'Pivot Output'!$F$1"));
+        assert_eq!(
+            chart.series[0].values,
+            DataReference::formula("'Pivot Output'!$F$2:$F$4")
+        );
+        assert_eq!(
+            chart.series[0].categories,
+            Some(DataReference::formula("'Pivot Output'!$E$2:$E$4"))
+        );
+        assert_eq!(chart.series[1].name.as_deref(), Some("'Pivot Output'!$G$1"));
+        assert_eq!(
+            chart.series[1].values,
+            DataReference::formula("'Pivot Output'!$G$2:$G$4")
+        );
+
+        ws.add_pivot_chart(
+            "SalesPivot",
+            ChartType::ColumnClustered,
+            DrawingAnchor::default(),
+        )
+        .unwrap();
+        assert_eq!(ws.chart_count(), 1);
+    }
+
+    #[test]
+    fn test_build_pivot_chart_requires_rendered_range() {
+        let mut ws = Worksheet::new("Pivot");
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:B4").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .named_measure("Revenue", crate::pivot::PivotAggregate::Sum, "Revenue")
+            .build()
+            .unwrap();
+        ws.add_pivot_table(pivot).unwrap();
+
+        let err = ws
+            .build_pivot_chart(
+                "SalesPivot",
+                ChartType::ColumnClustered,
+                DrawingAnchor::default(),
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("does not have a rendered range"));
+    }
+
+    #[test]
+    fn pivot_mutations_do_not_change_formula_topology_generation() {
+        let pivot = |name: &str| {
+            PivotTable::builder(name)
+                .source_range(CellRange::parse("A1:B2").unwrap())
+                .target_address("D1")
+                .unwrap()
+                .measure("Revenue", crate::pivot::PivotAggregate::Sum)
+                .build()
+                .unwrap()
+        };
+        let mut ws = Worksheet::new("Pivot");
+
+        ws.add_pivot_table(pivot("SalesPivot")).unwrap();
+        assert_eq!(ws.mutation_count(), 1);
+        assert_eq!(ws.topology_generation(), 0);
+
+        ws.pivot_tables_mut()[0].name = "RenamedPivot".to_string();
+        assert_eq!(ws.mutation_count(), 2);
+        assert_eq!(ws.topology_generation(), 0);
+
+        ws.pivot_table_by_name_mut("RenamedPivot").unwrap().id = 2;
+        assert_eq!(ws.mutation_count(), 3);
+        assert_eq!(ws.topology_generation(), 0);
+
+        ws.remove_pivot_table("RenamedPivot").unwrap();
+        assert_eq!(ws.mutation_count(), 4);
+        assert_eq!(ws.topology_generation(), 0);
+
+        ws.add_pivot_table(pivot("ReplacementPivot")).unwrap();
+        ws.clear_pivot_tables();
+        assert_eq!(ws.mutation_count(), 6);
+        assert_eq!(ws.topology_generation(), 0);
     }
 
     #[test]

@@ -13,6 +13,7 @@ categories = ["parser-implementations", "encoding"]
 duke-sheets-core.workspace = true
 duke-sheets-crypto.workspace = true
 duke-sheets-formula.workspace = true
+duke-sheets-pivot.workspace = true
 duke-sheets-xlsx.workspace = true
 duke-sheets-xls = { workspace = true, optional = true }
 duke-sheets-xlsb = { workspace = true, optional = true }
@@ -47,7 +48,13 @@ xlsx = []
 xls = ["dep:duke-sheets-xls"]
 xlsb = ["dep:duke-sheets-xlsb"]
 csv = []
-parallel = ["dep:rayon"]
+parallel = [
+    "dep:rayon",
+    "duke-sheets-pivot/parallel",
+    "duke-sheets-xlsx/parallel",
+    "duke-sheets-xls?/parallel",
+    "duke-sheets-xlsb?/parallel",
+]
 full = ["xlsx", "xls", "xlsb", "csv", "parallel"]
 
 [[bench]]

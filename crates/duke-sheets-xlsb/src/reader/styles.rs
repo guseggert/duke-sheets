@@ -7,7 +7,6 @@ use duke_sheets_core::style::{
     Underline, VerticalAlignment,
 };
 
-
 use crate::biff12::parser;
 use crate::biff12::records;
 use crate::biff12::RecordIter;
@@ -16,6 +15,7 @@ use crate::error::XlsbResult;
 pub(crate) struct StylesData {
     pub styles: Vec<Style>,
     pub fonts: Vec<FontStyle>,
+    pub numfmts: HashMap<u32, String>,
     pub dxf_styles: Vec<Style>,
 }
 
@@ -28,6 +28,7 @@ pub(crate) fn read_styles<R: Read + Seek>(
             return Ok(StylesData {
                 styles: vec![Style::default()],
                 fonts: Vec::new(),
+                numfmts: HashMap::new(),
                 dxf_styles: Vec::new(),
             })
         }
@@ -132,6 +133,7 @@ pub(crate) fn read_styles<R: Read + Seek>(
     Ok(StylesData {
         styles,
         fonts,
+        numfmts,
         dxf_styles,
     })
 }

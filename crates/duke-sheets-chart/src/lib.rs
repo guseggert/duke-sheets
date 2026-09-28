@@ -32,7 +32,8 @@ mod types;
 pub use axis::{Axis, AxisCrosses, AxisPosition, AxisType, CrossBetween, TickLabelPosition, TickMark};
 pub use chart::{
     BarShape, CellMarker, Chart, ChartAxis, ChartLines, ChartType, ChartTypeGroup,
-    DrawingAnchor, EditAs, EmbeddedImage, ImageFormat, OfPieType, SplitType, Surface, UpDownBars,
+    DrawingAnchor, EditAs, EmbeddedImage, ImageFormat, OfPieType, PivotChartSource, SplitType,
+    Surface, UpDownBars,
 };
 pub use config::{ChartDataTable, DisplayBlanksAs, Layout, ManualLayout, View3D};
 pub use drawing::{

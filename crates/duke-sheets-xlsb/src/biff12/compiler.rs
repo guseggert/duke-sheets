@@ -14,6 +14,7 @@ use super::ptg;
 
 pub(crate) struct CompileContext {
     pub sheet_names: Vec<String>,
+    pub sheet_ixti_offset: u16,
     /// Maps uppercase function name (e.g. "IFS") to 1-based name index
     /// for _xlfn.* functions not in the standard FTAB.
     pub xlfn_names: HashMap<String, u32>,
@@ -376,7 +377,7 @@ fn emit_cell_ref(
             let sheet_idx = resolve_sheet_index(sheet_name, ctx)?;
             // tRef3d
             out.push(class_ptg(ptg::PTG_REF_3D, class));
-            out.extend_from_slice(&(sheet_idx as u16).to_le_bytes());
+            out.extend_from_slice(&(ctx.sheet_ixti_offset + sheet_idx as u16).to_le_bytes());
             out.extend_from_slice(&cell_ref.address.row.to_le_bytes());
             out.extend_from_slice(&encode_col_word(&cell_ref.address).to_le_bytes());
         }
@@ -409,7 +410,7 @@ fn emit_range_ref(
             let sheet_idx = resolve_sheet_index(sheet_name, ctx)?;
             // tArea3d — cross-sheet ranges are R-class in the common case.
             out.push(class_ptg(ptg::PTG_AREA_3D, class));
-            out.extend_from_slice(&(sheet_idx as u16).to_le_bytes());
+            out.extend_from_slice(&(ctx.sheet_ixti_offset + sheet_idx as u16).to_le_bytes());
             out.extend_from_slice(&start.row.to_le_bytes());
             out.extend_from_slice(&end.row.to_le_bytes());
             out.extend_from_slice(&encode_col_word(start).to_le_bytes());
@@ -495,11 +496,17 @@ fn emit_function(
             return Ok(());
         }
         // IF short-circuit (PtgAttrIf / PtgAttrGoto), 2- and 3-arg forms.
-        if func_idx == 1 && (args.len() == 2 || args.len() == 3) && emit_optimized_if(args, ctx, out, extra, class)? {
+        if func_idx == 1
+            && (args.len() == 2 || args.len() == 3)
+            && emit_optimized_if(args, ctx, out, extra, class)?
+        {
             return Ok(());
         }
         // CHOOSE jump table (PtgAttrChoose).
-        if func_idx == 100 && args.len() >= 2 && emit_optimized_choose(args, ctx, out, extra, class)? {
+        if func_idx == 100
+            && args.len() >= 2
+            && emit_optimized_choose(args, ctx, out, extra, class)?
+        {
             return Ok(());
         }
         // Analysis-ToolPak functions (Ftab 384..=476) take by-reference
@@ -578,12 +585,30 @@ fn emit_optimized_if(
     // leaked rgcb would be duplicated and shift every PtgArray offset.
     let mut scratch_extra = Vec::new();
     let mut cond_bytes = Vec::new();
-    emit_expr(cond, ctx, &mut cond_bytes, &mut scratch_extra, function_arg_class(1, 0))?;
+    emit_expr(
+        cond,
+        ctx,
+        &mut cond_bytes,
+        &mut scratch_extra,
+        function_arg_class(1, 0),
+    )?;
     let mut t_bytes = Vec::new();
-    emit_expr(t_branch, ctx, &mut t_bytes, &mut scratch_extra, function_arg_class(1, 1))?;
+    emit_expr(
+        t_branch,
+        ctx,
+        &mut t_bytes,
+        &mut scratch_extra,
+        function_arg_class(1, 1),
+    )?;
     let mut f_bytes = Vec::new();
     if let Some(f) = f_branch {
-        emit_expr(f, ctx, &mut f_bytes, &mut scratch_extra, function_arg_class(1, 2))?;
+        emit_expr(
+            f,
+            ctx,
+            &mut f_bytes,
+            &mut scratch_extra,
+            function_arg_class(1, 2),
+        )?;
     }
 
     let attr_if_offset = t_bytes.len() + 4;
@@ -645,12 +670,24 @@ fn emit_optimized_choose(
 
     let mut scratch_extra = Vec::new();
     let mut selector_bytes = Vec::new();
-    emit_expr(selector, ctx, &mut selector_bytes, &mut scratch_extra, function_arg_class(100, 0))?;
+    emit_expr(
+        selector,
+        ctx,
+        &mut selector_bytes,
+        &mut scratch_extra,
+        function_arg_class(100, 0),
+    )?;
 
     let mut choice_bytes: Vec<Vec<u8>> = Vec::with_capacity(nc);
     for (i, c) in choices.iter().enumerate() {
         let mut buf = Vec::new();
-        emit_expr(c, ctx, &mut buf, &mut scratch_extra, function_arg_class(100, i + 1))?;
+        emit_expr(
+            c,
+            ctx,
+            &mut buf,
+            &mut scratch_extra,
+            function_arg_class(100, i + 1),
+        )?;
         choice_bytes.push(buf);
     }
 
@@ -713,6 +750,7 @@ mod tests {
     fn ctx() -> CompileContext {
         CompileContext {
             sheet_names: vec!["Sheet1".to_string(), "Sheet2".to_string()],
+            sheet_ixti_offset: 0,
             xlfn_names: HashMap::new(),
             defined_names: Vec::new(),
             defined_name_classes: Vec::new(),
@@ -730,6 +768,7 @@ mod tests {
         // whose classes are pinned byte-for-byte against Excel.
         let ctx = CompileContext {
             sheet_names: vec!["Sheet1".to_string()],
+            sheet_ixti_offset: 0,
             xlfn_names: HashMap::new(),
             defined_names: vec!["MyRange".to_string(), "MyConst".to_string()],
             defined_name_classes: vec![OperandClass::R, OperandClass::V],
@@ -763,12 +802,18 @@ mod tests {
         /// constructs the compiler special-cases: IF/CHOOSE/SUM attrs,
         /// array constants, unions, parens, unary operators.
         fn arb_formula() -> impl Strategy<Value = String> {
-            let cell = (0..26u8, 1..200u32)
-                .prop_map(|(c, r)| format!("{}{}", (b'A' + c) as char, r));
+            let cell =
+                (0..26u8, 1..200u32).prop_map(|(c, r)| format!("{}{}", (b'A' + c) as char, r));
             let area = (0..26u8, 1..50u32, 0..26u8, 1..50u32).prop_map(|(c1, r1, c2, r2)| {
                 let (c1, c2) = (c1.min(c2), c1.max(c2));
                 let (r1, r2) = (r1.min(r2), r1.max(r2));
-                format!("{}{}:{}{}", (b'A' + c1) as char, r1, (b'A' + c2) as char, r2)
+                format!(
+                    "{}{}:{}{}",
+                    (b'A' + c1) as char,
+                    r1,
+                    (b'A' + c2) as char,
+                    r2
+                )
             });
             let leaf = prop_oneof![
                 (0..10_000i32).prop_map(|n| n.to_string()),
@@ -793,19 +838,14 @@ mod tests {
                     Just("<"),
                 ];
                 prop_oneof![
-                    (inner.clone(), op, inner.clone())
-                        .prop_map(|(a, op, b)| format!("{a}{op}{b}")),
+                    (inner.clone(), op, inner.clone()).prop_map(|(a, op, b)| format!("{a}{op}{b}")),
                     inner.clone().prop_map(|a| format!("({a})")),
                     inner.clone().prop_map(|a| format!("-{a}")),
                     inner.clone().prop_map(|a| format!("SUM({a})")),
-                    (inner.clone(), inner.clone())
-                        .prop_map(|(a, b)| format!("IF({a}>0,{a},{b})")),
-                    (inner.clone(), inner.clone())
-                        .prop_map(|(a, b)| format!("MAX({a},{b})")),
-                    (inner.clone(), inner.clone())
-                        .prop_map(|(a, b)| format!("CHOOSE(1,{a},{b})")),
-                    (area.clone(), area.clone())
-                        .prop_map(|(a, b)| format!("COUNT(({a},{b}))")),
+                    (inner.clone(), inner.clone()).prop_map(|(a, b)| format!("IF({a}>0,{a},{b})")),
+                    (inner.clone(), inner.clone()).prop_map(|(a, b)| format!("MAX({a},{b})")),
+                    (inner.clone(), inner.clone()).prop_map(|(a, b)| format!("CHOOSE(1,{a},{b})")),
+                    (area.clone(), area.clone()).prop_map(|(a, b)| format!("COUNT(({a},{b}))")),
                 ]
             })
             .prop_map(|e| format!("={e}"))
@@ -955,7 +995,13 @@ mod tests {
         assert_eq!(tokens[5], ParsedToken::AttrSkip { offset: 9 });
         assert_eq!(tokens[6], ParsedToken::Bool(false));
         assert_eq!(tokens[7], ParsedToken::AttrSkip { offset: 3 });
-        assert_eq!(tokens[8], ParsedToken::FuncVar { argc: 3, func_idx: 1 });
+        assert_eq!(
+            tokens[8],
+            ParsedToken::FuncVar {
+                argc: 3,
+                func_idx: 1
+            }
+        );
     }
 
     #[test]

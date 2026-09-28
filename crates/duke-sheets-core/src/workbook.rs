@@ -2,6 +2,7 @@
 
 use std::any::Any;
 use std::collections::BTreeMap;
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::cell::{CellAddress, CellError, CellValue};
@@ -45,12 +46,22 @@ pub struct Workbook {
     active_sheet: usize,
     /// Named ranges (defined names)
     named_ranges: NamedRangeCollection,
+    /// Workbook-level data connections.
+    data_connections: Vec<WorkbookConnection>,
+    /// Raw workbook `<ext>` payloads preserved from package-level features.
+    workbook_extensions: Vec<WorkbookExtension>,
+    /// Raw workbook-related package parts preserved for package-level features.
+    workbook_extension_parts: Vec<WorkbookExtensionPart>,
     /// Theme color scheme parsed from the file's theme part, when any.
     theme_palette: Option<crate::style::ThemePalette>,
     /// Opaque calculation cache, populated and consumed by the calculation engine.
     /// Stored as type-erased `Box<dyn Any>` so the core crate needs no dependency
     /// on `duke-sheets-formula`.
     calc_cache: Option<Box<dyn Any + Send + Sync>>,
+    /// Opaque pivot runtime cache, populated and consumed by the pivot engine.
+    /// This is intentionally separate from file-format pivot cache records and
+    /// from the formula calculation cache.
+    pivot_runtime_cache: Option<Box<dyn Any + Send + Sync>>,
     /// Structural generation counter - incremented when sheets are added, removed,
     /// reordered, or renamed. The calculation engine uses this to detect stale caches.
     structural_generation: u64,
@@ -69,8 +80,12 @@ impl Workbook {
             workbook_protection: None,
             active_sheet: 0,
             named_ranges: NamedRangeCollection::new(),
+            data_connections: Vec::new(),
+            workbook_extensions: Vec::new(),
+            workbook_extension_parts: Vec::new(),
             theme_palette: None,
             calc_cache: None,
+            pivot_runtime_cache: None,
             structural_generation: 0,
             nonce: NEXT_WORKBOOK_NONCE.fetch_add(1, Ordering::Relaxed),
         };
@@ -88,8 +103,12 @@ impl Workbook {
             workbook_protection: None,
             active_sheet: 0,
             named_ranges: NamedRangeCollection::new(),
+            data_connections: Vec::new(),
+            workbook_extensions: Vec::new(),
+            workbook_extension_parts: Vec::new(),
             theme_palette: None,
             calc_cache: None,
+            pivot_runtime_cache: None,
             structural_generation: 0,
             nonce: NEXT_WORKBOOK_NONCE.fetch_add(1, Ordering::Relaxed),
         }
@@ -680,9 +699,13 @@ impl Workbook {
             settings: self.settings.clone(),
             active_sheet: self.active_sheet,
             named_ranges: self.named_ranges.clone(),
+            data_connections: self.data_connections.clone(),
+            workbook_extensions: self.workbook_extensions.clone(),
+            workbook_extension_parts: self.workbook_extension_parts.clone(),
             theme_palette: self.theme_palette,
             workbook_protection: self.workbook_protection.clone(),
             calc_cache: None,
+            pivot_runtime_cache: None,
             structural_generation: self.structural_generation,
             nonce: self.nonce,
         };
@@ -746,6 +769,30 @@ impl Workbook {
     /// Store a calculation cache on the workbook.
     pub fn set_calc_cache(&mut self, cache: Box<dyn Any + Send + Sync>) {
         self.calc_cache = Some(cache);
+    }
+
+    /// Borrow the pivot runtime cache without exposing its engine-specific type.
+    #[doc(hidden)]
+    pub fn pivot_runtime_cache(&self) -> Option<&(dyn Any + Send + Sync)> {
+        self.pivot_runtime_cache.as_deref()
+    }
+
+    /// Take the pivot runtime cache (moves it out of the workbook).
+    #[doc(hidden)]
+    pub fn take_pivot_runtime_cache(&mut self) -> Option<Box<dyn Any + Send + Sync>> {
+        self.pivot_runtime_cache.take()
+    }
+
+    /// Store a pivot runtime cache on the workbook.
+    #[doc(hidden)]
+    pub fn set_pivot_runtime_cache(&mut self, cache: Box<dyn Any + Send + Sync>) {
+        self.pivot_runtime_cache = Some(cache);
+    }
+
+    /// Clear any pivot runtime cache stored on the workbook.
+    #[doc(hidden)]
+    pub fn clear_pivot_runtime_cache(&mut self) {
+        self.pivot_runtime_cache = None;
     }
 
     /// Add a new worksheet with default name
@@ -1065,6 +1112,98 @@ impl Workbook {
         &mut self.named_ranges
     }
 
+    /// Get workbook-level data connections.
+    pub fn data_connections(&self) -> &[WorkbookConnection] {
+        &self.data_connections
+    }
+
+    /// Get workbook-level data connections mutably.
+    ///
+    /// Prefer [`Workbook::add_data_connection`] when adding a new connection so
+    /// duplicate ids and names are rejected.
+    pub fn data_connections_mut(&mut self) -> &mut Vec<WorkbookConnection> {
+        &mut self.data_connections
+    }
+
+    /// Add a workbook-level data connection.
+    pub fn add_data_connection(&mut self, connection: WorkbookConnection) -> Result<()> {
+        self.validate_data_connection(&connection)?;
+        self.data_connections.push(connection);
+        self.structural_generation += 1;
+        Ok(())
+    }
+
+    /// Get a data connection by OOXML connection id.
+    pub fn data_connection_by_id(&self, id: u32) -> Option<&WorkbookConnection> {
+        self.data_connections
+            .iter()
+            .find(|connection| connection.id == id)
+    }
+
+    /// Get a data connection by display name, case-insensitively.
+    pub fn data_connection_by_name(&self, name: &str) -> Option<&WorkbookConnection> {
+        self.data_connections
+            .iter()
+            .find(|connection| connection.name.eq_ignore_ascii_case(name))
+    }
+
+    /// Raw workbook extension payloads.
+    ///
+    /// These are complete `<ext>` elements from `workbook.xml` and are used to
+    /// preserve package-level features whose semantic model is not yet exposed.
+    pub fn workbook_extensions(&self) -> &[WorkbookExtension] {
+        &self.workbook_extensions
+    }
+
+    /// Mutable raw workbook extension payloads.
+    pub fn workbook_extensions_mut(&mut self) -> &mut Vec<WorkbookExtension> {
+        &mut self.workbook_extensions
+    }
+
+    /// Raw workbook-related package parts.
+    ///
+    /// XLSX slicer and timeline caches are workbook relationships pointing to
+    /// standalone package parts. This collection preserves those parts without
+    /// making them part of the pivot refresh runtime cache API.
+    pub fn workbook_extension_parts(&self) -> &[WorkbookExtensionPart] {
+        &self.workbook_extension_parts
+    }
+
+    /// Mutable raw workbook-related package parts.
+    pub fn workbook_extension_parts_mut(&mut self) -> &mut Vec<WorkbookExtensionPart> {
+        &mut self.workbook_extension_parts
+    }
+
+    fn validate_data_connection(&self, connection: &WorkbookConnection) -> Result<()> {
+        if connection.id == 0 {
+            return Err(Error::other("data connection id must be greater than zero"));
+        }
+        if connection.name.trim().is_empty() {
+            return Err(Error::other("data connection name cannot be empty"));
+        }
+        if self
+            .data_connections
+            .iter()
+            .any(|existing| existing.id == connection.id)
+        {
+            return Err(Error::other(format!(
+                "data connection id already exists: {}",
+                connection.id
+            )));
+        }
+        if self
+            .data_connections
+            .iter()
+            .any(|existing| existing.name.eq_ignore_ascii_case(&connection.name))
+        {
+            return Err(Error::other(format!(
+                "data connection name already exists: {}",
+                connection.name
+            )));
+        }
+        Ok(())
+    }
+
     /// Validate a sheet name
     fn validate_sheet_name(&self, name: &str) -> Result<()> {
         self.validate_sheet_name_excluding(name, None)
@@ -1249,6 +1388,555 @@ pub struct WorkbookSettings {
     pub theme: Option<String>,
 }
 
+/// A raw workbook `<ext>` payload preserved from `workbook.xml`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct WorkbookExtension {
+    /// Namespace or extension URI.
+    pub uri: String,
+    /// Complete `<ext>` element bytes, including namespace declarations.
+    pub payload: Vec<u8>,
+}
+
+/// A raw package part related from `xl/workbook.xml.rels`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct WorkbookExtensionPart {
+    /// Package path, for example `xl/slicerCaches/slicerCache1.xml`.
+    pub path: String,
+    /// Content type override for `[Content_Types].xml`.
+    pub content_type: String,
+    /// Relationship type from `xl/_rels/workbook.xml.rels`.
+    pub relationship_type: String,
+    /// Relationship id. When absent, writers generate a stable id.
+    pub relationship_id: Option<String>,
+    /// Raw part bytes.
+    pub payload: Vec<u8>,
+}
+
+impl WorkbookExtensionPart {
+    /// Create a raw workbook-related package part.
+    pub fn new(
+        path: impl Into<String>,
+        content_type: impl Into<String>,
+        relationship_type: impl Into<String>,
+        payload: impl Into<Vec<u8>>,
+    ) -> Self {
+        Self {
+            path: path.into(),
+            content_type: content_type.into(),
+            relationship_type: relationship_type.into(),
+            relationship_id: None,
+            payload: payload.into(),
+        }
+    }
+
+    /// Set the relationship id to use from `xl/workbook.xml.rels`.
+    pub fn with_relationship_id(mut self, relationship_id: impl Into<String>) -> Self {
+        self.relationship_id = Some(relationship_id.into());
+        self
+    }
+}
+
+/// A workbook-level external data connection.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct WorkbookConnection {
+    /// Stable workbook connection id.
+    pub id: u32,
+    /// User-visible connection name.
+    pub name: String,
+    /// Optional source file for the connection.
+    pub source_file: Option<String>,
+    /// Optional Office Data Connection file path.
+    pub odc_file: Option<String>,
+    /// Optional user-visible description.
+    pub description: Option<String>,
+    /// Optional SpreadsheetML connection type code.
+    pub connection_type: Option<u32>,
+    /// Connection payload.
+    pub kind: WorkbookConnectionKind,
+    /// Application version that last refreshed the connection.
+    pub refreshed_version: u8,
+    /// Minimum application version required to refresh this connection.
+    pub min_refreshable_version: u8,
+    /// Whether the host should keep the connection alive.
+    pub keep_alive: bool,
+    /// Refresh interval in minutes. Zero disables interval refresh.
+    pub interval: u32,
+    /// SpreadsheetML reconnection method. The default is 1.
+    pub reconnection_method: u32,
+    /// Whether the host application should refresh on open.
+    pub refresh_on_load: bool,
+    /// Whether refresh should run in the background.
+    pub background: bool,
+    /// Whether refreshed data should be saved in the workbook package.
+    pub save_data: bool,
+    /// Whether stored passwords should be saved in the package.
+    pub save_password: bool,
+    /// Whether this connection is marked as new by the host application.
+    pub new_connection: bool,
+    /// Whether this connection is marked deleted by the host application.
+    pub deleted: bool,
+    /// Whether the host should only use the external connection file.
+    pub only_use_connection_file: bool,
+    /// Optional credential method for applications that refresh this connection.
+    pub credentials: Option<WorkbookConnectionCredentials>,
+    /// Optional single sign-on id.
+    pub single_sign_on_id: Option<String>,
+    /// Query parameters associated with this connection.
+    pub parameters: Vec<WorkbookConnectionParameter>,
+}
+
+impl WorkbookConnection {
+    /// Create a database connection.
+    pub fn database(id: u32, name: impl Into<String>, connection: impl Into<String>) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            source_file: None,
+            odc_file: None,
+            description: None,
+            connection_type: None,
+            kind: WorkbookConnectionKind::Database {
+                connection: connection.into(),
+                command: None,
+                command_type: Some(2),
+            },
+            refreshed_version: 7,
+            min_refreshable_version: 0,
+            keep_alive: false,
+            interval: 0,
+            reconnection_method: 1,
+            refresh_on_load: false,
+            background: false,
+            save_data: false,
+            save_password: false,
+            new_connection: false,
+            deleted: false,
+            only_use_connection_file: false,
+            credentials: None,
+            single_sign_on_id: None,
+            parameters: Vec::new(),
+        }
+    }
+
+    /// Create a web query connection.
+    pub fn web(id: u32, name: impl Into<String>, url: impl Into<String>) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            source_file: None,
+            odc_file: None,
+            description: None,
+            connection_type: None,
+            kind: WorkbookConnectionKind::Web {
+                url: Some(url.into()),
+                xml: false,
+                source_data: false,
+                html_tables: false,
+                html_format: None,
+                post: None,
+                edit_page: None,
+            },
+            refreshed_version: 7,
+            min_refreshable_version: 0,
+            keep_alive: false,
+            interval: 0,
+            reconnection_method: 1,
+            refresh_on_load: false,
+            background: false,
+            save_data: false,
+            save_password: false,
+            new_connection: false,
+            deleted: false,
+            only_use_connection_file: false,
+            credentials: None,
+            single_sign_on_id: None,
+            parameters: Vec::new(),
+        }
+    }
+
+    /// Create a text-file connection.
+    pub fn text(id: u32, name: impl Into<String>, source_file: impl Into<String>) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            source_file: None,
+            odc_file: None,
+            description: None,
+            connection_type: None,
+            kind: WorkbookConnectionKind::Text {
+                source_file: Some(source_file.into()),
+                delimiter: None,
+                first_row: 1,
+                delimited: true,
+                decimal: None,
+                thousands: None,
+            },
+            refreshed_version: 7,
+            min_refreshable_version: 0,
+            keep_alive: false,
+            interval: 0,
+            reconnection_method: 1,
+            refresh_on_load: false,
+            background: false,
+            save_data: false,
+            save_password: false,
+            new_connection: false,
+            deleted: false,
+            only_use_connection_file: false,
+            credentials: None,
+            single_sign_on_id: None,
+            parameters: Vec::new(),
+        }
+    }
+
+    /// Create an OLAP connection.
+    pub fn olap(id: u32, name: impl Into<String>) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            source_file: None,
+            odc_file: None,
+            description: None,
+            connection_type: None,
+            kind: WorkbookConnectionKind::Olap {
+                connection: None,
+                command: None,
+                command_type: None,
+                local: false,
+                local_connection: None,
+                local_refresh: true,
+                send_locale: false,
+                row_drill_count: None,
+            },
+            refreshed_version: 7,
+            min_refreshable_version: 0,
+            keep_alive: false,
+            interval: 0,
+            reconnection_method: 1,
+            refresh_on_load: false,
+            background: false,
+            save_data: false,
+            save_password: false,
+            new_connection: false,
+            deleted: false,
+            only_use_connection_file: false,
+            credentials: None,
+            single_sign_on_id: None,
+            parameters: Vec::new(),
+        }
+    }
+
+    /// Set the database or OLAP command text.
+    pub fn with_command(mut self, command: impl Into<String>) -> Self {
+        match &mut self.kind {
+            WorkbookConnectionKind::Database {
+                command: existing, ..
+            }
+            | WorkbookConnectionKind::Olap {
+                command: existing, ..
+            } => *existing = Some(command.into()),
+            _ => {}
+        }
+        self
+    }
+
+    /// Set the database or OLAP command type.
+    pub fn with_command_type(mut self, command_type: u32) -> Self {
+        match &mut self.kind {
+            WorkbookConnectionKind::Database {
+                command_type: existing,
+                ..
+            }
+            | WorkbookConnectionKind::Olap {
+                command_type: existing,
+                ..
+            } => *existing = Some(command_type),
+            _ => {}
+        }
+        self
+    }
+
+    /// Set refresh-on-open behavior.
+    pub fn with_refresh_on_load(mut self, refresh_on_load: bool) -> Self {
+        self.refresh_on_load = refresh_on_load;
+        self
+    }
+
+    /// Set background refresh behavior.
+    pub fn with_background(mut self, background: bool) -> Self {
+        self.background = background;
+        self
+    }
+
+    /// Set whether refreshed data should be saved in the workbook package.
+    pub fn with_save_data(mut self, save_data: bool) -> Self {
+        self.save_data = save_data;
+        self
+    }
+
+    /// Set an external source file for this connection.
+    pub fn with_source_file(mut self, source_file: impl Into<String>) -> Self {
+        self.source_file = Some(source_file.into());
+        self
+    }
+
+    /// Set an Office Data Connection file for this connection.
+    pub fn with_odc_file(mut self, odc_file: impl Into<String>) -> Self {
+        self.odc_file = Some(odc_file.into());
+        self
+    }
+
+    /// Set the user-visible connection description.
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// Set the SpreadsheetML connection type code.
+    pub fn with_connection_type(mut self, connection_type: u32) -> Self {
+        self.connection_type = Some(connection_type);
+        self
+    }
+
+    /// Set keep-alive behavior.
+    pub fn with_keep_alive(mut self, keep_alive: bool) -> Self {
+        self.keep_alive = keep_alive;
+        self
+    }
+
+    /// Set refresh interval in minutes.
+    pub fn with_interval(mut self, interval: u32) -> Self {
+        self.interval = interval;
+        self
+    }
+
+    /// Set the reconnection method.
+    pub fn with_reconnection_method(mut self, reconnection_method: u32) -> Self {
+        self.reconnection_method = reconnection_method;
+        self
+    }
+
+    /// Set whether saved passwords should be persisted.
+    pub fn with_save_password(mut self, save_password: bool) -> Self {
+        self.save_password = save_password;
+        self
+    }
+
+    /// Set whether only the external connection file should be used.
+    pub fn with_only_use_connection_file(mut self, only_use_connection_file: bool) -> Self {
+        self.only_use_connection_file = only_use_connection_file;
+        self
+    }
+
+    /// Set the credential method used by host applications when refreshing.
+    pub fn with_credentials(mut self, credentials: WorkbookConnectionCredentials) -> Self {
+        self.credentials = Some(credentials);
+        self
+    }
+
+    /// Set a single sign-on id for this connection.
+    pub fn with_single_sign_on_id(mut self, single_sign_on_id: impl Into<String>) -> Self {
+        self.single_sign_on_id = Some(single_sign_on_id.into());
+        self
+    }
+
+    /// Add a query parameter to this connection.
+    pub fn with_parameter(mut self, parameter: WorkbookConnectionParameter) -> Self {
+        self.parameters.push(parameter);
+        self
+    }
+}
+
+/// Credential method used by a workbook data connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WorkbookConnectionCredentials {
+    /// Integrated authentication.
+    Integrated,
+    /// No credentials are used.
+    None,
+    /// Stored credentials.
+    Stored,
+    /// Prompt the user/application for credentials.
+    Prompt,
+}
+
+/// Query parameter associated with a workbook data connection.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct WorkbookConnectionParameter {
+    /// Optional parameter name.
+    pub name: Option<String>,
+    /// Provider SQL type. SpreadsheetML defaults this to 0.
+    pub sql_type: i32,
+    /// How the parameter value is supplied.
+    pub parameter_type: WorkbookConnectionParameterType,
+    /// Whether changes to the parameter should trigger refresh.
+    pub refresh_on_change: bool,
+    /// Optional prompt text.
+    pub prompt: Option<String>,
+    /// Parameter value or cell binding.
+    pub value: WorkbookConnectionParameterValue,
+}
+
+impl WorkbookConnectionParameter {
+    /// Create a prompt parameter.
+    pub fn prompt(name: impl Into<String>, prompt: impl Into<String>) -> Self {
+        Self {
+            name: Some(name.into()),
+            sql_type: 0,
+            parameter_type: WorkbookConnectionParameterType::Prompt,
+            refresh_on_change: false,
+            prompt: Some(prompt.into()),
+            value: WorkbookConnectionParameterValue::None,
+        }
+    }
+
+    /// Create a literal-value parameter.
+    pub fn value(name: impl Into<String>, value: WorkbookConnectionParameterValue) -> Self {
+        Self {
+            name: Some(name.into()),
+            sql_type: 0,
+            parameter_type: WorkbookConnectionParameterType::Value,
+            refresh_on_change: false,
+            prompt: None,
+            value,
+        }
+    }
+
+    /// Create a worksheet-cell parameter binding.
+    pub fn cell(name: impl Into<String>, cell: impl Into<String>) -> Self {
+        Self {
+            name: Some(name.into()),
+            sql_type: 0,
+            parameter_type: WorkbookConnectionParameterType::Cell,
+            refresh_on_change: false,
+            prompt: None,
+            value: WorkbookConnectionParameterValue::Cell(cell.into()),
+        }
+    }
+}
+
+/// How a connection parameter obtains its value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WorkbookConnectionParameterType {
+    /// Prompt for the value.
+    Prompt,
+    /// Use a stored literal value.
+    Value,
+    /// Bind to a worksheet cell.
+    Cell,
+}
+
+/// Stored value for a workbook connection parameter.
+#[derive(Debug, Clone)]
+pub enum WorkbookConnectionParameterValue {
+    /// No stored value.
+    None,
+    /// Boolean value.
+    Boolean(bool),
+    /// Floating-point value.
+    Double(f64),
+    /// Integer value.
+    Integer(i32),
+    /// Text value.
+    String(String),
+    /// Worksheet cell reference.
+    Cell(String),
+}
+
+impl PartialEq for WorkbookConnectionParameterValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::None, Self::None) => true,
+            (Self::Boolean(a), Self::Boolean(b)) => a == b,
+            (Self::Double(a), Self::Double(b)) => a.to_bits() == b.to_bits(),
+            (Self::Integer(a), Self::Integer(b)) => a == b,
+            (Self::String(a), Self::String(b)) => a == b,
+            (Self::Cell(a), Self::Cell(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for WorkbookConnectionParameterValue {}
+
+impl Hash for WorkbookConnectionParameterValue {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            Self::None => {}
+            Self::Boolean(value) => value.hash(state),
+            Self::Double(value) => value.to_bits().hash(state),
+            Self::Integer(value) => value.hash(state),
+            Self::String(value) | Self::Cell(value) => value.hash(state),
+        }
+    }
+}
+
+/// Workbook data connection payload.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum WorkbookConnectionKind {
+    /// Database connection represented by SpreadsheetML `dbPr`.
+    Database {
+        /// Provider-specific connection string.
+        connection: String,
+        /// Optional command or query text.
+        command: Option<String>,
+        /// SpreadsheetML command type. Excel uses `2` for SQL text.
+        command_type: Option<u32>,
+    },
+    /// OLAP connection represented by SpreadsheetML `olapPr`.
+    Olap {
+        /// Optional OLAP provider connection string from the paired `dbPr`.
+        connection: Option<String>,
+        /// Optional cube/MDX command from the paired `dbPr`.
+        command: Option<String>,
+        /// SpreadsheetML command type from the paired `dbPr`.
+        command_type: Option<u32>,
+        /// Whether this is a local cube connection.
+        local: bool,
+        /// Optional local cube connection string.
+        local_connection: Option<String>,
+        /// Whether local cube refresh is enabled.
+        local_refresh: bool,
+        /// Whether to send locale information to the OLAP server.
+        send_locale: bool,
+        /// Optional drill row count.
+        row_drill_count: Option<u32>,
+    },
+    /// Web query connection represented by SpreadsheetML `webPr`.
+    Web {
+        /// Optional query URL.
+        url: Option<String>,
+        /// Whether the source is XML.
+        xml: bool,
+        /// Whether source data should be imported.
+        source_data: bool,
+        /// Whether HTML table extraction is enabled.
+        html_tables: bool,
+        /// Optional HTML formatting mode (`none`, `rtf`, or `all`).
+        html_format: Option<String>,
+        /// Optional POST payload.
+        post: Option<String>,
+        /// Optional edit-page URL.
+        edit_page: Option<String>,
+    },
+    /// Text-file connection represented by SpreadsheetML `textPr`.
+    Text {
+        /// Optional source file path.
+        source_file: Option<String>,
+        /// Optional custom delimiter.
+        delimiter: Option<String>,
+        /// First data row, 1-based.
+        first_row: u32,
+        /// Whether the text file is delimited.
+        delimited: bool,
+        /// Optional decimal separator.
+        decimal: Option<String>,
+        /// Optional thousands separator.
+        thousands: Option<String>,
+    },
+}
+
 impl Default for WorkbookSettings {
     fn default() -> Self {
         Self {
@@ -1323,6 +2011,32 @@ mod tests {
         let idx = wb.add_worksheet_with_name("Data").unwrap();
         assert_eq!(idx, 2);
         assert_eq!(wb.worksheet(2).unwrap().name(), "Data");
+    }
+
+    #[test]
+    fn test_add_data_connection_rejects_duplicate_ids_and_names() {
+        let mut wb = Workbook::new();
+        wb.add_data_connection(WorkbookConnection::database(
+            1,
+            "SalesConnection",
+            "Provider=Test;",
+        ))
+        .unwrap();
+
+        assert!(wb
+            .add_data_connection(WorkbookConnection::database(
+                1,
+                "OtherConnection",
+                "Provider=Test;"
+            ))
+            .is_err());
+        assert!(wb
+            .add_data_connection(WorkbookConnection::database(
+                2,
+                "salesconnection",
+                "Provider=Test;"
+            ))
+            .is_err());
     }
 
     #[test]

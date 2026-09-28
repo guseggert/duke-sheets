@@ -15,7 +15,7 @@ use duke_sheets_core::style::{
 use duke_sheets_core::worksheet::SheetVisibility;
 use duke_sheets_core::{
     CellAddress, CellRange, CellValue, Color, ConditionalFormatRule, DataValidation, Hyperlink,
-    Style, ValidationOperator, Workbook,
+    Style, ValidationOperator, Workbook, WorkbookConnection, WorkbookConnectionKind,
 };
 
 fn range(start: &str, end: &str) -> CellRange {
@@ -23,6 +23,53 @@ fn range(start: &str, end: &str) -> CellRange {
         CellAddress::parse(start).unwrap(),
         CellAddress::parse(end).unwrap(),
     )
+}
+
+#[test]
+fn test_write_olap_connection_metadata_survives_excel_roundtrip() {
+    let mut wb = Workbook::new();
+    let mut connection = WorkbookConnection::olap(10, "CubeSales").with_connection_type(5);
+    connection.kind = WorkbookConnectionKind::Olap {
+        connection: Some("Provider=MSOLAP;Data Source=olapserver;".to_string()),
+        command: Some("SalesCube".to_string()),
+        command_type: Some(1),
+        local: false,
+        local_connection: None,
+        local_refresh: true,
+        send_locale: true,
+        row_drill_count: Some(1000),
+    };
+    wb.add_data_connection(connection).unwrap();
+
+    let result = roundtrip_through_excel(&wb);
+    let connection = result
+        .data_connection_by_name("CubeSales")
+        .expect("CubeSales connection");
+    match &connection.kind {
+        WorkbookConnectionKind::Olap {
+            connection,
+            command,
+            command_type,
+            local,
+            local_connection,
+            local_refresh,
+            send_locale,
+            row_drill_count,
+        } => {
+            assert_eq!(
+                connection.as_deref(),
+                Some("Provider=MSOLAP;Data Source=olapserver;")
+            );
+            assert_eq!(command.as_deref(), Some("SalesCube"));
+            assert_eq!(*command_type, Some(1));
+            assert!(!*local);
+            assert_eq!(local_connection.as_deref(), None);
+            assert!(*local_refresh);
+            assert!(*send_locale);
+            assert_eq!(*row_drill_count, Some(1000));
+        }
+        other => panic!("unexpected connection kind: {other:?}"),
+    }
 }
 
 // Font tests
