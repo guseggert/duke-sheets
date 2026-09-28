@@ -198,12 +198,27 @@ fn test_thousands_scaling() {
     let opts = FormatOptions::default();
 
     // 1,234,567 scaled by 1000 = 1234.567, rounded = 1,235
-    let result = fmt.format(1234567.0, &opts);
-    assert!(
-        result.contains("1") && result.len() < 10,
-        "Expected scaled result: {}",
-        result
-    );
+    assert_eq!(fmt.format(1234567.0, &opts), "1,235");
+}
+
+#[test]
+fn test_thousands_scaling_rounds_whole_numbers() {
+    let opts = FormatOptions::default();
+    let cases = [
+        ("#,##0,", 1234499.0, "1,234"),
+        ("0,", 1500.0, "2"),
+        ("0,", 2499.0, "2"),
+        ("0,", 499.0, "0"),
+        ("0,", 500.0, "1"),
+        ("#,##0,,", 1500000.0, "2"),
+        ("#,##0,,", 1499999.0, "1"),
+        ("#,##0,,,", 2500000000.0, "3"),
+        ("0.0,", 1250.0, "1.3"),
+    ];
+    for (format, value, expected) in cases {
+        let fmt = NumberFormat::parse(format).unwrap();
+        assert_eq!(fmt.format(value, &opts), expected, "{format} with {value}");
+    }
 }
 
 #[test]
