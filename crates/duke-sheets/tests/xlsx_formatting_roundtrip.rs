@@ -637,6 +637,36 @@ fn test_roundtrip_dxf_styles() {
     }
 }
 
+/// A solid dxf fill is written the way Excel writes it: the colour in
+/// bgColor and no automatic bgColor next to an fgColor.
+#[test]
+fn test_dxf_solid_fill_written_in_bg_color() {
+    use duke_sheets::prelude::{Color, Style};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_cell_value_at(0, 0, 150.0).unwrap();
+    let rule = ConditionalFormatRule::cell_is_greater_than("100")
+        .with_range(CellRange::parse("A1").unwrap())
+        .with_format(Style::new().fill_color(Color::rgb(255, 199, 206)));
+    sheet.add_conditional_format(rule);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    let mut zip = zip::ZipArchive::new(Cursor::new(&buf)).unwrap();
+    let mut styles = String::new();
+    zip.by_name("xl/styles.xml")
+        .unwrap()
+        .read_to_string(&mut styles)
+        .unwrap();
+    let dxfs = &styles[styles.find("<dxfs").unwrap()..styles.find("</dxfs>").unwrap()];
+    assert!(
+        dxfs.contains(r#"<fill><patternFill><bgColor rgb="FFFFC7CE"/></patternFill></fill>"#),
+        "unexpected dxf fill: {dxfs}"
+    );
+}
+
 /// Test multiple rules with different DXF styles
 #[test]
 fn test_roundtrip_multiple_dxf_styles() {

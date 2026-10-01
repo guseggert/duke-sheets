@@ -917,9 +917,20 @@ fn write_dxf_xml(w: &mut XmlWriter, style: &Style) -> std::io::Result<()> {
             .write_empty()?;
     }
 
-    // Fill (only if non-default)
-    if style.fill != FillStyle::None {
-        write_fill_xml(w, &style.fill)?;
+    // Fill (only if non-default). A dxf carries a solid fill's colour in
+    // bgColor, the way Excel writes it. The cell-fill form adds an automatic
+    // bgColor, which readers that take the dxf colour from bgColor (LibreOffice
+    // among them) draw in the automatic colour, black.
+    match &style.fill {
+        FillStyle::None => {}
+        FillStyle::Solid { color } => {
+            w.write_event(Event::Start(BytesStart::new("fill")))?;
+            w.write_event(Event::Start(BytesStart::new("patternFill")))?;
+            write_color_xml(w, "bgColor", color)?;
+            w.write_event(Event::End(BytesEnd::new("patternFill")))?;
+            w.write_event(Event::End(BytesEnd::new("fill")))?;
+        }
+        fill => write_fill_xml(w, fill)?,
     }
 
     // Alignment (only if non-default)
