@@ -1332,6 +1332,11 @@ impl CalculationEngine {
         if formula_count < 5_000 {
             return false;
         }
+        // wasm32 without atomics cannot spawn threads, so the pool that
+        // evaluate_parallel builds fails there.
+        if cfg!(all(target_arch = "wasm32", not(target_feature = "atomics"))) {
+            return false;
+        }
         #[cfg(feature = "parallel")]
         {
             true

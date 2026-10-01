@@ -399,6 +399,30 @@ fn test_calculation_stats() {
     assert_eq!(get_f64_field(&stats, "errors") as u32, 0);
 }
 
+#[wasm_bindgen_test]
+fn test_calculate_at_parallel_threshold() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+
+    // 5,000 formulas is where calculate() switches to the parallel path.
+    for row in 1..=5_000 {
+        sheet
+            .set_cell(&format!("A{row}"), JsValue::from_f64(row as f64))
+            .unwrap();
+        sheet
+            .set_formula(&format!("B{row}"), &format!("=A{row}*2"))
+            .unwrap();
+    }
+
+    let stats = wb.calculate(None).unwrap();
+
+    assert_eq!(get_f64_field(&stats, "cellsCalculated") as u32, 5_000);
+    assert_eq!(
+        sheet.get_calculated_value("B5000").unwrap().as_number(),
+        Some(10_000.0)
+    );
+}
+
 /// Helper to build a JS options object from key-value pairs
 fn make_options(entries: &[(&str, JsValue)]) -> JsValue {
     let obj = Object::new();
