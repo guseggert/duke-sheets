@@ -998,13 +998,18 @@ impl Worksheet {
         self.cells.merged_regions()
     }
 
+    /// Merged regions that cover `row`, in no particular order.
+    pub fn merged_regions_at_row(&self, row: u32) -> impl Iterator<Item = &CellRange> {
+        self.cells.merged_regions_at_row(row)
+    }
+
     /// Get the merge span for a cell if it is the top-left origin of a merged region.
     ///
     /// Returns `Some((row_span, col_span))` if the cell at `(row, col)` is the
     /// top-left corner of a merged region. Returns `None` if the cell is not
     /// a merge origin (including cells that are "secondary" members of a merge).
     pub fn get_merge_span(&self, row: u32, col: u16) -> Option<(u32, u16)> {
-        for region in self.cells.merged_regions() {
+        for region in self.cells.merged_regions_at_row(row) {
             if region.start.row == row && region.start.col == col {
                 let row_span = region.end.row - region.start.row + 1;
                 let col_span = region.end.col - region.start.col + 1;
@@ -1021,7 +1026,7 @@ impl Worksheet {
     /// skipped when rendering (the origin cell spans over them).
     pub fn is_merged_secondary(&self, row: u32, col: u16) -> bool {
         let addr = CellAddress::new(row, col);
-        for region in self.cells.merged_regions() {
+        for region in self.cells.merged_regions_at_row(row) {
             if region.contains(&addr) {
                 // It's in this region - check if it's NOT the origin
                 if region.start.row != row || region.start.col != col {
@@ -1035,10 +1040,8 @@ impl Worksheet {
     /// Merge cells
     pub fn merge_cells(&mut self, range: &CellRange) -> Result<()> {
         // Check for overlap with existing merged regions
-        for existing in self.cells.merged_regions() {
-            if range.overlaps(existing) {
-                return Err(Error::MergedCellConflict(range.to_string()));
-            }
+        if self.cells.find_overlapping_merged_region(range).is_some() {
+            return Err(Error::MergedCellConflict(range.to_string()));
         }
         self.cells.add_merged_region(*range);
         Ok(())
@@ -3055,6 +3058,48 @@ mod tests {
         // Can't merge overlapping
         let range2 = CellRange::parse("B2:D4").unwrap();
         assert!(ws.merge_cells(&range2).is_err());
+    }
+
+    #[test]
+    fn test_merge_lookups_with_many_and_tall_regions() {
+        let mut ws = Worksheet::new("Test");
+        // 20k rows x 10 two-cell merges: quadratic overlap checks used to take seconds.
+        for row in 0..20_000u32 {
+            for k in 0..10u16 {
+                let col = 1 + k * 2;
+                ws.merge_cells(&CellRange::new(
+                    CellAddress::new(row, col),
+                    CellAddress::new(row, col + 1),
+                ))
+                .unwrap();
+            }
+        }
+        // Taller than the per-row index cap: lives in the linear list.
+        let tall = CellRange::new(CellAddress::new(0, 30), CellAddress::new(4_999, 31));
+        ws.merge_cells(&tall).unwrap();
+
+        assert_eq!(ws.merged_regions().len(), 200_001);
+        assert_eq!(ws.get_merge_span(123, 3), Some((1, 2)));
+        assert!(ws.is_merged_secondary(123, 4));
+        assert!(!ws.is_merged_secondary(123, 3));
+        assert_eq!(ws.get_merge_span(123, 0), None);
+        assert_eq!(ws.get_merge_span(0, 30), Some((5_000, 2)));
+        assert!(ws.is_merged_secondary(4_999, 31));
+        assert!(!ws.is_merged_secondary(5_000, 31));
+
+        // Overlaps are still rejected against both bucketed and tall regions.
+        let range = |a1: &str| CellRange::parse(a1).unwrap();
+        assert!(ws.merge_cells(&range("C50:D50")).is_err());
+        assert!(ws.merge_cells(&range("AE3000:AE3001")).is_err());
+        assert!(ws.merge_cells(&range("AO1:AO10000")).is_ok());
+        assert!(ws.merge_cells(&range("AO11:AP11")).is_err());
+
+        // Unmerge shifts indices; lookups must follow.
+        assert!(ws.unmerge_cells(&range("B1:C1")));
+        assert_eq!(ws.get_merge_span(0, 1), None);
+        assert_eq!(ws.get_merge_span(0, 3), Some((1, 2)));
+        assert_eq!(ws.get_merge_span(19_999, 19), Some((1, 2)));
+        assert!(ws.merge_cells(&range("B1:C1")).is_ok());
     }
 
     #[test]

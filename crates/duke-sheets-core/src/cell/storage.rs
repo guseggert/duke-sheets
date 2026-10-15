@@ -9,6 +9,10 @@ use std::collections::BTreeMap;
 use super::{CellValue, FormulaData, StringPool};
 use crate::style::StylePool;
 
+/// Merged regions taller than this many rows skip the per-row index and are
+/// scanned linearly, so one full-column merge cannot cost a million entries.
+const MERGE_INDEX_MAX_ROWS: u32 = 1024;
+
 /// Storage mode for cell data
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StorageMode {
@@ -137,6 +141,13 @@ pub struct CellStorage {
     /// Merged cell regions
     merged_regions: Vec<crate::CellRange>,
 
+    /// Row -> indices into `merged_regions` of regions covering that row.
+    /// Only regions at most `MERGE_INDEX_MAX_ROWS` tall are bucketed here.
+    merge_rows: AHashMap<u32, Vec<usize>>,
+
+    /// Indices of regions taller than `MERGE_INDEX_MAX_ROWS`, scanned linearly.
+    tall_merges: Vec<usize>,
+
     /// Storage mode
     mode: StorageMode,
 
@@ -179,6 +190,8 @@ impl CellStorage {
             column_outline_levels: BTreeMap::new(),
             column_collapsed: BTreeMap::new(),
             merged_regions: Vec::new(),
+            merge_rows: AHashMap::new(),
+            tall_merges: Vec::new(),
             mode: StorageMode::InMemory,
             cached_bounds: None,
             spill_sources: AHashMap::new(),
@@ -269,7 +282,7 @@ impl CellStorage {
     /// Clear all cells
     pub fn clear(&mut self) {
         self.cells.clear();
-        self.merged_regions.clear();
+        self.clear_merged_regions();
         self.formulas.clear();
         self.invalidate_bounds();
     }
@@ -535,12 +548,20 @@ impl CellStorage {
     /// Add a merged region
     pub fn add_merged_region(&mut self, range: crate::CellRange) {
         self.merged_regions.push(range);
+        self.index_merged_region(self.merged_regions.len() - 1);
     }
 
     /// Remove a merged region
     pub fn remove_merged_region(&mut self, index: usize) -> Option<crate::CellRange> {
         if index < self.merged_regions.len() {
-            Some(self.merged_regions.remove(index))
+            let removed = self.merged_regions.remove(index);
+            // Indices after `index` shifted; unmerge is rare, so rebuild.
+            self.merge_rows.clear();
+            self.tall_merges.clear();
+            for i in 0..self.merged_regions.len() {
+                self.index_merged_region(i);
+            }
+            Some(removed)
         } else {
             None
         }
@@ -549,12 +570,48 @@ impl CellStorage {
     /// Clear all merged regions
     pub fn clear_merged_regions(&mut self) {
         self.merged_regions.clear();
+        self.merge_rows.clear();
+        self.tall_merges.clear();
+    }
+
+    fn index_merged_region(&mut self, index: usize) {
+        let r = self.merged_regions[index];
+        if r.end.row.saturating_sub(r.start.row) >= MERGE_INDEX_MAX_ROWS {
+            self.tall_merges.push(index);
+        } else {
+            for row in r.start.row..=r.end.row {
+                self.merge_rows.entry(row).or_default().push(index);
+            }
+        }
+    }
+
+    /// Merged regions that cover `row`, in no particular order.
+    pub fn merged_regions_at_row(&self, row: u32) -> impl Iterator<Item = &crate::CellRange> {
+        self.merge_rows
+            .get(&row)
+            .into_iter()
+            .flatten()
+            .chain(self.tall_merges.iter())
+            .map(|&i| &self.merged_regions[i])
+            .filter(move |r| r.start.row <= row && row <= r.end.row)
+    }
+
+    /// First merged region overlapping `range`, if any.
+    pub fn find_overlapping_merged_region(
+        &self,
+        range: &crate::CellRange,
+    ) -> Option<&crate::CellRange> {
+        if range.end.row.saturating_sub(range.start.row) >= MERGE_INDEX_MAX_ROWS {
+            return self.merged_regions.iter().find(|r| r.overlaps(range));
+        }
+        (range.start.row..=range.end.row)
+            .find_map(|row| self.merged_regions_at_row(row).find(|r| r.overlaps(range)))
     }
 
     /// Check if a cell is part of a merged region
     pub fn is_merged(&self, row: u32, col: u16) -> bool {
         let addr = crate::CellAddress::new(row, col);
-        self.merged_regions.iter().any(|r| r.contains(&addr))
+        self.merged_regions_at_row(row).any(|r| r.contains(&addr))
     }
 
     /// Get the string pool

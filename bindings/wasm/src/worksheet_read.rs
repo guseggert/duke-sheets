@@ -215,8 +215,8 @@ impl Worksheet {
             }
         }
         if inc_merge {
-            for region in ws.merged_regions() {
-                for row in region.start.row.max(start_row)..=region.end.row.min(end_row) {
+            for row in start_row..=end_row {
+                for region in ws.merged_regions_at_row(row) {
                     for col in region.start.col..=region.end.col {
                         coords.insert((row, col));
                     }
