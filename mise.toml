@@ -2,9 +2,9 @@
 # See https://mise.jdx.dev for documentation
 
 [tools]
-uv = "0.9"
+uv = "0.13.5"
 rust = "1.92"
-node = "20"
+node = "22.23.4"
 "cargo:wasm-pack" = "latest"
 dotnet = "8"
 

@@ -13,10 +13,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.3
       # The test harness builds the duke-sheets-pyuno docker image and
       # starts the container itself (ensure_lo); the workflow only needs
       # docker (present on ubuntu runners) and the shared URP directory.

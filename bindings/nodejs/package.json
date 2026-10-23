@@ -50,5 +50,15 @@
   "devDependencies": {
     "@napi-rs/cli": "^3.5.1",
     "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=22.23.4 <23 || >=24.22.1 <25"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": ">=22.23.4 <23 || >=24.22.1 <25",
+      "onFail": "error"
+    }
   }
 }

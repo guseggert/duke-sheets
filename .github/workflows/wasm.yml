@@ -23,20 +23,22 @@ jobs:
     name: Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: '24.22.1'
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.3
         with:
           key: wasm32
 
       - name: Install wasm-pack
-        uses: jetli/wasm-pack-action@v0.4.0
-        with:
-          version: 'latest'
+        run: npm install --global wasm-pack@0.15.0
 
       # Build all three targets into separate output dirs
       - name: Build (bundler)
@@ -70,14 +72,14 @@ jobs:
           cd pkg-web     && npm pack && mv *.tgz ../dukelib-sheets-wasm-web.tgz     && cd ..
           cd pkg-nodejs  && npm pack && mv *.tgz ../dukelib-sheets-wasm-nodejs.tgz  && cd ..
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: wasm-packages
           path: |
             ${{ env.WORKING_DIR }}/dukelib-sheets-wasm-*.tgz
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: wasm-web
           path: |
@@ -91,20 +93,22 @@ jobs:
     needs: [build]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: '24.22.1'
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.3
         with:
           key: wasm32-test
 
       - name: Install wasm-pack
-        uses: jetli/wasm-pack-action@v0.4.0
-        with:
-          version: 'latest'
+        run: npm install --global wasm-pack@0.15.0
 
       - name: Run tests
         run: wasm-pack test --node
@@ -116,12 +120,12 @@ jobs:
     needs: [test]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7.1.0
         with:
-          node-version: 24
+          node-version: '24.22.1'
           registry-url: https://registry.npmjs.org
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8.0.2
         with:
           name: wasm-packages
           path: dist
@@ -130,7 +134,7 @@ jobs:
         run: ls -lh dist/
 
       - name: Upload to GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3.0.3
         with:
           files: dist/*
           tag_name: ${{ github.ref_name }}
@@ -156,7 +160,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8.0.2
         with:
           name: wasm-web
           path: site/
@@ -180,12 +184,12 @@ jobs:
           </html>
           HTMLEOF
 
-      - uses: actions/configure-pages@v5
+      - uses: actions/configure-pages@v6.0.0
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5.0.0
         with:
           path: site/
 
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5.0.1

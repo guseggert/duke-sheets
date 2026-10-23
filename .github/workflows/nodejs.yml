@@ -7,6 +7,7 @@ on:
   pull_request:
     paths:
       - 'bindings/nodejs/**'
+      - 'tools/*python*trust.py'
       - 'crates/**'
       - '.github/workflows/nodejs.yml'
   workflow_dispatch:
@@ -52,24 +53,28 @@ jobs:
       run:
         working-directory: ${{ env.WORKING_DIR }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7.1.0
         with:
-          node-version: 22
+          node-version: '22.23.4'
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.settings.target }}
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.3
         with:
           key: ${{ matrix.settings.target }}
 
-      - uses: mlugg/setup-zig@v2
+      - name: Install Zig with verified Python installer trust
         if: ${{ contains(matrix.settings.target, 'musl') }}
-        with:
-          version: 0.14.1
+        shell: bash
+        run: |
+          python3 -m venv --without-pip "$RUNNER_TEMP/zig-python"
+          "$RUNNER_TEMP/zig-python/bin/python" ../../tools/upgrade-python-trust.py
+          "$RUNNER_TEMP/zig-python/bin/python" -m pip install --use-deprecated=legacy-certs ziglang==0.14.1
+          "$RUNNER_TEMP/zig-python/bin/python" -c 'import pathlib, ziglang; print(pathlib.Path(ziglang.__file__).parent)' >> "$GITHUB_PATH"
 
       - name: Install cargo-zigbuild
         uses: taiki-e/install-action@v2
@@ -81,7 +86,7 @@ jobs:
 
       - run: ${{ matrix.settings.build }}
         shell: bash
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: bindings-${{ matrix.settings.target }}
           path: ${{ env.WORKING_DIR }}/duke-sheets.*.node
@@ -106,15 +111,15 @@ jobs:
       run:
         working-directory: ${{ env.WORKING_DIR }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7.1.0
         with:
-          node-version: 22
+          node-version: '22.23.4'
 
       - run: npm install
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8.0.2
         with:
           name: bindings-${{ matrix.target }}
           path: ${{ env.WORKING_DIR }}
@@ -130,17 +135,17 @@ jobs:
       run:
         working-directory: ${{ env.WORKING_DIR }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7.0.1
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7.1.0
         with:
-          node-version: 24
+          node-version: '24.22.1'
           registry-url: https://registry.npmjs.org
       - run: npm install
 
       - run: npx napi create-npm-dirs
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8.0.2
         with:
           path: ${{ env.WORKING_DIR }}/artifacts
 
@@ -166,7 +171,7 @@ jobs:
           npm pack
 
       - name: Upload to GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3.0.3
         with:
           files: |
             bindings/nodejs/*.tgz
