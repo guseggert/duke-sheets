@@ -48,6 +48,78 @@ fn test_evaluate_if() {
     assert_eq!(result, FormulaValue::String("No".into()));
 }
 
+#[test]
+fn test_if_lazy_branches_in_workbook() {
+    let mut wb = Workbook::new();
+    let cases = [
+        // The blank template row must not evaluate arithmetic on text.
+        ("=IF(A1=\"\",\"\",A1*2)", CellValue::string("")),
+        ("=IF(A2=\"\",\"\",A2*2)", CellValue::Number(42.0)),
+        ("=IF(FALSE,\"invalid\"*2,7)", CellValue::Number(7.0)),
+        ("=IF(TRUE,7,\"invalid\"*2)", CellValue::Number(7.0)),
+        ("=IF(TRUE,1/0,7)", CellValue::Error(CellError::Div0)),
+        ("=IF(FALSE,7,1/0)", CellValue::Error(CellError::Div0)),
+        ("=IF(1/0,7,8)", CellValue::Error(CellError::Div0)),
+        ("=IF(FALSE,\"invalid\"*2)", CellValue::Boolean(false)),
+    ];
+    {
+        let sheet = wb.worksheet_mut(0).unwrap();
+        // A formula returning an empty string is typical in template rows.
+        sheet.set_cell_formula("A1", "=\"\"").unwrap();
+        sheet.set_cell_value("A2", 21.0).unwrap();
+        for (row, (formula, _)) in cases.iter().enumerate() {
+            sheet
+                .set_cell_formula(&format!("B{}", row + 1), formula)
+                .unwrap();
+        }
+    }
+
+    wb.calculate().unwrap();
+
+    let sheet = wb.worksheet(0).unwrap();
+    for (row, (formula, expected)) in cases.iter().enumerate() {
+        assert_eq!(sheet.get_value_at(row as u32, 1), *expected, "{formula}");
+    }
+}
+
+#[test]
+fn test_if_preserves_validation_and_error_handling() {
+    let ctx = EvaluationContext::simple();
+    for formula in ["=IF(TRUE)", "=IF(TRUE,1,2,3)"] {
+        let error = evaluate(&parse_formula(formula).unwrap(), &ctx).unwrap_err();
+        assert!(matches!(
+            error,
+            duke_sheets_formula::FormulaError::ArgumentCount { .. }
+        ));
+    }
+    for formula in [
+        "=IF(TRUE,\"invalid\"*2,7)",
+        "=IF(FALSE,7,\"invalid\"*2)",
+        "=IF(\"invalid\"*2,7,8)",
+        "=AND(FALSE,\"invalid\"*2)",
+        "=OR(TRUE,\"invalid\"*2)",
+    ] {
+        assert!(
+            evaluate(&parse_formula(formula).unwrap(), &ctx).is_err(),
+            "{formula}"
+        );
+    }
+    for (formula, expected) in [
+        ("=IF(2,7,\"invalid\"*2)", FormulaValue::Number(7.0)),
+        ("=IF(0,\"invalid\"*2,8)", FormulaValue::Number(8.0)),
+        ("=IF(\"TRUE\",7,8)", FormulaValue::Error(CellError::Value)),
+        ("=IF(A1,7,8)", FormulaValue::Error(CellError::Value)),
+        ("=AND(FALSE,1/0)", FormulaValue::Error(CellError::Div0)),
+        ("=OR(TRUE,1/0)", FormulaValue::Error(CellError::Div0)),
+    ] {
+        assert_eq!(
+            evaluate(&parse_formula(formula).unwrap(), &ctx).unwrap(),
+            expected,
+            "{formula}"
+        );
+    }
+}
+
 /// Test formula evaluation with cell references
 #[test]
 fn test_evaluate_with_cell_references() {
