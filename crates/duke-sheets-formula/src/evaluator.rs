@@ -2206,6 +2206,11 @@ fn evaluate_function(
         }
     }
 
+    // IF needs unevaluated branches so the unused branch can be skipped.
+    if lookup_name == "IF" {
+        return evaluate_if(args, ctx);
+    }
+
     // Special case: AREAS needs the raw AST to count union branches.
     if lookup_name == "AREAS" {
         return evaluate_areas(args, ctx);
@@ -2319,6 +2324,28 @@ fn evaluate_function(
 
     // Call the function
     (func.implementation)(&evaluated_args, ctx)
+}
+
+/// IF evaluates the condition and only the selected branch.
+/// Argument counts are validated by evaluate_function before dispatch.
+fn evaluate_if(args: &[FormulaExpr], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    let condition = evaluate(&args[0], ctx)?;
+
+    // Preserve the condition handling in logical::fn_if.
+    let condition_bool = match condition {
+        FormulaValue::Boolean(b) => b,
+        FormulaValue::Number(n) => n != 0.0,
+        FormulaValue::Error(e) => return Ok(FormulaValue::Error(e)),
+        _ => return Ok(FormulaValue::Error(CellError::Value)),
+    };
+
+    if condition_bool {
+        evaluate(&args[1], ctx)
+    } else if let Some(else_branch) = args.get(2) {
+        evaluate(else_branch, ctx)
+    } else {
+        Ok(FormulaValue::Boolean(false))
+    }
 }
 
 /// FORMULATEXT requires special handling: it needs the raw cell reference
