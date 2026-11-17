@@ -287,6 +287,47 @@ fn is_ooxml_envelope_probe_miss(msg: &str) -> bool {
     msg.starts_with("CFB envelope open failed:") || msg.starts_with("not an OOXML envelope")
 }
 
+/// Decrypt a password-protected workbook to plain file bytes without
+/// parsing it.
+///
+/// Returns `Ok(None)` when `bytes` is not an encrypted workbook. The
+/// password rules are those of [`WorkbookExt::from_bytes_with`]: the
+/// supplied password, else the `VelvetSweatshop` sentinel when enabled.
+///
+/// - Encrypted OOXML (`.xlsx` family): the output is the ZIP package
+///   exactly as it was encrypted.
+/// - Encrypted XLS: the output is the input container with only the
+///   workbook stream decrypted in place.
+pub fn decrypt_bytes(bytes: &[u8], opts: &WorkbookOpenOptions) -> Result<Option<Vec<u8>>> {
+    // Only CFB containers can be encrypted workbooks. A plain XLSX is a
+    // ZIP, and a CFB without the OOXML envelope streams is an XLS.
+    if !is_cfb_magic(bytes) {
+        return Ok(None);
+    }
+    let xlsx_opts = XlsxReadOptions {
+        password: opts.password.clone(),
+        try_velvet_sweatshop: opts.try_velvet_sweatshop,
+        skip_integrity_check: opts.skip_integrity_check,
+    };
+    match XlsxReader::decrypt_bytes(bytes, &xlsx_opts) {
+        Ok(decrypted) => return Ok(Some(decrypted)),
+        Err(XlsxError::InvalidFormat(msg)) if is_ooxml_envelope_probe_miss(&msg) => {}
+        Err(e) => return Err(Error::other(e.to_string())),
+    }
+    #[cfg(feature = "xls")]
+    {
+        let xls_opts = XlsReadOptions {
+            password: opts.password.clone(),
+            try_velvet_sweatshop: opts.try_velvet_sweatshop,
+        };
+        XlsReader::decrypt_bytes(bytes, &xls_opts).map_err(|e| Error::other(e.to_string()))
+    }
+    #[cfg(not(feature = "xls"))]
+    Err(Error::other(
+        "XLS format detected but the 'xls' feature is not enabled",
+    ))
+}
+
 /// Options controlling how a workbook is opened.
 ///
 /// The struct is non-exhaustive so fields can be added without a major

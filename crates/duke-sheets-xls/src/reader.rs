@@ -262,7 +262,52 @@ pub(crate) fn resolve_workbook_stream<F: Fn(&str) -> bool>(exists: F) -> XlsResu
     }
 }
 
+/// Decrypt an encrypted Workbook stream with the password the options
+/// select: the supplied one, else the `VelvetSweatshop` sentinel when
+/// enabled. Returns `None` when no password is available to try.
+fn decrypt_workbook_stream(stream: &[u8], options: &XlsReadOptions) -> XlsResult<Option<Vec<u8>>> {
+    let password = options.password.as_deref();
+    let try_pw = match password {
+        Some(p) => p,
+        None if options.try_velvet_sweatshop => "VelvetSweatshop",
+        None => return Ok(None),
+    };
+    match duke_sheets_crypto::xls::decrypt_workbook_stream(stream, try_pw) {
+        Ok(decrypted) => Ok(Some(decrypted)),
+        Err(duke_sheets_crypto::CryptoError::BadPassword) if password.is_none() => Err(
+            XlsError::Encrypted("workbook is encrypted but no password was supplied".into()),
+        ),
+        Err(e) => Err(e.into()),
+    }
+}
+
 impl XlsReader {
+    /// Decrypt a password-protected XLS file to plain XLS file bytes
+    /// without parsing the workbook.
+    ///
+    /// Returns `Ok(None)` when the workbook stream is not encrypted.
+    /// The output is the input container with only the workbook stream
+    /// rewritten in place, so every other stream is returned as stored.
+    /// Wrong passwords return [`XlsError::BadPassword`].
+    pub fn decrypt_bytes(bytes: &[u8], options: &XlsReadOptions) -> XlsResult<Option<Vec<u8>>> {
+        let cfb =
+            crate::cfb::CompoundFile::open(Cursor::new(bytes)).map_err(std::io::Error::from)?;
+        let stream_path = resolve_workbook_stream(|p| cfb.exists(p))?;
+        let stream_data = cfb.read_stream(stream_path).map_err(std::io::Error::from)?;
+        if !is_encrypted_workbook_stream(&stream_data) {
+            return Ok(None);
+        }
+        let Some(decrypted) = decrypt_workbook_stream(&stream_data, options)? else {
+            return Err(XlsError::Encrypted(
+                "workbook is encrypted but no password was supplied".into(),
+            ));
+        };
+        let out = cfb
+            .with_stream_replaced(stream_path, &decrypted)
+            .map_err(std::io::Error::from)?;
+        Ok(Some(out))
+    }
+
     /// Read an XLS file from a filesystem path.
     pub fn read_file<P: AsRef<Path>>(path: P) -> XlsResult<Workbook> {
         let file = std::fs::File::open(path.as_ref())?;
@@ -287,30 +332,13 @@ impl XlsReader {
     /// Read an XLS file from any `Read + Seek` source with explicit
     /// open options. Wrong passwords return [`XlsError::BadPassword`].
     pub fn read_with<R: Read + Seek>(reader: R, options: &XlsReadOptions) -> XlsResult<Workbook> {
-        let password = options.password.as_deref();
-        let try_velvet_sweatshop = options.try_velvet_sweatshop;
         let cfb = crate::cfb::CompoundFile::open(reader).map_err(std::io::Error::from)?;
         let stream_path = resolve_workbook_stream(|p| cfb.exists(p))?;
         let mut stream_data = cfb.read_stream(stream_path).map_err(std::io::Error::from)?;
 
         if is_encrypted_workbook_stream(&stream_data) {
-            let try_pw = match password {
-                Some(p) => Some(p),
-                None if try_velvet_sweatshop => Some("VelvetSweatshop"),
-                None => None,
-            };
-            if let Some(pw) = try_pw {
-                match duke_sheets_crypto::xls::decrypt_workbook_stream(&stream_data, pw) {
-                    Ok(decrypted) => {
-                        stream_data = decrypted;
-                    }
-                    Err(duke_sheets_crypto::CryptoError::BadPassword) if password.is_none() => {
-                        return Err(XlsError::Encrypted(
-                            "workbook is encrypted but no password was supplied".into(),
-                        ));
-                    }
-                    Err(e) => return Err(e.into()),
-                }
+            if let Some(decrypted) = decrypt_workbook_stream(&stream_data, options)? {
+                stream_data = decrypted;
             }
         }
 

@@ -1099,6 +1099,35 @@ impl Task for OpenBytesTask {
     }
 }
 
+pub struct DecryptTask {
+    data: Vec<u8>,
+    password: Option<String>,
+    skip_integrity_check: bool,
+}
+
+impl Task for DecryptTask {
+    type Output = Option<Vec<u8>>;
+    type JsValue = Option<Buffer>;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        catch_panic(|| {
+            let mut opts = duke_sheets::WorkbookOpenOptions::default();
+            if let Some(password) = &self.password {
+                opts = opts.password(password);
+            }
+            if self.skip_integrity_check {
+                opts = opts.skip_integrity_check();
+            }
+            duke_sheets::decrypt_bytes(&self.data, &opts)
+                .map_err(|e| napi::Error::from_reason(format!("Failed to decrypt file: {}", e)))
+        })
+    }
+
+    fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
+        Ok(output.map(Buffer::from))
+    }
+}
+
 pub struct SaveTask {
     workbook: Arc<RwLock<CoreWorkbook>>,
     path: PathBuf,
@@ -1170,6 +1199,34 @@ pub fn open_async(path: String) -> AsyncTask<OpenTask> {
 pub fn from_bytes_async(data: Buffer) -> AsyncTask<OpenBytesTask> {
     AsyncTask::new(OpenBytesTask {
         data: data.to_vec(),
+    })
+}
+
+/// Decrypt a password-protected workbook to plain file bytes
+/// asynchronously (non-blocking), without parsing it.
+///
+/// Resolves to `null` when the data is not an encrypted workbook.
+/// An encrypted `.xlsx`-family file resolves to the ZIP package it
+/// wraps. An encrypted `.xls` resolves to the same file with only its
+/// workbook stream decrypted.
+///
+/// @param data - The file content as a Buffer
+/// @param password - Password to attempt. When omitted, Excel's
+///   built-in default password is tried, which opens files Excel
+///   itself opens without a prompt.
+/// @param skipIntegrityCheck - If true, skip the HMAC integrity
+///   check on Agile-encrypted files. Default false.
+/// @returns Promise<Buffer | null>
+#[napi(ts_return_type = "Promise<Buffer | null>")]
+pub fn decrypt_async(
+    data: Buffer,
+    password: Option<String>,
+    skip_integrity_check: Option<bool>,
+) -> AsyncTask<DecryptTask> {
+    AsyncTask::new(DecryptTask {
+        data: data.to_vec(),
+        password,
+        skip_integrity_check: skip_integrity_check.unwrap_or(false),
     })
 }
 
