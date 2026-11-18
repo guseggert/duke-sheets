@@ -522,6 +522,25 @@ export declare class Worksheet {
 }
 
 /**
+ * Decrypt a password-protected workbook to plain file bytes
+ * asynchronously (non-blocking), without parsing it.
+ *
+ * Resolves to `null` when the data is not an encrypted workbook.
+ * An encrypted `.xlsx`-family file resolves to the ZIP package it
+ * wraps. An encrypted `.xls` resolves to the same file with only its
+ * workbook stream decrypted.
+ *
+ * @param data - The file content as a Buffer
+ * @param password - Password to attempt. When omitted, Excel's
+ *   built-in default password is tried, which opens files Excel
+ *   itself opens without a prompt.
+ * @param skipIntegrityCheck - If true, skip the HMAC integrity
+ *   check on Agile-encrypted files. Default false.
+ * @returns Promise<Buffer | null>
+ */
+export declare function decryptAsync(data: Buffer, password?: string | undefined | null, skipIntegrityCheck?: boolean | undefined | null): Promise<Buffer | null>
+
+/**
  * Load a workbook from bytes asynchronously (non-blocking).
  *
  * Auto-detects format (XLSX or XLS) from magic bytes.

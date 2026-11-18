@@ -406,3 +406,4 @@ export declare const Workbook: {
 
 export declare function openAsync(path: string): Promise<Workbook>
 export declare function fromBytesAsync(data: Buffer): Promise<Workbook>
+export declare function decryptAsync(data: Buffer, password?: string | null, skipIntegrityCheck?: boolean | null): Promise<Buffer | null>

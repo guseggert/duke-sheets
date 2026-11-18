@@ -271,6 +271,92 @@ impl CompoundFile {
         }
     }
 
+    /// Return the container bytes with the contents of one stream
+    /// replaced by `data`, which must be exactly the stream's length.
+    ///
+    /// The stream is overwritten in the sectors it already occupies, so
+    /// every other byte of the container (other streams, directory,
+    /// FATs, CLSIDs, timestamps) is returned as stored. This is what
+    /// in-place XLS decryption needs: the decrypted workbook stream is
+    /// the same length as the encrypted one.
+    pub fn with_stream_replaced(&self, path: &str, data: &[u8]) -> Result<Vec<u8>, CfbError> {
+        let entry = self
+            .find_entry(path)
+            .ok_or_else(|| CfbError::InvalidFormat(format!("stream not found: {path}")))?;
+        if entry.object_type != 2 {
+            return Err(CfbError::InvalidFormat(format!(
+                "path is not a stream: {path}"
+            )));
+        }
+        if entry.stream_size != data.len() as u64 {
+            return Err(CfbError::InvalidFormat(format!(
+                "replacement for {path} is {} bytes but the stream is {} bytes",
+                data.len(),
+                entry.stream_size
+            )));
+        }
+
+        let mut out = self.file_data.clone();
+        if data.is_empty() {
+            return Ok(out);
+        }
+
+        if data.len() < self.mini_stream_cutoff {
+            // A mini stream lives inside the root entry's stream, which
+            // is itself a regular sector chain. Mini sector `i` is the
+            // bytes at `i * mini_sector_size` of that chain.
+            let root_sectors = regular_chain_sectors(&self.fat, self.directory[0].start_sector)?;
+            let mut current = entry.start_sector;
+            let mut visited = vec![false; self.mini_fat.len()];
+            for piece in data.chunks(self.mini_sector_size) {
+                let index = current as usize;
+                if current > MAX_REGULAR_SECTOR || index >= self.mini_fat.len() {
+                    return Err(CfbError::InvalidFormat(
+                        "mini stream chain shorter than declared stream size".into(),
+                    ));
+                }
+                if visited[index] {
+                    return Err(CfbError::InvalidFormat(
+                        "loop detected in mini FAT chain".into(),
+                    ));
+                }
+                visited[index] = true;
+
+                let position = index * self.mini_sector_size;
+                let root_sector = root_sectors
+                    .get(position / self.sector_size)
+                    .copied()
+                    .ok_or_else(|| {
+                        CfbError::InvalidFormat(
+                            "mini stream sector points outside root mini stream".into(),
+                        )
+                    })?;
+                let offset = sector_offset(out.len(), self.sector_size, root_sector)?
+                    + position % self.sector_size;
+                out[offset..offset + piece.len()].copy_from_slice(piece);
+
+                current = self.mini_fat[index];
+            }
+        } else {
+            let sectors = regular_chain_sectors(&self.fat, entry.start_sector)?;
+            let mut pieces = data.chunks(self.sector_size);
+            for sector in sectors {
+                let Some(piece) = pieces.next() else {
+                    break;
+                };
+                let offset = sector_offset(out.len(), self.sector_size, sector)?;
+                out[offset..offset + piece.len()].copy_from_slice(piece);
+            }
+            if pieces.next().is_some() {
+                return Err(CfbError::InvalidFormat(
+                    "stream chain shorter than declared stream size".into(),
+                ));
+            }
+        }
+
+        Ok(out)
+    }
+
     fn read_mini_stream(&self, start_mini_sector: u32, size: usize) -> Result<Vec<u8>, CfbError> {
         let mut out = Vec::with_capacity(size);
         let mut current = start_mini_sector;
@@ -632,6 +718,30 @@ fn read_regular_chain(
     }
 
     Ok(out)
+}
+
+/// Sector ids of a regular FAT chain, in stream order.
+fn regular_chain_sectors(fat: &[u32], start_sector: u32) -> Result<Vec<u32>, CfbError> {
+    let mut sectors = Vec::new();
+    let mut current = start_sector;
+    let mut visited = vec![false; fat.len()];
+
+    while current != ENDOFCHAIN {
+        let index = current as usize;
+        if current > MAX_REGULAR_SECTOR || index >= fat.len() {
+            return Err(CfbError::InvalidFormat(format!(
+                "invalid chain sector id: {current:#010X}"
+            )));
+        }
+        if visited[index] {
+            return Err(CfbError::InvalidFormat("loop detected in FAT chain".into()));
+        }
+        visited[index] = true;
+        sectors.push(current);
+        current = fat[index];
+    }
+
+    Ok(sectors)
 }
 
 fn read_mini_fat(
@@ -1666,6 +1776,39 @@ mod writer_tests {
             .expect("our reader must accept our writer's output");
         assert!(cfb.exists("/Hello"));
         assert_eq!(cfb.read_stream("/Hello").unwrap(), b"world");
+    }
+
+    #[test]
+    fn with_stream_replaced_overwrites_only_that_stream() {
+        // One stream below the 4096-byte mini cutoff and one above it,
+        // so both the mini-FAT and the regular-FAT paths are exercised.
+        for size in [300usize, 9000] {
+            let mut b = CompoundFileBuilder::new();
+            b.add_stream("/Before", vec![0x11; 700]).unwrap();
+            b.add_stream("/Workbook", vec![0x22; size]).unwrap();
+            b.add_stream("/After", vec![0x33; 5000]).unwrap();
+            let bytes = b.build().unwrap();
+            let cfb = CompoundFile::open(Cursor::new(&bytes)).unwrap();
+
+            let replacement: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
+            let out = cfb.with_stream_replaced("/Workbook", &replacement).unwrap();
+
+            assert_eq!(out.len(), bytes.len(), "size={size}");
+            let changed = out.iter().zip(&bytes).filter(|(a, b)| a != b).count();
+            assert!(changed <= size, "size={size}: {changed} bytes changed");
+            let reopened = CompoundFile::open(Cursor::new(&out)).unwrap();
+            assert_eq!(reopened.read_stream("/Workbook").unwrap(), replacement);
+            assert_eq!(reopened.read_stream("/Before").unwrap(), vec![0x11; 700]);
+            assert_eq!(reopened.read_stream("/After").unwrap(), vec![0x33; 5000]);
+        }
+    }
+
+    #[test]
+    fn with_stream_replaced_rejects_a_different_length() {
+        let bytes = build_minimal();
+        let cfb = CompoundFile::open(Cursor::new(&bytes)).unwrap();
+        let err = cfb.with_stream_replaced("/Hello", b"longer than world");
+        assert!(err.is_err());
     }
 
     #[test]
